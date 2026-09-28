@@ -168,3 +168,51 @@ test('password protection', async () => {
   await s.shutdown();
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+test('bank import skips lines already imported', async () => {
+  const rows = [
+    { date: '2026-09-02', amount: -4.75, desc: 'TIM HORTONS' },
+    { date: '2026-09-02', amount: -4.75, desc: 'TIM HORTONS' }, // a second, identical coffee the same day
+    { date: '2026-09-03', amount: 2500, desc: 'PAYROLL', fitid: 'F1' },
+  ];
+  let r = await call('POST', '/api/bank/import', { account: 'a1010', rows });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual([r.json.added, r.json.skipped], [3, 0]);
+  r = await call('POST', '/api/bank/import', { account: 'a1010', rows: [...rows, { date: '2026-09-04', amount: -10, desc: 'NEW' }] });
+  assert.deepEqual([r.json.added, r.json.skipped], [1, 3]);
+  const bad = await call('POST', '/api/bank/import', { account: 'a4100', rows });
+  assert.equal(bad.status, 400, 'income account is not a bank account');
+  const bad2 = await call('POST', '/api/bank/import', { account: 'a1010', rows: [{ date: 'nope', amount: 1 }] });
+  assert.equal(bad2.status, 400);
+});
+
+test('matching a bank line, then deleting the transaction sends it back for review', async () => {
+  const { json } = await call('GET', '/api/state');
+  const line = json.bankTxns.find(b => b.account === 'a1010' && b.desc === 'NEW');
+  let r = await call('POST', '/api/batch', { writes: [
+    { op: 'set', collection: 'entries', id: 'bk1', data: entry([{ account: 'a6100', debit: 10 }, { account: 'a1010', credit: 10 }], { type: 'expense', date: '2026-09-04', clear: { a1010: 'c' } }) },
+    { op: 'set', collection: 'bankTxns', id: line.id, data: { ...line, status: 'added', entryId: 'bk1', made: true } },
+  ] });
+  assert.equal(r.status, 200, r.text);
+  // cleared marks must refer to an account on the transaction
+  r = await call('PUT', '/api/records/entries/bk2', entry([{ account: 'a6100', debit: 1 }, { account: 'a1010', credit: 1 }], { clear: { a1000: 'c' } }));
+  assert.equal(r.status, 400);
+  // the bank account now has bank lines, so it can't be deleted
+  assert.equal((await call('DELETE', '/api/records/accounts/a1010')).status, 409);
+  assert.equal((await call('DELETE', '/api/records/entries/bk1')).status, 200);
+  const after = await call('GET', '/api/state');
+  const back = after.json.bankTxns.find(b => b.id === line.id);
+  assert.equal(back.status, 'new');
+  assert.equal(back.entryId, '');
+  // excluding a line goes through the single-record route
+  r = await call('PUT', `/api/records/bankTxns/${line.id}`, { ...back, status: 'excluded' });
+  assert.equal(r.status, 200, r.text);
+});
+
+test('rules and reconciliations are validated', async () => {
+  assert.equal((await call('PUT', '/api/records/rules/r1', { text: 'ROGERS', direction: 'out', account: 'a6800', tax: true })).status, 200);
+  assert.equal((await call('PUT', '/api/records/rules/r2', { text: '', account: 'a6800' })).status, 400);
+  assert.equal((await call('PUT', '/api/records/rules/r3', { text: 'X', account: 'a1000' })).status, 400, 'bank account as rule category');
+  assert.equal((await call('PUT', '/api/records/recons/rc1', { account: 'a1000', statementDate: '2026-09-30', endingBalance: 100, entryIds: [] })).status, 200);
+  assert.equal((await call('PUT', '/api/records/recons/rc2', { account: 'a4100', statementDate: '2026-09-30', endingBalance: 100, entryIds: [] })).status, 400);
+});

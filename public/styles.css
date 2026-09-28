@@ -44,6 +44,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .nav button:hover{background:var(--surface-2);color:var(--ink)}
 .nav button[aria-current="page"]{background:var(--accent-soft);color:var(--ink)}
 .nav button:focus-visible{outline:2px solid var(--accent)}
+.nav .count.info{background:var(--info-soft);color:var(--info)}
 .nav .count{font-size:11px;background:var(--neg-soft);color:var(--neg);border-radius:10px;padding:0 7px;font-weight:600}
 .newwrap{position:relative}
 .menu{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:6px;z-index:30;display:grid;grid-template-columns:1fr 1fr;gap:2px;min-width:300px}
@@ -186,3 +187,34 @@ svg.chart .base{stroke:var(--line-strong);stroke-width:1}
 }
 @media (max-width:520px){.tiles{grid-template-columns:minmax(0,1fr)}.tile .val{font-size:21px}}
 @media (prefers-reduced-motion:no-preference){.modal{animation:pop .14s ease-out}@keyframes pop{from{transform:translateY(6px);opacity:.6}to{transform:none;opacity:1}}}
+
+/* banking */
+.acct-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-bottom:16px}
+.acct-card{all:unset;box-sizing:border-box;cursor:pointer;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.acct-card:hover{border-color:var(--line-strong)}
+.acct-card[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.acct-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.acct-card b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acct-card .val{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.acct-card .sub{font-size:12.5px;color:var(--muted)}
+.review td{vertical-align:middle}
+.review select{width:100%}
+.review select[data-bcat]{min-width:190px;max-width:280px}
+.review select[data-bpayee]{min-width:110px;max-width:180px}
+.review .desc{min-width:150px;max-width:260px}
+.review .desc div{overflow-wrap:anywhere}
+.review td,.review th{padding-inline:8px}
+.review .acts{display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;min-width:120px}
+.review .hint{font-size:12px;color:var(--muted)}
+.review .hint.match{color:var(--pos);font-weight:600}
+.review .hint.rule{color:var(--info)}
+.review tr.picked td{background:var(--accent-soft)}
+.map-grid select{min-width:120px}
+.map-grid td,.map-grid th{white-space:nowrap;font-size:13px;padding:6px 8px}
+.recon-bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-bottom:14px}
+.recon-bar div{background:var(--surface);padding:10px 14px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.recon-bar span{font-size:12px;color:var(--muted)}
+.recon-bar b{font-size:17px;font-variant-numeric:tabular-nums}
+.recon-bar .ok b{color:var(--pos)}
+.recon-bar .off b{color:var(--neg)}
+@media (max-width:800px){.recon-bar{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -28,7 +28,7 @@ const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts'];
+const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons'];
 
 async function api(method,url,body){
   let r;
@@ -54,9 +54,20 @@ function initStore(){
   if(window.EventSource){const es=new EventSource('/api/events');es.onmessage=ev=>{try{const{rev}=JSON.parse(ev.data);if(rev!==S.rev)load()}catch(e){}};es.onopen=()=>{if(S.connErr)load()}}
 }
 async function write(fn){try{await fn();await load();return true}catch(e){toast(e.message,true);return false}}
-const put=(col,id,data)=>write(()=>api('PUT',`/api/records/${col}/${encodeURIComponent(id)}`,strip(data)));
+// Editing a transaction keeps its cleared/reconciled marks for bank accounts it still uses.
+function keepClear(col,id,data){
+  if(col!=='entries'||!data||data.clear!==undefined)return data;
+  const prev=S.entries.find(e=>e.id===id);if(!prev||!prev.clear)return data;
+  const used=new Set((data.lines||[]).map(l=>l.account));const clear={};
+  for(const[k,v]of Object.entries(prev.clear))if(used.has(k))clear[k]=v;
+  return Object.keys(clear).length?{...data,clear}:data;
+}
+const put=(col,id,data)=>write(()=>api('PUT',`/api/records/${col}/${encodeURIComponent(id)}`,strip(keepClear(col,id,data))));
 const del=(col,id)=>write(()=>api('DELETE',`/api/records/${col}/${encodeURIComponent(id)}`));
-const batch=writes=>write(()=>api('POST','/api/batch',{writes:writes.map(w=>({...w,data:w.data&&strip(w.data)}))}));
+async function batch(writes){
+  const all=writes.map(w=>({...w,data:w.data&&strip(keepClear(w.collection,w.id,w.data))}));
+  return write(async()=>{for(let i=0;i<all.length;i+=400)await api('POST','/api/batch',{writes:all.slice(i,i+400)})});
+}
 const putCompany=data=>write(()=>api('PUT','/api/settings',data));
 const strip=o=>{const c={...o};delete c.id;return c};
 
@@ -90,7 +101,8 @@ function renderMain(){
   if(!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
-  const V={dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const nb=S.bankTxns.filter(b=>b.status==='new').length;const bc=$('#bankCount');bc.hidden=!nb;bc.textContent=nb;
+  const V={dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=banners()+V();
@@ -210,9 +222,9 @@ function vRegister(){
   const cIn=bank?(a.detail==='card'?'Charge':'Deposit'):'Debit',cOut=bank?(a.detail==='card'?'Payment':'Withdrawal'):'Credit';
   return `<button class="btn ghost sm" data-go="accounts" style="margin-bottom:8px">← Chart of accounts</button>`+head(a.name,`${a.code?`<span class="mono">${esc(a.code)}</span> · `:''}${a.type}${detailLabel(a)&&a.detail?' · '+detailLabel(a):''} · Balance ${mcell(bal(a.id))}`,`<button class="btn" data-editacct="${a.id}">Edit account</button>`)+
   `<div class="panel"><div class="toolbar"><span class="flabel">Dates</span><input type="date" id="regFrom" value="${f.from}" aria-label="From date"><span class="muted">to</span><input type="date" id="regTo" value="${f.to}" aria-label="To date"><span class="grow"></span></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee</th><th>Memo</th><th class="n">${dn?cIn:cOut}</th><th class="n">${dn?cOut:cIn}</th><th class="n">Balance</th></tr></thead><tbody>
+  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee</th><th>Memo</th><th class="n">${dn?cIn:cOut}</th><th class="n">${dn?cOut:cIn}</th><th class="n">Balance</th>${bank?'<th title="C = cleared, R = reconciled">✓</th>':''}</tr></thead><tbody>
   ${f.from?`<tr><td colspan="7" class="muted">Opening balance</td><td class="n">${mcell(bal(a.id,null,addDays(f.from,-1)))}</td></tr>`:''}
-  ${shown.length?shown.slice().reverse().map(({p,run})=>`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc">${esc(contactName(p.e.contactId))}</td><td class="trunc muted">${esc(p.memo||p.e.memo||'')}</td><td class="n">${(dn?p.debit:p.credit)?money(dn?p.debit:p.credit):''}</td><td class="n">${(dn?p.credit:p.debit)?money(dn?p.credit:p.debit):''}</td><td class="n">${mcell(run)}</td></tr>`).join(''):emptyRow(8,'No activity','Nothing has been posted to this account in this date range.')}
+  ${shown.length?shown.slice().reverse().map(({p,run})=>`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc">${esc(contactName(p.e.contactId))}</td><td class="trunc muted">${esc(p.memo||p.e.memo||'')}</td><td class="n">${(dn?p.debit:p.credit)?money(dn?p.debit:p.credit):''}</td><td class="n">${(dn?p.credit:p.debit)?money(dn?p.credit:p.debit):''}</td><td class="n">${mcell(run)}</td>${bank?`<td class="mono muted">${({c:'C',r:'R'})[p.e.clear?.[a.id]]||''}</td>`:''}</tr>`).join(''):emptyRow(8,'No activity','Nothing has been posted to this account in this date range.')}
   </tbody></table></div></div>`;
 }
 
@@ -305,6 +317,7 @@ function bindMain(m){
   m.onclick=async e=>{
     const t=e.target.closest('button,tr.click');if(!t||!m.contains(t))return;
     const d=t.dataset;
+    if(S.view==='banking'&&await bankClick(e,t,d))return;
     if(d.new)return openNew(d.new);
     if(d.go)return go(d.go);
     if(d.pay){e.stopPropagation();const doc=S.docs.find(x=>x.id===d.pay);return payForm(doc.kind==='invoice'?'payment':'billpayment',null,doc.id)}
@@ -330,6 +343,7 @@ function bindMain(m){
   const rp=$('#repPeriod',m);if(rp)rp.onchange=()=>{S.rep.period=rp.value;renderMain()};
   ['repFrom','repTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.onchange=()=>{S.rep.period='custom';S.rep.from=($('#repFrom')||{}).value||S.rep.from;S.rep.to=$('#repTo').value;renderMain()}});
   const rf2=$('#restoreFile',m);if(rf2)rf2.onchange=()=>{const f=rf2.files[0];rf2.value='';if(f)restoreBackup(f)};
+  if(S.view==='banking')bindBanking(m);
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim()};if(await putCompany(data))toast('Settings saved')};
 }
 function exportCSV(){
@@ -349,7 +363,8 @@ async function restoreBackup(file){
 async function clearExamples(){
   if(!await confirmBox('Clear example data?','This removes every customer, vendor, invoice, bill and transaction marked “Example”. Your chart of accounts and anything you entered yourself stay.','Clear examples'))return;
   const ex=S.entries.filter(x=>x.example);
-  const writes=[...ex.filter(e=>e.applyTo),...ex.filter(e=>!e.applyTo)].map(x=>({op:'delete',collection:'entries',id:x.id}))
+  const writes=[...S.bankTxns.filter(x=>x.example).map(x=>({op:'delete',collection:'bankTxns',id:x.id})),...S.rules.filter(x=>x.example).map(x=>({op:'delete',collection:'rules',id:x.id})),
+    ...[...ex.filter(e=>e.applyTo),...ex.filter(e=>!e.applyTo)].map(x=>({op:'delete',collection:'entries',id:x.id}))]
     .concat(S.docs.filter(x=>x.example).map(x=>({op:'delete',collection:'docs',id:x.id})),S.contacts.filter(x=>x.example).map(x=>({op:'delete',collection:'contacts',id:x.id})));
   if(!writes.length)return;
   if(await batch(writes))toast(`Removed ${writes.length} example records`);
@@ -419,8 +434,10 @@ function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${l
 
 /* ---------- forms ---------- */
 function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false');
-  ({invoice:()=>docForm('invoice'),bill:()=>docForm('bill'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
-function openEntry(e){if(!e)return;if(e.type==='invoice'||e.type==='bill'){const d=S.docs.find(x=>x.id===e.docId);if(d)return docForm(d.kind,d)}
+  ({invoice:()=>docForm('invoice'),bill:()=>docForm('bill'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
+async function openEntry(e){if(!e)return;
+  if(Object.values(e.clear||{}).includes('r')&&!await confirmBox('This transaction is reconciled','Changing its amount or bank account will change a balance you already reconciled. Open it anyway?','Open'))return;
+  if(e.type==='invoice'||e.type==='bill'){const d=S.docs.find(x=>x.id===e.docId);if(d)return docForm(d.kind,d)}
   const fn={payment:()=>payForm('payment',e),billpayment:()=>payForm('billpayment',e),expense:()=>moneyForm('expense',e),deposit:()=>moneyForm('deposit',e),transfer:()=>transferForm(e)}[e.type];fn?fn():journalForm(e)}
 
 function nextNum(kind){if(kind!=='invoice')return'';const n=Math.max(1000,...S.docs.filter(d=>d.kind==='invoice').map(d=>parseInt(d.number)||0));return String(n+1)}

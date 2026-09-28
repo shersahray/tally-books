@@ -14,12 +14,21 @@ It runs two ways from the same code:
 - **Sales:** invoices with line items and sales tax, partial and full payments, and a status on every invoice (open, partial, overdue, paid).
 - **Expenses:** vendor bills, bill payments, expenses paid by bank or credit card, and deposits.
 - **Banking:** transfers between accounts, credit card payments, and a register for each account with a running balance.
+- **Bank statement import:** import CSV, OFX, QFX or QBO files downloaded from online banking, including headerless CSVs like TD's and CIBC's. Lines already imported are skipped, so date ranges can overlap.
+- **For review:** each imported line gets a suggestion before it's added:
+  - a match with an existing transaction;
+  - a payment for an open invoice or bill;
+  - a category from a bank rule, or the category used last time for that payee.
+
+  You can add lines one at a time or in bulk, exclude duplicates, and undo anything.
+- **Bank rules:** "when the description contains ROGERS, suggest Telephone and internet, HST included."
+- **Reconciliation:** enter the statement's ending balance and date, then tick transactions until the difference is zero. You can save and come back later, and undo the most recent reconciliation. Registers mark each line C (cleared) or R (reconciled).
 - **Journal entries:** manual entries with debit and credit lines. The server rejects any entry that doesn't balance.
 - **Chart of accounts:** set up for a Canadian small business charging HST (13%). The tax name, rate and fiscal year start are all in Settings.
 - **Reports:** profit and loss, balance sheet, trial balance, A/R aging and A/P aging, for any date range. All of them export to CSV.
 - **Year-end:** the trial balance closes prior years into retained earnings, so the CSV is ready to import into working-paper software such as CaseWare.
 - **Backup and restore:** one JSON file holds everything. Use it to move books between computers.
-- **Example data:** sample customers and transactions for trying things out. They're marked "Example" and can be removed in one click.
+- **Example data:** sample customers, transactions and bank lines for trying things out. They're marked "Example" and can be removed in one click.
 
 ## Run it as a web app
 
@@ -69,19 +78,18 @@ The desktop app keeps its database in your user data folder. **File → Show dat
 
 ### Automatic installers from GitHub
 
-`.github/workflows/release.yml` builds the Windows `.exe`, the macOS `.dmg` and the Linux `.AppImage`, then attaches them to a draft GitHub release. It runs whenever you push a version tag:
+`.github/workflows/release.yml` builds the Windows `.exe`, the macOS `.dmg` and the Linux `.AppImage` on GitHub's computers. To run it, go to **Actions → Build desktop apps → Run workflow**. It also runs when you push a version tag such as `v1.0.0`.
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+When the run finishes, download the installers from the **Artifacts** section at the bottom of the run's page.
 
-The builds aren't code-signed, so Windows SmartScreen and macOS Gatekeeper will warn the first time someone opens the app. Add signing certificates to the workflow when you have them.
+The builds aren't code-signed, so Windows SmartScreen and macOS Gatekeeper will warn the first time someone opens the app.
 
 ## How it works
 
 ```
 public/            Browser app (plain HTML, CSS and JavaScript, no build step)
+  bankparse.js     Bank file parsers (CSV column detection, OFX/QFX/QBO)
+  banking.js       Banking screens: import, review, rules, reconcile
 src/server/
   app.js           HTTP server: JSON API, static files, live updates
   db.js            SQLite storage (Node's built-in node:sqlite)
@@ -115,12 +123,13 @@ GROUP BY account_id;
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/state` | Every account, contact, document, entry and setting |
-| `PUT` | `/api/records/:collection/:id` | Create or replace a record (`accounts`, `contacts`, `docs`, `entries`) |
+| `PUT` | `/api/records/:collection/:id` | Create or replace a record (`accounts`, `contacts`, `docs`, `entries`, `bankTxns`, `rules`, `recons`) |
 | `DELETE` | `/api/records/:collection/:id` | Delete a record |
 | `POST` | `/api/batch` | `{ "writes": [{ "op": "set" \| "delete", "collection", "id", "data" }] }`, applied all or nothing |
 | `PUT` | `/api/settings` | Company settings |
 | `GET` | `/api/backup` | Download a full backup |
 | `POST` | `/api/restore` | Replace everything with a backup |
+| `POST` | `/api/bank/import` | `{ "account", "rows": [{ "date", "amount", "desc", "fitid" }] }` adds statement lines to For review, skipping ones already imported |
 | `POST` | `/api/examples` | Load example data |
 | `GET` | `/api/events` | Server-sent events, sent whenever anything changes |
 
@@ -130,11 +139,11 @@ GROUP BY account_id;
 npm test
 ```
 
-The tests start a real server against a temporary database. They cover the bookkeeping rules, all-or-nothing batch writes, backup and restore, cross-site request blocking and password protection.
+The tests start a real server against a temporary database. They cover the bookkeeping rules, bank file parsing for several Canadian bank formats, statement import and duplicate detection, all-or-nothing batch writes, backup and restore, cross-site request blocking and password protection.
 
 ## Not built yet
 
-Bank feeds, bank reconciliation, emailing invoices or saving them as PDFs, payroll, multiple currencies, user accounts with roles, and an audit log of who changed what.
+Live bank feeds (see Banking above for statement import), emailing invoices or saving them as PDFs, payroll, multiple currencies, user accounts with roles, and an audit log of who changed what.
 
 ## License
 

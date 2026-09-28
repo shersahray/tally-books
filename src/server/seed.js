@@ -136,6 +136,15 @@ function exampleRecords(taxRate = 13, now = new Date()) {
   money('x_e3', 'expense', daysAgo(13, now), 'a1000', 'Internet and phone', [['a6800', 'Fibre internet and mobile', 95, true]]);
   money('x_e4', 'expense', daysAgo(6, now), 'a1000', 'Local ads', [['a6000', 'Community newsletter ad', 300, true]]);
   money('x_d1', 'deposit', daysAgo(65, now), 'a1000', 'Workshop fee', [['a4100', 'Half-day bookkeeping workshop', 800, true]]);
+  // Bank lines waiting in "For review": two match existing records, two are new, one has a rule.
+  const ads = r2(300 * (1 + rate)), rent = r2(1800 * (1 + rate)), maple = r2(1200 * (1 + rate));
+  const bank = (id, days, amount, desc) => out.push({ collection: 'bankTxns', id, data: { account: 'a1000', date: daysAgo(days, now), amount, desc, fitid: '', status: 'new', entryId: '', imported: cr(), file: 'example', example: true } });
+  bank('b_x1', 5, -ads, 'COMMUNITY NEWS ADVERTISING');
+  bank('b_x2', 2, maple, 'E-TRANSFER MAPLE STREET DENTAL');
+  bank('b_x3', 3, -4.75, 'TIM HORTONS #2231');
+  bank('b_x4', 1, -r2(75 * (1 + rate)), 'ROGERS WIRELESS PAYMENT');
+  bank('b_x5', 2, -rent, 'CITYVIEW PROPERTY MGMT PAD');
+  out.push({ collection: 'rules', id: 'x_r1', data: { text: 'ROGERS', direction: 'out', account: 'a6800', contactId: '', tax: true, example: true, created: cr() } });
   add('entries', 'x_t1', { type: 'transfer', date: daysAgo(8, now), memo: 'Credit card payment', form: { from: 'a1000', to: 'a2100', amount: cc },
     lines: [{ account: 'a2100', debit: cc, credit: 0 }, { account: 'a1000', debit: 0, credit: cc }] });
   return out;

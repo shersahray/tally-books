@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Store, COLLECTIONS } = require('./db');
-const { validateRecord, checkDelete, validateCompany, ValidationError } = require('./validate');
+const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY } = require('./seed');
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
@@ -53,19 +53,23 @@ function createApp(opts) {
     else if (op === 'delete') {
       checkDelete(collection, id, store);
       store.delete(collection, id);
+      // A deleted transaction sends any bank lines linked to it back to "For review".
+      if (collection === 'entries') {
+        for (const b of store.bankTxnsForEntry(id)) store.put('bankTxns', b.id, { ...b, status: 'new', entryId: '' });
+      }
     } else throw new ValidationError(`Unknown operation "${op}".`);
   }
 
   const routes = [
     ['GET', /^\/api\/health$/, () => ({ ok: true, rev })],
     ['GET', /^\/api\/state$/, () => state()],
-    ['PUT', /^\/api\/records\/([a-z]+)\/([^/]+)$/, async (req, m) => {
+    ['PUT', /^\/api\/records\/([A-Za-z]+)\/([^/]+)$/, async (req, m) => {
       const data = await readJson(req);
       store.transaction(() => applyWrite({ op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data }));
       bump();
       return { ok: true, rev };
     }],
-    ['DELETE', /^\/api\/records\/([a-z]+)\/([^/]+)$/, (req, m) => {
+    ['DELETE', /^\/api\/records\/([A-Za-z]+)\/([^/]+)$/, (req, m) => {
       store.transaction(() => applyWrite({ op: 'delete', collection: m[1], id: decodeURIComponent(m[2]) }));
       bump();
       return { ok: true, rev };
@@ -82,6 +86,12 @@ function createApp(opts) {
       store.putSetting('company', validateCompany(await readJson(req)));
       bump();
       return { ok: true, rev };
+    }],
+    ['POST', /^\/api\/bank\/import$/, async req => {
+      const body = await readJson(req, 20 * 1024 * 1024);
+      const result = store.transaction(() => importBankRows(store, body));
+      if (result.added) bump();
+      return { ok: true, rev, ...result };
     }],
     ['POST', /^\/api\/examples$/, () => {
       loadExamples(store);
@@ -101,8 +111,8 @@ function createApp(opts) {
       store.transaction(() => {
         store.clearAll();
         store.putSetting('company', validateCompany(body.company || {}));
-        // Order matters: entries are checked against accounts and docs.
-        for (const c of ['accounts', 'contacts', 'docs', 'entries']) {
+        // COLLECTIONS is ordered so each record is checked against what it depends on.
+        for (const c of COLLECTIONS) {
           for (const r of body[c] || []) {
             const { id, ...data } = r;
             store.put(c, id, validateRecord(c, id, data, store));
@@ -162,13 +172,41 @@ function createApp(opts) {
 function loadExamples(store) {
   const company = store.getSetting('company') || DEFAULT_COMPANY;
   const recs = exampleRecords(Number(company.taxRate) || 0);
-  const order = ['contacts', 'docs', 'entries'];
+  const order = ['contacts', 'rules', 'docs', 'entries', 'bankTxns'];
   recs.sort((a, b) => order.indexOf(a.collection) - order.indexOf(b.collection));
   try {
     store.transaction(() => recs.forEach(r => store.put(r.collection, r.id, validateRecord(r.collection, r.id, r.data, store))));
   } catch (err) {
     throw new ValidationError('Example data needs the default chart of accounts (codes 1000–7200). ' + err.message);
   }
+}
+
+/**
+ * Add statement lines to "For review", skipping ones already imported.
+ * A line's identity is the bank's FITID when the file has one, otherwise date + amount + description
+ * (+ a counter, so two identical coffees on the same day both come in).
+ */
+function importBankRows(store, body) {
+  const account = bankAccount(store, body.account);
+  if (!Array.isArray(body.rows) || !body.rows.length) throw new ValidationError('The file has no transactions to import.');
+  if (body.rows.length > 5000) throw new ValidationError('Import at most 5,000 transactions at a time.');
+  const seen = new Map();
+  let added = 0, skipped = 0;
+  const now = Date.now();
+  body.rows.forEach((r, i) => {
+    const amount = Math.round(Number(r.amount) * 100) / 100;
+    if (!isDate(r.date) || !Number.isFinite(amount) || amount === 0) throw new ValidationError(`Row ${i + 1} needs a valid date and a non-zero amount.`);
+    const desc = String(r.desc || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    let key = r.fitid ? 'f:' + String(r.fitid).trim() : `${r.date}|${amount.toFixed(2)}|${desc.toLowerCase()}`;
+    const n = (seen.get(key) || 0) + 1;
+    seen.set(key, n);
+    if (!r.fitid && n > 1) key += '#' + n;
+    const id = 'b_' + crypto.createHash('sha1').update(account.id + '\u0000' + key).digest('hex').slice(0, 24);
+    if (store.get('bankTxns', id)) { skipped++; return; }
+    store.put('bankTxns', id, { account: account.id, date: r.date, amount, desc, fitid: r.fitid ? String(r.fitid) : '', status: 'new', entryId: '', imported: now, file: String(body.fileName || '').slice(0, 200) });
+    added++;
+  });
+  return { added, skipped };
 }
 
 function authorized(req, password) {

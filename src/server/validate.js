@@ -78,12 +78,57 @@ function validateEntry(data, store) {
   });
   if (dr !== cr) throw new ValidationError(`Debits and credits don’t balance (off by ${((dr - cr) / 100).toFixed(2)}).`);
   if (dr === 0) throw new ValidationError('A transaction needs an amount.');
+  if (data.clear !== undefined) {
+    if (!isObj(data.clear)) throw new ValidationError('Cleared status must be an object.');
+    const used = new Set(lines.map(l => l.account));
+    for (const [acct, v] of Object.entries(data.clear)) {
+      if (!used.has(acct)) throw new ValidationError('Cleared status refers to an account this transaction doesn’t use.');
+      if (v !== 'c' && v !== 'r') throw new ValidationError('Cleared status must be "c" (cleared) or "r" (reconciled).');
+    }
+  }
   if (data.applyTo) {
     const doc = store.get('docs', data.applyTo);
     if (!doc) throw new ValidationError('The invoice or bill this payment applies to doesn’t exist.');
     if (!(Number(data.amount) > 0)) throw new ValidationError('Payment amount must be above zero.');
   }
   return { ...data, lines };
+}
+
+function bankAccount(store, id) {
+  const a = store.get('accounts', id);
+  if (!a || (a.detail !== 'bank' && a.detail !== 'card')) throw new ValidationError('Choose a bank or credit card account.');
+  return a;
+}
+
+const BANK_STATUS = ['new', 'added', 'matched', 'excluded'];
+function validateBankTxn(data, store) {
+  bankAccount(store, data.account);
+  if (!isDate(data.date)) throw new ValidationError('Bank transaction date must be YYYY-MM-DD.');
+  const amt = Number(data.amount);
+  if (!Number.isFinite(amt) || amt === 0) throw new ValidationError('Bank transaction amount must be a non-zero number.');
+  if (!BANK_STATUS.includes(data.status)) throw new ValidationError('Unknown bank transaction status.');
+  if ((data.status === 'added' || data.status === 'matched') && !store.get('entries', data.entryId)) {
+    throw new ValidationError('The transaction this bank line points to doesn’t exist.');
+  }
+  return { ...data, amount: cents(amt) / 100, desc: str(data.desc, 300), entryId: data.status === 'added' || data.status === 'matched' ? data.entryId : '' };
+}
+
+function validateRule(data, store) {
+  if (!str(data.text).trim()) throw new ValidationError('A rule needs text to look for.');
+  if (!['any', 'in', 'out'].includes(data.direction || 'any')) throw new ValidationError('Rule direction must be any, in or out.');
+  const a = store.get('accounts', data.account);
+  if (!a) throw new ValidationError('Choose the account this rule should use.');
+  if (a.detail === 'bank' || a.detail === 'card') throw new ValidationError('A rule can’t categorize into a bank or card account; use a transfer instead.');
+  if (data.contactId && !store.get('contacts', data.contactId)) throw new ValidationError('The payee on this rule doesn’t exist.');
+  return { ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: !!data.tax, contactId: data.contactId || '' };
+}
+
+function validateRecon(data, store) {
+  bankAccount(store, data.account);
+  if (!isDate(data.statementDate)) throw new ValidationError('Statement date must be YYYY-MM-DD.');
+  if (!Number.isFinite(Number(data.endingBalance))) throw new ValidationError('Ending balance must be a number.');
+  if (!Array.isArray(data.entryIds)) throw new ValidationError('Reconciliation must list its transactions.');
+  return data;
 }
 
 function validateRecord(collection, id, data, store) {
@@ -94,6 +139,9 @@ function validateRecord(collection, id, data, store) {
     case 'contacts': return validateContact(data);
     case 'docs': return validateDoc(data);
     case 'entries': return validateEntry(data, store);
+    case 'bankTxns': return validateBankTxn(data, store);
+    case 'rules': return validateRule(data, store);
+    case 'recons': return validateRecon(data, store);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -103,7 +151,10 @@ function checkDelete(collection, id, store) {
   if (collection === 'accounts' && store.accountUsed(id)) {
     throw new ValidationError('This account has transactions, so it can’t be deleted. Mark it inactive instead.', 409);
   }
-  if (collection === 'contacts' && store.contactUsed(id)) {
+  if (collection === 'accounts' && (store.list('bankTxns').some(b => b.account === id) || store.list('rules').some(r => r.account === id))) {
+    throw new ValidationError('This account has imported bank transactions or bank rules, so it can’t be deleted. Mark it inactive instead.', 409);
+  }
+  if (collection === 'contacts' && (store.contactUsed(id) || store.list('rules').some(r => r.contactId === id))) {
     throw new ValidationError('This contact appears on transactions, so it can’t be deleted.', 409);
   }
   if (collection === 'docs' && store.hasPayments(id)) {
@@ -125,4 +176,4 @@ function validateCompany(data) {
   };
 }
 
-module.exports = { validateRecord, checkDelete, validateCompany, ValidationError, TYPES };
+module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate };

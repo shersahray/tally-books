@@ -15,7 +15,8 @@ process.emitWarning = function (warning, ...args) {
 const { DatabaseSync } = require('node:sqlite');
 process.emitWarning = origEmit;
 
-const COLLECTIONS = ['accounts', 'contacts', 'docs', 'entries'];
+// Order matters for restore: later collections are validated against earlier ones.
+const COLLECTIONS = ['accounts', 'contacts', 'rules', 'docs', 'entries', 'bankTxns', 'recons'];
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS records (
@@ -71,6 +72,8 @@ class Store {
       accountUsed: this.db.prepare('SELECT 1 FROM journal_lines WHERE account_id = ? LIMIT 1'),
       contactUsed: this.db.prepare(`SELECT 1 FROM records WHERE collection IN ('docs','entries')
                                     AND json_extract(data, '$.contactId') = ? LIMIT 1`),
+      bankTxnsForEntry: this.db.prepare(`SELECT id, data FROM records WHERE collection = 'bankTxns'
+                                    AND json_extract(data, '$.entryId') = ?`),
       paymentsFor: this.db.prepare(`SELECT 1 FROM records WHERE collection = 'entries'
                                     AND json_extract(data, '$.applyTo') = ? LIMIT 1`),
     };
@@ -108,6 +111,7 @@ class Store {
   accountUsed(id) { return !!this.stmt.accountUsed.get(id); }
   contactUsed(id) { return !!this.stmt.contactUsed.get(id); }
   hasPayments(docId) { return !!this.stmt.paymentsFor.get(docId); }
+  bankTxnsForEntry(entryId) { return this.stmt.bankTxnsForEntry.all(entryId).map(r => ({ ...JSON.parse(r.data), id: r.id })); }
   clearAll() { this.stmt.delAll.run(); }
 
   /** Run fn inside a transaction; roll back if it throws. */
