@@ -11,6 +11,11 @@ It runs two ways from the same code:
 
 ## Features
 
+- **Multiple companies:** keep books for any number of clients. A client list shows each company's bank lines waiting for review, overdue invoices, receivables and when it was last reconciled. Switch between companies from the sidebar.
+  - Each company is a separate database file, so books never mix, and a backup covers one client.
+  - New companies get the right sales tax for their province or territory: 13% HST in Ontario, 14% in Nova Scotia, 15% in New Brunswick, Newfoundland and Labrador, and PEI, combined GST/QST in Quebec, and 5% GST elsewhere. You can also set the rate yourself.
+  - You pick the fiscal year-end, and can copy the chart of accounts from another client.
+  - Archive former clients to hide them without deleting anything.
 - **Sales:** invoices with line items and sales tax, partial and full payments, and a status on every invoice (open, partial, overdue, paid).
 - **Expenses:** vendor bills, bill payments, expenses paid by bank or credit card, and deposits.
 - **Banking:** transfers between accounts, credit card payments, and a register for each account with a running balance.
@@ -23,6 +28,12 @@ It runs two ways from the same code:
   You can add lines one at a time or in bulk, exclude duplicates, and undo anything.
 - **Bank rules:** "when the description contains ROGERS, suggest Telephone and internet, HST included."
 - **Reconciliation:** enter the statement's ending balance and date, then tick transactions until the difference is zero. You can save and come back later, and undo the most recent reconciliation. Registers mark each line C (cleared) or R (reconciled).
+- **Sales tax returns:** a worksheet for each filing period (monthly, quarterly or annual, following the fiscal year) with the figures to enter in the return.
+  - **GST/HST (CRA):** lines 101 to 113C and 114/115. Tax collected, input tax credits, adjustments from journal entries, and instalments are calculated from the books, and you can open the transactions behind each figure. Rebates and self-assessed amounts (lines 111, 205 and 405) are typed in.
+  - **QST (Revenu Québec):** Quebec companies track GST (5%) and QST (9.975%) in separate accounts and get their own QST worksheet, lines 203 to 213.
+  - **Filing:** marking a return as filed saves its figures and can record the payment to the government, or the refund, which clears the tax account. Instalments can be recorded too.
+  - **Filed periods:** changing a transaction in a filed period asks for confirmation first, and the worksheet shows when the books no longer match what was filed.
+  - The app produces the figures; returns are still submitted on CRA My Business Account or with Revenu Québec.
 - **Journal entries:** manual entries with debit and credit lines. The server rejects any entry that doesn't balance.
 - **Chart of accounts:** set up for a Canadian small business charging HST (13%). The tax name, rate and fiscal year start are all in Settings.
 - **Reports:** profit and loss, balance sheet, trial balance, A/R aging and A/P aging, for any date range. All of them export to CSV.
@@ -42,7 +53,13 @@ npm start            # or: npm run start:demo  (loads example data on first run)
 
 Then open <http://localhost:3000>.
 
-Your books are saved in `data/tally-books.db`. That's a normal SQLite file, so you can back it up by copying it while the server is stopped, or use **Settings → Download backup** at any time.
+Your books are saved in the `data` folder:
+- `companies.json` lists your companies;
+- `companies/<id>.db` holds each company's books.
+
+These are normal SQLite files, so you can back up the whole folder while the server is stopped, or use **Settings → Download backup** for one company at any time.
+
+If you're upgrading from the single-company version, your existing `data/tally-books.db` becomes your first company automatically.
 
 ### Settings
 
@@ -50,7 +67,7 @@ Your books are saved in `data/tally-books.db`. That's a normal SQLite file, so y
 |---|---|---|
 | `PORT` | `3000` | Port to listen on |
 | `HOST` | `127.0.0.1` | Set to `0.0.0.0` to allow other computers on your network |
-| `DATA_DIR` | `./data` | Folder that holds the database file |
+| `DATA_DIR` | `./data` | Folder that holds the company list and each company's database |
 | `APP_PASSWORD` | *(none)* | When set, the browser asks for this password (any username). **Set it whenever `HOST` isn't `127.0.0.1`.** |
 
 For example, to share it on your office network:
@@ -74,7 +91,7 @@ To build an installer for the computer you're on:
 npm run dist         # output goes to dist/
 ```
 
-The desktop app keeps its database in your user data folder. **File → Show data file** in the app shows you where it is.
+The desktop app keeps its books in your user data folder. **File → Show data folder** in the app opens it.
 
 ### Automatic installers from GitHub
 
@@ -90,9 +107,12 @@ The builds aren't code-signed, so Windows SmartScreen and macOS Gatekeeper will 
 public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   bankparse.js     Bank file parsers (CSV column detection, OFX/QFX/QBO)
   banking.js       Banking screens: import, review, rules, reconcile
+  companies.js     Client list, company switcher, new company
+  salestax.js      GST/HST and QST return worksheets, filing, payments
 src/server/
   app.js           HTTP server: JSON API, static files, live updates
   db.js            SQLite storage (Node's built-in node:sqlite)
+  companies.js     Company list; one database file per company
   validate.js      Bookkeeping rules enforced on every write
   seed.js          Default chart of accounts and example data
   index.js         Command-line entry point
@@ -120,18 +140,28 @@ GROUP BY account_id;
 
 ### API
 
+**Across companies:**
+
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/state` | Every account, contact, document, entry and setting |
-| `PUT` | `/api/records/:collection/:id` | Create or replace a record (`accounts`, `contacts`, `docs`, `entries`, `bankTxns`, `rules`, `recons`) |
-| `DELETE` | `/api/records/:collection/:id` | Delete a record |
-| `POST` | `/api/batch` | `{ "writes": [{ "op": "set" \| "delete", "collection", "id", "data" }] }`, applied all or nothing |
-| `PUT` | `/api/settings` | Company settings |
-| `GET` | `/api/backup` | Download a full backup |
-| `POST` | `/api/restore` | Replace everything with a backup |
-| `POST` | `/api/bank/import` | `{ "account", "rows": [{ "date", "amount", "desc", "fitid" }] }` adds statement lines to For review, skipping ones already imported |
-| `POST` | `/api/examples` | Load example data |
-| `GET` | `/api/events` | Server-sent events, sent whenever anything changes |
+| `GET` | `/api/companies` | Every company with a summary, plus the province tax presets |
+| `POST` | `/api/companies` | `{ "name", "province", "fyStart", "copyFrom", "examples" }` creates a company |
+| `PUT` | `/api/companies/:id` | `{ "archived": true \| false }` |
+| `GET` | `/api/events` | Server-sent events: `{ company, rev }` when a company's books change, `{ companies: true }` when the list changes |
+
+**Inside one company:** every path below is under `/api/c/:companyId`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/state` | Every account, contact, document, entry, bank line, rule, reconciliation and setting |
+| `PUT` | `/records/:collection/:id` | Create or replace a record (`accounts`, `contacts`, `docs`, `entries`, `bankTxns`, `rules`, `recons`, `filings`) |
+| `DELETE` | `/records/:collection/:id` | Delete a record |
+| `POST` | `/batch` | `{ "writes": [{ "op": "set" \| "delete", "collection", "id", "data" }] }`, applied all or nothing |
+| `PUT` | `/settings` | Company settings |
+| `POST` | `/bank/import` | `{ "account", "rows": [{ "date", "amount", "desc", "fitid" }] }` adds statement lines to For review, skipping ones already imported |
+| `GET` | `/backup` | Download a full backup of this company |
+| `POST` | `/restore` | Replace this company's books with a backup |
+| `POST` | `/examples` | Load example data |
 
 ## Development
 
@@ -139,11 +169,11 @@ GROUP BY account_id;
 npm test
 ```
 
-The tests start a real server against a temporary database. They cover the bookkeeping rules, bank file parsing for several Canadian bank formats, statement import and duplicate detection, all-or-nothing batch writes, backup and restore, cross-site request blocking and password protection.
+The tests start a real server against a temporary database. They cover the bookkeeping rules, bank file parsing for several Canadian bank formats, statement import and duplicate detection, all-or-nothing batch writes, backup and restore, cross-site request blocking, password protection, keeping companies separate, and moving books over from the single-company version.
 
 ## Not built yet
 
-Live bank feeds (see Banking above for statement import), emailing invoices or saving them as PDFs, payroll, multiple currencies, user accounts with roles, and an audit log of who changed what.
+Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, emailing invoices or saving them as PDFs, payroll, multiple currencies, user accounts with roles, and an audit log of who changed what.
 
 ## License
 

@@ -21,8 +21,8 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 async function start() {
-  const dbPath = path.join(app.getPath('userData'), 'tally-books.db');
-  server = createApp({ dbPath });
+  const dataDir = app.getPath('userData');
+  server = createApp({ dataDir });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve); // random free port, reachable only from this computer
@@ -49,18 +49,18 @@ async function start() {
     if (!target.startsWith(url)) { e.preventDefault(); shell.openExternal(target); }
   });
 
-  buildMenu(dbPath);
+  buildMenu(dataDir);
   await win.loadURL(url);
 }
 
-function buildMenu(dbPath) {
+function buildMenu(dataDir) {
   const isMac = process.platform === 'darwin';
   const template = [
     ...(isMac ? [{ role: 'appMenu' }] : []),
     {
       label: 'File',
       submenu: [
-        { label: 'Show data file', click: () => shell.showItemInFolder(dbPath) },
+        { label: 'Show data folder', click: () => shell.openPath(dataDir) },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
       ],

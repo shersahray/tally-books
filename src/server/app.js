@@ -5,9 +5,10 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { Store, COLLECTIONS } = require('./db');
+const { COLLECTIONS } = require('./db');
+const { Registry } = require('./companies');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
-const { seedDefaults, exampleRecords, DEFAULT_COMPANY } = require('./seed');
+const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 const MIME = {
@@ -20,33 +21,106 @@ const BACKUP_FORMAT = 'tally-books-backup';
 /**
  * Create the app server.
  * @param {object} opts
- * @param {string} opts.dbPath        SQLite file path (or ':memory:')
+ * @param {string} opts.dataDir       Folder holding companies.json and each company's database.
  * @param {string} [opts.password]    If set, HTTP Basic auth is required (any username).
  * @param {string} [opts.publicDir]   Directory of static files to serve.
- * @param {boolean} [opts.demo]       Load example data on first run.
+ * @param {boolean} [opts.demo]       Create an example company on first run.
  */
 function createApp(opts) {
-  const store = new Store(opts.dbPath);
-  const firstRun = seedDefaults(store);
-  if (firstRun && opts.demo) loadExamples(store);
+  const reg = new Registry(opts.dataDir);
   const publicDir = opts.publicDir || PUBLIC_DIR;
   const clients = new Set();
-  let rev = Number(store.getMeta('rev') || 0);
 
-  function bump() {
-    rev += 1;
-    store.putMeta('rev', rev);
-    const msg = `data: ${JSON.stringify({ rev })}\n\n`;
-    for (const res of clients) res.write(msg);
+  if (opts.demo && reg.list().length === 0) {
+    createCompany({ name: 'Example Company', province: 'ON', examples: true });
   }
 
-  function state() {
-    const out = { rev, company: { ...DEFAULT_COMPANY, ...(store.getSetting('company') || {}) } };
-    for (const c of COLLECTIONS) out[c] = store.list(c);
+  function broadcast(msg) {
+    const line = `data: ${JSON.stringify(msg)}\n\n`;
+    for (const res of clients) res.write(line);
+  }
+
+  /** Company context: its store and a change counter that live views follow. */
+  function ctxFor(id) {
+    const store = reg.store(id);
+    if (!store) throw new ValidationError('That company doesn’t exist. It may have been removed.', 404);
+    seedDefaults(store); // no-op once set up
+    return {
+      id, store,
+      get rev() { return Number(store.getMeta('rev') || 0); },
+      bump() {
+        const rev = Number(store.getMeta('rev') || 0) + 1;
+        store.putMeta('rev', rev);
+        broadcast({ company: id, rev });
+        return rev;
+      },
+    };
+  }
+
+  function createCompany(body) {
+    const name = String(body.name || '').trim();
+    if (!name) throw new ValidationError('Give the company a name.');
+    const preset = PROVINCES[body.province] || {};
+    const company = validateCompany({
+      ...DEFAULT_COMPANY, name, province: body.province || '',
+      taxName: body.taxName || preset.taxName || DEFAULT_COMPANY.taxName,
+      taxRate: body.taxRate ?? preset.taxRate ?? DEFAULT_COMPANY.taxRate,
+      qstRate: body.province ? preset.qstRate || 0 : 0,
+      filingFreq: body.filingFreq,
+      fyStart: body.fyStart || 1,
+    });
+    let accounts = null;
+    if (body.copyFrom) {
+      const src = reg.store(body.copyFrom);
+      if (!src) throw new ValidationError('The company to copy accounts from doesn’t exist.');
+      accounts = src.list('accounts');
+    }
+    const entry = reg.create(company.name);
+    const store = reg.store(entry.id);
+    seedDefaults(store, { company, accounts });
+    if (body.examples) loadExamples(store);
+    broadcast({ companies: true });
+    return entry;
+  }
+
+  function summary(c) {
+    const store = reg.store(c.id);
+    seedDefaults(store);
+    const settings = { ...DEFAULT_COMPANY, ...(store.getSetting('company') || {}) };
+    const entries = store.list('entries');
+    const paid = {};
+    for (const e of entries) if (e.applyTo) paid[e.applyTo] = (paid[e.applyTo] || 0) + (Number(e.amount) || 0);
+    const t = new Date(); const today = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+    let overdueCount = 0, overdue = 0, receivable = 0, payable = 0;
+    for (const d of store.list('docs')) {
+      const bal = Math.round(((Number(d.total) || 0) - (paid[d.id] || 0)) * 100) / 100;
+      if (bal <= 0.004) continue;
+      if (d.kind === 'invoice') {
+        receivable += bal;
+        if (d.due && d.due < today) { overdueCount++; overdue += bal; }
+      } else payable += bal;
+    }
+    const recons = store.list('recons').map(r => r.statementDate).sort();
+    return {
+      ...c,
+      name: settings.name,
+      province: settings.province, taxName: settings.taxName, taxRate: settings.taxRate, fyStart: settings.fyStart,
+      toReview: store.list('bankTxns').filter(b => b.status === 'new').length,
+      overdueCount, overdue: Math.round(overdue * 100) / 100,
+      receivable: Math.round(receivable * 100) / 100, payable: Math.round(payable * 100) / 100,
+      lastReconciled: recons[recons.length - 1] || '',
+      lastEntry: entries.reduce((m, e) => (e.date > m ? e.date : m), ''),
+      transactions: entries.length,
+    };
+  }
+
+  function state(ctx) {
+    const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) } };
+    for (const c of COLLECTIONS) out[c] = ctx.store.list(c);
     return out;
   }
 
-  function applyWrite(w) {
+  function applyWrite(store, w) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
     if (op === 'set') store.put(collection, id, validateRecord(collection, id, w.data, store));
@@ -60,74 +134,96 @@ function createApp(opts) {
     } else throw new ValidationError(`Unknown operation "${op}".`);
   }
 
-  const routes = [
-    ['GET', /^\/api\/health$/, () => ({ ok: true, rev })],
-    ['GET', /^\/api\/state$/, () => state()],
-    ['PUT', /^\/api\/records\/([A-Za-z]+)\/([^/]+)$/, async (req, m) => {
+  // Routes that work across companies.
+  const globalRoutes = [
+    ['GET', /^\/api\/health$/, () => ({ ok: true })],
+    ['GET', /^\/api\/companies$/, () => ({ companies: reg.list().map(summary), provinces: PROVINCES })],
+    ['POST', /^\/api\/companies$/, async req => {
+      const entry = createCompany(await readJson(req));
+      return { ok: true, company: summary(entry) };
+    }],
+    ['PUT', /^\/api\/companies\/([^/]+)$/, async (req, m) => {
+      const body = await readJson(req);
+      const id = decodeURIComponent(m[1]);
+      if (!reg.get(id)) throw new ValidationError('That company doesn’t exist.', 404);
+      const patch = {};
+      if (body.archived !== undefined) patch.archived = !!body.archived;
+      if (body.opened) patch.lastOpened = Date.now();
+      reg.update(id, patch);
+      if (patch.archived !== undefined) broadcast({ companies: true });
+      return { ok: true, company: summary(reg.get(id)) };
+    }],
+    ['GET', /^\/api\/events$/, (req, m, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      res.write(`retry: 3000\ndata: ${JSON.stringify({ hello: true })}\n\n`);
+      clients.add(res);
+      const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+      req.on('close', () => { clearInterval(ping); clients.delete(res); });
+    }],
+  ];
+
+  // Routes inside one company: /api/c/<companyId>/...
+  const companyRoutes = [
+    ['GET', /^\/state$/, ctx => state(ctx)],
+    ['PUT', /^\/records\/([A-Za-z]+)\/([^/]+)$/, async (ctx, req, m) => {
       const data = await readJson(req);
-      store.transaction(() => applyWrite({ op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data }));
-      bump();
-      return { ok: true, rev };
+      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data }));
+      return { ok: true, rev: ctx.bump() };
     }],
-    ['DELETE', /^\/api\/records\/([A-Za-z]+)\/([^/]+)$/, (req, m) => {
-      store.transaction(() => applyWrite({ op: 'delete', collection: m[1], id: decodeURIComponent(m[2]) }));
-      bump();
-      return { ok: true, rev };
+    ['DELETE', /^\/records\/([A-Za-z]+)\/([^/]+)$/, (ctx, req, m) => {
+      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'delete', collection: m[1], id: decodeURIComponent(m[2]) }));
+      return { ok: true, rev: ctx.bump() };
     }],
-    ['POST', /^\/api\/batch$/, async req => {
+    ['POST', /^\/batch$/, async (ctx, req) => {
       const body = await readJson(req);
       if (!Array.isArray(body.writes) || !body.writes.length) throw new ValidationError('Send a non-empty "writes" list.');
       if (body.writes.length > 500) throw new ValidationError('At most 500 writes per batch.');
-      store.transaction(() => body.writes.forEach(applyWrite));
-      bump();
-      return { ok: true, rev };
+      ctx.store.transaction(() => body.writes.forEach(w => applyWrite(ctx.store, w)));
+      return { ok: true, rev: ctx.bump() };
     }],
-    ['PUT', /^\/api\/settings$/, async req => {
-      store.putSetting('company', validateCompany(await readJson(req)));
-      bump();
-      return { ok: true, rev };
+    ['PUT', /^\/settings$/, async (ctx, req) => {
+      const company = validateCompany(await readJson(req));
+      ctx.store.putSetting('company', company);
+      reg.update(ctx.id, { name: company.name });
+      broadcast({ companies: true });
+      return { ok: true, rev: ctx.bump() };
     }],
-    ['POST', /^\/api\/bank\/import$/, async req => {
+    ['POST', /^\/bank\/import$/, async (ctx, req) => {
       const body = await readJson(req, 20 * 1024 * 1024);
-      const result = store.transaction(() => importBankRows(store, body));
-      if (result.added) bump();
-      return { ok: true, rev, ...result };
+      const result = ctx.store.transaction(() => importBankRows(ctx.store, body));
+      return { ok: true, rev: result.added ? ctx.bump() : ctx.rev, ...result };
     }],
-    ['POST', /^\/api\/examples$/, () => {
-      loadExamples(store);
-      bump();
-      return { ok: true, rev };
+    ['POST', /^\/examples$/, ctx => {
+      loadExamples(ctx.store);
+      return { ok: true, rev: ctx.bump() };
     }],
-    ['GET', /^\/api\/backup$/, (req, m, res) => {
-      const s = state();
+    ['GET', /^\/backup$/, (ctx, req, m, res) => {
+      const s = state(ctx);
       const body = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: s.company };
       for (const c of COLLECTIONS) body[c] = s[c];
-      const name = `tally-books-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const safe = String(s.company.name || 'books').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'books';
+      const name = `${safe}-backup-${new Date().toISOString().slice(0, 10)}.json`;
       send(res, 200, JSON.stringify(body, null, 2), { 'Content-Type': MIME['.json'], 'Content-Disposition': `attachment; filename="${name}"` });
     }],
-    ['POST', /^\/api\/restore$/, async req => {
+    ['POST', /^\/restore$/, async (ctx, req) => {
       const body = await readJson(req, 50 * 1024 * 1024);
       if (body.format !== BACKUP_FORMAT) throw new ValidationError('That file isn’t a Tally Books backup.');
-      store.transaction(() => {
-        store.clearAll();
-        store.putSetting('company', validateCompany(body.company || {}));
+      const company = validateCompany(body.company || {});
+      ctx.store.transaction(() => {
+        ctx.store.clearAll();
+        ctx.store.putMeta('seeded', new Date().toISOString());
+        ctx.store.putSetting('company', company);
         // COLLECTIONS is ordered so each record is checked against what it depends on.
         for (const c of COLLECTIONS) {
           for (const r of body[c] || []) {
             const { id, ...data } = r;
-            store.put(c, id, validateRecord(c, id, data, store));
+            ctx.store.put(c, id, validateRecord(c, id, data, ctx.store));
           }
         }
       });
-      bump();
-      return { ok: true, rev };
-    }],
-    ['GET', /^\/api\/events$/, (req, m, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-      res.write(`retry: 3000\ndata: ${JSON.stringify({ rev })}\n\n`);
-      clients.add(res);
-      const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-      req.on('close', () => { clearInterval(ping); clients.delete(res); });
+      reg.update(ctx.id, { name: company.name });
+      broadcast({ companies: true });
+      return { ok: true, rev: ctx.bump() };
     }],
   ];
 
@@ -139,7 +235,20 @@ function createApp(opts) {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
-        for (const [method, re, handler] of routes) {
+        const cm = url.pathname.match(/^\/api\/c\/([^/]+)(\/.*)$/);
+        if (cm) {
+          const ctx = ctxFor(decodeURIComponent(cm[1]));
+          for (const [method, re, handler] of companyRoutes) {
+            const m = cm[2].match(re);
+            if (m && method === req.method) {
+              const out = await handler(ctx, req, m, res);
+              if (out !== undefined) sendJson(res, 200, out);
+              return;
+            }
+          }
+          return sendJson(res, 404, { error: 'Not found' });
+        }
+        for (const [method, re, handler] of globalRoutes) {
           const m = url.pathname.match(re);
           if (m && method === req.method) {
             const out = await handler(req, m, res);
@@ -157,21 +266,22 @@ function createApp(opts) {
     }
   });
 
-  server.on('close', () => store.close());
-  /** Stop accepting requests, end live-update streams, and close the database. */
+  server.on('close', () => reg.closeAll());
+  /** Stop accepting requests, end live-update streams, and close the databases. */
   server.shutdown = () => new Promise(resolve => {
     for (const res of clients) res.end();
     clients.clear();
     server.close(() => resolve());
     server.closeIdleConnections();
   });
-  server.store = store;
+  server.registry = reg;
   return server;
 }
 
 function loadExamples(store) {
   const company = store.getSetting('company') || DEFAULT_COMPANY;
-  const recs = exampleRecords(Number(company.taxRate) || 0);
+  const split = Number(company.qstRate) > 0 && store.get('accounts', 'a2210');
+  const recs = exampleRecords(Number(company.taxRate) || 0, new Date(), split ? Number(company.qstRate) : 0);
   const order = ['contacts', 'rules', 'docs', 'entries', 'bankTxns'];
   recs.sort((a, b) => order.indexOf(a.collection) - order.indexOf(b.collection));
   try {

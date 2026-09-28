@@ -1,7 +1,7 @@
 'use strict';
 // Default chart of accounts (set up for a Canadian small business charging HST) and optional example data.
 
-const DEFAULT_COMPANY = { name: 'My Business', fyStart: 1, taxName: 'HST', taxRate: 13, terms: 30, currency: '$', bn: '' };
+const DEFAULT_COMPANY = { name: 'My Business', fyStart: 1, taxName: 'HST', taxRate: 13, terms: 30, currency: '$', bn: '', province: 'ON' };
 
 const DEFAULT_ACCOUNTS = [
   ['1000', 'Chequing', 'Asset', 'bank'],
@@ -35,13 +35,48 @@ const DEFAULT_ACCOUNTS = [
   ['7200', 'Utilities', 'Expense', ''],
 ];
 
-function seedDefaults(store) {
+// Sales tax by province or territory. Rates are the combined recoverable tax a business charges.
+const PROVINCES = {
+  ON: { name: 'Ontario', taxName: 'HST', taxRate: 13 },
+  NS: { name: 'Nova Scotia', taxName: 'HST', taxRate: 14 },
+  NB: { name: 'New Brunswick', taxName: 'HST', taxRate: 15 },
+  NL: { name: 'Newfoundland and Labrador', taxName: 'HST', taxRate: 15 },
+  PE: { name: 'Prince Edward Island', taxName: 'HST', taxRate: 15 },
+  QC: { name: 'Quebec', taxName: 'GST/QST', taxRate: 14.975, qstRate: 9.975 },
+  BC: { name: 'British Columbia', taxName: 'GST', taxRate: 5 },
+  AB: { name: 'Alberta', taxName: 'GST', taxRate: 5 },
+  SK: { name: 'Saskatchewan', taxName: 'GST', taxRate: 5 },
+  MB: { name: 'Manitoba', taxName: 'GST', taxRate: 5 },
+  YT: { name: 'Yukon', taxName: 'GST', taxRate: 5 },
+  NT: { name: 'Northwest Territories', taxName: 'GST', taxRate: 5 },
+  NU: { name: 'Nunavut', taxName: 'GST', taxRate: 5 },
+};
+
+/**
+ * Set up a new set of books once: company settings plus a chart of accounts.
+ * @param {Store} store
+ * @param {object} [init]
+ * @param {object} [init.company]   settings to start with (name, fyStart, taxName, taxRate, ...)
+ * @param {Array}  [init.accounts]  accounts to copy instead of the default chart ({id, ...data})
+ */
+function seedDefaults(store, init = {}) {
   if (store.getMeta('seeded')) return false;
+  const company = { ...DEFAULT_COMPANY, ...(init.company || {}) };
   store.transaction(() => {
-    if (!store.getSetting('company')) store.putSetting('company', DEFAULT_COMPANY);
+    if (!store.getSetting('company')) store.putSetting('company', company);
     if (store.list('accounts').length === 0) {
-      for (const [code, name, type, detail] of DEFAULT_ACCOUNTS) {
-        store.put('accounts', 'a' + code, { code, name, type, detail, desc: '', active: true });
+      if (init.accounts && init.accounts.length) {
+        for (const a of init.accounts) {
+          const { id, importMap, lastStatement, ...data } = a;
+          store.put('accounts', id, data);
+        }
+      } else {
+        const split = Number(company.qstRate) > 0;
+        for (const [code, name, type, detail] of DEFAULT_ACCOUNTS) {
+          const label = detail === 'tax' ? (split ? 'GST payable' : `${company.taxName || 'Sales tax'} payable`) : name;
+          store.put('accounts', 'a' + code, { code, name: label, type, detail, desc: '', active: true });
+        }
+        if (split) store.put('accounts', 'a2210', { code: '2210', name: 'QST payable', type: 'Liability', detail: 'qst', desc: '', active: true });
       }
     }
     store.putMeta('seeded', new Date().toISOString());
@@ -59,11 +94,17 @@ function daysAgo(n, now = new Date()) { const d = new Date(now); d.setHours(12, 
  * Builds the example records. Returns a list of {collection, id, data}.
  * Account ids refer to the default chart; call only when those accounts exist.
  */
-function exampleRecords(taxRate = 13, now = new Date()) {
+function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0) {
   const out = [];
   let created = now.getTime() - 90 * 864e5;
   const cr = () => (created += 60000);
   const rate = taxRate / 100;
+  // Tax lines for a taxable amount: one GST/HST line, or GST + QST for Quebec companies.
+  const taxLines = (base, side, memo) => {
+    const parts = qstRate > 0 ? [['a2200', (taxRate - qstRate) / 100, 'GST'], ['a2210', qstRate / 100, 'QST']] : [['a2200', rate, 'Sales tax']];
+    return parts.map(([account, r, name]) => ({ account, debit: side === 'debit' ? r2(base * r) : 0, credit: side === 'credit' ? r2(base * r) : 0, memo: `${name} ${memo}` })).filter(l => l.debit || l.credit);
+  };
+  const taxOn = base => taxLines(base, 'credit', '').reduce((s, l) => s + l.credit, 0);
   const add = (collection, id, data) => out.push({ collection, id, data: { example: true, created: cr(), contactId: '', ref: '', memo: '', ...data } });
 
   [['c_maple', 'Maple Street Dental', 'customer', 'accounts@maplestreetdental.example'],
@@ -78,7 +119,8 @@ function exampleRecords(taxRate = 13, now = new Date()) {
   function doc(id, kind, number, contactId, date, due, lines) {
     const ls = lines.map(([desc, account, qty, rate_, tax]) => ({ desc, account, qty, rate: rate_, tax }));
     const sub = r2(ls.reduce((s, l) => s + l.qty * l.rate, 0));
-    const tax = r2(ls.filter(l => l.tax).reduce((s, l) => s + l.qty * l.rate, 0) * rate);
+    const taxable = ls.filter(l => l.tax).reduce((s, l) => s + l.qty * l.rate, 0);
+    const tax = r2(taxOn(taxable));
     const total = r2(sub + tax);
     const g = {};
     ls.forEach(l => (g[l.account] = r2((g[l.account] || 0) + l.qty * l.rate)));
@@ -86,10 +128,10 @@ function exampleRecords(taxRate = 13, now = new Date()) {
     if (kind === 'invoice') {
       pl.push({ account: 'a1200', debit: total, credit: 0 });
       Object.entries(g).forEach(([a, v]) => pl.push({ account: a, debit: 0, credit: v }));
-      if (tax) pl.push({ account: 'a2200', debit: 0, credit: tax, memo: 'Sales tax' });
+      pl.push(...taxLines(taxable, 'credit', 'collected'));
     } else {
       Object.entries(g).forEach(([a, v]) => pl.push({ account: a, debit: v, credit: 0 }));
-      if (tax) pl.push({ account: 'a2200', debit: tax, credit: 0, memo: 'Sales tax paid' });
+      pl.push(...taxLines(taxable, 'debit', 'paid'));
       pl.push({ account: 'a2000', debit: 0, credit: total });
     }
     const c = cr();
@@ -107,17 +149,18 @@ function exampleRecords(taxRate = 13, now = new Date()) {
   function money(id, kind, date, bank, memo, lines) {
     const ls = lines.map(([account, desc, amount, tax]) => ({ account, desc, amount, tax }));
     const sub = r2(ls.reduce((s, l) => s + l.amount, 0));
-    const tax = r2(ls.filter(l => l.tax).reduce((s, l) => s + l.amount, 0) * rate);
+    const taxable = ls.filter(l => l.tax).reduce((s, l) => s + l.amount, 0);
+    const tax = r2(taxOn(taxable));
     const total = r2(sub + tax);
     const pl = [];
     if (kind === 'expense') {
       ls.forEach(l => pl.push({ account: l.account, debit: l.amount, credit: 0 }));
-      if (tax) pl.push({ account: 'a2200', debit: tax, credit: 0, memo: 'Sales tax paid' });
+      pl.push(...taxLines(taxable, 'debit', 'paid'));
       pl.push({ account: bank, debit: 0, credit: total });
     } else {
       pl.push({ account: bank, debit: total, credit: 0 });
       ls.forEach(l => pl.push({ account: l.account, debit: 0, credit: l.amount }));
-      if (tax) pl.push({ account: 'a2200', debit: 0, credit: tax, memo: 'Sales tax collected' });
+      pl.push(...taxLines(taxable, 'credit', 'collected'));
     }
     add('entries', id, { type: kind, date, memo, form: { bank, lines: ls }, lines: pl });
     return total;
@@ -137,12 +180,12 @@ function exampleRecords(taxRate = 13, now = new Date()) {
   money('x_e4', 'expense', daysAgo(6, now), 'a1000', 'Local ads', [['a6000', 'Community newsletter ad', 300, true]]);
   money('x_d1', 'deposit', daysAgo(65, now), 'a1000', 'Workshop fee', [['a4100', 'Half-day bookkeeping workshop', 800, true]]);
   // Bank lines waiting in "For review": two match existing records, two are new, one has a rule.
-  const ads = r2(300 * (1 + rate)), rent = r2(1800 * (1 + rate)), maple = r2(1200 * (1 + rate));
+  const ads = r2(300 + taxOn(300)), rent = r2(1800 + taxOn(1800)), maple = r2(1200 + taxOn(1200));
   const bank = (id, days, amount, desc) => out.push({ collection: 'bankTxns', id, data: { account: 'a1000', date: daysAgo(days, now), amount, desc, fitid: '', status: 'new', entryId: '', imported: cr(), file: 'example', example: true } });
   bank('b_x1', 5, -ads, 'COMMUNITY NEWS ADVERTISING');
   bank('b_x2', 2, maple, 'E-TRANSFER MAPLE STREET DENTAL');
   bank('b_x3', 3, -4.75, 'TIM HORTONS #2231');
-  bank('b_x4', 1, -r2(75 * (1 + rate)), 'ROGERS WIRELESS PAYMENT');
+  bank('b_x4', 1, -r2(75 + taxOn(75)), 'ROGERS WIRELESS PAYMENT');
   bank('b_x5', 2, -rent, 'CITYVIEW PROPERTY MGMT PAD');
   out.push({ collection: 'rules', id: 'x_r1', data: { text: 'ROGERS', direction: 'out', account: 'a6800', contactId: '', tax: true, example: true, created: cr() } });
   add('entries', 'x_t1', { type: 'transfer', date: daysAgo(8, now), memo: 'Credit card payment', form: { from: 'a1000', to: 'a2100', amount: cc },
@@ -150,4 +193,4 @@ function exampleRecords(taxRate = 13, now = new Date()) {
   return out;
 }
 
-module.exports = { seedDefaults, exampleRecords, DEFAULT_COMPANY, DEFAULT_ACCOUNTS };
+module.exports = { seedDefaults, exampleRecords, DEFAULT_COMPANY, DEFAULT_ACCOUNTS, PROVINCES };

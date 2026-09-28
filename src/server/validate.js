@@ -4,13 +4,13 @@
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
   Asset: ['', 'bank', 'ar'],
-  Liability: ['', 'card', 'ap', 'tax'],
+  Liability: ['', 'card', 'ap', 'tax', 'qst'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
   Expense: [''],
 };
-const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal'];
+const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment'];
 const ID_RE = /^[A-Za-z0-9_.:@+~-]{1,120}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -131,6 +131,17 @@ function validateRecon(data, store) {
   return data;
 }
 
+function validateFiling(data, store) {
+  if (!['gst', 'qst'].includes(data.tax)) throw new ValidationError('A filing must be for GST/HST or QST.');
+  if (!isDate(data.from) || !isDate(data.to) || data.from > data.to) throw new ValidationError('A filing needs a valid period.');
+  if (!isDate(data.filedOn)) throw new ValidationError('Enter the date the return was filed.');
+  if (!isObj(data.lines)) throw new ValidationError('A filing must include its return lines.');
+  if (data.entryId && !store.get('entries', data.entryId)) throw new ValidationError('The payment or refund for this filing doesn’t exist.');
+  const clash = store.list('filings').find(f => f.tax === data.tax && f.from <= data.to && data.from <= f.to && f.id !== data.id);
+  if (clash) throw new ValidationError(`That period overlaps a return already filed (${clash.from} to ${clash.to}).`, 409);
+  return data;
+}
+
 function validateRecord(collection, id, data, store) {
   checkId(id);
   if (!isObj(data)) throw new ValidationError('Record body must be a JSON object.');
@@ -142,6 +153,7 @@ function validateRecord(collection, id, data, store) {
     case 'bankTxns': return validateBankTxn(data, store);
     case 'rules': return validateRule(data, store);
     case 'recons': return validateRecon(data, store);
+    case 'filings': return validateFiling({ ...data, id }, store);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -173,6 +185,9 @@ function validateCompany(data) {
     terms: Math.max(0, Math.min(365, parseInt(data.terms, 10) || 0)),
     currency: str(data.currency, 4) || '$',
     bn: str(data.bn, 40).trim(),
+    province: /^[A-Z]{2}$/.test(data.province || '') ? data.province : '',
+    qstRate: Math.max(0, Math.min(100, Number(data.qstRate) || 0)),
+    filingFreq: ['monthly', 'quarterly', 'annual'].includes(data.filingFreq) ? data.filingFreq : 'quarterly',
   };
 }
 

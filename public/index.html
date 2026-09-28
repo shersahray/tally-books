@@ -14,7 +14,7 @@
 <body>
 <div class="app">
   <aside class="side">
-    <div class="brand"><b>Tally Books</b><span id="coName">Loading…</span></div>
+    <button class="brand" id="coSwitch" type="button" title="Switch company"><b>Tally Books</b><span class="co" id="coName">Loading…</span><span class="switch">Switch company</span></button>
     <div class="newwrap">
       <button class="btn primary block" id="newBtn" aria-haspopup="true" aria-expanded="false">+ New</button>
       <div class="menu" id="newMenu" hidden>
@@ -44,6 +44,7 @@
       <button data-view="sales">Sales <span class="count" id="odCount" hidden></span></button>
       <button data-view="expenses">Expenses</button>
       <button data-view="banking">Banking <span class="count info" id="bankCount" hidden></span></button>
+      <button data-view="salestax">Sales tax <span class="count" id="taxCount" hidden></span></button>
       <button data-view="transactions">Transactions</button>
       <button data-view="accounts">Chart of accounts</button>
       <button data-view="reports">Reports</button>
@@ -59,5 +60,7 @@
 <script src="bankparse.js"></script>
 <script src="app.js"></script>
 <script src="banking.js"></script>
+<script src="salestax.js"></script>
+<script src="companies.js"></script>
 </body>
 </html>

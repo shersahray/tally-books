@@ -150,11 +150,13 @@ function buildWrites(b,sel){
     entry={type:'transfer',date:b.date,ref:'',memo:b.desc,form:into?{from:cat.id,to:a.id,amount:amt}:{from:a.id,to:cat.id,amount:amt},
       lines:into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:amt}]:[{account:cat.id,debit:amt,credit:0},{account:a.id,debit:0,credit:amt}]};
   }else{
-    const rate=+S.company.taxRate||0,taxAcct=sel.tax&&rate?byDetail('tax'):null;
-    if(sel.tax&&rate&&!taxAcct)throw new Error('Add a “Sales tax payable” account first.');
-    const net=taxAcct?r2(amt/(1+rate/100)):amt,tax=r2(amt-net);
-    const lines=into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:net}]:[{account:cat.id,debit:net,credit:0},{account:a.id,debit:0,credit:amt}];
-    if(tax)lines.splice(into?2:1,0,into?{account:taxAcct.id,debit:0,credit:tax,memo:S.company.taxName+' collected'}:{account:taxAcct.id,debit:tax,credit:0,memo:S.company.taxName+' paid'});
+    const rate=+S.company.taxRate||0,useTax=sel.tax&&rate>0;
+    const net=useTax?r2(amt/(1+rate/100)):amt,parts=useTax?splitTaxTotal(r2(amt-net)):[];
+    if(parts.some(p=>!p.account))throw new Error(`Add a “${parts.find(p=>!p.account).name} payable” account first.`);
+    const tax=r2(parts.reduce((s,p)=>s+p.amount,0));
+    const lines=into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:net}]:[{account:cat.id,debit:net,credit:0}];
+    parts.forEach(p=>lines.push(into?{account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}:{account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));
+    if(!into)lines.push({account:a.id,debit:0,credit:amt});
     entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:sel.contactId||'',form:{bank:a.id,lines:[{account:cat.id,desc:b.desc,amount:net,tax:!!tax}]},lines};
   }
   entry.clear={[a.id]:'c'};entry.created=Date.now();

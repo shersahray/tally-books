@@ -17,21 +17,28 @@ function money(n,o={}){n=r2(n);const s=Math.abs(n).toLocaleString('en-CA',{minim
 const mcell=n=>`<span class="${r2(n)<0?'neg':''}">${money(n)}</span>`;
 
 const TYPES=['Asset','Liability','Equity','Income','Cost of Goods Sold','Expense'];
-const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts receivable']],Liability:[['','Other liability'],['card','Credit card'],['ap','Accounts payable'],['tax','Sales tax payable']],Equity:[['','Other equity'],['ob','Opening balance equity']],Income:[['','Income']],'Cost of Goods Sold':[['','Cost of goods sold']],Expense:[['','Expense']]};
+const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts receivable']],Liability:[['','Other liability'],['card','Credit card'],['ap','Accounts payable'],['tax','Sales tax payable (GST/HST)'],['qst','QST payable']],Equity:[['','Other equity'],['ob','Opening balance equity']],Income:[['','Income']],'Cost of Goods Sold':[['','Cost of goods sold']],Expense:[['','Expense']]};
 const detailLabel=a=>(DETAILS[a.type]||[]).find(d=>d[0]===(a.detail||''))?.[1]||'';
 const debitNormal=t=>t==='Asset'||t==='Expense'||t==='Cost of Goods Sold';
 const isPL=t=>t==='Income'||t==='Expense'||t==='Cost of Goods Sold';
-const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry'};
+const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment'};
 
 /* ---------- state + server API ---------- */
 const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',fyStart:1,taxName:'HST',taxRate:13,terms:30,currency:'$'},
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons'];
+const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons','filings'];
 
+let CO=null; // id of the company whose books are open
+// Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
+function coUrl(url){
+  if(!/^\/api\/(?!companies|events|health)/.test(url))return url;
+  if(!CO)throw new Error('Open a company first.');
+  return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
+}
 async function api(method,url,body){
-  let r;
+  let r;url=coUrl(url);
   try{r=await fetch(url,{method,headers:body!==undefined?{'Content-Type':'application/json'}:{},body:body!==undefined?JSON.stringify(body):undefined})}
   catch(e){throw new Error("Can't reach the Tally Books server. Check that it's still running.")}
   let j=null;try{j=await r.json()}catch(e){}
@@ -41,17 +48,15 @@ async function api(method,url,body){
 let loading=null,reloadQueued=false;
 async function load(){
   if(loading){reloadQueued=true;return loading}
+  if(!CO)return;
+  const co=CO;
   loading=(async()=>{
-    try{const s=await api('GET','/api/state');COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.rev=s.rev;S.connErr=false}
+    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.rev=s.rev;S.connErr=false}
     catch(e){S.connErr=true}
     S.loaded=true;scheduleRender();
   })();
   await loading;loading=null;
   if(reloadQueued){reloadQueued=false;return load()}
-}
-function initStore(){
-  load();
-  if(window.EventSource){const es=new EventSource('/api/events');es.onmessage=ev=>{try{const{rev}=JSON.parse(ev.data);if(rev!==S.rev)load()}catch(e){}};es.onopen=()=>{if(S.connErr)load()}}
 }
 async function write(fn){try{await fn();await load();return true}catch(e){toast(e.message,true);return false}}
 // Editing a transaction keeps its cleared/reconciled marks for bank accounts it still uses.
@@ -62,9 +67,19 @@ function keepClear(col,id,data){
   for(const[k,v]of Object.entries(prev.clear))if(used.has(k))clear[k]=v;
   return Object.keys(clear).length?{...data,clear}:data;
 }
-const put=(col,id,data)=>write(()=>api('PUT',`/api/records/${col}/${encodeURIComponent(id)}`,strip(keepClear(col,id,data))));
-const del=(col,id)=>write(()=>api('DELETE',`/api/records/${col}/${encodeURIComponent(id)}`));
+// Before saving a transaction dated in a period whose sales tax return was filed, ask first.
+async function filedOk(writes){
+  if(typeof filedWarning!=='function')return true;
+  // Only changes to amounts, accounts or dates matter; ticking a transaction as cleared doesn't.
+  const same=(a,b)=>a&&b&&a.date===b.date&&JSON.stringify(a.lines)===JSON.stringify(b.lines);
+  const touched=writes.filter(w=>w.collection==='entries').filter(w=>w.op==='delete'||!same(S.entries.find(e=>e.id===w.id),w.data)).flatMap(w=>[w.op==='set'?w.data:null,S.entries.find(e=>e.id===w.id)]);
+  const f=filedWarning(touched);
+  return !f||confirmBox('This period’s return was filed',`This change affects sales tax between ${fmtDate(f.from)} and ${fmtDate(f.to)}, which you already filed. Your books will no longer match the return, and you may need to file an amendment. Save anyway?`,'Save anyway');
+}
+async function put(col,id,data){if(!await filedOk([{op:'set',collection:col,id,data}]))return false;return write(()=>api('PUT',`/api/records/${col}/${encodeURIComponent(id)}`,strip(keepClear(col,id,data))))}
+async function del(col,id){if(!await filedOk([{op:'delete',collection:col,id}]))return false;return write(()=>api('DELETE',`/api/records/${col}/${encodeURIComponent(id)}`))}
 async function batch(writes){
+  if(!await filedOk(writes))return false;
   const all=writes.map(w=>({...w,data:w.data&&strip(keepClear(w.collection,w.id,w.data))}));
   return write(async()=>{for(let i=0;i<all.length;i+=400)await api('POST','/api/batch',{writes:all.slice(i,i+400)})});
 }
@@ -96,16 +111,19 @@ function scheduleRender(){PC=null;if(rq)return;rq=requestAnimationFrame(()=>{rq=
 function ready(){return S.loaded}
 function go(view,param=null){S.view=view;S.param=param;renderMain();window.scrollTo(0,0)}
 function renderMain(){
-  $('#coName').textContent=S.company.name||'My Business';
+  $('#coName').textContent=CO?(S.loaded?S.company.name:'Opening…'):'No company open';
+  document.title=CO&&S.loaded?`${S.company.name} · Tally Books`:'Tally Books';
+  document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
-  if(!ready())return;
+  if(S.view!=='companies'&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
   const nb=S.bankTxns.filter(b=>b.status==='new').length;const bc=$('#bankCount');bc.hidden=!nb;bc.textContent=nb;
-  const V={dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const nt=overdueReturns();const tc=$('#taxCount');tc.hidden=!nt;tc.textContent=nt;
+  const V={companies:vCompanies,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
-  main.innerHTML=banners()+V();
+  main.innerHTML=(S.view==='companies'?'':banners())+V();
   bindMain(main);
   if(keepFocus){const el=document.getElementById(keepFocus);if(el){el.focus();if(el.setSelectionRange&&el.type==='search'){const n=el.value.length;el.setSelectionRange(n,n)}}}
 }
@@ -297,7 +315,9 @@ function vSettings(){
   return head('Settings','Company details and defaults used on new transactions')+`<div class="panel" style="max-width:640px"><form class="pad" id="setForm" style="display:flex;flex-direction:column;gap:14px">
   <div class="fields">
     <div class="field" style="grid-column:1/-1"><label for="sName">Business name</label><input type="text" id="sName" value="${esc(c.name)}" required></div>
-    <div class="field"><label for="sFy">Fiscal year starts</label><select id="sFy">${Array.from({length:12},(_,i)=>`<option value="${i+1}" ${+c.fyStart===i+1?'selected':''}>${new Date(2026,i,1).toLocaleDateString('en-CA',{month:'long'})} 1</option>`).join('')}</select></div>
+    <div class="field"><label for="sFy">Fiscal year-end</label><select id="sFy">${fyOptions(c.fyStart)}</select></div>
+    <div class="field"><label for="sFreq">Sales tax filing</label><select id="sFreq">${[['monthly','Monthly'],['quarterly','Quarterly'],['annual','Annual']].map(([k,v])=>`<option value="${k}" ${(c.filingFreq||'quarterly')===k?'selected':''}>${v}</option>`).join('')}</select></div>
+    <div class="field"><label for="sProv">Province or territory</label><select id="sProv">${provinceOptions(c.province)}</select><span class="hint">Changing it fills in the sales tax below</span></div>
     <div class="field"><label for="sTerms">Payment terms (days)</label><input type="number" id="sTerms" min="0" step="1" value="${esc(c.terms)}"></div>
     <div class="field"><label for="sTaxName">Sales tax name</label><input type="text" id="sTaxName" value="${esc(c.taxName)}"><span class="hint">For example HST, GST or VAT</span></div>
     <div class="field"><label for="sTaxRate">Sales tax rate (%)</label><input type="number" id="sTaxRate" min="0" step="0.001" value="${esc(c.taxRate)}"></div>
@@ -318,6 +338,8 @@ function bindMain(m){
     const t=e.target.closest('button,tr.click');if(!t||!m.contains(t))return;
     const d=t.dataset;
     if(S.view==='banking'&&await bankClick(e,t,d))return;
+    if(S.view==='companies'&&await coClick(e,t,d))return;
+    if(S.view==='salestax'&&await stClick(e,t,d))return;
     if(d.new)return openNew(d.new);
     if(d.go)return go(d.go);
     if(d.pay){e.stopPropagation();const doc=S.docs.find(x=>x.id===d.pay);return payForm(doc.kind==='invoice'?'payment':'billpayment',null,doc.id)}
@@ -333,7 +355,7 @@ function bindMain(m){
     if(d.act==='export')return exportCSV();
     if(d.act==='retry')return load();
     if(d.act==='load-examples')return loadExamples();
-    if(d.act==='backup')return saveFile(`tally-books-backup-${today()}.json`,await fetch('/api/backup').then(r=>r.blob()));
+    if(d.act==='backup')return saveFile(`${(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase()}-backup-${today()}.json`,await fetch(coUrl('/api/backup')).then(r=>r.blob()));
     if(d.act==='restore')return $('#restoreFile').click();
   };
   const ds=$('#docStatus',m);if(ds){const st=S.view==='sales'?S.sales:S.exp;ds.value=st.status;ds.onchange=()=>{st.status=ds.value;renderMain()}}
@@ -344,7 +366,10 @@ function bindMain(m){
   ['repFrom','repTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.onchange=()=>{S.rep.period='custom';S.rep.from=($('#repFrom')||{}).value||S.rep.from;S.rep.to=$('#repTo').value;renderMain()}});
   const rf2=$('#restoreFile',m);if(rf2)rf2.onchange=()=>{const f=rf2.files[0];rf2.value='';if(f)restoreBackup(f)};
   if(S.view==='banking')bindBanking(m);
-  const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim()};if(await putCompany(data))toast('Settings saved')};
+  if(S.view==='companies')bindCompanies(m);
+  if(S.view==='salestax')bindSalesTax(m);
+  const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
+  const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value};if(await putCompany(data))toast('Settings saved')};
 }
 function exportCSV(){
   const R=S.rep;const r=({pl:rPL,bs:rBS,tb:rTB,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
@@ -426,7 +451,19 @@ function lineEditor(el,cols,rows,onChange){
 const taxLbl=()=>`${esc(S.company.taxName||'Tax')} ${+S.company.taxRate||0}%`;
 function totalsHTML(){return `<div class="totals" data-totals><div>Subtotal</div><div data-t="sub">0.00</div><div>${taxLbl()}</div><div data-t="tax">0.00</div><div class="big">Total</div><div class="big" data-t="tot">0.00</div></div>`}
 function setTotals(f,c){$('[data-t=sub]',f).textContent=money(c.sub);$('[data-t=tax]',f).textContent=money(c.tax);$('[data-t=tot]',f).textContent=money(c.total)}
-function calcLines(rows,amt){const ls=rows.map(r=>({...r,net:r2(amt(r))})).filter(r=>r.account&&r.net);const sub=r2(ls.reduce((s,r)=>s+r.net,0));const tax=r2(ls.filter(r=>r.tax).reduce((s,r)=>s+r.net,0)*(+S.company.taxRate||0)/100);return{ls,sub,tax,total:r2(sub+tax)}}
+/* Sales tax parts. Most provinces have one (GST or HST). Quebec companies that track QST separately
+   have two: GST at (taxRate - qstRate) and QST at qstRate, each posted to its own account. */
+function taxParts(){
+  const rate=+S.company.taxRate||0,q=+S.company.qstRate||0,main=byDetail('tax'),qst=byDetail('qst');
+  if(q>0&&qst)return[{key:'gst',account:main&&main.id,rate:r2(rate-q),name:'GST'},{key:'qst',account:qst.id,rate:q,name:'QST'}];
+  return[{key:'gst',account:main&&main.id,rate,name:S.company.taxName||'Sales tax'}];
+}
+// Tax on a taxable amount, one figure per part.
+const splitTax=base=>taxParts().map(p=>({...p,amount:r2(base*p.rate/100)})).filter(p=>p.amount);
+// Share out a known tax total (from a tax-included amount) across the parts.
+function splitTaxTotal(total){const ps=taxParts(),sum=ps.reduce((s,p)=>s+p.rate,0)||1;let left=r2(total);return ps.map((p,i)=>{const a=i===ps.length-1?left:r2(total*p.rate/sum);left=r2(left-a);return{...p,amount:a}}).filter(p=>p.amount)}
+function taxReady(parts){if(parts.every(p=>p.account))return true;toast(`Add a “${parts.find(p=>!p.account).name} payable” account in Chart of accounts first.`,true);return false}
+function calcLines(rows,amt){const ls=rows.map(r=>({...r,net:r2(amt(r))})).filter(r=>r.account&&r.net);const sub=r2(ls.reduce((s,r)=>s+r.net,0));const parts=splitTax(ls.filter(r=>r.tax).reduce((s,r)=>s+r.net,0));const tax=r2(parts.reduce((s,p)=>s+p.amount,0));return{ls,sub,tax,parts,total:r2(sub+tax)}}
 function groupBy(ls){const m={};ls.forEach(l=>m[l.account]=r2((m[l.account]||0)+l.net));return m}
 const delBtn=show=>show?`<button type="button" class="btn danger left" data-del>Delete</button>`:'<span class="left"></span>';
 const saveFoot=(del,label='Save')=>`${delBtn(del)}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${label}</button>`;
@@ -436,6 +473,7 @@ function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${l
 function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false');
   ({invoice:()=>docForm('invoice'),bill:()=>docForm('bill'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
 async function openEntry(e){if(!e)return;
+  if(e.type==='taxpayment'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast(e.taxKind==='instalment'?'Instalments are listed in the Sales tax worksheets. To remove one, delete it from the account register.':'Sales tax payments are managed from the return they belong to.');return}
   if(Object.values(e.clear||{}).includes('r')&&!await confirmBox('This transaction is reconciled','Changing its amount or bank account will change a balance you already reconciled. Open it anyway?','Open'))return;
   if(e.type==='invoice'||e.type==='bill'){const d=S.docs.find(x=>x.id===e.docId);if(d)return docForm(d.kind,d)}
   const fn={payment:()=>payForm('payment',e),billpayment:()=>payForm('billpayment',e),expense:()=>moneyForm('expense',e),deposit:()=>moneyForm('deposit',e),transfer:()=>transferForm(e)}[e.type];fn?fn():journalForm(e)}
@@ -467,12 +505,12 @@ function docForm(kind,doc){
     if(!c.ls.length)return f.err('Add at least one line with an account and an amount.');
     if(doc&&c.total<paid-0.004)return f.err(`The total can't be less than the ${money(paid)} already ${inv?'received':'paid'}.`);
     const ar=needAcct(inv?'ar':'ap',inv?'Accounts receivable':'Accounts payable');if(!ar)return;
-    const tx=c.tax?needAcct('tax','Sales tax payable'):null;if(c.tax&&!tx)return;
+    if(c.tax&&!taxReady(c.parts))return;
     const cid=await resolveContact(f,'dC',ck);if(!cid)return;
     const id=doc?doc.id:uid();const num=$('#dN',f).value.trim();
     const lines=[];const g=groupBy(c.ls);
-    if(inv){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:0,credit:v}:{account:a,debit:-v,credit:0}));if(c.tax)lines.push({account:tx.id,debit:0,credit:c.tax,memo:S.company.taxName})}
-    else{Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:v,credit:0}:{account:a,debit:0,credit:-v}));if(c.tax)lines.push({account:tx.id,debit:c.tax,credit:0,memo:S.company.taxName+' paid'});lines.push({account:ar.id,debit:0,credit:c.total})}
+    if(inv){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:0,credit:v}:{account:a,debit:-v,credit:0}));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
+    else{Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:v,credit:0}:{account:a,debit:0,credit:-v}));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ar.id,debit:0,credit:c.total})}
     const base={date:$('#dD',f).value,contactId:cid,memo:$('#dM',f).value.trim(),...(doc&&doc.example?{example:true}:{})};
     const dd={...base,kind,number:num,due:$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,tax:!!l.tax})),sub:c.sub,tax:c.tax,total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:kind,ref:num,docId:id,lines,created:dd.created}}]))return;
@@ -531,11 +569,11 @@ function moneyForm(kind,entry){
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const c=calcLines(le.read(),x=>+x.amount||0);const bank=$('#mBank',f).value;
     if(!bank)return f.err('Choose a bank or card account.');if(!c.ls.length)return f.err('Add at least one line with a category and amount.');
-    const tx=c.tax?needAcct('tax','Sales tax payable'):null;if(c.tax&&!tx)return;
+    if(c.tax&&!taxReady(c.parts))return;
     let cid=$('#mC',f).value;if(cid==='__new'){cid=await resolveContact(f,'mC',out?'vendor':'customer');if(!cid)return f.err('Enter a name for the new contact.')}
     const g=groupBy(c.ls);const lines=[];
-    if(out){Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:v,credit:0}:{account:a,debit:0,credit:-v}));if(c.tax)lines.push({account:tx.id,debit:c.tax,credit:0,memo:S.company.taxName+' paid'});lines.push(c.total>=0?{account:bank,debit:0,credit:c.total}:{account:bank,debit:-c.total,credit:0})}
-    else{lines.push(c.total>=0?{account:bank,debit:c.total,credit:0}:{account:bank,debit:0,credit:-c.total});Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:0,credit:v}:{account:a,debit:-v,credit:0}));if(c.tax)lines.push({account:tx.id,debit:0,credit:c.tax,memo:S.company.taxName+' collected'})}
+    if(out){Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:v,credit:0}:{account:a,debit:0,credit:-v}));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push(c.total>=0?{account:bank,debit:0,credit:c.total}:{account:bank,debit:-c.total,credit:0})}
+    else{lines.push(c.total>=0?{account:bank,debit:c.total,credit:0}:{account:bank,debit:0,credit:-c.total});Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:0,credit:v}:{account:a,debit:-v,credit:0}));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}))}
     const id=entry?.id||uid();
     if(await put('entries',id,{type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,tax:!!l.tax}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast(`${out?'Expense':'Deposit'} saved`)}
   };
@@ -598,4 +636,3 @@ $('#newBtn').onclick=e=>{e.stopPropagation();const m=$('#newMenu');m.hidden=!m.h
 $('#newMenu').onclick=e=>{const b=e.target.closest('[data-new]');if(b)openNew(b.dataset.new)};
 document.addEventListener('click',e=>{if(!e.target.closest('.newwrap')){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false')}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#newMenu').hidden){$('#newMenu').hidden=true;$('#newBtn').focus()}});
-initStore();

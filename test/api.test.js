@@ -6,21 +6,25 @@ const os = require('node:os');
 const path = require('node:path');
 const { createApp } = require('../src/server/app');
 
-let server, base, dir;
+let server, base, dir, co;
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-test-'));
-  server = createApp({ dbPath: path.join(dir, 'test.db') });
+  server = createApp({ dataDir: dir });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
+  const res = await fetch(base + '/api/companies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Test Co', province: 'ON' }) });
+  co = (await res.json()).company.id;
 });
 after(async () => {
   await server.shutdown();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Company-scoped calls: '/api/state' goes to '/api/c/<test company>/state'.
+const scoped = url => (/^\/api\/(companies|health|events)/.test(url) || !url.startsWith('/api/') ? url : url.replace(/^\/api\//, `/api/c/${co}/`));
 async function call(method, url, body) {
-  const res = await fetch(base + url, {
+  const res = await fetch(base + scoped(url), {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
@@ -153,15 +157,15 @@ test('example data loads and keeps the books balanced', async () => {
 });
 
 test('blocks cross-site writes', async () => {
-  const res = await fetch(base + '/api/records/contacts/x', { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: '{"name":"x","kind":"vendor"}' });
+  const res = await fetch(base + scoped('/api/records/contacts/x'), { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: '{"name":"x","kind":"vendor"}' });
   assert.equal(res.status, 403);
 });
 
 test('password protection', async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-auth-'));
-  const s = createApp({ dbPath: path.join(d, 'a.db'), password: 's3cret' });
+  const s = createApp({ dataDir: d, password: 's3cret' });
   await new Promise(r => s.listen(0, '127.0.0.1', r));
-  const url = `http://127.0.0.1:${s.address().port}/api/state`;
+  const url = `http://127.0.0.1:${s.address().port}/api/companies`;
   assert.equal((await fetch(url)).status, 401);
   assert.equal((await fetch(url, { headers: { Authorization: 'Basic ' + Buffer.from('me:wrong').toString('base64') } })).status, 401);
   assert.equal((await fetch(url, { headers: { Authorization: 'Basic ' + Buffer.from('me:s3cret').toString('base64') } })).status, 200);
@@ -215,4 +219,97 @@ test('rules and reconciliations are validated', async () => {
   assert.equal((await call('PUT', '/api/records/rules/r3', { text: 'X', account: 'a1000' })).status, 400, 'bank account as rule category');
   assert.equal((await call('PUT', '/api/records/recons/rc1', { account: 'a1000', statementDate: '2026-09-30', endingBalance: 100, entryIds: [] })).status, 200);
   assert.equal((await call('PUT', '/api/records/recons/rc2', { account: 'a4100', statementDate: '2026-09-30', endingBalance: 100, entryIds: [] })).status, 400);
+});
+
+test('companies: create with province tax, copy a chart, switch, archive', async () => {
+  let r = await call('POST', '/api/companies', { name: 'Prairie Farms', province: 'AB', fyStart: 4 });
+  assert.equal(r.status, 200, r.text);
+  const ab = r.json.company.id;
+  const abState = await (await fetch(`${base}/api/c/${ab}/state`)).json();
+  assert.equal(abState.company.taxName, 'GST');
+  assert.equal(abState.company.taxRate, 5);
+  assert.equal(abState.company.fyStart, 4);
+  assert.ok(abState.accounts.find(a => a.detail === 'tax' && a.name === 'GST payable'));
+  assert.equal(abState.entries.length, 0, 'new company starts empty');
+
+  // books are separate: a contact in one company doesn't appear in the other
+  await fetch(`${base}/api/c/${ab}/records/contacts/farmer`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Farmer Joe', kind: 'customer' }) });
+  const testState = await call('GET', '/api/state');
+  assert.ok(!testState.json.contacts.find(c => c.id === 'farmer'));
+
+  // copy the chart of accounts from the test company (which has a custom account from earlier tests)
+  await call('PUT', '/api/records/accounts/custom1', { code: '6950', name: 'Farm supplies', type: 'Expense', detail: '' });
+  r = await call('POST', '/api/companies', { name: 'Copy Co', province: 'ON', copyFrom: co });
+  const cp = r.json.company.id;
+  const cpState = await (await fetch(`${base}/api/c/${cp}/state`)).json();
+  assert.ok(cpState.accounts.find(a => a.name === 'Farm supplies'));
+  assert.equal(cpState.contacts.length, 0, 'only accounts are copied');
+
+  // list with summaries, then archive
+  let list = (await call('GET', '/api/companies')).json.companies;
+  assert.ok(list.find(c => c.id === co).transactions > 0);
+  r = await call('PUT', `/api/companies/${cp}`, { archived: true });
+  assert.equal(r.json.company.archived, true);
+  list = (await call('GET', '/api/companies')).json.companies;
+  assert.equal(list.find(c => c.id === cp).archived, true);
+
+  // renaming in settings renames it in the list
+  await fetch(`${base}/api/c/${ab}/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...abState.company, name: 'Prairie Farms Ltd.' }) });
+  list = (await call('GET', '/api/companies')).json.companies;
+  assert.equal(list.find(c => c.id === ab).name, 'Prairie Farms Ltd.');
+
+  assert.equal((await fetch(`${base}/api/c/co_nope/state`)).status, 404);
+  assert.equal((await call('POST', '/api/companies', { name: '  ' })).status, 400);
+});
+
+test('books from the single-company version become the first company', async () => {
+  const { Store } = require('../src/server/db');
+  const { seedDefaults } = require('../src/server/seed');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-legacy-'));
+  const old = new Store(path.join(d, 'tally-books.db'));
+  seedDefaults(old, { company: { name: 'Legacy Bakery' } });
+  old.put('contacts', 'c1', { name: 'Old Customer', kind: 'customer' });
+  old.close();
+  const s = createApp({ dataDir: d });
+  await new Promise(r => s.listen(0, '127.0.0.1', r));
+  const b = `http://127.0.0.1:${s.address().port}`;
+  const list = (await (await fetch(b + '/api/companies')).json()).companies;
+  assert.equal(list.length, 1);
+  assert.equal(list[0].name, 'Legacy Bakery');
+  const st = await (await fetch(`${b}/api/c/${list[0].id}/state`)).json();
+  assert.ok(st.contacts.find(c => c.name === 'Old Customer'));
+  await s.shutdown();
+  // starting again doesn't adopt it twice
+  const s2 = createApp({ dataDir: d });
+  assert.equal(s2.registry.list().length, 1);
+  s2.registry.closeAll();
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('Quebec companies track GST and QST in separate accounts', async () => {
+  const r = await call('POST', '/api/companies', { name: 'Montreal Bistro', province: 'QC', examples: true });
+  assert.equal(r.status, 200, r.text);
+  const st = await (await fetch(`${base}/api/c/${r.json.company.id}/state`)).json();
+  assert.equal(st.company.qstRate, 9.975);
+  const gst = st.accounts.find(a => a.detail === 'tax'), qst = st.accounts.find(a => a.detail === 'qst');
+  assert.equal(gst.name, 'GST payable');
+  assert.equal(qst.name, 'QST payable');
+  // invoice 1001 for $1,200: GST 60.00 + QST 119.70 = 1,379.70
+  const inv = st.docs.find(d => d.number === '1001');
+  assert.equal(inv.total, 1379.7);
+  const e = st.entries.find(x => x.id === 'd_' + inv.id);
+  assert.equal(e.lines.find(l => l.account === gst.id).credit, 60);
+  assert.equal(e.lines.find(l => l.account === qst.id).credit, 119.7);
+});
+
+test('sales tax filings are validated and cannot overlap', async () => {
+  const filing = { tax: 'gst', from: '2026-07-01', to: '2026-09-30', filedOn: '2026-10-15', lines: { 109: 100 } };
+  assert.equal((await call('PUT', '/api/records/filings/f1', filing)).status, 200);
+  assert.equal((await call('PUT', '/api/records/filings/f2', { ...filing, from: '2026-09-01', to: '2026-11-30' })).status, 409, 'overlap');
+  assert.equal((await call('PUT', '/api/records/filings/f1', { ...filing, filedOn: '2026-10-16' })).status, 200, 'editing itself is fine');
+  assert.equal((await call('PUT', '/api/records/filings/f3', { ...filing, tax: 'pst' })).status, 400);
+  assert.equal((await call('PUT', '/api/records/filings/f4', { ...filing, tax: 'qst', entryId: 'missing' })).status, 400);
+  // a sales tax payment is a valid transaction type
+  const r = await call('PUT', '/api/records/entries/tp1', entry([{ account: 'a2200', debit: 100 }, { account: 'a1000', credit: 100 }], { type: 'taxpayment', tax: 'gst', taxKind: 'payment' }));
+  assert.equal(r.status, 200, r.text);
 });
