@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Tally Books</title>
+<meta name="description" content="Double-entry bookkeeping for small businesses.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><b>Tally Books</b><span id="coName">Loading…</span></div>
+    <div class="newwrap">
+      <button class="btn primary block" id="newBtn" aria-haspopup="true" aria-expanded="false">+ New</button>
+      <div class="menu" id="newMenu" hidden>
+        <div class="col"><h4>Customers</h4>
+          <button data-new="invoice">Invoice</button>
+          <button data-new="payment">Receive payment</button>
+          <button data-new="deposit">Deposit</button>
+        </div>
+        <div class="col"><h4>Vendors</h4>
+          <button data-new="bill">Bill</button>
+          <button data-new="billpayment">Pay bill</button>
+          <button data-new="expense">Expense</button>
+        </div>
+        <div class="col"><h4>Other</h4>
+          <button data-new="transfer">Transfer</button>
+          <button data-new="journal">Journal entry</button>
+        </div>
+        <div class="col"><h4>Lists</h4>
+          <button data-new="contact">Customer or vendor</button>
+          <button data-new="account">Account</button>
+        </div>
+      </div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Sections">
+      <button data-view="dashboard">Dashboard</button>
+      <button data-view="sales">Sales <span class="count" id="odCount" hidden></span></button>
+      <button data-view="expenses">Expenses</button>
+      <button data-view="transactions">Transactions</button>
+      <button data-view="accounts">Chart of accounts</button>
+      <button data-view="reports">Reports</button>
+      <button data-view="settings">Settings</button>
+    </nav>
+    <div class="side-foot" id="sideFoot">Double-entry bookkeeping</div>
+  </aside>
+  <main id="main"><div class="empty"><b>Opening your books…</b>Loading accounts and transactions.</div></main>
+</div>
+<div id="modalRoot"></div>
+<div id="confirmRoot"></div>
+<div id="toastRoot"></div>
+<script src="app.js"></script>
+</body>
+</html>

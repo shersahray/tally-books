@@ -1,0 +1,68 @@
+{
+  "name": "tally-books",
+  "version": "1.0.0",
+  "description": "Double-entry bookkeeping for small businesses: invoices, bills, expenses, chart of accounts and financial reports. Runs as a web app or a desktop app.",
+  "main": "electron/main.js",
+  "bin": {
+    "tally-books": "src/server/index.js"
+  },
+  "scripts": {
+    "start": "node src/server/index.js",
+    "start:demo": "node src/server/index.js --demo",
+    "test": "node --test \"test/*.test.js\"",
+    "desktop": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "keywords": [
+    "bookkeeping",
+    "accounting",
+    "invoicing",
+    "small-business",
+    "double-entry",
+    "sqlite",
+    "electron"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.tallybooks.app",
+    "productName": "Tally Books",
+    "files": [
+      "electron/**",
+      "src/**",
+      "public/**",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.finance",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Office",
+      "icon": "build/icon.png"
+    }
+  }
+}
