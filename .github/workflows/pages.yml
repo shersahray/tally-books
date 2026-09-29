@@ -1,0 +1,48 @@
+name: Publish online demo
+
+# Builds the browser-only demo (example data, nothing saved) and publishes it with GitHub Pages.
+# One-time setup: Settings → Pages → Source: "GitHub Actions".
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['public/**', 'scripts/**', 'src/**', '.github/workflows/pages.yml']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build demo page
+        run: |
+          node scripts/build-demo.js
+          mkdir -p site
+          {
+            echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            echo '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
+            echo '<link rel="icon" href="icon.svg" type="image/svg+xml"></head><body>'
+            cat dist/demo.html
+            echo '</body></html>'
+          } > site/index.html
+          cp public/icon.svg site/icon.svg
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
