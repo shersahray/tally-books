@@ -28,7 +28,7 @@ const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons','filings'];
+const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons','filings','employees','payruns'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
@@ -127,7 +127,8 @@ function renderMain(){
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
   const nb=S.bankTxns.filter(b=>b.status==='new').length;const bc=$('#bankCount');bc.hidden=!nb;bc.textContent=nb;
   const nt=overdueReturns();const tc=$('#taxCount');tc.hidden=!nt;tc.textContent=nt;
-  const V={companies:vCompanies,users:vUsers,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const np=overdueRemits();const pc=$('#payCount');pc.hidden=!np;pc.textContent=np;
+  const V={companies:vCompanies,users:vUsers,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,payroll:vPayroll,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(S.view==='companies'||S.view==='users'?'':banners())+V();
@@ -333,6 +334,7 @@ function vSettings(){
     <div class="field"><label for="sBn">Business / tax number</label><input type="text" id="sBn" value="${esc(c.bn||'')}"><span class="hint">Shown for your reference</span></div>
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
+  ${payrollSettingsPanel()}
   ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
     <span class="muted">A backup is a single file with every account, contact, invoice, bill and transaction. Keep one somewhere safe, and restore it here or on another computer.</span>
@@ -349,6 +351,7 @@ function bindMain(m){
     if(S.view==='banking'&&await bankClick(e,t,d))return;
     if(S.view==='companies'&&await coClick(e,t,d))return;
     if(S.view==='salestax'&&await stClick(e,t,d))return;
+    if(S.view==='payroll'&&await payClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.new)return openNew(d.new);
     if(d.go)return go(d.go);
@@ -380,6 +383,7 @@ function bindMain(m){
   bindBackups(m);
   if(S.view==='users')bindUsers(m);
   if(S.view==='salestax')bindSalesTax(m);
+  bindPayrollSettings(m);
   const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value};if(await putCompany(data))toast('Settings saved')};
 }
@@ -398,11 +402,13 @@ async function restoreBackup(file){
   if(await write(()=>api('POST','/api/restore',body)))toast('Backup restored');
 }
 async function clearExamples(){
-  if(!await confirmBox('Clear example data?','This removes every customer, vendor, invoice, bill and transaction marked “Example”. Your chart of accounts and anything you entered yourself stay.','Clear examples'))return;
+  if(!await confirmBox('Clear example data?','This removes every customer, vendor, employee, invoice, bill and transaction marked “Example”, and any pay runs for example employees. Your chart of accounts and anything you entered yourself stay.','Clear examples'))return;
   const ex=S.entries.filter(x=>x.example);
-  const writes=[...S.bankTxns.filter(x=>x.example).map(x=>({op:'delete',collection:'bankTxns',id:x.id})),...S.rules.filter(x=>x.example).map(x=>({op:'delete',collection:'rules',id:x.id})),
+  const exEmp=new Set(S.employees.filter(x=>x.example).map(x=>x.id));
+  const runs=S.payruns.filter(r=>r.lines.some(l=>exEmp.has(l.employeeId)));
+  const writes=[...runs.map(r=>({op:'delete',collection:'payruns',id:r.id})),...runs.filter(r=>S.entries.some(e=>e.id===r.entryId)).map(r=>({op:'delete',collection:'entries',id:r.entryId})),...S.bankTxns.filter(x=>x.example).map(x=>({op:'delete',collection:'bankTxns',id:x.id})),...S.rules.filter(x=>x.example).map(x=>({op:'delete',collection:'rules',id:x.id})),
     ...[...ex.filter(e=>e.applyTo),...ex.filter(e=>!e.applyTo)].map(x=>({op:'delete',collection:'entries',id:x.id}))]
-    .concat(S.docs.filter(x=>x.example).map(x=>({op:'delete',collection:'docs',id:x.id})),S.contacts.filter(x=>x.example).map(x=>({op:'delete',collection:'contacts',id:x.id})));
+    .concat(S.docs.filter(x=>x.example).map(x=>({op:'delete',collection:'docs',id:x.id})),S.contacts.filter(x=>x.example).map(x=>({op:'delete',collection:'contacts',id:x.id})),[...exEmp].map(id=>({op:'delete',collection:'employees',id})));
   if(!writes.length)return;
   if(await batch(writes))toast(`Removed ${writes.length} example records`);
 }
@@ -492,8 +498,10 @@ function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${l
 
 /* ---------- forms ---------- */
 function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false');
-  ({invoice:()=>docForm('invoice'),bill:()=>docForm('bill'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
+  ({invoice:()=>docForm('invoice'),bill:()=>docForm('bill'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
 async function openEntry(e){if(!e)return;
+  if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id);if(r)return payRunView(r)}
+  if(e.type==='payremit')return remitForm(e.agency+'|'+e.period,e);
   if(e.type==='taxpayment'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast(e.taxKind==='instalment'?'Instalments are listed in the Sales tax worksheets. To remove one, delete it from the account register.':'Sales tax payments are managed from the return they belong to.');return}
   if(Object.values(e.clear||{}).includes('r')&&!await confirmBox('This transaction is reconciled','Changing its amount or bank account will change a balance you already reconciled. Open it anyway?','Open'))return;
   if(e.type==='invoice'||e.type==='bill'){const d=S.docs.find(x=>x.id===e.docId);if(d)return docForm(d.kind,d)}

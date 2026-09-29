@@ -449,3 +449,44 @@ test('export sales carry a tax code and no sales tax', async () => {
   assert.ok(e.lines.some(l => l.account === 'a4100' && l.credit === 900 && l.taxCode === 'export'));
   assert.ok(!e.lines.some(l => l.account === 'a2200'), 'no HST line');
 });
+
+test('payroll: employees and pay runs are validated and post balanced entries', async () => {
+  const P = require('../public/payroll-calc.js');
+  const emp = { name: 'Pat Payroll', prov: 'ON', freq: 'biweekly', payType: 'salary', rate: 52000, td1Fed: '', rrsp: 50 };
+  assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, prov: 'XX' })).status, 400);
+  assert.equal((await call('PUT', '/api/records/employees/e1', emp)).status, 200);
+  const r = P.calc({ date: '2026-09-18', prov: 'ON', P: 26, gross: 2000, rrsp: 50 });
+  const line = { employeeId: 'e1', name: emp.name, gross: 2000, rrsp: 50, union: 0, ded: r.employee, er: r.employer };
+  const deds = Object.values(r.employee).reduce((s, v) => s + v, 0) + 50;
+  line.net = Math.round((2000 - deds) * 100) / 100;
+  const split = P.remitSplit(r.employee, r.employer);
+  const er = Object.values(r.employer).reduce((s, v) => s + v, 0);
+  const acct = (id, code, name, type, detail) => call('PUT', `/api/records/accounts/${id}`, { code, name, type, detail });
+  assert.equal((await acct('a2300', '2300', 'Payroll liabilities – CRA', 'Liability', 'payroll_cra')).status, 200);
+  assert.equal((await acct('a2320', '2320', 'Other payroll deductions', 'Liability', 'payroll_other')).status, 200);
+  assert.equal((await acct('a7110', '7110', 'Employer payroll taxes', 'Expense', 'payroll_tax')).status, 200);
+  const r2 = n => Math.round(n * 100) / 100;
+  const lines = [{ account: 'a7100', debit: 2000, credit: 0 }, { account: 'a7110', debit: r2(er), credit: 0 },
+    { account: 'a2300', debit: 0, credit: split.cra }, { account: 'a2320', debit: 0, credit: 50 }, { account: 'a1000', debit: 0, credit: line.net }];
+  const run = { payDate: '2026-09-18', freq: 'biweekly', bank: 'a1000', entryId: 'pr_1', lines: [line] };
+  // Net pay that doesn't add up is refused, and so is the whole batch.
+  const bad = await call('POST', '/api/batch', { writes: [
+    { op: 'set', collection: 'entries', id: 'pr_1', data: { type: 'payrun', date: '2026-09-18', lines } },
+    { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, net: line.net + 1 }] } }] });
+  assert.equal(bad.status, 400);
+  assert.match(bad.json.error, /net pay/);
+  const ok = await call('POST', '/api/batch', { writes: [
+    { op: 'set', collection: 'entries', id: 'pr_1', data: { type: 'payrun', date: '2026-09-18', lines } },
+    { op: 'set', collection: 'payruns', id: 'run1', data: run }] });
+  assert.equal(ok.status, 200, ok.text);
+  // The employee and the entry are protected while the pay run exists.
+  assert.equal((await call('DELETE', '/api/records/employees/e1')).status, 409);
+  assert.equal((await call('DELETE', '/api/records/entries/pr_1')).status, 409);
+  const del = await call('POST', '/api/batch', { writes: [{ op: 'delete', collection: 'payruns', id: 'run1' }, { op: 'delete', collection: 'entries', id: 'pr_1' }] });
+  assert.equal(del.status, 200);
+  assert.equal((await call('DELETE', '/api/records/employees/e1')).status, 200);
+  // Payroll settings round-trip through company settings.
+  const s = (await call('GET', '/api/state')).json.company;
+  assert.equal((await call('PUT', '/api/settings', { ...s, payroll: { remitFreq: 'quarterly', hsfRate: 1.25 } })).status, 200);
+  assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25 });
+});

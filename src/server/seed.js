@@ -94,7 +94,7 @@ function daysAgo(n, now = new Date()) { const d = new Date(now); d.setHours(12, 
  * Builds the example records. Returns a list of {collection, id, data}.
  * Account ids refer to the default chart; call only when those accounts exist.
  */
-function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0) {
+function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0, province = '') {
   const out = [];
   let created = now.getTime() - 90 * 864e5;
   const cr = () => (created += 60000);
@@ -196,6 +196,11 @@ function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0) {
   out.push({ collection: 'rules', id: 'x_r1', data: { text: 'ROGERS', direction: 'out', account: 'a6800', contactId: '', tax: true, example: true, created: cr() } });
   add('entries', 'x_t1', { type: 'transfer', date: daysAgo(8, now), memo: 'Credit card payment', form: { from: 'a1000', to: 'a2100', amount: cc },
     lines: [{ account: 'a2100', debit: cc, credit: 0 }, { account: 'a1000', debit: 0, credit: cc }] });
+  // Two employees so the Payroll screen has someone to pay.
+  const prov = province || (qstRate > 0 ? 'QC' : 'ON');
+  const emp = (id, data) => out.push({ collection: 'employees', id, data: { prov, freq: 'biweekly', active: true, hireDate: daysAgo(400, now), example: true, created: cr(), ...data } });
+  emp('x_emp1', { name: 'Jordan Lee', email: 'jordan@example.com', payType: 'salary', rate: 58000, hours: 75 });
+  emp('x_emp2', { name: 'Sam Patel', email: 'sam@example.com', payType: 'hourly', rate: 24.5, hours: 60 });
   return out;
 }
 

@@ -35,6 +35,14 @@ It runs two ways from the same code:
   - **Filing:** marking a return as filed saves its figures and can record the payment to the government, or the refund, which clears the tax account. Instalments can be recorded too.
   - **Filed periods:** changing a transaction in a filed period asks for confirmation first, and the worksheet shows when the books no longer match what was filed.
   - The app produces the figures; returns are still submitted on CRA My Business Account or with Revenu Québec.
+- **Payroll (Canada, including Quebec):** pay employees and track what's owed to CRA and Revenu Québec.
+  - **Employees:** province of employment, pay schedule (weekly, every 2 weeks, twice a month, monthly), salary or hourly rate, TD1 and TP-1015.3 claim amounts, extra tax, RRSP and union dues at source, CPP/QPP, EI and QPIP exemptions, and amounts paid earlier in the year outside Tally Books.
+  - **Pay runs** calculate CPP, CPP2, EI and federal and provincial income tax for every province and territory, and QPP, QPP2, QPIP, Quebec EI and Quebec income tax for Quebec, using CRA's *Payroll Deductions Formulas* (T4127, 123rd edition, July 2026). Employer CPP/QPP, EI (1.4×), QPIP and the Quebec Health Services Fund are included. Yearly maximums are tracked from year-to-date amounts.
+  - Every amount can be changed before posting. Changed amounts are marked "Edited" on the pay run.
+  - Posting a pay run records one journal entry: wages and employer contributions as expenses, source deductions as liabilities to CRA and Revenu Québec, and net pay out of the bank. Payroll accounts (2300, 2310, 2320, 7110) are added the first time they're needed.
+  - **Pay stubs** with this-pay and year-to-date amounts, printed one at a time or all together.
+  - **Remittances:** what's owed to each agency per month (or quarter), the due date (the 15th of the following month), the figures for the PD7A voucher and for Revenu Québec, and payments that clear the liability.
+  - Rates are loaded for pay dates from July 1 to December 31, 2026. Quebec income tax follows Revenu Québec's TP-1015.F method but hasn't been checked line by line against WebRAS yet, so compare a first pay run with WebRAS. Always check unusual cases against CRA's PDOC.
 - **Sign-in security:** nobody sees any data without signing in.
   - The first start asks you to create an **owner** account.
   - Owners add **staff** accounts and can limit each one to specific companies. Staff choose their own password the first time they sign in.
@@ -140,6 +148,8 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   banking.js       Banking screens: import, review, rules, reconcile
   companies.js     Client list, company switcher, new company
   salestax.js      GST/HST and QST return worksheets, filing, payments
+  payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas
+  payroll.js       Employees, pay runs, pay stubs, remittances
 src/server/
   app.js           HTTP server: JSON API, static files, live updates
   db.js            SQLite storage (Node's built-in node:sqlite)
@@ -216,11 +226,11 @@ Every route except `/api/health` and `/api/auth/*` requires a signed-in session.
 npm test
 ```
 
-The tests start a real server against a temporary database. They cover the bookkeeping rules, bank file parsing for several Canadian bank formats, statement import and duplicate detection, all-or-nothing batch writes, backup and restore, cross-site request blocking, password protection, keeping companies separate, and moving books over from the single-company version.
+The tests start a real server against a temporary database. They cover the bookkeeping rules, bank file parsing for several Canadian bank formats, statement import and duplicate detection, all-or-nothing batch writes, backup and restore, payroll deductions checked against CRA's published tables and worked examples, cross-site request blocking, password protection, keeping companies separate, and moving books over from the single-company version.
 
 ## Not built yet
 
-Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, emailing invoices or saving them as PDFs, payroll, multiple currencies, user accounts with roles, and an audit log of who changed what.
+Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, emailing invoices or saving them as PDFs, T4 and RL-1 slips, records of employment (ROE), vacation and statutory holiday pay, multiple currencies, and an audit log of who changed what.
 
 ## License
 

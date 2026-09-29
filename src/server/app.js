@@ -354,8 +354,8 @@ function createApp(opts) {
 function loadExamples(store) {
   const company = store.getSetting('company') || DEFAULT_COMPANY;
   const split = Number(company.qstRate) > 0 && store.get('accounts', 'a2210');
-  const recs = exampleRecords(Number(company.taxRate) || 0, new Date(), split ? Number(company.qstRate) : 0);
-  const order = ['contacts', 'rules', 'docs', 'entries', 'bankTxns'];
+  const recs = exampleRecords(Number(company.taxRate) || 0, new Date(), split ? Number(company.qstRate) : 0, company.province);
+  const order = ['contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns'];
   recs.sort((a, b) => order.indexOf(a.collection) - order.indexOf(b.collection));
   try {
     store.transaction(() => recs.forEach(r => store.put(r.collection, r.id, validateRecord(r.collection, r.id, r.data, store))));

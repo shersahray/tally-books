@@ -32,9 +32,11 @@
           <button data-new="transfer">Transfer</button>
           <button data-new="journal">Journal entry</button>
           <button data-new="import">Import bank statement</button>
+          <button data-new="payrun">Run payroll</button>
         </div>
         <div class="col"><h4>Lists</h4>
           <button data-new="contact">Customer or vendor</button>
+          <button data-new="employee">Employee</button>
           <button data-new="account">Account</button>
         </div>
       </div>
@@ -45,6 +47,7 @@
       <button data-view="expenses">Expenses</button>
       <button data-view="banking">Banking <span class="count info" id="bankCount" hidden></span></button>
       <button data-view="salestax">Sales tax <span class="count" id="taxCount" hidden></span></button>
+      <button data-view="payroll">Payroll <span class="count" id="payCount" hidden></span></button>
       <button data-view="transactions">Transactions</button>
       <button data-view="accounts">Chart of accounts</button>
       <button data-view="reports">Reports</button>
@@ -62,6 +65,8 @@
 <script src="app.js"></script>
 <script src="banking.js"></script>
 <script src="salestax.js"></script>
+<script src="payroll-calc.js"></script>
+<script src="payroll.js"></script>
 <script src="backups.js"></script>
 <script src="auth.js"></script>
 <script src="companies.js"></script>

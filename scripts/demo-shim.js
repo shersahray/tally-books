@@ -7,7 +7,7 @@
   'use strict';
   const DATA = window.__TALLY_DEMO__;
   const PROVS = DATA.provinces, DEFAULT_ACCOUNTS = DATA.defaultAccounts;
-  const COLS = ['accounts', 'contacts', 'rules', 'docs', 'entries', 'bankTxns', 'recons', 'filings'];
+  const COLS = ['accounts', 'contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns', 'recons', 'filings', 'payruns'];
   const clone = o => JSON.parse(JSON.stringify(o));
   const cos = DATA.companies.map(c => ({ ...c.entry }));
   const books = {};
@@ -47,6 +47,7 @@
     if (w.op === 'delete') {
       if (w.collection === 'accounts' && b.entries.some(e => (e.lines || []).some(l => l.account === w.id))) throw new ApiError(409, 'This account has transactions, so it can’t be deleted. Mark it inactive instead.');
       if (w.collection === 'contacts' && (b.docs.some(d => d.contactId === w.id) || b.entries.some(e => e.contactId === w.id))) throw new ApiError(409, 'This contact appears on transactions, so it can’t be deleted.');
+      if (w.collection === 'employees' && b.payruns.some(r => r.lines.some(l => l.employeeId === w.id))) throw new ApiError(409, 'This employee has been paid, so they can’t be deleted. Mark them inactive instead.');
       if (w.collection === 'docs' && b.entries.some(e => e.applyTo === w.id)) throw new ApiError(409, 'Delete the payments on this invoice or bill first.');
     }
   }
@@ -75,7 +76,7 @@
       if (split) b.accounts.push({ id: 'a2210', code: '2210', name: 'QST payable', type: 'Liability', detail: 'qst', desc: '', active: true });
     }
     const tpl = templates[company.province];
-    if (body.examples && tpl && !body.copyFrom) ['contacts', 'rules', 'docs', 'entries', 'bankTxns'].forEach(c => (b[c] = clone(tpl[c])));
+    if (body.examples && tpl && !body.copyFrom) ['contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns'].forEach(c => (b[c] = clone(tpl[c])));
     b.rev = 1; books[id] = b;
     const entry = { id, name, archived: false, created: Date.now() }; cos.push(entry);
     return entry;

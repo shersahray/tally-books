@@ -4,13 +4,15 @@
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
   Asset: ['', 'bank', 'ar'],
-  Liability: ['', 'card', 'ap', 'tax', 'qst'],
+  Liability: ['', 'card', 'ap', 'tax', 'qst', 'payroll_cra', 'payroll_rq', 'payroll_other'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
-  Expense: [''],
+  Expense: ['', 'wages', 'payroll_tax'],
 };
-const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment'];
+const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit'];
+const PAY_PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
+const PAY_FREQ = ['weekly', 'biweekly', 'semimonthly', 'monthly'];
 const ID_RE = /^[A-Za-z0-9_.:@+~-]{1,120}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -142,6 +144,65 @@ function validateFiling(data, store) {
   return data;
 }
 
+const numOr0 = v => (v === '' || v === null || v === undefined ? 0 : Number(v));
+const optAmount = (v, label) => {
+  if (v === '' || v === null || v === undefined) return '';
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) throw new ValidationError(`${label} must be zero or more.`);
+  return cents(n) / 100;
+};
+
+function validateEmployee(data) {
+  const name = str(data.name, 160).trim();
+  if (!name) throw new ValidationError('An employee needs a name.');
+  if (!PAY_PROVINCES.includes(data.prov)) throw new ValidationError('Choose the province or territory of employment.');
+  if (!PAY_FREQ.includes(data.freq)) throw new ValidationError('Choose how often this employee is paid.');
+  if (!['salary', 'hourly'].includes(data.payType)) throw new ValidationError('Pay type must be salary or hourly.');
+  const out = { ...data, name, active: data.active !== false };
+  for (const [k, label] of [['rate', 'Pay rate'], ['hours', 'Hours per pay'], ['rrsp', 'RRSP deduction'], ['union', 'Union dues'],
+    ['td1Fed', 'Federal TD1 amount'], ['td1Prov', 'Provincial TD1 amount'], ['td1Qc', 'Quebec TP-1015.3 amount'],
+    ['extraTax', 'Additional tax'], ['extraQcTax', 'Additional Quebec tax'], ['dependants', 'Dependants']]) out[k] = optAmount(data[k], label);
+  if (data.hireDate && !isDate(data.hireDate)) throw new ValidationError('Hire date must be YYYY-MM-DD.');
+  if (data.openingYtd !== undefined) {
+    if (!isObj(data.openingYtd)) throw new ValidationError('Opening year-to-date amounts must be an object.');
+    const o = { year: parseInt(data.openingYtd.year, 10) || 0 };
+    for (const [k, v] of Object.entries(data.openingYtd)) if (k !== 'year') o[k] = optAmount(v, 'Opening year-to-date ' + k) || 0;
+    out.openingYtd = o;
+  }
+  return out;
+}
+
+const PAY_KEYS = ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'fedTax', 'provTax', 'qcTax'];
+const ER_KEYS = ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'hsf'];
+function validatePayrun(data, store) {
+  if (!isDate(data.payDate)) throw new ValidationError('Pay date must be YYYY-MM-DD.');
+  if (data.from && !isDate(data.from) || data.to && !isDate(data.to) || (data.from && data.to && data.from > data.to)) throw new ValidationError('The pay period dates aren’t valid.');
+  bankAccount(store, data.bank);
+  if (!Array.isArray(data.lines) || !data.lines.length) throw new ValidationError('A pay run needs at least one employee.');
+  const seen = new Set();
+  let net = 0;
+  const lines = data.lines.map((l, i) => {
+    if (!isObj(l)) throw new ValidationError(`Pay run line ${i + 1} is not valid.`);
+    const emp = store.get('employees', l.employeeId);
+    if (!emp) throw new ValidationError(`Pay run line ${i + 1} is for an employee who doesn’t exist.`);
+    if (seen.has(l.employeeId)) throw new ValidationError(`${emp.name} is in this pay run twice.`);
+    seen.add(l.employeeId);
+    const amt = (v, what) => { const n = numOr0(v); if (!Number.isFinite(n) || n < 0) throw new ValidationError(`${emp.name}: ${what} must be zero or more.`); return cents(n); };
+    const gross = amt(l.gross, 'gross pay');
+    const ded = {}, er = {};
+    let d = amt(l.rrsp, 'RRSP') + amt(l.union, 'union dues');
+    for (const k of PAY_KEYS) { ded[k] = amt(l.ded && l.ded[k], k) / 100; d += cents(ded[k]); }
+    for (const k of ER_KEYS) er[k] = amt(l.er && l.er[k], 'employer ' + k) / 100;
+    const n = gross - d;
+    if (n < 0) throw new ValidationError(`${emp.name}: deductions are more than gross pay.`);
+    if (cents(l.net) !== n) throw new ValidationError(`${emp.name}: net pay doesn’t equal gross pay minus deductions.`);
+    net += n;
+    return { ...l, gross: gross / 100, rrsp: cents(numOr0(l.rrsp)) / 100, union: cents(numOr0(l.union)) / 100, ded, er, net: n / 100 };
+  });
+  if (data.entryId && !store.get('entries', data.entryId)) throw new ValidationError('The journal entry for this pay run doesn’t exist.');
+  return { ...data, lines, totalNet: net / 100 };
+}
+
 function validateRecord(collection, id, data, store) {
   checkId(id);
   if (!isObj(data)) throw new ValidationError('Record body must be a JSON object.');
@@ -154,6 +215,8 @@ function validateRecord(collection, id, data, store) {
     case 'rules': return validateRule(data, store);
     case 'recons': return validateRecon(data, store);
     case 'filings': return validateFiling({ ...data, id }, store);
+    case 'employees': return validateEmployee(data);
+    case 'payruns': return validatePayrun(data, store);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -169,9 +232,24 @@ function checkDelete(collection, id, store) {
   if (collection === 'contacts' && (store.contactUsed(id) || store.list('rules').some(r => r.contactId === id))) {
     throw new ValidationError('This contact appears on transactions, so it can’t be deleted.', 409);
   }
+  if (collection === 'employees' && store.list('payruns').some(r => (r.lines || []).some(l => l.employeeId === id))) {
+    throw new ValidationError('This employee has been paid, so they can’t be deleted. Mark them inactive instead.', 409);
+  }
+  if (collection === 'entries' && store.list('payruns').some(r => r.entryId === id)) {
+    throw new ValidationError('This transaction belongs to a pay run. Delete the pay run instead.', 409);
+  }
   if (collection === 'docs' && store.hasPayments(id)) {
     throw new ValidationError('Delete the payments on this invoice or bill first.', 409);
   }
+}
+
+function validatePayrollSettings(p) {
+  if (!isObj(p)) return { hsfRate: 1.65, remitFreq: 'monthly' };
+  const hsf = Number(p.hsfRate);
+  return {
+    hsfRate: Number.isFinite(hsf) && hsf >= 0 && hsf <= 10 ? hsf : 1.65,
+    remitFreq: ['monthly', 'quarterly'].includes(p.remitFreq) ? p.remitFreq : 'monthly',
+  };
 }
 
 function validateCompany(data) {
@@ -188,6 +266,7 @@ function validateCompany(data) {
     province: /^[A-Z]{2}$/.test(data.province || '') ? data.province : '',
     qstRate: Math.max(0, Math.min(100, Number(data.qstRate) || 0)),
     filingFreq: ['monthly', 'quarterly', 'annual'].includes(data.filingFreq) ? data.filingFreq : 'quarterly',
+    payroll: validatePayrollSettings(data.payroll),
   };
 }
 
