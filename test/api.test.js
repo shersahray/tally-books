@@ -632,7 +632,7 @@ test('security headers and off-site backups to Azure Blob Storage', async () => 
   await new Promise(r => fake.listen(0, '127.0.0.1', r));
   blobs.set('2001-01-01/Old (x).json', '{}');
   const bdir = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-bk-'));
-  const { j, b, done } = await freshServer({ backupBlobUrl: `http://127.0.0.1:${fake.address().port}/backups?sv=1&sig=secret`, backupFolder: bdir });
+  const { j, b, done } = await freshServer({ backupBlobUrl: `http://127.0.0.1:${fake.address().port}/backups?sv=1&sp=racwdl&sig=secret`, backupFolder: bdir });
   const ck = (await j('POST', '/api/auth/setup', OWNER)).cookie;
   await j('POST', '/api/companies', { name: 'Blob Co', province: 'ON' }, ck);
   const r = await j('POST', '/api/backups/run', {}, ck);
@@ -663,5 +663,49 @@ test('a new online server needs the setup code to create the first owner', async
   assert.equal((await j('POST', '/api/auth/setup', OWNER)).status, 403);
   assert.equal((await j('POST', '/api/auth/setup', { ...OWNER, setupCode: 'wrong' })).status, 403);
   assert.equal((await j('POST', '/api/auth/setup', { ...OWNER, setupCode: 'blue harbour 42' })).status, 200);
+  await done();
+});
+
+test('review fixes: replacing two-step needs the password, restore is owner-only and keeps a copy, staff see less', async () => {
+  const { s, d, j, done } = await freshServer();
+  const { totp } = require('../src/server/auth');
+  const ck = (await j('POST', '/api/auth/setup', OWNER)).cookie;
+  const co = (await j('POST', '/api/companies', { name: 'Keep Co', province: 'ON' }, ck)).json.company.id;
+  // Owner turns on two-step; a second start without the password is refused.
+  const st = (await j('POST', '/api/auth/2fa/start', {}, ck)).json;
+  await j('POST', '/api/auth/2fa/confirm', { code: totp(st.secret, Math.floor(Date.now() / 30000)) }, ck);
+  assert.equal((await j('POST', '/api/auth/2fa/start', {}, ck)).status, 400);
+  assert.equal((await j('POST', '/api/auth/2fa/start', { password: OWNER.password }, ck)).status, 200);
+  // Owners can't set their own password from the users screen.
+  const me = (await j('GET', '/api/users', null, ck)).json.users[0];
+  assert.equal((await j('PUT', `/api/users/${me.id}`, { password: 'another long phrase' }, ck)).status, 409);
+  // A client who isn't view only still can't restore, change settings or load examples.
+  const inv = (await j('POST', '/api/users', { name: 'C', username: 'c@example.com', role: 'client', companies: [co], invite: true }, ck)).json.user.link;
+  const cc = (await j('POST', '/api/auth/link/accept', { token: inv, password: 'client long phrase' })).cookie;
+  assert.equal((await j('POST', `/api/c/${co}/restore`, { format: 'tally-books-backup', company: { name: 'x' } }, cc)).status, 403);
+  assert.equal((await j('PUT', `/api/c/${co}/settings`, { name: 'x' }, cc)).status, 403);
+  assert.equal((await j('POST', `/api/c/${co}/examples`, {}, cc)).status, 403);
+  // Staff see backup status without paths, and can't run backups.
+  const sl = (await j('POST', '/api/users', { name: 'S', username: 's@example.com', role: 'staff', invite: true }, ck)).json.user.link;
+  const sc = (await j('POST', '/api/auth/link/accept', { token: sl, password: 'staff long phrase' })).cookie;
+  const bs = (await j('GET', '/api/backups', null, sc)).json;
+  assert.equal(bs.limited, true);
+  assert.equal(bs.folder, undefined);
+  assert.equal((await j('POST', '/api/backups/run', {}, sc)).status, 403);
+  // The owner's restore keeps a copy of what was replaced.
+  const backup = (await (await fetch(`${s.address ? `http://127.0.0.1:${s.address().port}` : ''}/api/c/${co}/backup`, { headers: { cookie: ck } })).json());
+  // (the owner's session ended when they replaced two-step? No: only other sessions end)
+  assert.equal((await j('POST', `/api/c/${co}/restore`, backup, ck)).status, 200);
+  assert.equal(fs.readdirSync(path.join(d, 'before-restore')).length, 1);
+  // Long usernames are refused before any work is done.
+  assert.equal((await j('POST', '/api/auth/login', { username: 'x'.repeat(5000), password: 'y' })).status, 401);
+  await done();
+});
+
+test('a flood of simultaneous sign-ins from one address is turned away', async () => {
+  const { j, done } = await freshServer();
+  await j('POST', '/api/auth/setup', OWNER);
+  const results = await Promise.all(Array.from({ length: 12 }, (_, i) => j('POST', '/api/auth/login', { username: `n${i}@example.com`, password: 'wrong wrong wrong' })));
+  assert.ok(results.filter(r => r.status === 429).length >= 9, results.map(r => r.status).join());
   await done();
 });

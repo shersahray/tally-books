@@ -19,6 +19,11 @@ const password = process.env.APP_PASSWORD || '';
 // Online servers (see deploy/azure): REQUIRE_2FA=everyone, TRUST_PROXY=1 behind Caddy,
 // BACKUP_FOLDER for local copies and BACKUP_BLOB_URL for the off-site copy in Azure Storage.
 const require2fa = process.env.REQUIRE_2FA || '';
+const setupCode = process.env.SETUP_CODE || '';
+if (setupCode && (setupCode.trim().length < 10 || /choose a phrase only you know/i.test(setupCode))) {
+  console.error('SETUP_CODE is still the example or is too short. Choose your own phrase of at least 10 characters in /etc/tally-books.env.');
+  process.exit(1);
+}
 const trustProxy = process.env.TRUST_PROXY === '1';
 
 if (HOST !== '127.0.0.1' && HOST !== 'localhost' && !trustProxy) {
@@ -28,7 +33,7 @@ if (HOST !== '127.0.0.1' && HOST !== 'localhost' && !trustProxy) {
 const server = createApp({
   dataDir: DATA_DIR, password, demo: args.has('--demo'),
   require2fa, trustProxy,
-  setupCode: process.env.SETUP_CODE || undefined,
+  setupCode: setupCode || undefined,
   backupFolder: process.env.BACKUP_FOLDER || undefined,
   backupBlobUrl: process.env.BACKUP_BLOB_URL || undefined,
 });

@@ -299,3 +299,7 @@ body.readonly [data-act="load-examples"],body.readonly [data-act="clear-examples
 body.readonly #setForm button[type=submit],body.readonly #paySetForm button[type=submit],
 body.readonly .modal:not(.keep) .mfoot button[type=submit]{display:none!important}
 a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}
+/* clients don't change company settings or load examples; only owners restore backups */
+body.role-client #setForm button[type=submit],body.role-client #paySetForm button[type=submit],
+body.role-client [data-act="load-examples"],body.role-client [data-act="clear-examples"],
+body.not-owner [data-act="restore"]{display:none!important}

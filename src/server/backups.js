@@ -143,7 +143,9 @@ class Backups {
         await this.blobFetch('PUT', `${day}/${f}`, '', fs.readFileSync(path.join(dir, f)));
         st.lastCount++;
       }
-      st.removed = await this.pruneBlobs();
+      // With a write-only token (recommended), Azure removes old days itself (lifecycle rule).
+      const perms = new URLSearchParams(this.blob.sas).get('sp') || '';
+      if (perms.includes('l') && perms.includes('d')) st.removed = await this.pruneBlobs();
     } catch (e) {
       st.lastError = `Off-site copy failed: ${e.message}`;
     }

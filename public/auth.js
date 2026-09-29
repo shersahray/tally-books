@@ -17,6 +17,7 @@ function unlocked(user,idle){
   $('#lockRoot').innerHTML='';document.body.classList.remove('locked');
   document.body.classList.toggle('readonly',!!ME.readOnly);
   document.body.classList.toggle('role-client',ME.role==='client');
+  document.body.classList.toggle('not-owner',ME.role!=='owner');
   renderUserBox();
   const w=unlockWaiters;unlockWaiters=[];w.forEach(f=>f(user));
 }

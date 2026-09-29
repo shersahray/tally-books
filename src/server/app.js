@@ -57,7 +57,8 @@ function createApp(opts) {
       res.write(line);
     }
   }
-  const clientIp = req => (opts.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '';
+  // Behind Caddy, the last X-Forwarded-For entry is the address Caddy saw (earlier ones can be made up by the browser).
+  const clientIp = req => (opts.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',').pop().trim()) || req.socket.remoteAddress || '';
   // Wrong passwords or codes from one address: after 20 in 15 minutes, that address waits.
   const ipFails = new Map();
   function ipCheck(ip) {
@@ -67,19 +68,30 @@ function createApp(opts) {
   function ipFail(ip) {
     const f = ipFails.get(ip);
     if (!f || Date.now() - f.since >= 15 * 60 * 1000) ipFails.set(ip, { count: 1, since: Date.now() }); else f.count++;
-    if (ipFails.size > 10000) ipFails.clear();
+    if (ipFails.size > 10000) { const old = Date.now() - 15 * 60 * 1000; for (const [k, v] of ipFails) if (v.since < old) ipFails.delete(k); }
   }
+  // At most 3 sign-ins at a time from one address and 50 overall, so a flood can't get round the limits.
+  const inflight = new Map();
+  let inflightAll = 0;
   async function signIn(req, res, fn) {
     const ip = clientIp(req);
     ipCheck(ip);
-    await new Promise(r => setTimeout(r, 250)); // slows down guessing
-    let out;
-    try { out = fn({ ip }); } catch (e) { if (e.status === 401 || e.status === 429) ipFail(ip); throw e; }
-    if (out.ticket) return { ok: true, needCode: true, ticket: out.ticket };
-    const token = out.token || out;
-    res.setHeader('Set-Cookie', sessionCookie(token, req));
-    const { token: _, ...u } = auth.userFor({ headers: { cookie: `${COOKIE}=${token}` } });
-    return { ok: true, user: u };
+    if ((inflight.get(ip) || 0) >= 3 || inflightAll >= 50) throw new AuthError('Too many sign-in attempts at once. Wait a moment and try again.', 429);
+    inflight.set(ip, (inflight.get(ip) || 0) + 1); inflightAll++;
+    try {
+      await new Promise(r => setTimeout(r, 250)); // slows down guessing
+      let out;
+      try { out = await fn({ ip }); } catch (e) { if (e.status === 401 || e.status === 429) ipFail(ip); throw e; }
+      if (out.ticket) return { ok: true, needCode: true, ticket: out.ticket };
+      const token = out.token || out;
+      res.setHeader('Set-Cookie', sessionCookie(token, req));
+      const { token: _, ...u } = auth.userFor({ headers: { cookie: `${COOKIE}=${token}` } });
+      return { ok: true, user: u };
+    } finally {
+      const n = (inflight.get(ip) || 1) - 1;
+      if (n > 0) inflight.set(ip, n); else inflight.delete(ip);
+      inflightAll--;
+    }
   }
 
   /** Company context: its store and a change counter that live views follow. */
@@ -220,7 +232,7 @@ function createApp(opts) {
         if (!crypto.timingSafeEqual(a, b)) { ipFail(ip); throw new AuthError('The setup code isn’t right. It’s the SETUP_CODE you chose when the server was set up.', 403); }
       }
       const u = auth.setup(body);
-      const { token } = auth.login(u.username, body.password, { ip: clientIp(req) });
+      const { token } = await auth.login(u.username, body.password, { ip: clientIp(req) });
       res.setHeader('Set-Cookie', sessionCookie(token, req));
       return { ok: true, user: u };
     }],
@@ -230,7 +242,7 @@ function createApp(opts) {
     }],
     ['POST', /^\/api\/auth\/login\/code$/, async (req, m, res) => {
       const body = await readJson(req);
-      return signIn(req, res, meta => ({ token: auth.loginCode(body.ticket, body.code, meta) }));
+      return signIn(req, res, async meta => ({ token: auth.loginCode(body.ticket, body.code, meta) }));
     }],
     // Invitation and password reset links: look one up, then set the password.
     ['POST', /^\/api\/auth\/link$/, async req => {
@@ -240,9 +252,9 @@ function createApp(opts) {
     }],
     ['POST', /^\/api\/auth\/link\/accept$/, async (req, m, res) => {
       const body = await readJson(req);
-      return signIn(req, res, meta => auth.login((auth.acceptLink(body.token, body.password)).username, body.password, meta));
+      return signIn(req, res, async meta => auth.login(auth.acceptLink(body.token, body.password).username, body.password, meta));
     }],
-    ['POST', /^\/api\/auth\/2fa\/start$/, (req, m, res, user) => auth.start2fa(user)],
+    ['POST', /^\/api\/auth\/2fa\/start$/, async (req, m, res, user) => auth.start2fa(user, (await readJson(req)).password)],
     ['POST', /^\/api\/auth\/2fa\/confirm$/, async (req, m, res, user) => ({ ok: true, ...auth.confirm2fa(user, (await readJson(req)).code) })],
     ['POST', /^\/api\/auth\/2fa\/disable$/, async (req, m, res, user) => { auth.disable2fa(user, (await readJson(req)).password); return { ok: true }; }],
     ['POST', /^\/api\/auth\/2fa\/recovery$/, async (req, m, res, user) => ({ ok: true, ...auth.newRecovery(user, (await readJson(req)).password) })],
@@ -300,10 +312,16 @@ function createApp(opts) {
       if (patch.archived !== undefined) broadcast({ companies: true });
       return { ok: true, company: summary(reg.get(id)) };
     }],
-    ['GET', /^\/api\/backups$/, (req, m, res, user) => (user.role === 'client' ? { enabled: true, hidden: true } : backups.status())],
+    ['GET', /^\/api\/backups$/, (req, m, res, user) => {
+      if (user.role === 'client') return { enabled: true, hidden: true };
+      const st = backups.status();
+      if (user.role === 'owner') return st;
+      // Staff see whether backups are working, not where they're kept.
+      return { enabled: st.enabled, lastRun: st.lastRun, lastCount: st.lastCount, lastError: st.lastError ? 'The latest backup had a problem. An owner can see the details.' : '', offsite: st.offsite ? { lastRun: st.offsite.lastRun, where: 'off-site storage' } : null, limited: true };
+    }],
     ['PUT', /^\/api\/backups$/, async (req, m, res, user) => { ownerOnly(user); return backups.update(await readJson(req)); }],
     ['POST', /^\/api\/backups\/run$/, async (req, m, res, user) => {
-      notClient(user);
+      ownerOnly(user);
       const r = backups.run();
       if (!r.ok) throw new ValidationError(r.error, 409);
       if (r.upload) { const up = await r.upload; delete r.upload; if (up.lastError) throw new ValidationError(up.lastError, 502); }
@@ -350,6 +368,7 @@ function createApp(opts) {
       return { ok: true, rev: ctx.bump() };
     }],
     ['PUT', /^\/settings$/, async (ctx, req) => {
+      notClient(ctx.user);
       const company = validateCompany(await readJson(req));
       const before = ctx.store.getSetting('company');
       ctx.store.transaction(() => {
@@ -370,6 +389,7 @@ function createApp(opts) {
       return { ok: true, rev: result.added ? ctx.bump() : ctx.rev, ...result };
     }],
     ['POST', /^\/examples$/, ctx => {
+      notClient(ctx.user);
       loadExamples(ctx.store);
       ctx.store.audit(ctx.user, 'examples', { summary: 'loaded example data' });
       return { ok: true, rev: ctx.bump() };
@@ -384,8 +404,15 @@ function createApp(opts) {
     }],
     ['POST', /^\/restore$/, async (ctx, req) => {
       const body = await readJson(req, 50 * 1024 * 1024);
+      ownerOnly(ctx.user);
       if (body.format !== BACKUP_FORMAT) throw new ValidationError('That file isn’t a Tally Books backup.');
       const company = validateCompany(body.company || {});
+      // Keep a copy of what's about to be replaced, in the data folder, in case the wrong file was chosen.
+      const snapDir = path.join(opts.dataDir, 'before-restore');
+      fs.mkdirSync(snapDir, { recursive: true, mode: 0o700 });
+      const snap = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: ctx.store.getSetting('company') };
+      for (const c of COLLECTIONS) snap[c] = ctx.store.list(c);
+      fs.writeFileSync(path.join(snapDir, `${ctx.id}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), JSON.stringify(snap), { mode: 0o600 });
       ctx.store.transaction(() => {
         ctx.store.clearAll();
         ctx.store.putMeta('seeded', new Date().toISOString());

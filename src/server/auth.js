@@ -76,6 +76,17 @@ class AuthError extends Error {
 const hashPassword = (password, salt = crypto.randomBytes(16).toString('hex')) =>
   ({ salt, hash: crypto.scryptSync(String(password), salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex') });
 
+// The same check without blocking the server (used for sign-in, where many requests can arrive at once).
+const scryptAsync = (pw, salt) => new Promise((res, rej) => crypto.scrypt(String(pw), salt, 64, { N: 16384, r: 8, p: 1 }, (e, k) => (e ? rej(e) : res(k))));
+async function checkPasswordAsync(user, password) {
+  const salt = user && user.hash && user.salt ? user.salt : 'no-such-user-salt';
+  const key = await scryptAsync(password, salt); // same work whether or not the user exists
+  if (!user || !user.hash || !user.salt) return false;
+  return crypto.timingSafeEqual(key, Buffer.from(user.hash, 'hex'));
+}
+const MAX_FIELD = 200;
+const LOCK_TOTAL = 50; // wrong tries for one account from all addresses together
+
 function checkPassword(user, password) {
   if (!user.hash || !user.salt) { hashPassword(password); return false; } // invited, no password yet
   const { hash } = hashPassword(password, user.salt);
@@ -115,14 +126,19 @@ class Auth {
   /** Append one line to the sign-in log (kept to about 5 MB, with one older file). */
   log(event, detail = {}) {
     try {
+      for (const k of Object.keys(detail)) if (typeof detail[k] === 'string') detail[k] = detail[k].slice(0, 120);
       const line = JSON.stringify({ at: new Date().toISOString(), event, ...detail }) + '\n';
-      try { if (fs.statSync(this.logFile).size > LOG_MAX) fs.renameSync(this.logFile, this.logFile + '.1'); } catch { /* no log yet */ }
+      try {
+        if (fs.statSync(this.logFile).size > LOG_MAX) {
+          for (const n of [3, 2, 1]) { try { fs.renameSync(n === 1 ? this.logFile : `${this.logFile}.${n - 1}`, `${this.logFile}.${n}`); } catch { /* none */ } }
+        }
+      } catch { /* no log yet */ }
       fs.appendFileSync(this.logFile, line, { mode: 0o600 });
     } catch { /* logging must never stop a sign-in */ }
   }
   readLog(limit = 500) {
     let text = '';
-    for (const f of [this.logFile + '.1', this.logFile]) { try { text += fs.readFileSync(f, 'utf8'); } catch { /* none */ } }
+    for (const f of [this.logFile + '.3', this.logFile + '.2', this.logFile + '.1', this.logFile]) { try { text += fs.readFileSync(f, 'utf8'); } catch { /* none */ } }
     return text.split('\n').filter(Boolean).slice(-limit).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).reverse();
   }
 
@@ -173,7 +189,9 @@ class Auth {
     const u = { id: 'u_' + crypto.randomBytes(8).toString('hex'), name, username, role, companies, readOnly: role !== 'owner' && !!readOnly, created: Date.now() };
     let link = '';
     if (invite) { link = this.setLink(u, 'invite'); }
-    else {
+    else if (this.forced2fa !== 'off' && this.data.users.length) {
+      throw new AuthError('On this server, add people with an invitation link so they choose their own password.', 400);
+    } else {
       const problem = passwordProblem(password, { username });
       if (problem) throw new AuthError(problem, 400);
       Object.assign(u, hashPassword(password), { mustChange: !!mustChange });
@@ -214,7 +232,7 @@ class Auth {
     Object.assign(u, hashPassword(password), { mustChange: false });
     delete u.invite;
     this.endSessionsFor(u.id);
-    this.failures.delete(u.username);
+    this.clearFailures(u.username);
     this.save();
     this.log(kind === 'invite' ? 'invite-accepted' : 'password-reset', { username: u.username });
     return u;
@@ -243,15 +261,18 @@ class Auth {
       if (patch.disabled && u.id === actor.id) throw new AuthError('You can’t turn off your own account.', 409);
       if (patch.disabled && u.role === 'owner' && owners().length <= 1) throw new AuthError('There must always be at least one owner.', 409);
       u.disabled = !!patch.disabled;
-      if (u.disabled) this.endSessionsFor(u.id);
+      if (u.disabled) { this.endSessionsFor(u.id); delete u.invite; }
     }
     if (patch.password !== undefined) {
+      if (u.id === actor.id) throw new AuthError('Change your own password from Account.', 409);
+      if (this.forced2fa !== 'off') throw new AuthError('On this server, send a password reset link instead.', 400);
       const problem = passwordProblem(patch.password, u);
       if (problem) throw new AuthError(problem, 400);
       Object.assign(u, hashPassword(patch.password));
-      u.mustChange = u.id !== actor.id; // someone else set it: ask the user to choose their own
+      delete u.invite;
+      u.mustChange = true; // someone else set it: ask the user to choose their own
       this.endSessionsFor(u.id);
-      this.failures.delete(u.username);
+      this.clearFailures(u.username);
     }
     this.save();
     this.log('user-changed', { username: u.username, by: actor.username, changes: Object.keys(patch).filter(k => k !== 'password').concat(patch.password !== undefined ? ['password'] : []) });
@@ -260,19 +281,24 @@ class Auth {
 
   changeOwnPassword(user, current, next) {
     const u = this.byId(user.id);
+    if (String(current || '').length > MAX_FIELD) throw new AuthError('Your current password isn’t right.', 400);
     if (!checkPassword(u, current)) throw new AuthError('Your current password isn’t right.', 400);
     const problem = passwordProblem(next, u);
     if (problem) throw new AuthError(problem, 400);
     if (checkPassword(u, next)) throw new AuthError('Choose a password different from your current one.', 400);
     Object.assign(u, hashPassword(next), { mustChange: false });
+    delete u.invite;
+    this.endSessionsFor(u.id, user.token); // sign out everywhere else
     this.save();
     this.log('password-changed', { username: u.username });
   }
 
   /* ---------- two-step sign-in ---------- */
   /** Start setting up an authenticator app: a new secret, not active until a code confirms it. */
-  start2fa(user) {
+  start2fa(user, password) {
     const u = this.byId(user.id);
+    // Replacing a working authenticator needs the password, so a stolen session can't take the account over.
+    if (u.totp && u.totp.enabled && !checkPassword(u, password)) throw new AuthError('Enter your password to set up a new authenticator app.', 400);
     u.totpPending = { secret: base32(crypto.randomBytes(20)), created: Date.now() };
     this.save();
     const label = encodeURIComponent('Tally Books') + ':' + encodeURIComponent(u.username);
@@ -285,8 +311,10 @@ class Auth {
     const st = matchStep(u.totpPending.secret, code);
     if (!st) throw new AuthError('That code isn’t right. Check the time on your phone is set automatically, then try the newest code.', 400);
     const recovery = newRecoveryCodes();
+    const replacing = !!(u.totp && u.totp.enabled);
     u.totp = { secret: u.totpPending.secret, enabled: true, lastStep: st, recovery: recovery.map(sha256), since: Date.now() };
     delete u.totpPending;
+    if (replacing) this.endSessionsFor(u.id, user.token);
     this.save();
     this.log('2fa-on', { username: u.username });
     return { recovery };
@@ -298,7 +326,9 @@ class Auth {
     if (!u.totp) throw new AuthError('Two-step sign-in isn’t on.', 409);
     const recovery = newRecoveryCodes();
     u.totp.recovery = recovery.map(sha256);
+    this.endSessionsFor(u.id, user.token);
     this.save();
+    this.log('recovery-codes-renewed', { username: u.username });
     return { recovery };
   }
   disable2fa(user, password) {
@@ -306,6 +336,7 @@ class Auth {
     if (!checkPassword(u, password)) throw new AuthError('Your password isn’t right.', 400);
     if (this.needs2fa(u)) throw new AuthError('Two-step sign-in is required for your account, so it can’t be turned off.', 409);
     delete u.totp; delete u.totpPending;
+    this.endSessionsFor(u.id, user.token);
     this.save();
     this.log('2fa-off', { username: u.username });
   }
@@ -326,36 +357,48 @@ class Auth {
     return true;
   }
 
-  /** Throws if the account is locked. */
-  checkLock(name) {
-    const f = this.failures.get(name);
-    if (f && f.until > Date.now()) {
-      const mins = Math.ceil((f.until - Date.now()) / 60000);
-      throw new AuthError(`Too many wrong tries. This account is locked for ${mins} more minute${mins === 1 ? '' : 's'}.`, 429);
+  /** Throws if the account is locked for this address (5 wrong tries), or for everyone (50 from all addresses). */
+  checkLock(name, ip = '') {
+    for (const key of [`${name}|${ip}`, name]) {
+      const f = this.failures.get(key);
+      if (f && f.until > Date.now()) {
+        const mins = Math.ceil((f.until - Date.now()) / 60000);
+        throw new AuthError(`Too many wrong tries. This account is locked for ${mins} more minute${mins === 1 ? '' : 's'}.`, 429);
+      }
     }
-    return f;
   }
-  /** Count a wrong password or code. Returns how many tries are left before the lock. */
-  fail(name) {
-    const f = this.failures.get(name);
-    const n = (f && f.until && f.until <= Date.now() ? 0 : (f ? f.count : 0)) + 1; // a finished lock starts the count again
-    this.failures.set(name, { count: n, until: n >= LOCK_AFTER ? Date.now() + LOCK_MS : 0 });
-    if (n >= LOCK_AFTER) this.log('locked', { username: name });
-    return LOCK_AFTER - n;
+  /** Count a wrong password or code. Returns how many tries are left (from this address) before the lock. */
+  fail(name, ip = '') {
+    if (this.failures.size > 20000) { // keep memory bounded: forget finished locks and old counts
+      const now = Date.now();
+      for (const [k, f] of this.failures) if (!f.until || f.until < now) this.failures.delete(k);
+      if (this.failures.size > 20000) this.failures.clear();
+    }
+    const bump = (key, limit) => {
+      const f = this.failures.get(key);
+      const n = (f && f.until && f.until <= Date.now() ? 0 : (f ? f.count : 0)) + 1; // a finished lock starts the count again
+      this.failures.set(key, { count: n, until: n >= limit ? Date.now() + LOCK_MS : 0 });
+      return n;
+    };
+    const total = bump(name, LOCK_TOTAL);
+    const n = bump(`${name}|${ip}`, LOCK_AFTER);
+    if (n === LOCK_AFTER || total === LOCK_TOTAL) this.log('locked', { username: name, ip, everywhere: total >= LOCK_TOTAL });
+    return total >= LOCK_TOTAL ? 0 : LOCK_AFTER - n;
   }
+  clearFailures(name) { for (const k of this.failures.keys()) if (k === name || k.startsWith(name + '|')) this.failures.delete(k); }
 
   /**
    * Check a username and password.
    * Returns { token } for a new session, or { ticket } when the account also needs a code from the authenticator app.
    */
-  login(username, password, meta = {}) {
+  async login(username, password, meta = {}) {
+    if (String(username || '').length > MAX_FIELD || String(password || '').length > MAX_FIELD) throw new AuthError('The username or password isn’t right.', 401);
     const name = cleanUsername(username);
-    this.checkLock(name);
+    this.checkLock(name, meta.ip);
     const u = this.byName(name);
-    const ok = u && !u.disabled && checkPassword(u, password);
-    if (!u) hashPassword(password); // take the same time whether or not the user exists
+    const ok = (await checkPasswordAsync(u, password)) && !u.disabled;
     if (!ok) {
-      const left = this.fail(name);
+      const left = this.fail(name, meta.ip);
       this.log('login-failed', { username: name, ip: meta.ip, reason: u ? (u.disabled ? 'turned off' : 'wrong password') : 'no such user' });
       if (u && u.disabled) throw new AuthError('This account has been turned off. Ask the owner to turn it back on.', 403);
       throw new AuthError(left > 0 ? `The username or password isn’t right.${left <= 2 ? ` ${left} more tr${left === 1 ? 'y' : 'ies'} before the account is locked for 15 minutes.` : ''}` : 'Too many wrong tries. This account is locked for 15 minutes.', left > 0 ? 401 : 429);
@@ -374,10 +417,10 @@ class Auth {
     if (!t || Date.now() - t.created > TICKET_MS) { this.tickets.delete(ticket); throw new AuthError('That took too long. Enter your password again.', 401, { restart: true }); }
     const u = this.byId(t.userId);
     if (!u || u.disabled || !u.totp) { this.tickets.delete(ticket); throw new AuthError('Enter your password again.', 401, { restart: true }); }
-    this.checkLock(u.username);
+    this.checkLock(u.username, meta.ip);
     if (!this.checkSecondStep(u, code)) {
       t.tries++;
-      const left = this.fail(u.username);
+      const left = this.fail(u.username, meta.ip);
       this.log('code-failed', { username: u.username, ip: meta.ip });
       if (t.tries >= 3 || left <= 0) this.tickets.delete(ticket);
       throw new AuthError(left <= 0 ? 'Too many wrong tries. This account is locked for 15 minutes.' : t.tries >= 3 ? 'Too many wrong codes. Enter your password again.' : 'That code isn’t right. Codes change every 30 seconds; use the newest one.', left <= 0 ? 429 : 401, t.tries >= 3 ? { restart: true } : {});
@@ -386,7 +429,7 @@ class Auth {
     return this.startSession(u, meta);
   }
   startSession(u, meta = {}) {
-    this.failures.delete(u.username);
+    this.clearFailures(u.username);
     u.lastLogin = Date.now();
     this.save();
     this.log('login', { username: u.username, ip: meta.ip, twoStep: !!(u.totp && u.totp.enabled) });
@@ -396,7 +439,8 @@ class Auth {
   }
 
   logout(token) { this.sessions.delete(token); }
-  endSessionsFor(userId) { for (const [t, s] of this.sessions) if (s.userId === userId) this.sessions.delete(t); }
+  /** End a user's sessions, except (optionally) the one they're using now. */
+  endSessionsFor(userId, keepToken) { for (const [t, s] of this.sessions) if (s.userId === userId && t !== keepToken) this.sessions.delete(t); }
 
   /** The signed-in user for a request, or null. Refreshes the inactivity timer. */
   userFor(req, { touch = true } = {}) {

@@ -49,7 +49,7 @@ It runs two ways from the same code:
   - **Invitations:** new people get a one-time link (valid 7 days) to choose their own password. Owners can send a **password reset link** (valid 24 hours). Links are stored only as hashes.
   - **Two-step sign-in:** a 6-digit code from an authenticator app (Microsoft Authenticator, Google Authenticator, 1Password), set up by scanning a QR code, with ten one-time recovery codes. Owners can require it for owners or everyone; online servers require it for everyone.
   - Passwords are stored only as scrypt hashes, never as the password itself.
-  - Five wrong passwords or codes lock an account for 15 minutes, and 20 failures from one network address block that address for 15 minutes.
+  - Five wrong passwords or codes from one network address lock that account there for 15 minutes (50 from all addresses lock it everywhere). 20 failures from one address, or more than 3 sign-ins at once, block that address for 15 minutes.
   - The app **locks itself after inactivity** (30 minutes unless you change it), and every sign-in ends after 12 hours.
   - Sessions use HttpOnly, SameSite=Strict cookies (Secure over HTTPS). Pages are served with a strict Content Security Policy and, over HTTPS, HSTS.
   - **Sign-in activity:** every sign-in, failed attempt and account change is logged for owners.
@@ -98,7 +98,7 @@ If you're upgrading from the single-company version, your existing `data/tally-b
 | `SETUP_CODE` | *(none)* | If set, creating the first owner account needs this code, so a stranger can't claim a new server. |
 | `TRUST_PROXY` | *(off)* | `1` when running behind an HTTPS proxy such as Caddy, so sign-in limits use the visitor's real address. |
 | `BACKUP_FOLDER` | OneDrive, if found | Folder for the daily backups. |
-| `BACKUP_BLOB_URL` | *(none)* | An Azure Blob Storage container URL with a SAS token (read, add, create, write, delete, list). Each day's backup is also copied there. |
+| `BACKUP_BLOB_URL` | *(none)* | An Azure Blob Storage container URL with a SAS token. Each day's backup is also copied there. A write-only token (Create, Write) is safest, with an Azure lifecycle rule removing old days. If the token can also list and delete, Tally Books removes old days itself. |
 
 To put it on the internet for clients, follow [deploy/azure/README.md](deploy/azure/README.md) rather than opening a port: it adds HTTPS, two-step sign-in and off-site backups.
 
