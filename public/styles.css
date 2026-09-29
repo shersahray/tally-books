@@ -275,3 +275,11 @@ svg.chart .base{stroke:var(--line-strong);stroke-width:1}
   body.printing>*:not(#printRoot){display:none!important}
   body.printing #printRoot{display:block}
 }
+/* general ledger */
+.report table.gl td,.report table.gl th{padding:5px 7px}
+.report table.gl tr.sec td{padding-top:18px}
+.report table.gl tr.click:hover td{background:var(--surface-2)}
+.report table.gl{font-size:13px}
+.report table.gl td.mono{white-space:nowrap}
+.report table.gl td.trunc{max-width:160px}
+.report table.gl td.n{white-space:nowrap}

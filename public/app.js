@@ -269,17 +269,18 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep;const T=[['pl','Profit and loss'],['bs','Balance sheet'],['tb','Trial balance'],['ar','A/R aging'],['ap','A/P aging']];
+  const R=S.rep;const T=[['pl','Profit and loss'],['bs','Balance sheet'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']];
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
-  const pointInTime=R.tab!=='pl';
+  const pointInTime=R.tab!=='pl'&&R.tab!=='gl';
   return head('Reports','')+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
     ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
+    ${R.tab==='gl'?`<select id="repAcct" aria-label="Account"><option value="">All accounts</option>${acctOptions(R.acct||'')}</select>`:''}
     <span class="grow"></span><button class="btn sm" data-act="export">Export CSV</button>
   </div><div id="repBody">${reportBody()}</div></div>`;
 }
-function reportBody(){return({pl:rPL,bs:rBS,tb:rTB,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
+function reportBody(){return({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
 const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font-weight:600;margin-top:2px">${t}</div><span>${sub}</span></div>`;
 const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
 function rPL(){
@@ -309,6 +310,41 @@ function rTB(){
   add('','Retained earnings','Equity',-netIncome(null,addDays(fy,-1)));
   csv.push(['','Total','',r2(td),r2(tc)]);
   return{html:`<div class="report">${rh('Trial balance',`As of ${fmtDate(to)} · income and expenses from ${fmtDate(fy)}`)}<div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th class="n">Debit</th><th class="n">Credit</th></tr></thead><tbody>${h||`<tr><td colspan="4" class="muted">No balances.</td></tr>`}</tbody><tfoot><tr class="grand"><td></td><td>Total</td><td class="n">${money(td)}</td><td class="n">${money(tc)}</td></tr></tfoot></table></div></div>`,csv,name:`trial-balance_${to}`};
+}
+/* General ledger: every posting in the period, grouped by account, with an opening balance, a running balance
+   and a closing balance. Income and expense accounts open with their balance since the start of the fiscal year;
+   balance sheet accounts open with their all-time balance. Balances are shown the way the account normally runs
+   (debits up for assets and expenses, credits up for liabilities, equity and income). */
+function rGL(){
+  const{from,to}=S.rep,only=S.rep.acct||'';
+  const csv=[['Account','Date','Type','No.','Name','Memo','Debit','Credit','Balance']];let h='',td=0,tc=0,n=0;
+  const byAcct={};for(const p of postings())if(p.date>=from&&p.date<=to)(byAcct[p.account]=byAcct[p.account]||[]).push(p);
+  for(const a of sortAccts(S.accounts)){
+    if(only&&a.id!==only)continue;
+    const ps=(byAcct[a.id]||[]).sort((x,y)=>x.date.localeCompare(y.date)||(x.e.created||0)-(y.e.created||0));
+    const dn=debitNormal(a.type),sign=dn?1:-1;
+    const open=isPL(a.type)?(fyStartOf(from)<from?bal(a.id,fyStartOf(from),addDays(from,-1)):0):bal(a.id,null,addDays(from,-1));
+    if(!ps.length&&!open&&!only)continue;
+    const label=(a.code?a.code+' ':'')+a.name;let run=open,ad=0,ac=0;
+    h+=`<tbody class="gl-acct"><tr class="sec"><td colspan="8"><button class="link" data-acct="${a.id}">${esc(label)}</button> <span class="muted">· ${a.type}</span></td></tr>
+      <tr class="gl-open"><td></td><td colspan="5" class="muted">Opening balance${isPL(a.type)?' (fiscal year to date)':''}</td><td></td><td class="n">${mcell(open)}</td></tr>`;
+    csv.push([label,from,'Opening balance','','','','','',r2(open)]);
+    for(const p of ps){
+      run=r2(run+sign*(p.debit-p.credit));ad+=p.debit;ac+=p.credit;n++;
+      const name=contactName(p.e.contactId)||(p.e.type==='payrun'?'Payroll':'');
+      h+=`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc">${esc(name)}</td><td class="trunc muted">${esc(p.memo||p.e.memo||'')}</td><td class="n">${p.debit?money(p.debit):''}</td><td class="n">${p.credit?money(p.credit):''}</td><td class="n">${mcell(run)}</td></tr>`;
+      csv.push([label,p.date,TLABEL[p.e.type]||p.e.type,p.e.ref||'',name,p.memo||p.e.memo||'',r2(p.debit)||'',r2(p.credit)||'',run]);
+    }
+    td+=ad;tc+=ac;
+    h+=`<tr class="tot"><td colspan="5">Total ${esc(label)}</td><td class="n">${money(ad)}</td><td class="n">${money(ac)}</td><td class="n">${mcell(run)}</td></tr></tbody>`;
+    csv.push(['Total '+label,'','','','','',r2(ad),r2(ac),run]);
+  }
+  csv.push(['Total','','','','','',r2(td),r2(tc),'']);
+  const out=Math.abs(r2(td-tc))>0.004&&!only;
+  return{html:`<div class="report" style="max-width:none">${rh('General ledger',`${fmtDate(from)} – ${fmtDate(to)}${only?' · '+esc(acctName(only)):''}`)}<div class="tbl-wrap"><table class="gl"><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Name</th><th>Memo</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead>
+    ${h||`<tbody><tr><td colspan="8" class="muted" style="padding:16px">No transactions in this period.</td></tr></tbody>`}
+    ${h&&!only?`<tfoot><tr class="grand"><td colspan="5">Total, ${n} line${n===1?'':'s'}</td><td class="n">${money(td)}</td><td class="n">${money(tc)}</td><td></td></tr></tfoot>`:''}</table></div>
+    ${out?`<div class="banner err" style="margin:12px 16px">Debits and credits differ by ${money(r2(td-tc))}. Check for entries posted to deleted accounts.</div>`:''}</div>`,csv,name:`general-ledger_${from}_${to}`};
 }
 function rAging(kind){
   const t=today(),B=['Current','1–30','31–60','61–90','Over 90'];const by={};
@@ -376,6 +412,7 @@ function bindMain(m){
   ['txQ','txType','txFrom','txTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.oninput=el.onchange=txU});
   const rf=$('#regFrom',m),rt=$('#regTo',m);if(rf){rf.onchange=rt.onchange=()=>{S.reg={from:rf.value,to:rt.value};renderMain()}}
   const rp=$('#repPeriod',m);if(rp)rp.onchange=()=>{S.rep.period=rp.value;renderMain()};
+  const ra=$('#repAcct',m);if(ra)ra.onchange=()=>{S.rep.acct=ra.value;renderMain()};
   ['repFrom','repTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.onchange=()=>{S.rep.period='custom';S.rep.from=($('#repFrom')||{}).value||S.rep.from;S.rep.to=$('#repTo').value;renderMain()}});
   const rf2=$('#restoreFile',m);if(rf2)rf2.onchange=()=>{const f=rf2.files[0];rf2.value='';if(f)restoreBackup(f)};
   if(S.view==='banking')bindBanking(m);
@@ -388,7 +425,7 @@ function bindMain(m){
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value};if(await putCompany(data))toast('Settings saved')};
 }
 function exportCSV(){
-  const R=S.rep;const r=({pl:rPL,bs:rBS,tb:rTB,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
+  const R=S.rep;const r=({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
   const text=r.csv.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
   saveFile(r.name+'.csv',new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'}));
 }
