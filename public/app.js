@@ -29,6 +29,7 @@ const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
 const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons','filings'];
+COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.

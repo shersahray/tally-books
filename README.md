@@ -53,6 +53,8 @@ npm start            # or: npm run start:demo  (loads example data on first run)
 
 Then open <http://localhost:3000>.
 
+**Shortcut:** instead of typing the command, double-click **Start Tally Books.bat** on Windows or **Start Tally Books.command** on a Mac. It starts the server and opens the app in your browser. Keep the window it opens running while you work, and close it to stop.
+
 Your books are saved in the `data` folder:
 - `companies.json` lists your companies;
 - `companies/<id>.db` holds each company's books.
@@ -95,11 +97,30 @@ The desktop app keeps its books in your user data folder. **File → Show data f
 
 ### Automatic installers from GitHub
 
-`.github/workflows/release.yml` builds the Windows `.exe`, the macOS `.dmg` and the Linux `.AppImage` on GitHub's computers. To run it, go to **Actions → Build desktop apps → Run workflow**. It also runs when you push a version tag such as `v1.0.0`.
+`.github/workflows/release.yml` builds the Windows `.exe`, the macOS `.dmg` and the Linux `.AppImage` on GitHub's computers. To run it, go to **Actions → Build desktop apps → Run workflow**. It also runs when you push a version tag such as `v1.0.0`. When the run finishes, download the installers from the **Artifacts** section at the bottom of the run's page.
 
-When the run finishes, download the installers from the **Artifacts** section at the bottom of the run's page.
+### Signing the Windows installer (Azure Artifact Signing)
 
-The builds aren't code-signed, so Windows SmartScreen and macOS Gatekeeper will warn the first time someone opens the app.
+Without a signature, Windows warns "Windows protected your PC", and Smart App Control blocks the installer completely. Signing fixes both.
+
+1. Set up [Azure Artifact Signing](https://learn.microsoft.com/en-us/azure/trusted-signing/quickstart):
+   - a signing account;
+   - an approved identity validation;
+   - a Public Trust certificate profile;
+   - an app registration with the **Artifact Signing Certificate Profile Signer** role on the signing account.
+2. In the GitHub repo, go to **Settings → Secrets and variables → Actions**.
+   - **Secrets** tab, which stores values privately:
+     - `AZURE_TENANT_ID`: the Directory (tenant) ID, from Microsoft Entra ID.
+     - `AZURE_CLIENT_ID`: the Application (client) ID, from the app registration.
+     - `AZURE_CLIENT_SECRET`: the client secret **Value**.
+   - **Variables** tab:
+     - `AZURE_SIGNING_ACCOUNT`: the Artifact Signing account name. This isn't the app registration's name.
+     - `AZURE_CERT_PROFILE`: the certificate profile name.
+     - `AZURE_SIGNING_ENDPOINT`: the endpoint for your account's region, for example `https://eus.codesigning.azure.net`.
+     - `AZURE_PUBLISHER_NAME`: the name exactly as it appears on the certificate.
+3. Run the workflow again. The log says "Signing the Windows installer as …", and a check step confirms the signature is valid.
+
+The Mac and Linux builds stay unsigned. Signing the Mac version needs Apple's separate Developer Program.
 
 ## How it works
 
@@ -162,6 +183,10 @@ GROUP BY account_id;
 | `GET` | `/backup` | Download a full backup of this company |
 | `POST` | `/restore` | Replace this company's books with a backup |
 | `POST` | `/examples` | Load example data |
+
+## Online demo
+
+`node scripts/build-demo.js` builds `dist/demo.html`, the whole app in one file. It runs in the browser with two example companies and needs no server. Changes aren't saved and downloads are turned off, so it's only for showing people how the app works.
 
 ## Development
 

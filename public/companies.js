@@ -34,7 +34,7 @@ async function openCompany(id,view='dashboard'){
   if(!CO_LIST.some(c=>c.id===id))return;
   closeModal();
   CO=id;resetBooks();lsSet(id);
-  if(location.hash.slice(1)!==id)history.replaceState(null,'','#'+id);
+  try{if(location.hash.slice(1)!==id)history.replaceState(null,'','#'+id)}catch(e){}
   S.view=view;renderMain();window.scrollTo(0,0);
   await load();
   api('PUT','/api/companies/'+encodeURIComponent(id),{opened:true}).catch(()=>{});

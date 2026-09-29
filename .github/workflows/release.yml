@@ -1,5 +1,14 @@
 name: Build desktop apps
 
+# Builds installers for Windows, macOS and Linux. Run it from Actions → Build desktop apps →
+# Run workflow, or by pushing a version tag such as v1.0.0.
+#
+# Windows code signing (Azure Artifact Signing) switches on by itself once these are set in
+# Settings → Secrets and variables → Actions:
+#   Secrets:    AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+#   Variables:  AZURE_SIGNING_ACCOUNT, AZURE_CERT_PROFILE, AZURE_SIGNING_ENDPOINT, AZURE_PUBLISHER_NAME
+# Until then the Windows installer is built unsigned, as before.
+
 on:
   workflow_dispatch:
   push:
@@ -25,10 +34,54 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm test
+
       - name: Build installer
-        run: npx electron-builder --publish never
+        shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SIGN_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          SIGN_PROFILE: ${{ vars.AZURE_CERT_PROFILE }}
+          SIGN_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          SIGN_PUBLISHER: ${{ vars.AZURE_PUBLISHER_NAME }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
+            missing=""
+            for v in AZURE_TENANT_ID AZURE_CLIENT_ID SIGN_ACCOUNT SIGN_PROFILE SIGN_ENDPOINT SIGN_PUBLISHER; do
+              [ -z "${!v}" ] && missing="$missing $v"
+            done
+            if [ -n "$missing" ]; then
+              echo "::error::Azure signing is half set up. Missing:$missing (see the notes at the top of this file)."
+              exit 1
+            fi
+            echo "Signing the Windows installer as \"$SIGN_PUBLISHER\" with Azure Artifact Signing"
+            echo "SIGNED=1" >> "$GITHUB_ENV"
+            npx electron-builder --publish never \
+              "-c.win.azureSignOptions.publisherName=$SIGN_PUBLISHER" \
+              "-c.win.azureSignOptions.endpoint=$SIGN_ENDPOINT" \
+              "-c.win.azureSignOptions.certificateProfileName=$SIGN_PROFILE" \
+              "-c.win.azureSignOptions.codeSigningAccountName=$SIGN_ACCOUNT"
+          else
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              echo "::notice::The Windows installer is not signed yet. Add the Azure secrets and variables to sign it."
+            fi
+            npx electron-builder --publish never
+          fi
+
+      - name: Check the Windows signature
+        if: runner.os == 'Windows' && env.SIGNED == '1'
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem dist -Filter *.exe) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            Write-Host "$($f.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { $failed = $true }
+          }
+          if ($failed) { Write-Error 'The installer is not validly signed.'; exit 1 }
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
