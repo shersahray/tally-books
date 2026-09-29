@@ -1,8 +1,8 @@
 name: Publish online demo
 
-# Builds the browser-only demo (example data, nothing saved) and publishes it with GitHub Pages.
-# One-time setup: Settings → Pages → Source: "GitHub Actions". The page is then at
-# https://shersahray.github.io/tally-books/
+# Builds the browser-only demo (example data, nothing saved) and puts it on the gh-pages branch,
+# which GitHub Pages serves at https://shersahray.github.io/tally-books/
+# (Settings → Pages → Source: "Deploy from a branch", branch gh-pages, folder / (root)).
 
 on:
   workflow_dispatch:
@@ -11,9 +11,7 @@ on:
     paths: ['public/**', 'scripts/**', 'src/**', '.github/workflows/pages.yml']
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -22,9 +20,6 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,8 +37,15 @@ jobs:
             echo '</body></html>'
           } > site/index.html
           cp public/icon.svg site/icon.svg
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-      - id: deploy
-        uses: actions/deploy-pages@v4
+          touch site/.nojekyll
+      - name: Publish to the gh-pages branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Online demo from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

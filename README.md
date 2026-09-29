@@ -204,7 +204,7 @@ Every route except `/api/health` and `/api/auth/*` requires a signed-in session.
 
 ## Online demo
 
-**Live demo:** https://shersahray.github.io/tally-books/ (turn it on once under **Settings → Pages → Source: GitHub Actions**)
+**Live demo:** https://shersahray.github.io/tally-books/ (GitHub Pages, served from the `gh-pages` branch, which `.github/workflows/pages.yml` updates automatically)
 
 
 `node scripts/build-demo.js` builds `dist/demo.html`, the whole app in one file. It runs in the browser with two example companies and needs no server. Changes aren't saved and downloads are turned off, so it's only for showing people how the app works.
