@@ -490,3 +490,178 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   assert.equal((await call('PUT', '/api/settings', { ...s, payroll: { remitFreq: 'quarterly', hsfRate: 1.25 } })).status, 200);
   assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25 });
 });
+
+// A fresh server for one test; returns helpers bound to it.
+async function freshServer(extra = {}) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-x-'));
+  const s = createApp({ dataDir: d, autoBackup: false, ...extra });
+  await new Promise(r => s.listen(0, '127.0.0.1', r));
+  const b = `http://127.0.0.1:${s.address().port}`;
+  const j = async (method, url, body, ck = '') => {
+    const r = await fetch(b + url, { method, headers: { 'Content-Type': 'application/json', cookie: ck }, body: body && JSON.stringify(body) });
+    let json = null; try { json = await r.json(); } catch {}
+    return { status: r.status, json, cookie: (r.headers.get('set-cookie') || '').split(';')[0] };
+  };
+  return { s, b, d, j, done: async () => { await s.shutdown(); fs.rmSync(d, { recursive: true, force: true }); } };
+}
+
+test('two-step sign-in: set up, sign in with a code, recovery codes, replay and required policy', async () => {
+  const { s, j, done } = await freshServer({ require2fa: 'owners' });
+  const { totp } = require('../src/server/auth');
+  const owner = await j('POST', '/api/auth/setup', OWNER);
+  const ck = owner.cookie;
+  assert.equal(owner.json.user.mustEnroll, true, 'owners must set it up on this server');
+  let r = await j('GET', '/api/companies', null, ck);
+  assert.equal(r.status, 403);
+  assert.equal(r.json.mustEnroll, true);
+
+  const start = (await j('POST', '/api/auth/2fa/start', {}, ck)).json;
+  assert.match(start.uri, /^otpauth:\/\/totp\/Tally%20Books:owner%40example\.com\?secret=[A-Z2-7]{32}&issuer=Tally%20Books/);
+  const step = Math.floor(Date.now() / 30000);
+  assert.equal((await j('POST', '/api/auth/2fa/confirm', { code: '000000' === totp(start.secret, step) ? '111111' : '000000' }, ck)).status, 400);
+  r = await j('POST', '/api/auth/2fa/confirm', { code: totp(start.secret, step) }, ck);
+  assert.equal(r.status, 200);
+  const recovery = r.json.recovery;
+  assert.equal(recovery.length, 10);
+  assert.equal((await j('GET', '/api/companies', null, ck)).status, 200, 'unlocked once set up');
+  assert.ok(!fs.readFileSync(path.join(s.auth.file), 'utf8').includes(recovery[0]), 'recovery codes are stored hashed');
+
+  // Password alone is not enough now.
+  r = await j('POST', '/api/auth/login', OWNER);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.needCode, true);
+  assert.equal(r.cookie, '', 'no session before the code');
+  const ticket = r.json.ticket;
+  assert.equal((await j('POST', '/api/auth/login/code', { ticket, code: totp(start.secret, step) })).status, 401, 'a code already used is refused');
+  r = await j('POST', '/api/auth/login/code', { ticket, code: totp(start.secret, step + 1) });
+  assert.equal(r.status, 200);
+  assert.ok(r.cookie.startsWith('tb_session='));
+
+  // A recovery code works once.
+  let t2 = (await j('POST', '/api/auth/login', OWNER)).json.ticket;
+  assert.equal((await j('POST', '/api/auth/login/code', { ticket: t2, code: recovery[0] })).status, 200);
+  t2 = (await j('POST', '/api/auth/login', OWNER)).json.ticket;
+  assert.equal((await j('POST', '/api/auth/login/code', { ticket: t2, code: recovery[0] })).status, 401);
+
+  // Three wrong codes end the ticket.
+  const t3 = (await j('POST', '/api/auth/login', OWNER)).json.ticket;
+  for (let i = 0; i < 2; i++) await j('POST', '/api/auth/login/code', { ticket: t3, code: '123456' });
+  r = await j('POST', '/api/auth/login/code', { ticket: t3, code: '123456' });
+  assert.equal(r.json.restart, true);
+  assert.equal((await j('POST', '/api/auth/login/code', { ticket: t3, code: totp(start.secret, step + 2) })).status, 401);
+
+  // Required for owners: can't be turned off.
+  assert.equal((await j('POST', '/api/auth/2fa/disable', { password: OWNER.password }, ck)).status, 409);
+  const log = (await j('GET', '/api/security/log', null, ck)).json.log;
+  assert.ok(log.some(e => e.event === 'code-failed') && log.some(e => e.event === '2fa-on') && log.some(e => e.event === 'recovery-code-used'));
+  await done();
+});
+
+test('invitation links, client role and view-only access', async () => {
+  const { s, j, done } = await freshServer();
+  const ck = (await j('POST', '/api/auth/setup', OWNER)).cookie;
+  const co1 = (await j('POST', '/api/companies', { name: 'Client One', province: 'ON' }, ck)).json.company.id;
+  const co2 = (await j('POST', '/api/companies', { name: 'Client Two', province: 'ON' }, ck)).json.company.id;
+  assert.equal((await j('POST', '/api/users', { name: 'Cli', username: 'cli@example.com', role: 'client', invite: true }, ck)).status, 400, 'a client needs a company');
+  let r = await j('POST', '/api/users', { name: 'Cli', username: 'cli@example.com', role: 'client', companies: [co1], readOnly: true, invite: true }, ck);
+  assert.equal(r.status, 200);
+  const link = r.json.user.link;
+  assert.ok(link && link.length > 20);
+  assert.ok(!fs.readFileSync(s.auth.file, 'utf8').includes(link), 'links are stored hashed');
+  assert.equal((await j('POST', '/api/auth/login', { username: 'cli@example.com', password: 'anything at all here' })).status, 401, 'no password until the invite is accepted');
+  assert.deepEqual((await j('POST', '/api/auth/link', { token: link })).json, { name: 'Cli', username: 'cli@example.com', kind: 'invite' });
+  r = await j('POST', '/api/auth/link/accept', { token: link, password: 'client chosen phrase' });
+  assert.equal(r.status, 200);
+  const cc = r.cookie;
+  assert.equal((await j('POST', '/api/auth/link', { token: link })).status, 410, 'a link works once');
+
+  const seen = (await j('GET', '/api/companies', null, cc)).json.companies.map(c => c.id);
+  assert.deepEqual(seen, [co1]);
+  assert.equal((await j('GET', `/api/c/${co2}/state`, null, cc)).status, 403);
+  assert.equal((await j('GET', `/api/c/${co1}/state`, null, cc)).status, 200);
+  r = await j('PUT', `/api/c/${co1}/records/contacts/c1`, { name: 'X', kind: 'customer' }, cc);
+  assert.equal(r.status, 403);
+  assert.match(r.json.error, /view only/);
+  assert.equal((await j('GET', `/api/c/${co1}/audit`, null, cc)).status, 403, 'clients don’t see the audit log');
+  assert.equal((await j('GET', '/api/backups', null, cc)).json.hidden, true);
+  assert.equal((await j('POST', '/api/backups/run', {}, cc)).status, 403);
+
+  // Turn off view only: the client can now make changes, and they're in the audit log under their name.
+  const cid = (await j('GET', '/api/users', null, ck)).json.users.find(u => u.role === 'client').id;
+  await j('PUT', `/api/users/${cid}`, { readOnly: false }, ck);
+  assert.equal((await j('PUT', `/api/c/${co1}/records/contacts/c1`, { name: 'Added by client', kind: 'customer' }, cc)).status, 200);
+  await j('PUT', `/api/c/${co1}/records/contacts/c1`, { name: 'Renamed by owner', kind: 'customer' }, ck);
+  await j('DELETE', `/api/c/${co1}/records/contacts/c1`, null, ck);
+  const audit = (await j('GET', `/api/c/${co1}/audit`, null, ck)).json.rows;
+  assert.deepEqual(audit.slice(0, 3).map(a => [a.action, a.username]), [['delete', OWNER.username], ['change', OWNER.username], ['add', 'cli@example.com']]);
+  const full = (await j('GET', `/api/c/${co1}/audit/${audit[1].seq}`, null, ck)).json;
+  assert.equal(full.before.name, 'Added by client');
+  assert.equal(full.after.name, 'Renamed by owner');
+
+  // Password reset link for an existing user.
+  r = await j('POST', `/api/users/${cid}/link`, {}, ck);
+  assert.equal(r.json.kind, 'reset');
+  assert.equal((await j('POST', '/api/auth/link/accept', { token: r.json.token, password: 'short' })).status, 400);
+  assert.equal((await j('POST', '/api/auth/link/accept', { token: r.json.token, password: 'a brand new phrase' })).status, 200);
+  assert.equal((await j('GET', '/api/companies', null, cc)).status, 401, 'resetting the password ends old sessions');
+  await done();
+});
+
+test('too many failed sign-ins from one address are slowed down', async () => {
+  const { s, j, done } = await freshServer();
+  await j('POST', '/api/auth/setup', OWNER);
+  for (let i = 0; i < 20; i++) await j('POST', '/api/auth/login', { username: `nobody${i}@example.com`, password: 'wrong wrong wrong' });
+  const r = await j('POST', '/api/auth/login', OWNER);
+  assert.equal(r.status, 429);
+  assert.match(r.json.error, /your network/);
+  await done();
+});
+
+test('security headers and off-site backups to Azure Blob Storage', async () => {
+  // A stand-in for Azure Blob Storage: PUT, list and DELETE on one container.
+  const blobs = new Map();
+  const http = require('node:http');
+  const fake = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    assert.equal(u.searchParams.get('sig'), 'secret', 'the SAS token is sent');
+    if (req.method === 'PUT') { const chunks = []; req.on('data', c => chunks.push(c)); req.on('end', () => { blobs.set(decodeURIComponent(u.pathname.replace('/backups/', '')), Buffer.concat(chunks).toString()); res.writeHead(201); res.end(); }); return; }
+    if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'application/xml' }); res.end(`<EnumerationResults><Blobs>${[...blobs.keys()].map(n => `<Blob><Name>${n}</Name></Blob>`).join('')}</Blobs><NextMarker/></EnumerationResults>`); return; }
+    if (req.method === 'DELETE') { blobs.delete(decodeURIComponent(u.pathname.replace('/backups/', ''))); res.writeHead(202); res.end(); return; }
+    res.writeHead(405); res.end();
+  });
+  await new Promise(r => fake.listen(0, '127.0.0.1', r));
+  blobs.set('2001-01-01/Old (x).json', '{}');
+  const bdir = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-bk-'));
+  const { j, b, done } = await freshServer({ backupBlobUrl: `http://127.0.0.1:${fake.address().port}/backups?sv=1&sig=secret`, backupFolder: bdir });
+  const ck = (await j('POST', '/api/auth/setup', OWNER)).cookie;
+  await j('POST', '/api/companies', { name: 'Blob Co', province: 'ON' }, ck);
+  const r = await j('POST', '/api/backups/run', {}, ck);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const names = [...blobs.keys()];
+  assert.ok(names.some(n => /^\d{4}-\d{2}-\d{2}\/Blob Co \(.+\)\.json$/.test(n)), names.join());
+  assert.ok(names.some(n => n.endsWith('/companies.json')));
+  assert.ok(!names.includes('2001-01-01/Old (x).json'), 'old days are removed off-site too');
+  const st = (await j('GET', '/api/backups', null, ck)).json;
+  assert.equal(st.offsite.lastError, '');
+  assert.equal(st.offsite.where, `127.0.0.1:${fake.address().port}`);
+
+  const page = await fetch(b + '/');
+  assert.match(page.headers.get('content-security-policy'), /script-src 'self'/);
+  assert.equal(page.headers.get('strict-transport-security'), null, 'no HSTS over plain http');
+  const https = await fetch(b + '/', { headers: { 'x-forwarded-proto': 'https' } });
+  assert.match(https.headers.get('strict-transport-security'), /max-age/);
+  await done();
+  fake.close();
+  fs.rmSync(bdir, { recursive: true, force: true });
+});
+
+test('a new online server needs the setup code to create the first owner', async () => {
+  const { j, done } = await freshServer({ setupCode: 'blue harbour 42' });
+  const me = await j('GET', '/api/auth/me');
+  assert.equal(me.json.setup, true);
+  assert.equal(me.json.setupCode, true);
+  assert.equal((await j('POST', '/api/auth/setup', OWNER)).status, 403);
+  assert.equal((await j('POST', '/api/auth/setup', { ...OWNER, setupCode: 'wrong' })).status, 403);
+  assert.equal((await j('POST', '/api/auth/setup', { ...OWNER, setupCode: 'blue harbour 42' })).status, 200);
+  await done();
+});

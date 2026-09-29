@@ -54,7 +54,7 @@ function vCompanies(){
   const review=active.reduce((s,c)=>s+c.toReview,0),overdue=active.reduce((s,c)=>s+c.overdueCount,0);
   const h=head('Companies',all.length?`${active.length} active compan${active.length===1?'y':'ies'}${review?` · ${review} bank line${review===1?'':'s'} to review`:''}${overdue?` · ${overdue} overdue invoice${overdue===1?'':'s'}`:''}`:'',
     `${ME&&ME.role==='owner'?'<button class="btn" data-coact="users">Users &amp; security</button><button class="btn primary" data-coact="new">+ New company</button>':''}`);
-  if(!all.length)return h+`<div class="panel" style="max-width:640px"><div class="empty"><b>Set up your first company</b>Each company keeps its own chart of accounts, customers, bank accounts and reports, in its own file.<div style="margin-top:14px"><button class="btn primary" data-coact="new">+ New company</button></div></div></div>`;
+  if(!all.length)return h+`<div class="panel" style="max-width:640px"><div class="empty"><b>Set up your first company</b>Each company keeps its own chart of accounts, customers, bank accounts and reports, in its own file.${ME&&ME.role==='owner'?'<div style="margin-top:14px"><button class="btn primary" data-coact="new">+ New company</button></div>':''}</div></div>`;
   const fyEnd=c=>{const end=+c.fyStart===1?12:(+c.fyStart||1)-1;return `${monthName(end).slice(0,3)} ${new Date(2026,end,0).getDate()} year-end`};
   return h+`<div class="panel"><div class="toolbar">
     <input class="grow" type="search" id="coQ" placeholder="Search companies" value="${esc(S.co.q)}" aria-label="Search companies">
@@ -124,13 +124,12 @@ window.addEventListener('hashchange',()=>{const id=location.hash.slice(1);if(id&
 
 async function boot(){
   // Sign in first: nothing else loads without a session.
-  try{const me=await api('GET','/api/auth/me');if(me.user.mustChange){ME=me.user;await requireSignIn('password')}else{ME=me.user;IDLE_MIN=me.idleMinutes;renderUserBox()}}
+  try{await authStart()}
   catch(e){
-    if(e.status===401)await requireSignIn(e.info&&e.info.setup?'setup':'signin');
-    else{$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Tally Books server.</b> ${esc(e.message)}</span><button class="btn sm" onclick="location.reload()">Try again</button></div>`;$('#coName').textContent='Not connected';return}
+    {$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Tally Books server.</b> ${esc(e.message)}</span><button class="btn sm" data-reload>Try again</button></div>`;$('#main [data-reload]').onclick=()=>location.reload();$('#coName').textContent='Not connected';return}
   }
   try{await Promise.all([loadCompanies(),loadBackups()])}
-  catch(e){$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Tally Books server.</b> ${esc(e.message)}</span><button class="btn sm" onclick="location.reload()">Try again</button></div>`;$('#coName').textContent='Not connected';return}
+  catch(e){$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Tally Books server.</b> ${esc(e.message)}</span><button class="btn sm" data-reload>Try again</button></div>`;$('#main [data-reload]').onclick=()=>location.reload();$('#coName').textContent='Not connected';return}
   const active=CO_LIST.filter(c=>!c.archived);
   const pick=[location.hash.slice(1),lsGet()].find(id=>id&&CO_LIST.some(c=>c.id===id))||(active.length===1?active[0].id:null);
   if(pick)await openCompany(pick);else{S.view='companies';renderMain()}

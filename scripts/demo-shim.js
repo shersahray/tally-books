@@ -82,6 +82,8 @@
     return entry;
   }
 
+  const auditLogs = {};
+  let auditSeq = 0;
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
@@ -102,11 +104,22 @@
     if (!m) throw new ApiError(404, 'Not found');
     const id = decodeURIComponent(m[1]), rest = m[2], b = books[id];
     if (!b) throw new ApiError(404, 'That company doesn’t exist.');
+    // A simple activity log kept in memory, like the real one.
+    const log = (auditLogs[id] = auditLogs[id] || []);
+    const note = w => {
+      const before = (b[w.collection] || []).find(x => x.id === w.id);
+      const d = w.data || before || {};
+      log.unshift({ seq: ++auditSeq, at: Date.now(), username: 'demo', name: 'Demo user', action: w.op === 'delete' ? 'delete' : before ? 'change' : 'add', collection: w.collection, record_id: w.id,
+        summary: [d.type || d.kind || '', d.number ? '#' + d.number : '', d.name || '', d.date || '', d.memo || ''].filter(Boolean).join(' ').slice(0, 120), before: before && clone(before), after: w.op === 'set' ? clone(w.data) : undefined });
+    };
+    if (rest.split('?')[0] === '/audit') return { rows: log.slice(0, 200).map(({ before, after, ...r }) => r), users: log.length ? [{ username: 'demo', name: 'Demo user' }] : [] };
+    const am = rest.match(/^\/audit\/(\d+)$/);
+    if (am) { const row = log.find(x => x.seq === Number(am[1])); if (!row) throw new ApiError(404, 'Not found'); return row; }
     if (rest === '/state') return { ...clone(b), companyId: id };
     let r = rest.match(/^\/records\/([A-Za-z]+)\/([^/]+)$/);
-    if (r && method === 'PUT') return transact(id, w => apply(w, { op: 'set', collection: r[1], id: decodeURIComponent(r[2]), data: body }));
-    if (r && method === 'DELETE') return transact(id, w => apply(w, { op: 'delete', collection: r[1], id: decodeURIComponent(r[2]) }));
-    if (rest === '/batch') return transact(id, w => body.writes.forEach(x => apply(w, x)));
+    if (r && method === 'PUT') { const w0 = { op: 'set', collection: r[1], id: decodeURIComponent(r[2]), data: body }; note(w0); return transact(id, w => apply(w, w0)); }
+    if (r && method === 'DELETE') { const w0 = { op: 'delete', collection: r[1], id: decodeURIComponent(r[2]) }; note(w0); return transact(id, w => apply(w, w0)); }
+    if (rest === '/batch') { body.writes.forEach(note); return transact(id, w => body.writes.forEach(x => apply(w, x))); }
     if (rest === '/settings') { const out = transact(id, w => { w.company = { ...w.company, ...body }; }); cos.find(c => c.id === id).name = body.name; return out; }
     if (rest === '/bank/import') {
       let added = 0, skipped = 0; const seen = {};

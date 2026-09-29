@@ -27,12 +27,17 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {string} [opts.password]    If set, HTTP Basic auth is required (any username).
  * @param {string} [opts.publicDir]   Directory of static files to serve.
  * @param {boolean} [opts.demo]       Create an example company on first run.
+ * @param {string} [opts.require2fa]  Least two-step sign-in allowed: 'owners' or 'everyone' (use 'everyone' online).
+ * @param {boolean} [opts.trustProxy] Behind a reverse proxy (Caddy): take the client's address from X-Forwarded-For.
+ * @param {string} [opts.backupBlobUrl] Azure Blob Storage container URL with a SAS token, for off-site backups.
+ * @param {string} [opts.setupCode]   If set, creating the first owner account needs this code (so a stranger can't claim a new server).
  */
 function createApp(opts) {
   const reg = new Registry(opts.dataDir);
-  const auth = new Auth(opts.dataDir);
+  const auth = new Auth(opts.dataDir, { require2fa: opts.require2fa });
   const ownerOnly = u => { if (u.role !== 'owner') throw new ValidationError('Only an owner can do that.', 403); };
-  const backups = new Backups(opts.dataDir, reg);
+  const notClient = u => { if (u.role === 'client') throw new ValidationError('Only your bookkeeper can do that.', 403); };
+  const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   if (opts.backupFolder) backups.update({ folder: opts.backupFolder });
   if (opts.autoBackup !== false) backups.start();
   const publicDir = opts.publicDir || PUBLIC_DIR;
@@ -42,9 +47,39 @@ function createApp(opts) {
     createCompany({ name: 'Example Company', province: 'ON', examples: true });
   }
 
+  // Live updates go only to people who can see that company.
   function broadcast(msg) {
     const line = `data: ${JSON.stringify(msg)}\n\n`;
-    for (const res of clients) res.write(line);
+    for (const res of clients) {
+      const u = res.user && auth.byId(res.user.id);
+      if (!u || u.disabled) { res.end(); clients.delete(res); continue; }
+      if (msg.company && !auth.canSee(auth.publicUser(u), msg.company)) continue;
+      res.write(line);
+    }
+  }
+  const clientIp = req => (opts.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '';
+  // Wrong passwords or codes from one address: after 20 in 15 minutes, that address waits.
+  const ipFails = new Map();
+  function ipCheck(ip) {
+    const f = ipFails.get(ip);
+    if (f && Date.now() - f.since < 15 * 60 * 1000 && f.count >= 20) throw new AuthError('Too many failed sign-ins from your network. Try again in 15 minutes.', 429);
+  }
+  function ipFail(ip) {
+    const f = ipFails.get(ip);
+    if (!f || Date.now() - f.since >= 15 * 60 * 1000) ipFails.set(ip, { count: 1, since: Date.now() }); else f.count++;
+    if (ipFails.size > 10000) ipFails.clear();
+  }
+  async function signIn(req, res, fn) {
+    const ip = clientIp(req);
+    ipCheck(ip);
+    await new Promise(r => setTimeout(r, 250)); // slows down guessing
+    let out;
+    try { out = fn({ ip }); } catch (e) { if (e.status === 401 || e.status === 429) ipFail(ip); throw e; }
+    if (out.ticket) return { ok: true, needCode: true, ticket: out.ticket };
+    const token = out.token || out;
+    res.setHeader('Set-Cookie', sessionCookie(token, req));
+    const { token: _, ...u } = auth.userFor({ headers: { cookie: `${COOKIE}=${token}` } });
+    return { ok: true, user: u };
   }
 
   /** Company context: its store and a change counter that live views follow. */
@@ -64,7 +99,7 @@ function createApp(opts) {
     };
   }
 
-  function createCompany(body) {
+  function createCompany(body, user) {
     const name = String(body.name || '').trim();
     if (!name) throw new ValidationError('Give the company a name.');
     const preset = PROVINCES[body.province] || {};
@@ -86,6 +121,7 @@ function createApp(opts) {
     const store = reg.store(entry.id);
     seedDefaults(store, { company, accounts });
     if (body.examples) loadExamples(store);
+    store.audit(user, 'create', { summary: `company created${body.copyFrom ? ' with a copied chart of accounts' : ''}${body.examples ? ', with example data' : ''}` });
     broadcast({ companies: true });
     return entry;
   }
@@ -127,13 +163,19 @@ function createApp(opts) {
     return out;
   }
 
-  function applyWrite(store, w) {
+  function applyWrite(store, w, user) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
-    if (op === 'set') store.put(collection, id, validateRecord(collection, id, w.data, store));
-    else if (op === 'delete') {
+    const before = store.get(collection, id);
+    if (op === 'set') {
+      const data = validateRecord(collection, id, w.data, store);
+      store.put(collection, id, data);
+      const after = store.get(collection, id);
+      if (JSON.stringify(before) !== JSON.stringify(after)) store.audit(user, before ? 'change' : 'add', { collection, id, summary: auditSummary(collection, after), before, after });
+    } else if (op === 'delete') {
       checkDelete(collection, id, store);
       store.delete(collection, id);
+      if (before) store.audit(user, 'delete', { collection, id, summary: auditSummary(collection, before), before });
       // A deleted transaction sends any bank lines linked to it back to "For review".
       if (collection === 'entries') {
         for (const b of store.bankTxnsForEntry(id)) store.put('bankTxns', b.id, { ...b, status: 'new', entryId: '' });
@@ -141,31 +183,72 @@ function createApp(opts) {
     } else throw new ValidationError(`Unknown operation "${op}".`);
   }
 
+  // A one-line description of a record for the audit log.
+  function auditSummary(col, d) {
+    if (!d) return '';
+    const amt = n => '$' + (Number(n) || 0).toFixed(2);
+    const tot = e => (e.lines || []).reduce((s, l) => s + (Number(l.debit) || 0), 0);
+    switch (col) {
+      case 'entries': return `${d.type} ${d.date}${d.ref ? ' #' + d.ref : ''} ${amt(tot(d))}${d.memo ? ' · ' + String(d.memo).slice(0, 60) : ''}`;
+      case 'docs': return `${d.kind}${d.number ? ' #' + d.number : ''} ${d.date} ${amt(d.total)}`;
+      case 'accounts': return `${d.code ? d.code + ' ' : ''}${d.name}`;
+      case 'contacts': case 'employees': return d.name || '';
+      case 'bankTxns': return `${d.date} ${amt(d.amount)} ${String(d.desc || '').slice(0, 50)} (${d.status})`;
+      case 'rules': return `when "${d.text}"`;
+      case 'recons': return `statement ${d.statementDate} ending ${amt(d.endingBalance)}`;
+      case 'filings': return `${d.tax === 'qst' ? 'QST' : 'GST/HST'} ${d.from} to ${d.to}`;
+      case 'payruns': return `pay date ${d.payDate}, ${(d.lines || []).length} employee(s)`;
+      default: return '';
+    }
+  }
+
   // Routes that work across companies.
   const globalRoutes = [
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
     ['GET', /^\/api\/auth\/me$/, req => {
       const user = auth.userFor(req);
-      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup() });
+      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode });
       const { token, ...u } = user;
-      return { user: u, idleMinutes: auth.data.settings.idleMinutes };
+      return { user: u, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.policy2fa };
     }],
     ['POST', /^\/api\/auth\/setup$/, async (req, m, res) => {
       const body = await readJson(req);
+      if (opts.setupCode && auth.needsSetup()) {
+        const ip = clientIp(req);
+        ipCheck(ip);
+        const a = crypto.createHash('sha256').update(String(body.setupCode || '').trim()).digest(), b = crypto.createHash('sha256').update(String(opts.setupCode).trim()).digest();
+        if (!crypto.timingSafeEqual(a, b)) { ipFail(ip); throw new AuthError('The setup code isn’t right. It’s the SETUP_CODE you chose when the server was set up.', 403); }
+      }
       const u = auth.setup(body);
-      const token = auth.login(u.username, body.password);
+      const { token } = auth.login(u.username, body.password, { ip: clientIp(req) });
       res.setHeader('Set-Cookie', sessionCookie(token, req));
       return { ok: true, user: u };
     }],
     ['POST', /^\/api\/auth\/login$/, async (req, m, res) => {
       const body = await readJson(req);
-      await new Promise(r => setTimeout(r, 250)); // slows down password guessing
-      const token = auth.login(body.username, body.password);
-      res.setHeader('Set-Cookie', sessionCookie(token, req));
-      const { token: _, ...u } = auth.userFor({ headers: { cookie: `${COOKIE}=${token}` } });
-      return { ok: true, user: u };
+      return signIn(req, res, meta => auth.login(body.username, body.password, meta));
     }],
+    ['POST', /^\/api\/auth\/login\/code$/, async (req, m, res) => {
+      const body = await readJson(req);
+      return signIn(req, res, meta => ({ token: auth.loginCode(body.ticket, body.code, meta) }));
+    }],
+    // Invitation and password reset links: look one up, then set the password.
+    ['POST', /^\/api\/auth\/link$/, async req => {
+      const body = await readJson(req);
+      ipCheck(clientIp(req));
+      try { return auth.peekLink(body.token); } catch (e) { ipFail(clientIp(req)); throw e; }
+    }],
+    ['POST', /^\/api\/auth\/link\/accept$/, async (req, m, res) => {
+      const body = await readJson(req);
+      return signIn(req, res, meta => auth.login((auth.acceptLink(body.token, body.password)).username, body.password, meta));
+    }],
+    ['POST', /^\/api\/auth\/2fa\/start$/, (req, m, res, user) => auth.start2fa(user)],
+    ['POST', /^\/api\/auth\/2fa\/confirm$/, async (req, m, res, user) => ({ ok: true, ...auth.confirm2fa(user, (await readJson(req)).code) })],
+    ['POST', /^\/api\/auth\/2fa\/disable$/, async (req, m, res, user) => { auth.disable2fa(user, (await readJson(req)).password); return { ok: true }; }],
+    ['POST', /^\/api\/auth\/2fa\/recovery$/, async (req, m, res, user) => ({ ok: true, ...auth.newRecovery(user, (await readJson(req)).password) })],
     ['POST', /^\/api\/auth\/logout$/, (req, m, res) => {
+      const u = auth.userFor(req, { touch: false });
+      if (u) auth.log('logout', { username: u.username });
       auth.logout(readCookie(req, COOKIE));
       res.setHeader('Set-Cookie', sessionCookie('', req, 0));
       return { ok: true };
@@ -175,14 +258,34 @@ function createApp(opts) {
       auth.changeOwnPassword(user, body.current, body.password);
       return { ok: true };
     }],
-    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); return { users: auth.list(), idleMinutes: auth.data.settings.idleMinutes }; }],
-    ['POST', /^\/api\/users$/, async (req, m, res, user) => { ownerOnly(user); const b = await readJson(req); return { ok: true, user: auth.addUser({ ...b, mustChange: true }) }; }],
+    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); return { users: auth.list(), idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa || 'off', forced2fa: auth.forced2fa }; }],
+    ['POST', /^\/api\/users$/, async (req, m, res, user) => {
+      ownerOnly(user);
+      const b = await readJson(req);
+      const u = auth.addUser({ ...b, mustChange: !b.invite });
+      auth.log('user-added', { username: u.username, by: user.username, role: u.role });
+      return { ok: true, user: u };
+    }],
     ['PUT', /^\/api\/users\/([^/]+)$/, async (req, m, res, user) => { ownerOnly(user); return { ok: true, user: auth.updateUser(decodeURIComponent(m[1]), await readJson(req), user) }; }],
-    ['PUT', /^\/api\/security$/, async (req, m, res, user) => { ownerOnly(user); auth.setIdleMinutes((await readJson(req)).idleMinutes); return { ok: true, idleMinutes: auth.data.settings.idleMinutes }; }],
+    ['POST', /^\/api\/users\/([^/]+)\/link$/, (req, m, res, user) => {
+      ownerOnly(user);
+      const out = auth.issueLink(decodeURIComponent(m[1]));
+      auth.log(out.kind === 'invite' ? 'invite-link' : 'reset-link', { username: auth.byId(decodeURIComponent(m[1])).username, by: user.username });
+      return { ok: true, ...out };
+    }],
+    ['PUT', /^\/api\/security$/, async (req, m, res, user) => {
+      ownerOnly(user);
+      const b = await readJson(req);
+      if (b.idleMinutes !== undefined) auth.setIdleMinutes(b.idleMinutes);
+      if (b.require2fa !== undefined) auth.setRequire2fa(b.require2fa);
+      auth.log('security-changed', { by: user.username, ...b });
+      return { ok: true, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa };
+    }],
+    ['GET', /^\/api\/security\/log$/, (req, m, res, user) => { ownerOnly(user); return { log: auth.readLog(1000) }; }],
     ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list().filter(c => auth.canSee(user, c.id)).map(summary), provinces: PROVINCES })],
     ['POST', /^\/api\/companies$/, async (req, m, res, user) => {
       ownerOnly(user);
-      const entry = createCompany(await readJson(req));
+      const entry = createCompany(await readJson(req), user);
       return { ok: true, company: summary(entry) };
     }],
     ['PUT', /^\/api\/companies\/([^/]+)$/, async (req, m, res, user) => {
@@ -197,14 +300,17 @@ function createApp(opts) {
       if (patch.archived !== undefined) broadcast({ companies: true });
       return { ok: true, company: summary(reg.get(id)) };
     }],
-    ['GET', /^\/api\/backups$/, () => backups.status()],
+    ['GET', /^\/api\/backups$/, (req, m, res, user) => (user.role === 'client' ? { enabled: true, hidden: true } : backups.status())],
     ['PUT', /^\/api\/backups$/, async (req, m, res, user) => { ownerOnly(user); return backups.update(await readJson(req)); }],
-    ['POST', /^\/api\/backups\/run$/, () => {
+    ['POST', /^\/api\/backups\/run$/, async (req, m, res, user) => {
+      notClient(user);
       const r = backups.run();
       if (!r.ok) throw new ValidationError(r.error, 409);
+      if (r.upload) { const up = await r.upload; delete r.upload; if (up.lastError) throw new ValidationError(up.lastError, 502); }
       return { ...r, status: backups.status() };
     }],
-    ['POST', /^\/api\/backups\/open$/, req => {
+    ['POST', /^\/api\/backups\/open$/, (req, m, res, user) => {
+      notClient(user);
       // Only for someone sitting at this computer: opens the folder in File Explorer / Finder.
       const ip = req.socket.remoteAddress || '';
       if (!/^(::1|127\.|::ffff:127\.)/.test(ip)) throw new ValidationError('The backup folder can only be opened on the computer running Tally Books.', 403);
@@ -214,8 +320,9 @@ function createApp(opts) {
       try { spawn(cmd, args, { stdio: 'ignore', detached: true }).unref(); } catch { /* shown in the UI instead */ }
       return { ok: true, path: dir };
     }],
-    ['GET', /^\/api\/events$/, (req, m, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    ['GET', /^\/api\/events$/, (req, m, res, user) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      res.user = user;
       res.write(`retry: 3000\ndata: ${JSON.stringify({ hello: true })}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
@@ -228,34 +335,43 @@ function createApp(opts) {
     ['GET', /^\/state$/, ctx => state(ctx)],
     ['PUT', /^\/records\/([A-Za-z]+)\/([^/]+)$/, async (ctx, req, m) => {
       const data = await readJson(req);
-      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data }));
+      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data }, ctx.user));
       return { ok: true, rev: ctx.bump() };
     }],
     ['DELETE', /^\/records\/([A-Za-z]+)\/([^/]+)$/, (ctx, req, m) => {
-      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'delete', collection: m[1], id: decodeURIComponent(m[2]) }));
+      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'delete', collection: m[1], id: decodeURIComponent(m[2]) }, ctx.user));
       return { ok: true, rev: ctx.bump() };
     }],
     ['POST', /^\/batch$/, async (ctx, req) => {
       const body = await readJson(req);
       if (!Array.isArray(body.writes) || !body.writes.length) throw new ValidationError('Send a non-empty "writes" list.');
       if (body.writes.length > 500) throw new ValidationError('At most 500 writes per batch.');
-      ctx.store.transaction(() => body.writes.forEach(w => applyWrite(ctx.store, w)));
+      ctx.store.transaction(() => body.writes.forEach(w => applyWrite(ctx.store, w, ctx.user)));
       return { ok: true, rev: ctx.bump() };
     }],
     ['PUT', /^\/settings$/, async (ctx, req) => {
       const company = validateCompany(await readJson(req));
-      ctx.store.putSetting('company', company);
+      const before = ctx.store.getSetting('company');
+      ctx.store.transaction(() => {
+        ctx.store.putSetting('company', company);
+        ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'company', summary: 'company settings', before, after: company });
+      });
       reg.update(ctx.id, { name: company.name });
       broadcast({ companies: true });
       return { ok: true, rev: ctx.bump() };
     }],
     ['POST', /^\/bank\/import$/, async (ctx, req) => {
       const body = await readJson(req, 20 * 1024 * 1024);
-      const result = ctx.store.transaction(() => importBankRows(ctx.store, body));
+      const result = ctx.store.transaction(() => {
+        const r = importBankRows(ctx.store, body);
+        if (r.added) ctx.store.audit(ctx.user, 'import', { collection: 'bankTxns', summary: `imported ${r.added} bank line(s) from ${String(body.fileName || 'a file').slice(0, 100)}` });
+        return r;
+      });
       return { ok: true, rev: result.added ? ctx.bump() : ctx.rev, ...result };
     }],
     ['POST', /^\/examples$/, ctx => {
       loadExamples(ctx.store);
+      ctx.store.audit(ctx.user, 'examples', { summary: 'loaded example data' });
       return { ok: true, rev: ctx.bump() };
     }],
     ['GET', /^\/backup$/, (ctx, req, m, res) => {
@@ -282,9 +398,22 @@ function createApp(opts) {
           }
         }
       });
+      ctx.store.audit(ctx.user, 'restore', { summary: `restored a backup exported ${String(body.exportedAt || '').slice(0, 10) || 'on an unknown date'}` });
       reg.update(ctx.id, { name: company.name });
       broadcast({ companies: true });
       return { ok: true, rev: ctx.bump() };
+    }],
+    // Audit log for this company (owners and staff).
+    ['GET', /^\/audit$/, (ctx, req) => {
+      notClient(ctx.user);
+      const q = new URL(req.url, 'http://x').searchParams;
+      return { rows: ctx.store.auditList({ before: q.get('before'), from: q.get('from'), to: q.get('to'), username: q.get('user'), collection: q.get('collection'), recordId: q.get('record'), limit: q.get('limit') }), users: ctx.store.auditUsers() };
+    }],
+    ['GET', /^\/audit\/(\d+)$/, (ctx, req, m) => {
+      notClient(ctx.user);
+      const r = ctx.store.auditList({ before: Number(m[1]) + 1, limit: 1, full: true })[0];
+      if (!r || r.seq !== Number(m[1])) throw new ValidationError('That change isn’t in the log.', 404);
+      return r;
     }],
   ];
 
@@ -298,15 +427,17 @@ function createApp(opts) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
         // Everything except signing in needs a signed-in user.
         let user = null;
-        if (!/^\/api\/(health|auth\/(me|setup|login|logout))$/.test(url.pathname)) {
+        if (!/^\/api\/(health|auth\/(me|setup|login|login\/code|logout|link|link\/accept))$/.test(url.pathname)) {
           user = auth.userFor(req);
           if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup() });
           if (user.mustChange && url.pathname !== '/api/auth/password' && url.pathname !== '/api/events') throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
+          if (user.mustEnroll && !/^\/api\/(auth\/(password|2fa\/start|2fa\/confirm)|events)$/.test(url.pathname)) throw new AuthError('Set up two-step sign-in before continuing.', 403, { mustEnroll: true });
         }
         const cm = url.pathname.match(/^\/api\/c\/([^/]+)(\/.*)$/);
         if (cm) {
           const cid = decodeURIComponent(cm[1]);
           if (!auth.canSee(user, cid)) throw new ValidationError('You don’t have access to that company.', 403);
+          if (user.readOnly && req.method !== 'GET') throw new ValidationError('Your account is view only, so you can’t make changes.', 403);
           const ctx = ctxFor(cid);
           ctx.user = user;
           for (const [method, re, handler] of companyRoutes) {
@@ -333,7 +464,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.mustChange ? { mustChange: true } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}) });
     }
   });
 
@@ -425,8 +556,13 @@ function readJson(req, limit = 5 * 1024 * 1024) {
   });
 }
 
+// Content Security Policy: scripts only from this server; fonts from Google Fonts.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 function send(res, status, body, headers = {}) {
-  res.writeHead(status, { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', ...headers });
+  const https = res.req && (res.req.headers['x-forwarded-proto'] === 'https' || res.req.socket.encrypted);
+  res.writeHead(status, { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': CSP,
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()', 'Cross-Origin-Opener-Policy': 'same-origin',
+    ...(https ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}), ...headers });
   res.end(body);
 }
 function sendJson(res, status, obj) {

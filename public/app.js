@@ -48,6 +48,7 @@ async function api(method,url,body){
     // Signed out (expired, locked, or another tab signed out): ask to sign in again, then carry on.
     if(r.status===401&&!url.startsWith('/api/auth/')&&typeof sessionEnded==='function')sessionEnded(j);
     if(r.status===403&&j&&j.mustChange&&typeof renderLock==='function')renderLock('password');
+    if(r.status===403&&j&&j.mustEnroll&&typeof renderLock==='function')renderLock('enroll');
     throw err;
   }
   return j;
@@ -122,21 +123,23 @@ function renderMain(){
   document.title=CO&&S.loaded?`${S.company.name} · Tally Books`:'Tally Books';
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
-  if(S.view!=='companies'&&S.view!=='users'&&!ready())return;
+  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins';
+  if(!noCo&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
   const nb=S.bankTxns.filter(b=>b.status==='new').length;const bc=$('#bankCount');bc.hidden=!nb;bc.textContent=nb;
   const nt=overdueReturns();const tc=$('#taxCount');tc.hidden=!nt;tc.textContent=nt;
   const np=overdueRemits();const pc=$('#payCount');pc.hidden=!np;pc.textContent=np;
-  const V={companies:vCompanies,users:vUsers,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,payroll:vPayroll,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,payroll:vPayroll,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
-  main.innerHTML=(S.view==='companies'||S.view==='users'?'':banners())+V();
+  main.innerHTML=(noCo?'':banners())+V();
   bindMain(main);
   if(keepFocus){const el=document.getElementById(keepFocus);if(el){el.focus();if(el.setSelectionRange&&el.type==='search'){const n=el.value.length;el.setSelectionRange(n,n)}}}
 }
 function banners(){
   let h='';
+  if(typeof ME!=='undefined'&&ME&&ME.readOnly)h+=`<div class="banner"><span><b>View only.</b> You can look at everything in these books, but changes are turned off for your account.</span></div>`;
   if(S.connErr)h+=`<div class="banner err"><span><b>Can't reach the server.</b> Showing the last data loaded. Changes won't save until the connection is back.</span><button class="btn sm" data-act="retry">Try again</button></div>`;
   else if(!S.entries.length&&!S.docs.length&&!S.contacts.length)h+=`<div class="banner"><span><b>Your books are empty.</b> Start with + New, or load example data to see how everything fits together.</span><button class="btn sm" data-act="load-examples">Load example data</button></div>`;
   if(typeof BK!=='undefined'&&BK&&(!BK.enabled||BK.lastError))h+=`<div class="banner err"><span><b>${BK.enabled?'Backups aren’t working.':'Automatic backups are off.'}</b> ${BK.enabled?esc(BK.lastError):'Turn them on so your clients’ books are safe if this computer fails.'}</span><button class="btn sm" data-go="settings">Fix in Settings</button></div>`;
@@ -370,6 +373,7 @@ function vSettings(){
     <div class="field"><label for="sBn">Business / tax number</label><input type="text" id="sBn" value="${esc(c.bn||'')}"><span class="hint">Shown for your reference</span></div>
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
+  ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${payrollSettingsPanel()}
   ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
@@ -388,6 +392,7 @@ function bindMain(m){
     if(S.view==='companies'&&await coClick(e,t,d))return;
     if(S.view==='salestax'&&await stClick(e,t,d))return;
     if(S.view==='payroll'&&await payClick(e,t,d))return;
+    if(S.view==='activity'&&await actClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.new)return openNew(d.new);
     if(d.go)return go(d.go);
@@ -403,6 +408,7 @@ function bindMain(m){
     if(d.act==='clear-examples')return clearExamples();
     if(d.act==='export')return exportCSV();
     if(d.act==='retry')return load();
+    if(d.act==='activity')return showActivity();
     if(d.act==='load-examples')return loadExamples();
     if(d.act==='backup')return saveFile(`${(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase()}-backup-${today()}.json`,await fetch(coUrl('/api/backup')).then(r=>r.blob()));
     if(d.act==='restore')return $('#restoreFile').click();
@@ -418,7 +424,8 @@ function bindMain(m){
   if(S.view==='banking')bindBanking(m);
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
-  if(S.view==='users')bindUsers(m);
+  if(S.view==='users'||S.view==='signins')bindUsers(m);
+  if(S.view==='activity')bindActivity(m);
   if(S.view==='salestax')bindSalesTax(m);
   bindPayrollSettings(m);
   const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};

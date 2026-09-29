@@ -9,10 +9,11 @@ function backupStatusLine(){
   if(!BK.enabled)return `<span class="pill overdue">Off</span> <span class="neg">Automatic backups are turned off. If this computer fails, your clients’ books could be lost.</span>`;
   if(BK.lastError)return `<span class="pill overdue">Problem</span> <span class="neg">${esc(BK.lastError)}</span>`;
   if(!BK.lastRun)return `<span class="pill partial">Waiting</span> The first backup runs within a minute of starting Tally Books, or click Back up now.`;
-  return `<span class="pill paid">On</span> Last backup ${fmtWhen(BK.lastRun)} · ${BK.lastCount} compan${BK.lastCount===1?'y':'ies'}`;
+  const off=BK.offsite?(BK.offsite.lastRun?` · off-site copy in ${esc(BK.offsite.where)} ${fmtWhen(BK.offsite.lastRun)}`:` · off-site copy to ${esc(BK.offsite.where)} after the next backup`):'';
+  return `<span class="pill paid">On</span> Last backup ${fmtWhen(BK.lastRun)} · ${BK.lastCount} compan${BK.lastCount===1?'y':'ies'}${off}`;
 }
 function backupPanel(){
-  if(!BK)return '';
+  if(!BK||BK.hidden)return '';
   const keep=[7,14,30,90,365];
   if(typeof ME!=='undefined'&&ME&&ME.role!=='owner')return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Automatic backups</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px"><div>${backupStatusLine()}</div><div class="actions"><button class="btn" data-bkact="run" ${bkBusy?'disabled':''}>${bkBusy?'Backing up…':'Back up now'}</button></div><div class="muted" style="font-size:13px">An owner manages where backups go and how long they’re kept.</div></div></div>`;
   return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Automatic backups</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">

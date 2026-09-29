@@ -44,14 +44,18 @@ It runs two ways from the same code:
   - **Remittances:** what's owed to each agency per month (or quarter), the due date (the 15th of the following month), the figures for the PD7A voucher and for Revenu Québec, and payments that clear the liability.
   - Rates are loaded for pay dates from July 1 to December 31, 2026. Quebec income tax follows Revenu Québec's TP-1015.F method but hasn't been checked line by line against WebRAS yet, so compare a first pay run with WebRAS. Always check unusual cases against CRA's PDOC.
 - **Sign-in security:** nobody sees any data without signing in.
-  - The first start asks you to create an **owner** account.
-  - Owners add **staff** accounts and can limit each one to specific companies. Staff choose their own password the first time they sign in.
+  - The first start asks you to create an **owner** account. On an online server this also needs the setup code chosen when the server was installed.
+  - **Roles:** owners manage everything; **staff** work in the companies they're given; **clients** see only their own company. Staff and clients can be **view only**.
+  - **Invitations:** new people get a one-time link (valid 7 days) to choose their own password. Owners can send a **password reset link** (valid 24 hours). Links are stored only as hashes.
+  - **Two-step sign-in:** a 6-digit code from an authenticator app (Microsoft Authenticator, Google Authenticator, 1Password), set up by scanning a QR code, with ten one-time recovery codes. Owners can require it for owners or everyone; online servers require it for everyone.
   - Passwords are stored only as scrypt hashes, never as the password itself.
-  - Five wrong passwords lock an account for 15 minutes.
+  - Five wrong passwords or codes lock an account for 15 minutes, and 20 failures from one network address block that address for 15 minutes.
   - The app **locks itself after inactivity** (30 minutes unless you change it), and every sign-in ends after 12 hours.
-  - Sessions use HttpOnly, SameSite=Strict cookies.
-  - Owners manage all of this under **Users & security**.
-- **Automatic backups:** every company is backed up once a day while the app is open. Backups go to OneDrive by default, or any folder you pick, such as Google Drive. Each day gets its own dated folder, and backups older than the keep period (30 days unless you change it) are removed. Each file restores through **Settings → Restore from backup**. Settings and the company list show backup status, with **Back up now**, **Change folder** and **Open backup folder**.
+  - Sessions use HttpOnly, SameSite=Strict cookies (Secure over HTTPS). Pages are served with a strict Content Security Policy and, over HTTPS, HSTS.
+  - **Sign-in activity:** every sign-in, failed attempt and account change is logged for owners.
+- **Activity log:** every change to a company's books is recorded with who made it, when, and the record before and after. Filter by person or kind of record, open any change to see what was different, and export to CSV (Settings → Activity log).
+- **Online server:** [deploy/azure](deploy/azure/README.md) puts Tally Books on a small Azure server in Toronto with HTTPS, nightly tested updates, automatic security patches, and off-site backups to Azure Storage in Canada.
+- **Automatic backups:** every company is backed up once a day while the app is open. On a server, each day's backup is also copied to Azure Blob Storage. Backups go to OneDrive by default, or any folder you pick, such as Google Drive. Each day gets its own dated folder, and backups older than the keep period (30 days unless you change it) are removed. Each file restores through **Settings → Restore from backup**. Settings and the company list show backup status, with **Back up now**, **Change folder** and **Open backup folder**.
 - **Journal entries:** manual entries with debit and credit lines. The server rejects any entry that doesn't balance.
 - **Chart of accounts:** set up for a Canadian small business charging HST (13%). The tax name, rate and fiscal year start are all in Settings.
 - **Reports:** profit and loss, balance sheet, trial balance, general ledger, A/R aging and A/P aging, for any date range. All of them export to CSV.
@@ -90,6 +94,13 @@ If you're upgrading from the single-company version, your existing `data/tally-b
 | `HOST` | `127.0.0.1` | Set to `0.0.0.0` to allow other computers on your network |
 | `DATA_DIR` | `./data` | Folder that holds the company list and each company's database |
 | `APP_PASSWORD` | *(none)* | An extra shared password the browser asks for before the Tally Books sign-in screen. User accounts protect the data either way; this adds a second layer when the app is on a network. |
+| `REQUIRE_2FA` | *(none)* | `owners` or `everyone`: the least two-step sign-in allowed. Online servers use `everyone`. |
+| `SETUP_CODE` | *(none)* | If set, creating the first owner account needs this code, so a stranger can't claim a new server. |
+| `TRUST_PROXY` | *(off)* | `1` when running behind an HTTPS proxy such as Caddy, so sign-in limits use the visitor's real address. |
+| `BACKUP_FOLDER` | OneDrive, if found | Folder for the daily backups. |
+| `BACKUP_BLOB_URL` | *(none)* | An Azure Blob Storage container URL with a SAS token (read, add, create, write, delete, list). Each day's backup is also copied there. |
+
+To put it on the internet for clients, follow [deploy/azure/README.md](deploy/azure/README.md) rather than opening a port: it adds HTTPS, two-step sign-in and off-site backups.
 
 For example, to share it on your office network:
 
@@ -151,6 +162,9 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   salestax.js      GST/HST and QST return worksheets, filing, payments
   payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas
   payroll.js       Employees, pay runs, pay stubs, remittances
+  activity.js      Activity log screen
+  auth.js          Sign-in, two-step codes, invitations, users and security
+  qr.js            QR code generator for the two-step setup screen
 src/server/
   app.js           HTTP server: JSON API, static files, live updates
   db.js            SQLite storage (Node's built-in node:sqlite)
@@ -161,6 +175,7 @@ src/server/
   seed.js          Default chart of accounts and example data
   index.js         Command-line entry point
 electron/main.js   Desktop wrapper: starts the server privately and opens a window
+deploy/azure/      Setup script and guide for an online server on Azure
 test/              API tests (node --test)
 ```
 
@@ -231,7 +246,7 @@ The tests start a real server against a temporary database. They cover the bookk
 
 ## Not built yet
 
-Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, emailing invoices or saving them as PDFs, T4 and RL-1 slips, records of employment (ROE), vacation and statutory holiday pay, multiple currencies, and an audit log of who changed what.
+Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, emailing invoices or saving them as PDFs, T4 and RL-1 slips, records of employment (ROE), vacation and statutory holiday pay, multiple currencies, and emailing invitations directly (for now you send the link yourself).
 
 ## License
 

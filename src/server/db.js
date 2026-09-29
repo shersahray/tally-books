@@ -47,6 +47,20 @@ CREATE VIEW IF NOT EXISTS journal_lines AS
   FROM records r, json_each(r.data, '$.lines') l
   WHERE r.collection = 'entries';
 CREATE INDEX IF NOT EXISTS records_by_collection ON records (collection);
+-- Audit log: one row per change, with who made it and the record before and after.
+CREATE TABLE IF NOT EXISTS audit (
+  seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         INTEGER NOT NULL,
+  username   TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  action     TEXT NOT NULL,
+  collection TEXT NOT NULL DEFAULT '',
+  record_id  TEXT NOT NULL DEFAULT '',
+  summary    TEXT NOT NULL DEFAULT '',
+  before     TEXT,
+  after      TEXT
+);
+CREATE INDEX IF NOT EXISTS audit_by_time ON audit (at);
 `;
 
 class Store {
@@ -74,6 +88,8 @@ class Store {
                                     AND json_extract(data, '$.contactId') = ? LIMIT 1`),
       bankTxnsForEntry: this.db.prepare(`SELECT id, data FROM records WHERE collection = 'bankTxns'
                                     AND json_extract(data, '$.entryId') = ?`),
+      addAudit: this.db.prepare(`INSERT INTO audit (at, username, name, action, collection, record_id, summary, before, after)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
       paymentsFor: this.db.prepare(`SELECT 1 FROM records WHERE collection = 'entries'
                                     AND json_extract(data, '$.applyTo') = ? LIMIT 1`),
     };
@@ -113,6 +129,27 @@ class Store {
   hasPayments(docId) { return !!this.stmt.paymentsFor.get(docId); }
   bankTxnsForEntry(entryId) { return this.stmt.bankTxnsForEntry.all(entryId).map(r => ({ ...JSON.parse(r.data), id: r.id })); }
   clearAll() { this.stmt.delAll.run(); }
+
+  /** Record a change in the audit log. `before`/`after` are the record's data (or null). */
+  audit(user, action, { collection = '', id = '', summary = '', before = null, after = null } = {}) {
+    this.stmt.addAudit.run(Date.now(), user ? user.username : 'system', user ? user.name : 'System', action, collection, id, summary,
+      before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null);
+  }
+  /** Audit rows, newest first. Filters: before (seq), from/to (ms), username, collection, recordId, limit. */
+  auditList({ before, from, to, username, collection, recordId, limit = 200, full = false } = {}) {
+    const where = [], args = [];
+    if (before) { where.push('seq < ?'); args.push(Number(before)); }
+    if (from) { where.push('at >= ?'); args.push(Number(from)); }
+    if (to) { where.push('at <= ?'); args.push(Number(to)); }
+    if (username) { where.push('username = ?'); args.push(String(username)); }
+    if (collection) { where.push('collection = ?'); args.push(String(collection)); }
+    if (recordId) { where.push('record_id = ?'); args.push(String(recordId)); }
+    const cols = full ? '*' : 'seq, at, username, name, action, collection, record_id, summary';
+    const sql = `SELECT ${cols} FROM audit ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY seq DESC LIMIT ?`;
+    args.push(Math.max(1, Math.min(5000, Number(limit) || 200)));
+    return this.db.prepare(sql).all(...args).map(r => ({ ...r, before: r.before ? JSON.parse(r.before) : undefined, after: r.after ? JSON.parse(r.after) : undefined }));
+  }
+  auditUsers() { return this.db.prepare('SELECT DISTINCT username, name FROM audit ORDER BY name').all(); }
 
   /** Run fn inside a transaction; roll back if it throws. */
   transaction(fn) {

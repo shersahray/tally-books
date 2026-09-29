@@ -283,3 +283,19 @@ svg.chart .base{stroke:var(--line-strong);stroke-width:1}
 .report table.gl td.mono{white-space:nowrap}
 .report table.gl td.trunc{max-width:160px}
 .report table.gl td.n{white-space:nowrap}
+/* sign-in extras */
+.qr{display:flex;justify-content:center}
+.qr svg{max-width:100%;height:auto;border-radius:6px}
+.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.recovery{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:15px;user-select:all}
+.linkbox{padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;word-break:break-all;user-select:all;font-size:13px}
+.subpanel{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px}
+table.diff td{vertical-align:top}
+code.json{white-space:pre-wrap;word-break:break-word;font-size:12px;display:block;max-height:220px;overflow:auto}
+/* view-only accounts: hide the ways to add or change things (the server refuses them anyway) */
+body.readonly #newBtn,body.readonly [data-new],body.readonly [data-pay],body.readonly [data-del],body.readonly [data-newcontact],
+body.readonly [data-pay-run="new"],body.readonly [data-pay-emp="new"],body.readonly [data-remit-pay],body.readonly [data-go-pay],
+body.readonly [data-act="load-examples"],body.readonly [data-act="clear-examples"],body.readonly [data-act="restore"],
+body.readonly #setForm button[type=submit],body.readonly #paySetForm button[type=submit],
+body.readonly .modal:not(.keep) .mfoot button[type=submit]{display:none!important}
+a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}

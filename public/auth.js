@@ -1,72 +1,163 @@
 'use strict';
-/* ---------- Sign-in: first-time setup, sign in, auto-lock, account and users ----------
+/* ---------- Sign-in: setup, sign in, two-step codes, invitations, auto-lock, account and users ----------
  * The server refuses every data request without a signed-in session. This file shows the
  * screens that get one, locks the app after inactivity, and manages users for owners.
  */
-let ME=null,IDLE_MIN=30,lastActivity=Date.now(),unlockWaiters=[];
+let ME=null,IDLE_MIN=30,REQ2FA='off',lastActivity=Date.now(),unlockWaiters=[];
+const ROLE_LABEL={owner:'Owner',staff:'Staff',client:'Client'};
+const roleLabel=u=>ROLE_LABEL[u.role]+(u.readOnly?' · view only':'');
 
 function lockShown(){return !!$('#lockRoot').innerHTML}
-/** Show a full-screen sign-in (or setup / new-password) card. Resolves once the user is in. */
+/** Show a full-screen sign-in (or setup / new-password / code) card. Resolves once the user is in. */
 function requireSignIn(mode,msg){
   return new Promise(res=>{unlockWaiters.push(res);renderLock(mode,msg)});
 }
 function unlocked(user,idle){
   ME=user;if(idle)IDLE_MIN=idle;lastActivity=Date.now();
   $('#lockRoot').innerHTML='';document.body.classList.remove('locked');
+  document.body.classList.toggle('readonly',!!ME.readOnly);
+  document.body.classList.toggle('role-client',ME.role==='client');
   renderUserBox();
   const w=unlockWaiters;unlockWaiters=[];w.forEach(f=>f(user));
 }
-function renderLock(mode,msg=''){
+/** After a password or code is accepted: finish anything the account still needs, then unlock. */
+async function afterSignIn(){
+  const me=await api('GET','/api/auth/me');REQ2FA=me.require2fa||'off';
+  if(me.user.mustChange){ME=me.user;return renderLock('password')}
+  if(me.user.mustEnroll){ME=me.user;return renderLock('enroll')}
+  unlocked(me.user,me.idleMinutes);
+}
+const pwHint='At least 10 characters. A short phrase of a few unrelated words works well, for example “maple river copper lamp”.';
+const lockCard=(title,sub,body,submit,extra='')=>`<div class="lock"><form class="lock-card" novalidate>
+    <div class="lock-brand"><img src="icon.svg" alt="" width="40" height="40"><b>Tally Books</b></div>
+    <h1>${title}</h1>${sub?`<p class="muted">${sub}</p>`:''}
+    <div class="fields" style="grid-template-columns:1fr">${body}</div>
+    <div class="err-msg" data-lockerr></div>
+    ${submit?`<button type="submit" class="btn primary block">${submit}</button>`:''}${extra}
+  </form></div>`;
+
+function renderLock(mode,opt=''){
   document.body.classList.add('locked');
   closeModal();
-  const title={setup:'Welcome to Tally Books',signin:'Sign in',password:'Choose a new password'}[mode];
-  const sub={setup:'Create the owner account. You’ll use it to sign in, add staff, and manage security. Only people with an account can see your clients’ books.',
-    signin:msg||'Sign in to see your clients’ books.',
-    password:'Your password was set by someone else. Choose your own before continuing.'}[mode];
-  const pwHint='At least 10 characters. A short phrase of a few unrelated words works well, for example “maple river copper lamp”.';
-  const body=mode==='signin'?`
+  const msg=typeof opt==='string'?opt:'';
+  let html='';
+  if(mode==='signin')html=lockCard('Sign in',esc(msg||'Sign in to see your books.'),`
       ${fld('lgUser','Username or email',`<input type="text" id="lgUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
-      ${fld('lgPass','Password',`<input type="password" id="lgPass" autocomplete="current-password">`,true)}`
-    :mode==='setup'?`
+      ${fld('lgPass','Password',`<input type="password" id="lgPass" autocomplete="current-password">`,true)}`,'Sign in',
+      '<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>');
+  else if(mode==='setup')html=lockCard('Welcome to Tally Books','Create the owner account. You’ll use it to sign in, add staff and clients, and manage security. Only people with an account can see the books.',`
+      ${opt&&opt.setupCode?fld('suCode','Setup code',`<input type="text" id="suCode" autocomplete="off" autocapitalize="none" spellcheck="false"><span class="hint">The setup code chosen when this server was installed.</span>`,true):''}
       ${fld('suName','Your name',`<input type="text" id="suName" autocomplete="name">`,true)}
       ${fld('suUser','Username or email',`<input type="text" id="suUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('suPass','Password',`<input type="password" id="suPass" autocomplete="new-password">`,true)}
       ${fld('suPass2','Type the password again',`<input type="password" id="suPass2" autocomplete="new-password">`,true)}
-      <div class="hint muted" style="font-size:12.5px">${pwHint} Write it down somewhere safe: there’s no “forgot password” email, and only an owner can reset a password.</div>`
-    :`
+      <div class="hint muted" style="font-size:12.5px">${pwHint} Write it down somewhere safe: only an owner can reset a password.</div>`,'Create owner account');
+  else if(mode==='code')html=lockCard('Enter your code','Open your authenticator app (Microsoft Authenticator, Google Authenticator, 1Password…) and enter the 6-digit code for Tally Books.',`
+      ${fld('lgCode','Code',`<input type="text" id="lgCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456" style="font-size:20px;letter-spacing:.2em;text-align:center">`,true)}
+      <div class="muted" style="font-size:12.5px">Lost your phone? Enter one of your recovery codes instead (it looks like <span class="mono">a1b2c-3d4e5</span>).</div>`,'Continue',
+      '<button type="button" class="btn ghost block" data-lockback>Back</button>');
+  else if(mode==='password')html=lockCard('Choose a new password','Your password was set by someone else. Choose your own before continuing.',`
       ${fld('npCur','Temporary password',`<input type="password" id="npCur" autocomplete="current-password">`,true)}
       ${fld('npPass','New password',`<input type="password" id="npPass" autocomplete="new-password">`,true)}
       ${fld('npPass2','Type it again',`<input type="password" id="npPass2" autocomplete="new-password">`,true)}
-      <div class="hint muted" style="font-size:12.5px">${pwHint}</div>`;
-  $('#lockRoot').innerHTML=`<div class="lock"><form class="lock-card" novalidate>
-    <div class="lock-brand"><img src="icon.svg" alt="" width="40" height="40"><b>Tally Books</b></div>
-    <h1>${title}</h1><p class="muted">${esc(sub)}</p>
-    <div class="fields" style="grid-template-columns:1fr">${body}</div>
-    <div class="err-msg" data-lockerr></div>
-    <button type="submit" class="btn primary block">${mode==='setup'?'Create owner account':mode==='signin'?'Sign in':'Save new password'}</button>
-    ${mode==='password'?'<button type="button" class="btn ghost block" data-lockout>Sign out</button>':''}
-  </form></div>`;
+      <div class="hint muted" style="font-size:12.5px">${pwHint}</div>`,'Save new password','<button type="button" class="btn ghost block" data-lockout>Sign out</button>');
+  else if(mode==='link')html=lockCard('Checking your link…','','','');
+  else if(mode==='enroll')html=lockCard('Set up two-step sign-in','Loading…','','');
+  $('#lockRoot').innerHTML=html;
   const f=$('#lockRoot form'),err=m=>{$('[data-lockerr]',f).textContent=m||''},btn=f.querySelector('button[type=submit]');
   setTimeout(()=>f.querySelector('input')?.focus(),30);
   const lo=$('[data-lockout]',f);if(lo)lo.onclick=()=>signOut();
+  const bk=$('[data-lockback]',f);if(bk)bk.onclick=()=>renderLock('signin');
+  if(mode==='link')return linkScreen(f);
+  if(mode==='enroll')return enrollScreen(f,opt);
   f.onsubmit=async e=>{e.preventDefault();err('');btn.disabled=true;
     try{
       if(mode==='signin'){
         const r=await api('POST','/api/auth/login',{username:$('#lgUser').value,password:$('#lgPass').value});
-        const me=await api('GET','/api/auth/me');
-        if(r.user.mustChange){ME=r.user;renderLock('password');return}
-        unlocked(me.user,me.idleMinutes);
+        if(r.needCode)return renderLock('code',{ticket:r.ticket});
+        await afterSignIn();
+      }else if(mode==='code'){
+        await api('POST','/api/auth/login/code',{ticket:opt.ticket,code:$('#lgCode').value});
+        await afterSignIn();
       }else if(mode==='setup'){
         if($('#suPass').value!==$('#suPass2').value)throw new Error('The two passwords don’t match.');
-        await api('POST','/api/auth/setup',{name:$('#suName').value,username:$('#suUser').value,password:$('#suPass').value});
-        const me=await api('GET','/api/auth/me');unlocked(me.user,me.idleMinutes);toast('Owner account created');
+        await api('POST','/api/auth/setup',{name:$('#suName').value,username:$('#suUser').value,password:$('#suPass').value,setupCode:($('#suCode')||{}).value});
+        await afterSignIn();toast('Owner account created');
       }else{
         if($('#npPass').value!==$('#npPass2').value)throw new Error('The two passwords don’t match.');
         await api('POST','/api/auth/password',{current:$('#npCur').value,password:$('#npPass').value});
-        const me=await api('GET','/api/auth/me');unlocked(me.user,me.idleMinutes);toast('Password changed');
+        await afterSignIn();toast('Password changed');
       }
-    }catch(ex){err(ex.message);btn.disabled=false;if(mode==='signin'){$('#lgPass').value='';$('#lgPass').focus()}}
+    }catch(ex){
+      if(mode==='code'&&ex.info&&ex.info.restart){renderLock('signin',ex.message);return}
+      err(ex.message);btn.disabled=false;
+      if(mode==='signin'){$('#lgPass').value='';$('#lgPass').focus()}
+      if(mode==='code'){$('#lgCode').value='';$('#lgCode').focus()}
+    }
   };
+}
+
+/* An invitation or password reset link: #link=<token>. */
+async function linkScreen(f){
+  const token=decodeURIComponent((location.hash.match(/link=([^&]+)/)||[])[1]||'');
+  history.replaceState(null,'',location.pathname+location.search); // don't leave the token in the address bar
+  let info;
+  try{info=await api('POST','/api/auth/link',{token})}
+  catch(ex){$('#lockRoot').innerHTML=lockCard('This link doesn’t work',esc(ex.message),'','','<button type="button" class="btn primary block" data-tosignin>Go to sign in</button>');$('#lockRoot [data-tosignin]').onclick=()=>renderLock('signin');return}
+  const invite=info.kind==='invite';
+  $('#lockRoot').innerHTML=lockCard(invite?`Welcome, ${esc(info.name)}`:'Choose a new password',invite?'You’ve been invited to Tally Books. Choose a password to finish setting up your account.':`Choose a new password for ${esc(info.username)}.`,`
+    <div class="muted">Username: <b class="mono">${esc(info.username)}</b></div>
+    ${fld('lkPass','Password',`<input type="password" id="lkPass" autocomplete="new-password">`,true)}
+    ${fld('lkPass2','Type it again',`<input type="password" id="lkPass2" autocomplete="new-password">`,true)}
+    <input type="text" autocomplete="username" value="${esc(info.username)}" hidden>
+    <div class="hint muted" style="font-size:12.5px">${pwHint}</div>`,invite?'Create my account':'Save new password');
+  const g=$('#lockRoot form'),btn=g.querySelector('button[type=submit]'),err=m=>{$('[data-lockerr]',g).textContent=m||''};
+  setTimeout(()=>$('#lkPass').focus(),30);
+  g.onsubmit=async e=>{e.preventDefault();err('');
+    if($('#lkPass').value!==$('#lkPass2').value)return err('The two passwords don’t match.');
+    btn.disabled=true;
+    try{const r=await api('POST','/api/auth/link/accept',{token,password:$('#lkPass').value});
+      if(r.needCode)return renderLock('code',{ticket:r.ticket});
+      await afterSignIn();toast(invite?'Your account is ready':'Password changed');
+    }catch(ex){err(ex.message);btn.disabled=false}};
+}
+
+/* Setting up an authenticator app: QR code, code to confirm, then recovery codes. */
+async function enrollScreen(f,opt){
+  const optional=opt&&opt.optional;
+  let s;try{s=await api('POST','/api/auth/2fa/start',{})}catch(ex){$('[data-lockerr]',f).textContent=ex.message;return}
+  const key=s.secret.replace(/(.{4})/g,'$1 ').trim();
+  $('#lockRoot').innerHTML=lockCard('Set up two-step sign-in',`${optional?'':'Your account needs a second step to sign in. '}Each time you sign in, you’ll also enter a 6-digit code from an app on your phone. Someone who learns your password still can’t get in.`,`
+    <ol class="steps">
+      <li>Install an authenticator app if you don’t have one: <b>Microsoft Authenticator</b> or <b>Google Authenticator</b> (free), or use 1Password.</li>
+      <li>In the app, add an account and scan this code:</li>
+    </ol>
+    <div class="qr">${TallyQR.qrSvg(s.uri,{px:4,label:'QR code for your authenticator app'})}</div>
+    <details><summary class="fsum">Can’t scan it?</summary><div class="muted" style="font-size:13px;margin-top:6px">Choose “Enter a setup key” in the app and type this key (time-based):<div class="mono" style="font-size:15px;margin-top:6px;word-break:break-all;user-select:all">${key}</div></div></details>
+    <ol class="steps" start="3"><li>Enter the 6-digit code the app shows for Tally Books:</li></ol>
+    ${fld('enCode','Code',`<input type="text" id="enCode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" style="font-size:20px;letter-spacing:.2em;text-align:center">`,true)}`,
+    'Turn on two-step sign-in',optional?'<button type="button" class="btn ghost block" data-lockcancel>Not now</button>':'<button type="button" class="btn ghost block" data-lockout>Sign out</button>');
+  const g=$('#lockRoot form'),btn=g.querySelector('button[type=submit]'),err=m=>{$('[data-lockerr]',g).textContent=m||''};
+  const lo=$('[data-lockout]',g);if(lo)lo.onclick=()=>signOut();
+  const lc=$('[data-lockcancel]',g);if(lc)lc.onclick=()=>{$('#lockRoot').innerHTML='';document.body.classList.remove('locked')};
+  g.onsubmit=async e=>{e.preventDefault();err('');btn.disabled=true;
+    try{const r=await api('POST','/api/auth/2fa/confirm',{code:$('#enCode').value});showRecovery(r.recovery,optional)}
+    catch(ex){err(ex.message);btn.disabled=false;$('#enCode').value='';$('#enCode').focus()}};
+}
+function showRecovery(codes,fromAccount){
+  const text=`Tally Books recovery codes for ${ME?ME.username:''}\nEach code works once, if you can't use your authenticator app.\n\n${codes.join('\n')}\n`;
+  document.body.classList.add('locked');
+  $('#lockRoot').innerHTML=lockCard('Save your recovery codes','If you lose your phone, each of these codes lets you sign in once. Keep them somewhere safe, such as a password manager or a printed copy in a drawer. They won’t be shown again.',`
+    <div class="recovery mono">${codes.map(c=>`<span>${c}</span>`).join('')}</div>
+    <div class="actions"><button type="button" class="btn sm" data-rcopy>Copy</button><button type="button" class="btn sm" data-rsave>Download</button></div>
+    <label class="check"><input type="checkbox" id="rcSaved"> I’ve saved these codes</label>`,'Continue');
+  const g=$('#lockRoot form'),btn=g.querySelector('button[type=submit]');btn.disabled=true;
+  $('#rcSaved').onchange=()=>{btn.disabled=!$('#rcSaved').checked};
+  $('[data-rcopy]',g).onclick=async()=>{try{await navigator.clipboard.writeText(text);toast('Copied')}catch(e){toast('Select the codes and copy them instead.',true)}};
+  $('[data-rsave]',g).onclick=()=>saveFile('tally-books-recovery-codes.txt',new Blob([text],{type:'text/plain'}));
+  g.onsubmit=async e=>{e.preventDefault();
+    if(fromAccount){$('#lockRoot').innerHTML='';document.body.classList.remove('locked');const me=await api('GET','/api/auth/me');ME=me.user;toast('Two-step sign-in is on');return}
+    await afterSignIn();toast('Two-step sign-in is on')};
 }
 
 /** Called by api() when the server says the session is gone. */
@@ -77,6 +168,17 @@ function sessionEnded(info){
   reauthing=requireSignIn(info&&info.setup?'setup':'signin',info&&info.idle?`Locked after ${IDLE_MIN} minutes without activity. Sign in to continue.`:'Your session ended. Sign in to continue.')
     .then(()=>{reauthing=null;if(CO)load();renderMain()});
   return reauthing;
+}
+/** Start-up: who's signed in, or show the right screen first. */
+async function authStart(){
+  if(/[#&]link=/.test(location.hash))return requireSignIn('link');
+  let me;
+  try{me=await api('GET','/api/auth/me')}
+  catch(e){if(e.status===401)return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode}):requireSignIn('signin');throw e}
+  REQ2FA=me.require2fa||'off';ME=me.user;IDLE_MIN=me.idleMinutes;
+  if(me.user.mustChange)return requireSignIn('password');
+  if(me.user.mustEnroll)return requireSignIn('enroll');
+  unlocked(me.user,me.idleMinutes);
 }
 async function signOut(){
   try{await api('POST','/api/auth/logout',{})}catch(e){}
@@ -94,32 +196,54 @@ setInterval(async()=>{
 function renderUserBox(){
   const box=$('#userBox');if(!box)return;
   if(!ME){box.innerHTML='';return}
-  box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span>${ME.role==='owner'?'Owner':'Staff'}</span></div>
+  box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span>${roleLabel(ME)}</span></div>
     <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}<button class="link" data-signout>Sign out</button></div>`;
   box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))accountForm();if(b.hasAttribute('data-users'))showUsers()};
 }
+function passwordPrompt(title,msg,ok){
+  return new Promise(res=>{
+    const f=openModal(title,`<div class="muted">${esc(msg)}</div>${fld('ppPass','Your password',`<input type="password" id="ppPass" autocomplete="current-password">`,true)}`,`<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${esc(ok)}</button>`,'small keep');
+    f.onsubmit=e=>{e.preventDefault();const v=$('#ppPass',f).value;res({f,password:v})};
+    $$('[data-close]',f).forEach(b=>b.addEventListener('click',()=>res(null)));
+  });
+}
 function accountForm(){
-  const f=openModal('Your account',`<div class="muted">${esc(ME.name)} · ${esc(ME.username)} · ${ME.role==='owner'?'Owner':'Staff'}</div>
+  const two=ME.twoStep,required=ME.mustEnroll||(REQ2FA==='everyone'||(REQ2FA==='owners'&&ME.role==='owner'));
+  const f=openModal('Your account',`<div class="muted">${esc(ME.name)} · ${esc(ME.username)} · ${roleLabel(ME)}</div>
+    <h3 class="fsec">Two-step sign-in</h3>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${two?`<span class="pill paid">On</span><span class="muted" style="font-size:13px">${ME.recoveryLeft} recovery code${ME.recoveryLeft===1?'':'s'} left</span>`:'<span class="pill quiet">Off</span><span class="muted" style="font-size:13px">Recommended: a code from your phone as well as your password.</span>'}</div>
+    <div class="actions" style="justify-content:flex-start">${two?`<button type="button" class="btn sm" data-2fanew>New recovery codes</button>${required?'':'<button type="button" class="btn sm danger" data-2faoff>Turn off</button>'}`:'<button type="button" class="btn sm primary" data-2faon>Set up two-step sign-in</button>'}</div>
+    <h3 class="fsec">Change password</h3>
     <div class="fields">${fld('acCur','Current password',`<input type="password" id="acCur" autocomplete="current-password">`,true)}${fld('acNew','New password',`<input type="password" id="acNew" autocomplete="new-password">`)}${fld('acNew2','Type it again',`<input type="password" id="acNew2" autocomplete="new-password">`)}</div>
     <div class="hint muted" style="font-size:12.5px">At least 10 characters. A short phrase of unrelated words is strong and easy to remember.</div>`,
-    `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Change password</button>`,'small');
+    `<button type="button" class="btn" data-close>Close</button><button type="submit" class="btn primary">Change password</button>`,'keep');
+  const on=$('[data-2faon]',f);if(on)on.onclick=()=>{closeModal();document.body.classList.add('locked');renderLock('enroll',{optional:true})};
+  const nw=$('[data-2fanew]',f);if(nw)nw.onclick=async()=>{const r=await passwordPrompt('New recovery codes','Your old recovery codes will stop working.','Make new codes');if(!r)return;
+    try{const x=await api('POST','/api/auth/2fa/recovery',{password:r.password});closeModal();showRecovery(x.recovery,true)}catch(ex){closeModal();toast(ex.message,true)}};
+  const off=$('[data-2faoff]',f);if(off)off.onclick=async()=>{const r=await passwordPrompt('Turn off two-step sign-in?','Signing in will need only your password.','Turn off');if(!r)return;
+    try{await api('POST','/api/auth/2fa/disable',{password:r.password});const me=await api('GET','/api/auth/me');ME=me.user;closeModal();toast('Two-step sign-in is off')}catch(ex){closeModal();toast(ex.message,true)}};
   f.onsubmit=async e=>{e.preventDefault();f.err('');if($('#acNew',f).value!==$('#acNew2',f).value)return f.err('The two new passwords don’t match.');
     try{await api('POST','/api/auth/password',{current:$('#acCur',f).value,password:$('#acNew',f).value});closeModal();toast('Password changed')}catch(ex){f.err(ex.message)}};
 }
 
 /* ---------- Users & security (owners) ---------- */
-let USERS=null;
+let USERS=null,SIGNINS=null;
 async function showUsers(){S.view='users';renderMain();try{USERS=await api('GET','/api/users');IDLE_MIN=USERS.idleMinutes}catch(e){toast(e.message,true)}if(S.view==='users')renderMain()}
 function vUsers(){
   if(!ME||ME.role!=='owner')return head('Users & security','')+'<div class="panel"><div class="empty"><b>Owners only</b>Ask an owner to change users or security settings.</div></div>';
   if(!USERS)return head('Users & security','Loading…');
   const coName=id=>(CO_LIST.find(c=>c.id===id)||{}).name||'(removed company)';
-  const access=u=>u.role==='owner'||!u.companies.length?'All companies':u.companies.map(coName).join(', ');
-  return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Users & security','Who can sign in, what they can see, and when the app locks itself',`<button class="btn primary" data-useradd>+ Add user</button>`)+
-  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Can see</th><th>Last sign-in</th><th>Status</th></tr></thead><tbody>${USERS.users.map(u=>`<tr class="click" data-useredit="${u.id}"><td><b>${esc(u.name)}</b>${u.id===ME.id?' <span class="pill paid">You</span>':''}</td><td class="mono">${esc(u.username)}</td><td>${u.role==='owner'?'Owner':'Staff'}</td><td class="trunc">${esc(access(u))}</td><td class="muted">${u.lastLogin?fmtWhen(u.lastLogin):'Never'}</td><td>${u.disabled?'<span class="pill overdue">Turned off</span>':u.mustChange?'<span class="pill partial">Must set password</span>':'<span class="pill paid">Active</span>'}</td></tr>`).join('')}</tbody></table></div></div>
+  const access=u=>u.role==='owner'||(u.role==='staff'&&!u.companies.length)?'All companies':u.companies.map(coName).join(', ');
+  const status=u=>u.disabled?'<span class="pill overdue">Turned off</span>':u.invited?`<span class="pill partial">${u.linkPending==='invite'?'Invited':'Invite expired'}</span>`:u.mustChange?'<span class="pill partial">Must set password</span>':u.mustEnroll?'<span class="pill partial">Must set up two-step</span>':'<span class="pill paid">Active</span>';
+  const rank={off:0,owners:1,everyone:2},forced=USERS.forced2fa||'off',eff=rank[USERS.require2fa]>=rank[forced]?USERS.require2fa:forced;
+  return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Users & security','Who can sign in, what they can see, and how sign-in is protected',`<button class="btn" data-signins>Sign-in activity</button><button class="btn primary" data-useradd>+ Add user</button>`)+
+  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Can see</th><th>Two-step</th><th>Last sign-in</th><th>Status</th></tr></thead><tbody>${USERS.users.map(u=>`<tr class="click" data-useredit="${u.id}"><td><b>${esc(u.name)}</b>${u.id===ME.id?' <span class="pill paid">You</span>':''}</td><td class="mono">${esc(u.username)}</td><td>${roleLabel(u)}</td><td class="trunc">${esc(access(u))}</td><td>${u.twoStep?'On':'<span class="muted">Off</span>'}</td><td class="muted">${u.lastLogin?fmtWhen(u.lastLogin):'Never'}</td><td>${status(u)}</td></tr>`).join('')}</tbody></table></div></div>
   <div class="panel" style="max-width:760px;margin-top:16px"><h3>Security</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
-    <div class="field" style="max-width:320px"><label for="secIdle">Lock the app after no activity for</label><select id="secIdle">${[5,10,15,30,60,120,240,480].map(m=>`<option value="${m}" ${IDLE_MIN===m?'selected':''}>${m<60?m+' minutes':m/60+' hour'+(m===60?'':'s')}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:13px">Also always on: passwords are stored only as secure hashes, five wrong passwords lock an account for 15 minutes, and every sign-in lasts at most 12 hours.</div>
+    <div class="fields">
+    <div class="field"><label for="sec2fa">Require two-step sign-in for</label><select id="sec2fa">${[['off','No one (each person chooses)'],['owners','Owners'],['everyone','Everyone']].map(([k,v])=>`<option value="${k}" ${eff===k?'selected':''} ${rank[k]<rank[forced]?'disabled':''}>${v}</option>`).join('')}</select>${forced!=='off'?`<span class="hint">This server always requires it for ${forced==='everyone'?'everyone':'owners'}.</span>`:''}</div>
+    <div class="field"><label for="secIdle">Lock the app after no activity for</label><select id="secIdle">${[5,10,15,30,60,120,240,480].map(m=>`<option value="${m}" ${IDLE_MIN===m?'selected':''}>${m<60?m+' minutes':m/60+' hour'+(m===60?'':'s')}</option>`).join('')}</select></div>
+    </div>
+    <div class="muted" style="font-size:13px">Also always on: passwords are stored only as secure hashes, five wrong tries lock an account for 15 minutes, too many failures from one network are blocked for 15 minutes, and every sign-in lasts at most 12 hours.</div>
   </div></div>`;
 }
 function bindUsers(m){
@@ -127,36 +251,68 @@ function bindUsers(m){
     const t=e.target.closest('button,tr.click');if(!t)return;const d=t.dataset;
     if(t.hasAttribute('data-back-co'))return showCompanies();
     if(t.hasAttribute('data-useradd'))return userForm(null);
+    if(t.hasAttribute('data-signins'))return showSignins();
+    if(t.hasAttribute('data-back-users'))return showUsers();
     if(d.useredit)return userForm(USERS.users.find(u=>u.id===d.useredit));
     if(d.go)return go(d.go);
   };
   const si=$('#secIdle',m);if(si)si.onchange=async()=>{try{const r=await api('PUT','/api/security',{idleMinutes:+si.value});IDLE_MIN=r.idleMinutes;toast(`The app now locks after ${si.options[si.selectedIndex].text}`)}catch(ex){toast(ex.message,true)}};
+  const s2=$('#sec2fa',m);if(s2)s2.onchange=async()=>{try{await api('PUT','/api/security',{require2fa:s2.value});await showUsers();toast(s2.value==='off'?'Two-step sign-in is optional':'Saved. People without two-step sign-in will set it up the next time they sign in.')}catch(ex){toast(ex.message,true)}};
+}
+/* A link to send: invitation (new person chooses a password) or password reset. */
+function showLink(u,token,kind){
+  const url=`${location.origin}${location.pathname}#link=${encodeURIComponent(token)}`;
+  const invite=kind==='invite';
+  const mail=`Hi ${u.name.split(' ')[0]},\n\n${invite?`I've set up your Tally Books account so you can see your company's books online. Open this link to choose your password (it works once, for 7 days)`:`Here's a link to choose a new Tally Books password (it works once, for 24 hours)`}:\n\n${url}\n\nYour username is ${u.username}.${REQ2FA!=='off'||invite?' You’ll also set up a code app on your phone for two-step sign-in.':''}\n`;
+  const f=openModal(invite?'Invitation link':'Password reset link',`
+    <div class="muted">Send this link to <b>${esc(u.name)}</b> yourself, for example by email. Anyone with the link can set the password, so send it only to them. It works once and expires in ${invite?'7 days':'24 hours'}.</div>
+    <div class="linkbox mono">${esc(url)}</div>
+    <div class="actions" style="justify-content:flex-start"><button type="button" class="btn sm" data-lcopy>Copy link</button><button type="button" class="btn sm" data-mcopy>Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(u.username.includes('@')?u.username:'')}?subject=${encodeURIComponent(invite?'Your Tally Books account':'Reset your Tally Books password')}&body=${encodeURIComponent(mail)}">Open in email</a></div>`,
+    `<button type="button" class="btn primary" data-close>Done</button>`);
+  $('[data-lcopy]',f).onclick=async()=>{try{await navigator.clipboard.writeText(url);toast('Link copied')}catch(e){toast('Select the link and copy it instead.',true)}};
+  $('[data-mcopy]',f).onclick=async()=>{try{await navigator.clipboard.writeText(mail);toast('Email text copied')}catch(e){toast('Select the text and copy it instead.',true)}};
 }
 function userForm(u){
   const cos=CO_LIST.slice().sort((a,b)=>a.name.localeCompare(b.name));
   const sel=new Set(u?u.companies:[]);
+  const role0=u?u.role:'client';
   const f=openModal(u?`Edit ${u.name}`:'Add user',`<div class="fields">
     ${fld('usName','Name',`<input type="text" id="usName" value="${esc(u?.name||'')}">`)}
-    ${fld('usUser','Username or email',u?`<div class="mono" style="padding:6px 0">${esc(u.username)}</div>`:`<input type="text" id="usUser" autocapitalize="none" spellcheck="false">`)}
-    ${fld('usRole','Role',`<select id="usRole"><option value="staff" ${u?.role!=='owner'?'selected':''}>Staff: works in the companies below</option><option value="owner" ${u?.role==='owner'?'selected':''}>Owner: everything, including users and security</option></select>`,true)}
-    ${fld('usPass',u?'Set a new temporary password (optional)':'Temporary password',`<input type="text" id="usPass" autocomplete="off" placeholder="${u?'Leave blank to keep their password':'At least 10 characters'}">`,true)}
+    ${fld('usUser','Email (used as their username)',u?`<div class="mono" style="padding:6px 0">${esc(u.username)}</div>`:`<input type="email" id="usUser" autocapitalize="none" spellcheck="false">`)}
+    ${fld('usRole','Role',`<select id="usRole"><option value="client" ${role0==='client'?'selected':''}>Client: sees only their own company</option><option value="staff" ${role0==='staff'?'selected':''}>Staff: works in the companies below</option><option value="owner" ${role0==='owner'?'selected':''}>Owner: everything, including users and security</option></select>`,true)}
   </div>
-  <div data-cos><div class="flabel" style="margin-bottom:6px">Companies this person can see</div>
-    <label class="check"><input type="checkbox" id="usAll" ${!u||!u.companies.length?'checked':''}> All companies, including new ones</label>
+  <label class="check" data-ro><input type="checkbox" id="usRO" ${u?(u.readOnly?'checked':''):'checked'}> View only: can see reports and transactions but can’t change anything</label>
+  <div data-cos><div class="flabel" style="margin-bottom:6px" data-coslabel>Companies this person can see</div>
+    <label class="check" data-allrow><input type="checkbox" id="usAll" ${u&&u.role==='staff'&&!u.companies.length?'checked':''}> All companies, including new ones</label>
     <div data-colist style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 16px;margin-top:6px">${cos.map(c=>`<label class="check"><input type="checkbox" data-usco="${c.id}" ${sel.has(c.id)?'checked':''}> ${esc(c.name)}${c.archived?' <span class="muted">(archived)</span>':''}</label>`).join('')}</div></div>
-  <div class="muted" style="font-size:13px">${u?'A new temporary password signs them out, and they choose their own at the next sign-in.':'Give them the temporary password in person or by phone. They’ll choose their own the first time they sign in.'}</div>`,
-  `${u&&u.id!==ME.id?`<button type="button" class="btn ${u.disabled?'':'danger'} left" data-usdis>${u.disabled?'Turn account back on':'Turn account off'}</button>`:'<span class="left"></span>'}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${u?'Save':'Add user'}</button>`);
+  ${u?`<div class="subpanel"><div class="flabel">Sign-in</div>
+    <div class="muted" style="font-size:13px">${u.invited?'They haven’t accepted their invitation yet.':`Two-step sign-in is ${u.twoStep?'on':'off'}.`}</div>
+    <div class="actions" style="justify-content:flex-start">${u.id!==ME.id?`<button type="button" class="btn sm" data-uslink>${u.invited?'New invitation link':'Password reset link'}</button>`:''}${u.twoStep&&u.id!==ME.id?'<button type="button" class="btn sm" data-us2fa>Reset two-step sign-in</button>':''}</div></div>`
+   :`<div class="muted" style="font-size:13px">You’ll get an invitation link to send them. They choose their own password${REQ2FA!=='off'?' and set up two-step sign-in':''}.</div>`}`,
+  `${u&&u.id!==ME.id?`<button type="button" class="btn ${u.disabled?'':'danger'} left" data-usdis>${u.disabled?'Turn account back on':'Turn account off'}</button>`:'<span class="left"></span>'}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${u?'Save':'Add and get invitation link'}</button>`);
   const role=$('#usRole',f),all=$('#usAll',f);
-  const sync=()=>{$('[data-cos]',f).hidden=role.value==='owner';$('[data-colist]',f).hidden=all.checked};
+  const sync=()=>{const r=role.value;$('[data-cos]',f).hidden=r==='owner';$('[data-ro]',f).hidden=r==='owner';$('[data-allrow]',f).hidden=r!=='staff';$('[data-colist]',f).hidden=r==='staff'&&all.checked;$('[data-coslabel]',f).textContent=r==='client'?'Their company (or companies)':'Companies this person can see'};
   role.onchange=all.onchange=sync;sync();
   const dis=$('[data-usdis]',f);if(dis)dis.onclick=async()=>{try{await api('PUT','/api/users/'+u.id,{disabled:!u.disabled});closeModal();await showUsers();toast(u.disabled?`${u.name} can sign in again`:`${u.name} is signed out and can’t sign in`)}catch(ex){f.err(ex.message)}};
+  const ln=$('[data-uslink]',f);if(ln)ln.onclick=async()=>{try{const r=await api('POST',`/api/users/${u.id}/link`,{});closeModal();await showUsers();showLink(u,r.token,r.kind)}catch(ex){f.err(ex.message)}};
+  const r2f=$('[data-us2fa]',f);if(r2f)r2f.onclick=async()=>{if(!await confirmBox('Reset two-step sign-in?',`${u.name} will be signed out. They’ll sign in with their password${REQ2FA!=='off'?' and set up their authenticator app again':''}. Do this only if you’re sure it’s really them asking, for example after a lost phone.`,'Reset'))return;
+    try{await api('PUT','/api/users/'+u.id,{reset2fa:true});closeModal();await showUsers();toast('Two-step sign-in reset')}catch(ex){f.err(ex.message)}};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
-    const companies=role.value==='owner'||all.checked?[]:$$('[data-usco]',f).filter(c=>c.checked).map(c=>c.dataset.usco);
-    if(role.value==='staff'&&!all.checked&&!companies.length)return f.err('Pick at least one company, or tick “All companies”.');
-    const body={name:$('#usName',f).value,role:role.value,companies};const pw=$('#usPass',f).value;
+    const r=role.value;
+    const companies=r==='owner'||(r==='staff'&&all.checked)?[]:$$('[data-usco]',f).filter(c=>c.checked).map(c=>c.dataset.usco);
+    if(r!=='owner'&&!(r==='staff'&&all.checked)&&!companies.length)return f.err(r==='client'?'Pick the client’s company.':'Pick at least one company, or tick “All companies”.');
+    const body={name:$('#usName',f).value,role:r,companies,readOnly:r!=='owner'&&$('#usRO',f).checked};
     try{
-      if(u){if(pw)body.password=pw;await api('PUT','/api/users/'+u.id,body)}
-      else await api('POST','/api/users',{...body,username:$('#usUser',f).value,password:pw});
-      closeModal();await showUsers();toast(u?'Saved':'User added. Give them their temporary password.');
+      if(u){await api('PUT','/api/users/'+u.id,body);closeModal();await showUsers();toast('Saved')}
+      else{const x=await api('POST','/api/users',{...body,username:$('#usUser',f).value,invite:true});closeModal();await showUsers();showLink(x.user,x.user.link,'invite')}
     }catch(ex){f.err(ex.message)}};
+}
+
+/* ---------- sign-in activity (owners) ---------- */
+const SIGNIN_EVENT={login:'Signed in','login-failed':'Wrong password','code-failed':'Wrong code',locked:'Account locked',logout:'Signed out','2fa-on':'Two-step turned on','2fa-off':'Two-step turned off','recovery-code-used':'Used a recovery code','invite-accepted':'Accepted invitation','password-reset':'Reset password with link','password-changed':'Changed password','user-added':'User added','user-changed':'User changed','invite-link':'Invitation link made','reset-link':'Reset link made','security-changed':'Security settings changed'};
+async function showSignins(){S.view='signins';SIGNINS=null;renderMain();try{SIGNINS=(await api('GET','/api/security/log')).log}catch(e){toast(e.message,true)}if(S.view==='signins')renderMain()}
+function vSignins(){
+  const bad=new Set(['login-failed','code-failed','locked']);
+  return `<button class="btn ghost sm" data-back-users style="margin-bottom:8px">← Users &amp; security</button>`+head('Sign-in activity','Sign-ins, failed attempts and account changes, newest first')+
+  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>When</th><th>What</th><th>Who</th><th>Details</th></tr></thead><tbody>${!SIGNINS?emptyRow(4,'Loading…',''):SIGNINS.length?SIGNINS.map(e=>`<tr><td class="muted" style="white-space:nowrap">${fmtWhen(Date.parse(e.at))}</td><td class="${bad.has(e.event)?'neg':''}">${esc(SIGNIN_EVENT[e.event]||e.event)}</td><td class="mono">${esc(e.username||e.by||'')}</td><td class="muted trunc">${esc([e.by&&e.username?'by '+e.by:'',e.ip?'from '+e.ip:'',e.reason||'',e.role||'',e.changes?e.changes.join(', '):'',e.require2fa?'two-step: '+e.require2fa:'',e.idleMinutes?'lock after '+e.idleMinutes+' min':''].filter(Boolean).join(' · '))}</td></tr>`).join(''):emptyRow(4,'Nothing yet','')}</tbody></table></div></div>`;
 }
