@@ -1,7 +1,8 @@
 name: Publish online demo
 
 # Builds the browser-only demo (example data, nothing saved) and publishes it with GitHub Pages.
-# One-time setup: Settings → Pages → Source: "GitHub Actions".
+# One-time setup: Settings → Pages → Source: "GitHub Actions". The page is then at
+# https://shersahray.github.io/tally-books/
 
 on:
   workflow_dispatch:
