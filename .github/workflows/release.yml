@@ -1,7 +1,8 @@
 name: Build desktop apps
 
-# Builds installers for Windows, macOS and Linux. Run it from Actions → Build desktop apps →
-# Run workflow, or by pushing a version tag such as v1.0.0.
+# Builds installers for Windows, macOS and Linux. Runs whenever code changes on main
+# (not for README-only changes), from Actions → Build desktop apps → Run workflow, or on a
+# version tag such as v1.0.0.
 #
 # Windows code signing (Azure Artifact Signing) switches on by itself once these are set in
 # Settings → Secrets and variables → Actions:
@@ -12,7 +13,9 @@ name: Build desktop apps
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
+    paths-ignore: ['**.md', 'docs/**']
 
 jobs:
   build:
