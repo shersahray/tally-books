@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
+const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 
@@ -29,6 +30,8 @@ const BACKUP_FORMAT = 'tally-books-backup';
  */
 function createApp(opts) {
   const reg = new Registry(opts.dataDir);
+  const auth = new Auth(opts.dataDir);
+  const ownerOnly = u => { if (u.role !== 'owner') throw new ValidationError('Only an owner can do that.', 403); };
   const backups = new Backups(opts.dataDir, reg);
   if (opts.backupFolder) backups.update({ folder: opts.backupFolder });
   if (opts.autoBackup !== false) backups.start();
@@ -141,15 +144,52 @@ function createApp(opts) {
   // Routes that work across companies.
   const globalRoutes = [
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
-    ['GET', /^\/api\/companies$/, () => ({ companies: reg.list().map(summary), provinces: PROVINCES })],
-    ['POST', /^\/api\/companies$/, async req => {
+    ['GET', /^\/api\/auth\/me$/, req => {
+      const user = auth.userFor(req);
+      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup() });
+      const { token, ...u } = user;
+      return { user: u, idleMinutes: auth.data.settings.idleMinutes };
+    }],
+    ['POST', /^\/api\/auth\/setup$/, async (req, m, res) => {
+      const body = await readJson(req);
+      const u = auth.setup(body);
+      const token = auth.login(u.username, body.password);
+      res.setHeader('Set-Cookie', sessionCookie(token, req));
+      return { ok: true, user: u };
+    }],
+    ['POST', /^\/api\/auth\/login$/, async (req, m, res) => {
+      const body = await readJson(req);
+      await new Promise(r => setTimeout(r, 250)); // slows down password guessing
+      const token = auth.login(body.username, body.password);
+      res.setHeader('Set-Cookie', sessionCookie(token, req));
+      const { token: _, ...u } = auth.userFor({ headers: { cookie: `${COOKIE}=${token}` } });
+      return { ok: true, user: u };
+    }],
+    ['POST', /^\/api\/auth\/logout$/, (req, m, res) => {
+      auth.logout(readCookie(req, COOKIE));
+      res.setHeader('Set-Cookie', sessionCookie('', req, 0));
+      return { ok: true };
+    }],
+    ['POST', /^\/api\/auth\/password$/, async (req, m, res, user) => {
+      const body = await readJson(req);
+      auth.changeOwnPassword(user, body.current, body.password);
+      return { ok: true };
+    }],
+    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); return { users: auth.list(), idleMinutes: auth.data.settings.idleMinutes }; }],
+    ['POST', /^\/api\/users$/, async (req, m, res, user) => { ownerOnly(user); const b = await readJson(req); return { ok: true, user: auth.addUser({ ...b, mustChange: true }) }; }],
+    ['PUT', /^\/api\/users\/([^/]+)$/, async (req, m, res, user) => { ownerOnly(user); return { ok: true, user: auth.updateUser(decodeURIComponent(m[1]), await readJson(req), user) }; }],
+    ['PUT', /^\/api\/security$/, async (req, m, res, user) => { ownerOnly(user); auth.setIdleMinutes((await readJson(req)).idleMinutes); return { ok: true, idleMinutes: auth.data.settings.idleMinutes }; }],
+    ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list().filter(c => auth.canSee(user, c.id)).map(summary), provinces: PROVINCES })],
+    ['POST', /^\/api\/companies$/, async (req, m, res, user) => {
+      ownerOnly(user);
       const entry = createCompany(await readJson(req));
       return { ok: true, company: summary(entry) };
     }],
-    ['PUT', /^\/api\/companies\/([^/]+)$/, async (req, m) => {
+    ['PUT', /^\/api\/companies\/([^/]+)$/, async (req, m, res, user) => {
       const body = await readJson(req);
       const id = decodeURIComponent(m[1]);
-      if (!reg.get(id)) throw new ValidationError('That company doesn’t exist.', 404);
+      if (!reg.get(id) || !auth.canSee(user, id)) throw new ValidationError('That company doesn’t exist.', 404);
+      if (body.archived !== undefined) ownerOnly(user);
       const patch = {};
       if (body.archived !== undefined) patch.archived = !!body.archived;
       if (body.opened) patch.lastOpened = Date.now();
@@ -158,7 +198,7 @@ function createApp(opts) {
       return { ok: true, company: summary(reg.get(id)) };
     }],
     ['GET', /^\/api\/backups$/, () => backups.status()],
-    ['PUT', /^\/api\/backups$/, async req => backups.update(await readJson(req))],
+    ['PUT', /^\/api\/backups$/, async (req, m, res, user) => { ownerOnly(user); return backups.update(await readJson(req)); }],
     ['POST', /^\/api\/backups\/run$/, () => {
       const r = backups.run();
       if (!r.ok) throw new ValidationError(r.error, 409);
@@ -256,9 +296,19 @@ function createApp(opts) {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
+        // Everything except signing in needs a signed-in user.
+        let user = null;
+        if (!/^\/api\/(health|auth\/(me|setup|login|logout))$/.test(url.pathname)) {
+          user = auth.userFor(req);
+          if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup() });
+          if (user.mustChange && url.pathname !== '/api/auth/password' && url.pathname !== '/api/events') throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
+        }
         const cm = url.pathname.match(/^\/api\/c\/([^/]+)(\/.*)$/);
         if (cm) {
-          const ctx = ctxFor(decodeURIComponent(cm[1]));
+          const cid = decodeURIComponent(cm[1]);
+          if (!auth.canSee(user, cid)) throw new ValidationError('You don’t have access to that company.', 403);
+          const ctx = ctxFor(cid);
+          ctx.user = user;
           for (const [method, re, handler] of companyRoutes) {
             const m = cm[2].match(re);
             if (m && method === req.method) {
@@ -272,7 +322,7 @@ function createApp(opts) {
         for (const [method, re, handler] of globalRoutes) {
           const m = url.pathname.match(re);
           if (m && method === req.method) {
-            const out = await handler(req, m, res);
+            const out = await handler(req, m, res, user);
             if (out !== undefined) sendJson(res, 200, out);
             return;
           }
@@ -283,7 +333,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.mustChange ? { mustChange: true } : {}) });
     }
   });
 
@@ -297,6 +347,7 @@ function createApp(opts) {
   });
   server.registry = reg;
   server.backups = backups;
+  server.auth = auth;
   return server;
 }
 
@@ -375,7 +426,7 @@ function readJson(req, limit = 5 * 1024 * 1024) {
 }
 
 function send(res, status, body, headers = {}) {
-  res.writeHead(status, { 'X-Content-Type-Options': 'nosniff', ...headers });
+  res.writeHead(status, { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', ...headers });
   res.end(body);
 }
 function sendJson(res, status, obj) {

@@ -53,7 +53,7 @@ function vCompanies(){
   const active=all.filter(c=>!c.archived);
   const review=active.reduce((s,c)=>s+c.toReview,0),overdue=active.reduce((s,c)=>s+c.overdueCount,0);
   const h=head('Companies',all.length?`${active.length} active compan${active.length===1?'y':'ies'}${review?` · ${review} bank line${review===1?'':'s'} to review`:''}${overdue?` · ${overdue} overdue invoice${overdue===1?'':'s'}`:''}`:'',
-    `<button class="btn primary" data-coact="new">+ New company</button>`);
+    `${ME&&ME.role==='owner'?'<button class="btn" data-coact="users">Users &amp; security</button><button class="btn primary" data-coact="new">+ New company</button>':''}`);
   if(!all.length)return h+`<div class="panel" style="max-width:640px"><div class="empty"><b>Set up your first company</b>Each company keeps its own chart of accounts, customers, bank accounts and reports, in its own file.<div style="margin-top:14px"><button class="btn primary" data-coact="new">+ New company</button></div></div></div>`;
   const fyEnd=c=>{const end=+c.fyStart===1?12:(+c.fyStart||1)-1;return `${monthName(end).slice(0,3)} ${new Date(2026,end,0).getDate()} year-end`};
   return h+`<div class="panel"><div class="toolbar">
@@ -67,7 +67,7 @@ function vCompanies(){
     <td class="n">${c.receivable?money(c.receivable):'<span class="muted">—</span>'}</td>
     <td>${c.lastReconciled?fmtDate(c.lastReconciled):'<span class="muted">Never</span>'}</td>
     <td>${c.lastEntry?fmtDate(c.lastEntry):'<span class="muted">None yet</span>'}</td>
-    <td class="n" style="white-space:nowrap"><button class="btn sm primary" data-coopen="${c.id}">Open</button> <button class="btn sm ghost" data-coarch="${c.id}">${c.archived?'Restore':'Archive'}</button></td></tr>`).join(''):emptyRow(7,'No companies match','Clear the search to see them all.')}
+    <td class="n" style="white-space:nowrap"><button class="btn sm primary" data-coopen="${c.id}">Open</button>${ME&&ME.role==='owner'?` <button class="btn sm ghost" data-coarch="${c.id}">${c.archived?'Restore':'Archive'}</button>`:''}</td></tr>`).join(''):emptyRow(7,'No companies match','Clear the search to see them all.')}
   </tbody></table></div></div>
   ${backupPanel()}
   <div class="muted" style="font-size:13px;margin-top:12px">Archiving hides a company from this list without deleting anything. Its books stay in their own file and you can restore them any time.</div>`;
@@ -82,6 +82,7 @@ async function coClick(ev,t,d){
   }
   if(d.coopen){await openCompany(d.coopen);return true}
   if(d.coact==='new'){companyForm();return true}
+  if(d.coact==='users'){showUsers();return true}
   return false;
 }
 function bindCompanies(m){
@@ -122,6 +123,12 @@ $('#coSwitch').onclick=()=>showCompanies();
 window.addEventListener('hashchange',()=>{const id=location.hash.slice(1);if(id&&id!==CO&&CO_LIST.some(c=>c.id===id))openCompany(id)});
 
 async function boot(){
+  // Sign in first: nothing else loads without a session.
+  try{const me=await api('GET','/api/auth/me');if(me.user.mustChange){ME=me.user;await requireSignIn('password')}else{ME=me.user;IDLE_MIN=me.idleMinutes;renderUserBox()}}
+  catch(e){
+    if(e.status===401)await requireSignIn(e.info&&e.info.setup?'setup':'signin');
+    else{$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Tally Books server.</b> ${esc(e.message)}</span><button class="btn sm" onclick="location.reload()">Try again</button></div>`;$('#coName').textContent='Not connected';return}
+  }
   try{await Promise.all([loadCompanies(),loadBackups()])}
   catch(e){$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Tally Books server.</b> ${esc(e.message)}</span><button class="btn sm" onclick="location.reload()">Try again</button></div>`;$('#coName').textContent='Not connected';return}
   const active=CO_LIST.filter(c=>!c.archived);

@@ -6,14 +6,22 @@ const os = require('node:os');
 const path = require('node:path');
 const { createApp } = require('../src/server/app');
 
-let server, base, dir, co;
+let server, base, dir, co, cookie = '';
+const OWNER = { name: 'Sher Test', username: 'owner@example.com', password: 'correct horse battery staple' };
+// fetch with the signed-in owner's session cookie
+const afetch = (url, init = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), cookie } });
+async function signUp(b, who = OWNER) {
+  const r = await fetch(b + '/api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(who) });
+  return r.headers.get('set-cookie').split(';')[0];
+}
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-test-'));
   server = createApp({ dataDir: dir, autoBackup: false });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
-  const res = await fetch(base + '/api/companies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Test Co', province: 'ON' }) });
+  cookie = await signUp(base);
+  const res = await afetch(base + '/api/companies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Test Co', province: 'ON' }) });
   co = (await res.json()).company.id;
 });
 after(async () => {
@@ -22,11 +30,11 @@ after(async () => {
 });
 
 // Company-scoped calls: '/api/state' goes to '/api/c/<test company>/state'.
-const scoped = url => (/^\/api\/(companies|health|events|backups)/.test(url) || !url.startsWith('/api/') ? url : url.replace(/^\/api\//, `/api/c/${co}/`));
+const scoped = url => (/^\/api\/(companies|health|events|backups|users|auth|security)/.test(url) || !url.startsWith('/api/') ? url : url.replace(/^\/api\//, `/api/c/${co}/`));
 async function call(method, url, body) {
   const res = await fetch(base + scoped(url), {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
+    headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), cookie },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -157,7 +165,7 @@ test('example data loads and keeps the books balanced', async () => {
 });
 
 test('blocks cross-site writes', async () => {
-  const res = await fetch(base + scoped('/api/records/contacts/x'), { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: '{"name":"x","kind":"vendor"}' });
+  const res = await fetch(base + scoped('/api/records/contacts/x'), { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example', cookie }, body: '{"name":"x","kind":"vendor"}' });
   assert.equal(res.status, 403);
 });
 
@@ -168,7 +176,8 @@ test('password protection', async () => {
   const url = `http://127.0.0.1:${s.address().port}/api/companies`;
   assert.equal((await fetch(url)).status, 401);
   assert.equal((await fetch(url, { headers: { Authorization: 'Basic ' + Buffer.from('me:wrong').toString('base64') } })).status, 401);
-  assert.equal((await fetch(url, { headers: { Authorization: 'Basic ' + Buffer.from('me:s3cret').toString('base64') } })).status, 200);
+  // right shared password gets past the first layer; a signed-in account is still required
+  assert.equal((await fetch(url, { headers: { Authorization: 'Basic ' + Buffer.from('me:s3cret').toString('base64') } })).status, 401);
   await s.shutdown();
   fs.rmSync(d, { recursive: true, force: true });
 });
@@ -225,7 +234,7 @@ test('companies: create with province tax, copy a chart, switch, archive', async
   let r = await call('POST', '/api/companies', { name: 'Prairie Farms', province: 'AB', fyStart: 4 });
   assert.equal(r.status, 200, r.text);
   const ab = r.json.company.id;
-  const abState = await (await fetch(`${base}/api/c/${ab}/state`)).json();
+  const abState = await (await afetch(`${base}/api/c/${ab}/state`)).json();
   assert.equal(abState.company.taxName, 'GST');
   assert.equal(abState.company.taxRate, 5);
   assert.equal(abState.company.fyStart, 4);
@@ -233,7 +242,7 @@ test('companies: create with province tax, copy a chart, switch, archive', async
   assert.equal(abState.entries.length, 0, 'new company starts empty');
 
   // books are separate: a contact in one company doesn't appear in the other
-  await fetch(`${base}/api/c/${ab}/records/contacts/farmer`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Farmer Joe', kind: 'customer' }) });
+  await afetch(`${base}/api/c/${ab}/records/contacts/farmer`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Farmer Joe', kind: 'customer' }) });
   const testState = await call('GET', '/api/state');
   assert.ok(!testState.json.contacts.find(c => c.id === 'farmer'));
 
@@ -241,7 +250,7 @@ test('companies: create with province tax, copy a chart, switch, archive', async
   await call('PUT', '/api/records/accounts/custom1', { code: '6950', name: 'Farm supplies', type: 'Expense', detail: '' });
   r = await call('POST', '/api/companies', { name: 'Copy Co', province: 'ON', copyFrom: co });
   const cp = r.json.company.id;
-  const cpState = await (await fetch(`${base}/api/c/${cp}/state`)).json();
+  const cpState = await (await afetch(`${base}/api/c/${cp}/state`)).json();
   assert.ok(cpState.accounts.find(a => a.name === 'Farm supplies'));
   assert.equal(cpState.contacts.length, 0, 'only accounts are copied');
 
@@ -254,11 +263,11 @@ test('companies: create with province tax, copy a chart, switch, archive', async
   assert.equal(list.find(c => c.id === cp).archived, true);
 
   // renaming in settings renames it in the list
-  await fetch(`${base}/api/c/${ab}/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...abState.company, name: 'Prairie Farms Ltd.' }) });
+  await afetch(`${base}/api/c/${ab}/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...abState.company, name: 'Prairie Farms Ltd.' }) });
   list = (await call('GET', '/api/companies')).json.companies;
   assert.equal(list.find(c => c.id === ab).name, 'Prairie Farms Ltd.');
 
-  assert.equal((await fetch(`${base}/api/c/co_nope/state`)).status, 404);
+  assert.equal((await afetch(`${base}/api/c/co_nope/state`)).status, 404);
   assert.equal((await call('POST', '/api/companies', { name: '  ' })).status, 400);
 });
 
@@ -273,10 +282,11 @@ test('books from the single-company version become the first company', async () 
   const s = createApp({ dataDir: d, autoBackup: false });
   await new Promise(r => s.listen(0, '127.0.0.1', r));
   const b = `http://127.0.0.1:${s.address().port}`;
-  const list = (await (await fetch(b + '/api/companies')).json()).companies;
+  const ck = await signUp(b);
+  const list = (await (await fetch(b + '/api/companies', { headers: { cookie: ck } })).json()).companies;
   assert.equal(list.length, 1);
   assert.equal(list[0].name, 'Legacy Bakery');
-  const st = await (await fetch(`${b}/api/c/${list[0].id}/state`)).json();
+  const st = await (await fetch(`${b}/api/c/${list[0].id}/state`, { headers: { cookie: ck } })).json();
   assert.ok(st.contacts.find(c => c.name === 'Old Customer'));
   await s.shutdown();
   // starting again doesn't adopt it twice
@@ -289,7 +299,7 @@ test('books from the single-company version become the first company', async () 
 test('Quebec companies track GST and QST in separate accounts', async () => {
   const r = await call('POST', '/api/companies', { name: 'Montreal Bistro', province: 'QC', examples: true });
   assert.equal(r.status, 200, r.text);
-  const st = await (await fetch(`${base}/api/c/${r.json.company.id}/state`)).json();
+  const st = await (await afetch(`${base}/api/c/${r.json.company.id}/state`)).json();
   assert.equal(st.company.qstRate, 9.975);
   const gst = st.accounts.find(a => a.detail === 'tax'), qst = st.accounts.find(a => a.detail === 'qst');
   assert.equal(gst.name, 'GST payable');
@@ -352,4 +362,77 @@ test('automatic backups write every company and remove old days', async () => {
   assert.equal(st.dueToday, false);
   assert.equal(st.lastError, '');
   fs.rmSync(out, { recursive: true, force: true });
+});
+
+test('sign-in: protected routes, wrong passwords, lockout, sign out', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-auth2-'));
+  const s = createApp({ dataDir: d, autoBackup: false });
+  await new Promise(r => s.listen(0, '127.0.0.1', r));
+  const b = `http://127.0.0.1:${s.address().port}`;
+  const j = (url, body, ck = '') => fetch(b + url, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', cookie: ck }, body: body && JSON.stringify(body) });
+
+  let r = await j('/api/auth/me');
+  assert.equal(r.status, 401);
+  assert.equal((await r.json()).setup, true, 'first run asks for setup');
+  assert.equal((await j('/api/companies')).status, 401, 'data is locked before setup');
+  assert.equal((await j('/api/auth/setup', { ...OWNER, password: 'short' })).status, 400, 'weak password refused');
+  const ck = await signUp(b);
+  assert.equal((await j('/api/auth/setup', { ...OWNER, username: 'second@example.com' })).status, 409, 'setup only once');
+  assert.equal((await j('/api/companies', null, ck)).status, 200);
+
+  // the password file never contains the password
+  assert.ok(!fs.readFileSync(path.join(d, 'users.json'), 'utf8').includes(OWNER.password));
+
+  // wrong passwords lock the account after 5 tries
+  for (let i = 0; i < 4; i++) assert.equal((await j('/api/auth/login', { username: OWNER.username, password: 'nope-nope-nope' })).status, 401);
+  assert.equal((await j('/api/auth/login', { username: OWNER.username, password: 'nope-nope-nope' })).status, 429);
+  assert.equal((await j('/api/auth/login', OWNER)).status, 429, 'even the right password waits out the lock');
+  s.auth.failures.clear();
+  r = await j('/api/auth/login', OWNER);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
+  const ck2 = r.headers.get('set-cookie').split(';')[0];
+
+  // sign out ends the session
+  await j('/api/auth/logout', {}, ck2);
+  assert.equal((await j('/api/companies', null, ck2)).status, 401);
+
+  // idle timeout
+  s.auth.data.settings.idleMinutes = 5;
+  for (const sess of s.auth.sessions.values()) sess.lastSeen -= 6 * 60 * 1000;
+  assert.equal((await j('/api/companies', null, ck)).status, 401, 'session expires after inactivity');
+
+  await s.shutdown();
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('staff users see only their companies and must change a temporary password', async () => {
+  const list = (await call('GET', '/api/companies')).json.companies;
+  const allowed = list[0].id, other = list.find(c => c.id !== allowed).id;
+  let r = await call('POST', '/api/users', { name: 'Staff Person', username: 'staff1', password: 'temporary pass 123', role: 'staff', companies: [allowed] });
+  assert.equal(r.status, 200, r.text);
+  const staffId = r.json.user.id;
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'staff1', password: 'temporary pass 123' }) });
+  const sc = login.headers.get('set-cookie').split(';')[0];
+  const sf = (url, init = {}) => fetch(base + url, { ...init, headers: { 'Content-Type': 'application/json', cookie: sc } });
+
+  r = await sf('/api/companies');
+  assert.equal(r.status, 403, 'temporary password must be changed first');
+  assert.equal((await r.json()).mustChange, true);
+  r = await sf('/api/auth/password', { method: 'POST', body: JSON.stringify({ current: 'temporary pass 123', password: 'my own better phrase' }) });
+  assert.equal(r.status, 200);
+
+  const seen = (await (await sf('/api/companies')).json()).companies.map(c => c.id);
+  assert.deepEqual(seen, [allowed]);
+  assert.equal((await sf(`/api/c/${other}/state`)).status, 403);
+  assert.equal((await sf(`/api/c/${allowed}/state`)).status, 200);
+  assert.equal((await sf('/api/users')).status, 403, 'staff cannot manage users');
+  assert.equal((await sf('/api/companies', { method: 'POST', body: JSON.stringify({ name: 'X' }) })).status, 403);
+
+  // turning the account off signs them out
+  await call('PUT', `/api/users/${staffId}`, { disabled: true });
+  assert.equal((await sf('/api/companies')).status, 401);
+  // the last owner can't be removed
+  const me = (await call('GET', '/api/users')).json.users.find(u => u.role === 'owner');
+  assert.equal((await call('PUT', `/api/users/${me.id}`, { role: 'staff' })).status, 409);
 });

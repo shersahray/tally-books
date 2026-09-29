@@ -34,7 +34,7 @@ COLS.forEach(c=>{if(!S[c])S[c]=[]});
 let CO=null; // id of the company whose books are open
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -43,7 +43,13 @@ async function api(method,url,body){
   try{r=await fetch(url,{method,headers:body!==undefined?{'Content-Type':'application/json'}:{},body:body!==undefined?JSON.stringify(body):undefined})}
   catch(e){throw new Error("Can't reach the Tally Books server. Check that it's still running.")}
   let j=null;try{j=await r.json()}catch(e){}
-  if(!r.ok)throw new Error((j&&j.error)||`The server answered ${r.status}.`);
+  if(!r.ok){
+    const err=new Error((j&&j.error)||`The server answered ${r.status}.`);err.status=r.status;err.info=j||{};
+    // Signed out (expired, locked, or another tab signed out): ask to sign in again, then carry on.
+    if(r.status===401&&!url.startsWith('/api/auth/')&&typeof sessionEnded==='function')sessionEnded(j);
+    if(r.status===403&&j&&j.mustChange&&typeof renderLock==='function')renderLock('password');
+    throw err;
+  }
   return j;
 }
 let loading=null,reloadQueued=false;
@@ -116,15 +122,15 @@ function renderMain(){
   document.title=CO&&S.loaded?`${S.company.name} · Tally Books`:'Tally Books';
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
-  if(S.view!=='companies'&&!ready())return;
+  if(S.view!=='companies'&&S.view!=='users'&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
   const nb=S.bankTxns.filter(b=>b.status==='new').length;const bc=$('#bankCount');bc.hidden=!nb;bc.textContent=nb;
   const nt=overdueReturns();const tc=$('#taxCount');tc.hidden=!nt;tc.textContent=nt;
-  const V={companies:vCompanies,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
-  main.innerHTML=(S.view==='companies'?'':banners())+V();
+  main.innerHTML=(S.view==='companies'||S.view==='users'?'':banners())+V();
   bindMain(main);
   if(keepFocus){const el=document.getElementById(keepFocus);if(el){el.focus();if(el.setSelectionRange&&el.type==='search'){const n=el.value.length;el.setSelectionRange(n,n)}}}
 }
@@ -372,6 +378,7 @@ function bindMain(m){
   if(S.view==='banking')bindBanking(m);
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
+  if(S.view==='users')bindUsers(m);
   if(S.view==='salestax')bindSalesTax(m);
   const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value};if(await putCompany(data))toast('Settings saved')};

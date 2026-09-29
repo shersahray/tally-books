@@ -19,12 +19,15 @@ const pub = f => fs.readFileSync(path.join(root, 'public', f), 'utf8');
   const server = createApp({ dataDir: dir, demo: true, autoBackup: false });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const post = (url, body) => fetch(base + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const setup = await fetch(base + '/api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Demo', username: 'demo-builder', password: 'demo build only ' + Date.now() }) });
+  const cookie = setup.headers.get('set-cookie').split(';')[0];
+  const _fetch = fetch; const fetchA = (u, init = {}) => _fetch(u, { ...init, headers: { ...(init.headers || {}), cookie } });
+  const post = (url, body) => fetchA(base + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   await post('/api/companies', { name: 'Bistro Montréal Inc.', province: 'QC', fyStart: 1, examples: true });
-  const list = await (await fetch(base + '/api/companies')).json();
+  const list = await (await fetchA(base + '/api/companies')).json();
   const data = { provinces: list.provinces, defaultAccounts: DEFAULT_ACCOUNTS, companies: [] };
   for (const c of list.companies) {
-    const state = await (await fetch(`${base}/api/c/${c.id}/state`)).json();
+    const state = await (await fetchA(`${base}/api/c/${c.id}/state`)).json();
     delete state.rev; delete state.companyId;
     data.companies.push({ entry: { id: c.id, name: c.name, archived: false, created: c.created }, state });
   }
@@ -46,7 +49,7 @@ ${body}
 <div class="demo-ribbon">Demo · example data · changes aren’t saved</div>
 <script>window.__TALLY_DEMO__=${safe(JSON.stringify(data))};</script>
 <script>${safe(fs.readFileSync(path.join(__dirname, 'demo-shim.js'), 'utf8'))}</script>
-${['bankparse.js', 'app.js', 'banking.js', 'salestax.js', 'backups.js', 'companies.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
+${['bankparse.js', 'app.js', 'banking.js', 'salestax.js', 'backups.js', 'auth.js', 'companies.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
 `;
   fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'dist', 'demo.html'), html);

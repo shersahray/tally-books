@@ -84,6 +84,11 @@
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
+    const demoUser = { id: 'u_demo', name: 'Demo user', username: 'demo', role: 'owner', companies: [], disabled: false, lastLogin: Date.now(), mustChange: false };
+    if (path === '/api/auth/me') return { user: demoUser, idleMinutes: 480 };
+    if (path === '/api/auth/logout') return { ok: true };
+    if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480 };
+    if (path.startsWith('/api/users') || path.startsWith('/api/auth') || path === '/api/security') throw new ApiError(400, 'Users and passwords aren’t available in the demo.');
     if (path.startsWith('/api/backups')) {
       if (method === 'GET') return { enabled: true, folder: 'Demo', target: 'Not available in the demo: nothing is saved', keepDays: 30, lastRun: Date.now(), lastCount: cos.length, lastError: '', suggestions: [] };
       throw new ApiError(400, 'Backups aren’t available in the demo, because nothing in it is saved.');

@@ -34,6 +34,14 @@ It runs two ways from the same code:
   - **Filing:** marking a return as filed saves its figures and can record the payment to the government, or the refund, which clears the tax account. Instalments can be recorded too.
   - **Filed periods:** changing a transaction in a filed period asks for confirmation first, and the worksheet shows when the books no longer match what was filed.
   - The app produces the figures; returns are still submitted on CRA My Business Account or with Revenu Québec.
+- **Sign-in security:** nobody sees any data without signing in.
+  - The first start asks you to create an **owner** account.
+  - Owners add **staff** accounts and can limit each one to specific companies. Staff choose their own password the first time they sign in.
+  - Passwords are stored only as scrypt hashes, never as the password itself.
+  - Five wrong passwords lock an account for 15 minutes.
+  - The app **locks itself after inactivity** (30 minutes unless you change it), and every sign-in ends after 12 hours.
+  - Sessions use HttpOnly, SameSite=Strict cookies.
+  - Owners manage all of this under **Users & security**.
 - **Automatic backups:** every company is backed up once a day while the app is open. Backups go to OneDrive by default, or any folder you pick, such as Google Drive. Each day gets its own dated folder, and backups older than the keep period (30 days unless you change it) are removed. Each file restores through **Settings → Restore from backup**. Settings and the company list show backup status, with **Back up now**, **Change folder** and **Open backup folder**.
 - **Journal entries:** manual entries with debit and credit lines. The server rejects any entry that doesn't balance.
 - **Chart of accounts:** set up for a Canadian small business charging HST (13%). The tax name, rate and fiscal year start are all in Settings.
@@ -71,7 +79,7 @@ If you're upgrading from the single-company version, your existing `data/tally-b
 | `PORT` | `3000` | Port to listen on |
 | `HOST` | `127.0.0.1` | Set to `0.0.0.0` to allow other computers on your network |
 | `DATA_DIR` | `./data` | Folder that holds the company list and each company's database |
-| `APP_PASSWORD` | *(none)* | When set, the browser asks for this password (any username). **Set it whenever `HOST` isn't `127.0.0.1`.** |
+| `APP_PASSWORD` | *(none)* | An extra shared password the browser asks for before the Tally Books sign-in screen. User accounts protect the data either way; this adds a second layer when the app is on a network. |
 
 For example, to share it on your office network:
 
@@ -136,6 +144,7 @@ src/server/
   db.js            SQLite storage (Node's built-in node:sqlite)
   companies.js     Company list; one database file per company
   backups.js       Daily automatic backups to a folder of your choice
+  auth.js          User accounts, password hashing, sessions, lockout, roles
   validate.js      Bookkeeping rules enforced on every write
   seed.js          Default chart of accounts and example data
   index.js         Command-line entry point
@@ -162,6 +171,10 @@ GROUP BY account_id;
 ```
 
 ### API
+
+Every route except `/api/health` and `/api/auth/*` requires a signed-in session. Without one it answers `401`, and a user with a temporary password gets `403` until they choose their own.
+
+**Sign-in:** `GET /api/auth/me`, `POST /api/auth/setup` (first owner, only once), `POST /api/auth/login`, `POST /api/auth/logout` and `POST /api/auth/password`. Owners only: `GET`/`POST /api/users`, `PUT /api/users/:id` and `PUT /api/security` (`{ "idleMinutes" }`).
 
 **Across companies:**
 

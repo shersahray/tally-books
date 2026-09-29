@@ -14,6 +14,7 @@ function backupStatusLine(){
 function backupPanel(){
   if(!BK)return '';
   const keep=[7,14,30,90,365];
+  if(typeof ME!=='undefined'&&ME&&ME.role!=='owner')return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Automatic backups</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px"><div>${backupStatusLine()}</div><div class="actions"><button class="btn" data-bkact="run" ${bkBusy?'disabled':''}>${bkBusy?'Backing up…':'Back up now'}</button></div><div class="muted" style="font-size:13px">An owner manages where backups go and how long they’re kept.</div></div></div>`;
   return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Automatic backups</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
     <div>${backupStatusLine()}</div>
     <div class="fields">
