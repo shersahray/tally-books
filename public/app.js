@@ -449,6 +449,7 @@ function lineEditor(el,cols,rows,onChange){
     case 'text':return `<input type="text" data-k="${c.key}" value="${esc(v??'')}" aria-label="${c.label}">`;
     case 'num':return `<input type="number" step="${c.step||'0.01'}" inputmode="decimal" data-k="${c.key}" value="${v===undefined||v===''||v===null?'':esc(v)}" aria-label="${c.label}">`;
     case 'check':return `<input type="checkbox" data-k="${c.key}" ${v?'checked':''} aria-label="${c.label}">`;
+    case 'sel':return `<select data-k="${c.key}" aria-label="${c.label}">${c.options(v)}</select>`;
     case 'calc':return `<span data-calc="${c.key}"></span>`;}};
   const rowHTML=r=>`<tr>${cols.map(c=>`<td class="c-${c.type}">${cell(c,r)}</td>`).join('')}<td class="c-x"><button type="button" class="icon-btn" data-rm aria-label="Remove line">×</button></td></tr>`;
   el.innerHTML=`<div class="tbl-wrap"><table class="lines"><thead><tr>${cols.map(c=>`<th class="c-${c.type}">${c.label}</th>`).join('')}<th></th></tr></thead><tbody>${rows.map(rowHTML).join('')}</tbody></table></div><button type="button" class="btn ghost sm" data-add style="margin-top:6px">+ Add line</button>`;
@@ -475,8 +476,16 @@ const splitTax=base=>taxParts().map(p=>({...p,amount:r2(base*p.rate/100)})).filt
 // Share out a known tax total (from a tax-included amount) across the parts.
 function splitTaxTotal(total){const ps=taxParts(),sum=ps.reduce((s,p)=>s+p.rate,0)||1;let left=r2(total);return ps.map((p,i)=>{const a=i===ps.length-1?left:r2(total*p.rate/sum);left=r2(left-a);return{...p,amount:a}}).filter(p=>p.amount)}
 function taxReady(parts){if(parts.every(p=>p.account))return true;toast(`Add a “${parts.find(p=>!p.account).name} payable” account in Chart of accounts first.`,true);return false}
-function calcLines(rows,amt){const ls=rows.map(r=>({...r,net:r2(amt(r))})).filter(r=>r.account&&r.net);const sub=r2(ls.reduce((s,r)=>s+r.net,0));const parts=splitTax(ls.filter(r=>r.tax).reduce((s,r)=>s+r.net,0));const tax=r2(parts.reduce((s,p)=>s+p.amount,0));return{ls,sub,tax,parts,total:r2(sub+tax)}}
-function groupBy(ls){const m={};ls.forEach(l=>m[l.account]=r2((m[l.account]||0)+l.net));return m}
+/* Tax codes on each line. Only "std" charges tax; the others are 0% but are kept apart so the
+   GST/HST return can report taxable sales (line 90) separately from exports, exempt and other revenue (line 91). */
+const TAX_CODES=[['std',null],['zero','Zero-rated in Canada (0%)'],['export','Zero-rated export (0%)'],['exempt','Exempt'],['none','No tax']];
+const taxCodeLabel=c=>c==='std'?`${S.company.taxName||'Tax'} ${+S.company.taxRate||0}%`:(TAX_CODES.find(t=>t[0]===c)||[,'No tax'])[1];
+const taxCodeOf=l=>l.taxCode||(l.tax?'std':'none'); // older lines only had a tick box
+const taxCodeOptions=sel=>TAX_CODES.map(([k])=>`<option value="${k}" ${sel===k?'selected':''}>${esc(taxCodeLabel(k))}</option>`).join('');
+function calcLines(rows,amt){const ls=rows.map(r=>({...r,taxCode:taxCodeOf(r),net:r2(amt(r))})).filter(r=>r.account&&r.net);const sub=r2(ls.reduce((s,r)=>s+r.net,0));const parts=splitTax(ls.filter(r=>r.taxCode==='std').reduce((s,r)=>s+r.net,0));const tax=r2(parts.reduce((s,p)=>s+p.amount,0));return{ls,sub,tax,parts,total:r2(sub+tax)}}
+// Total per account and tax code, so each posting line remembers its tax code for the sales tax return.
+function groupBy(ls){const m={};ls.forEach(l=>{const k=l.account+'|'+taxCodeOf(l);m[k]=r2((m[k]||0)+l.net)});return m}
+const gLine=(k,v,side)=>{const[account,taxCode]=k.split('|');return side==='credit'?(v>=0?{account,debit:0,credit:v,taxCode}:{account,debit:-v,credit:0,taxCode}):(v>=0?{account,debit:v,credit:0,taxCode}:{account,debit:0,credit:-v,taxCode})};
 const delBtn=show=>show?`<button type="button" class="btn danger left" data-del>Delete</button>`:'<span class="left"></span>';
 const saveFoot=(del,label='Save')=>`${delBtn(del)}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${label}</button>`;
 function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${label}" account in Chart of accounts first.`,true);return a}
@@ -495,7 +504,7 @@ function docForm(kind,doc){
   const inv=kind==='invoice',ck=inv?'customer':'vendor',t=today();
   const filter=inv?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&!a.detail);
   const defA=(sortAccts(S.accounts.filter(a=>filter(a)&&a.active!==false))[0]||{}).id||'';
-  const d=doc||{number:nextNum(kind),date:t,due:addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',tax:true}],memo:''};
+  const d=doc?{...doc,lines:doc.lines.map(l=>({...l,taxCode:taxCodeOf(l)}))}:{number:nextNum(kind),date:t,due:addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:'std'}],memo:''};
   const paid=doc?paidOn(doc.id):0;
   const f=openModal(doc?`${inv?'Invoice':'Bill'} ${d.number?'#'+d.number:''}`:(inv?'New invoice':'New bill'),
     `<div class="fields">${fld('dC',inv?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',inv?'Invoice no.':'Bill no.',`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',inv?'Invoice date':'Bill date',`<input type="date" id="dD" value="${d.date}">`)}${fld('dDue','Due date',`<input type="date" id="dDue" value="${d.due||''}">`)}</div>
@@ -504,9 +513,12 @@ function docForm(kind,doc){
     ${doc&&paid?`<div class="banner" style="margin:0"><span>${money(paid)} has been ${inv?'received':'paid'} on this ${kind}. Balance due ${money(r2(d.total-paid))}.</span></div>`:''}`,
     `${delBtn(!!doc)}<button type="button" class="btn" data-close>Cancel</button>${doc&&docStatus(doc).bal>0?`<button type="button" class="btn" data-paynow>${inv?'Receive payment':'Pay bill'}</button>`:''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'dC');
-  let rows=[];const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:inv?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:inv?'Rate':'Cost',type:'num'},{key:'tax',label:esc(S.company.taxName||'Tax'),type:'check'},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
-  cols.defaults=()=>({qty:1,tax:true,account:defA});
+  let rows=[];const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:inv?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:inv?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
+  const contactCode=()=>contact($('#dC',f).value)?.taxCode||'';
+  cols.defaults=()=>({qty:1,taxCode:contactCode()||'std',account:defA});
   const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{rows=r;setTotals(f,calcLines(r,x=>(+x.qty||0)*(+x.rate||0)))});
+  // A customer or vendor with a default tax code (e.g. a US customer: zero-rated export) sets it on every line.
+  $('#dC',f).addEventListener('change',()=>{const code=contactCode();if(!code)return;$$('[data-le] [data-k=taxCode]',f).forEach(s=>s.value=code);$('[data-le]',f).dispatchEvent(new Event('change'));toast(`Tax set to ${taxCodeLabel(code)} for ${contactName($('#dC',f).value)}`)});
   let lastDate=d.date;$('#dD',f).onchange=()=>{const due=$('#dDue',f);if(due.value===addDays(lastDate,+S.company.terms||0))due.value=addDays($('#dD',f).value,+S.company.terms||0);lastDate=$('#dD',f).value};
   const pn=$('[data-paynow]',f);if(pn)pn.onclick=()=>payForm(inv?'payment':'billpayment',null,doc.id);
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(paid){f.err(`Delete the ${paid?'payments':''} on this ${kind} first.`);return}if(!await confirmBox(`Delete this ${kind}?`,`${inv?'Invoice':'Bill'} ${d.number?'#'+d.number+' ':''}and its posting to the ledger will be removed.`))return;if(!await batch([{op:'delete',collection:'entries',id:'d_'+doc.id},{op:'delete',collection:'docs',id:doc.id}]))return;closeModal();toast(`${inv?'Invoice':'Bill'} deleted`)};
@@ -521,10 +533,10 @@ function docForm(kind,doc){
     const cid=await resolveContact(f,'dC',ck);if(!cid)return;
     const id=doc?doc.id:uid();const num=$('#dN',f).value.trim();
     const lines=[];const g=groupBy(c.ls);
-    if(inv){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:0,credit:v}:{account:a,debit:-v,credit:0}));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
-    else{Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:v,credit:0}:{account:a,debit:0,credit:-v}));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ar.id,debit:0,credit:c.total})}
+    if(inv){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
+    else{Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ar.id,debit:0,credit:c.total})}
     const base={date:$('#dD',f).value,contactId:cid,memo:$('#dM',f).value.trim(),...(doc&&doc.example?{example:true}:{})};
-    const dd={...base,kind,number:num,due:$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,tax:!!l.tax})),sub:c.sub,tax:c.tax,total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
+    const dd={...base,kind,number:num,due:$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'})),sub:c.sub,tax:c.tax,total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:kind,ref:num,docId:id,lines,created:dd.created}}]))return;
     closeModal();toast(`${inv?'Invoice':'Bill'} saved`);
   };
@@ -574,9 +586,10 @@ function moneyForm(kind,entry){
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="mMemo">Memo</label><textarea id="mMemo">${esc(entry?.memo||'')}</textarea></div>${totalsHTML()}</div>`,
     saveFoot(!!entry),'wide');
   wireContactSelect(f,'mC');
-  const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'tax',label:esc(S.company.taxName||'Tax'),type:'check'}];
-  cols.defaults=()=>({tax:out,account:defA});
-  const le=lineEditor($('[data-le]',f),cols,fm.lines||[{account:defA,desc:'',amount:'',tax:out}],r=>setTotals(f,calcLines(r,x=>+x.amount||0)));
+  const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions}];
+  const mCode=()=>contact($('#mC',f).value)?.taxCode||(out?'std':'none');
+  cols.defaults=()=>({taxCode:mCode(),account:defA});
+  const le=lineEditor($('[data-le]',f),cols,(fm.lines||[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}]).map(l=>({...l,taxCode:taxCodeOf(l)})),r=>setTotals(f,calcLines(r,x=>+x.amount||0)));
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox(`Delete this ${kind}?`,'It will be removed from your books.'))return;await del('entries',entry.id);closeModal();toast(`${out?'Expense':'Deposit'} deleted`)};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const c=calcLines(le.read(),x=>+x.amount||0);const bank=$('#mBank',f).value;
@@ -584,10 +597,10 @@ function moneyForm(kind,entry){
     if(c.tax&&!taxReady(c.parts))return;
     let cid=$('#mC',f).value;if(cid==='__new'){cid=await resolveContact(f,'mC',out?'vendor':'customer');if(!cid)return f.err('Enter a name for the new contact.')}
     const g=groupBy(c.ls);const lines=[];
-    if(out){Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:v,credit:0}:{account:a,debit:0,credit:-v}));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push(c.total>=0?{account:bank,debit:0,credit:c.total}:{account:bank,debit:-c.total,credit:0})}
-    else{lines.push(c.total>=0?{account:bank,debit:c.total,credit:0}:{account:bank,debit:0,credit:-c.total});Object.entries(g).forEach(([a,v])=>lines.push(v>=0?{account:a,debit:0,credit:v}:{account:a,debit:-v,credit:0}));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}))}
+    if(out){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push(c.total>=0?{account:bank,debit:0,credit:c.total}:{account:bank,debit:-c.total,credit:0})}
+    else{lines.push(c.total>=0?{account:bank,debit:c.total,credit:0}:{account:bank,debit:0,credit:-c.total});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}))}
     const id=entry?.id||uid();
-    if(await put('entries',id,{type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,tax:!!l.tax}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast(`${out?'Expense':'Deposit'} saved`)}
+    if(await put('entries',id,{type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast(`${out?'Expense':'Deposit'} saved`)}
   };
 }
 
@@ -636,10 +649,10 @@ function accountForm(a){
 function contactForm(c,kind){
   const k=c?.kind||kind||'customer';
   const refs=c?S.docs.some(d=>d.contactId===c.id)||S.entries.some(e=>e.contactId===c.id):false;
-  const f=openModal(c?c.name:`New ${k}`,`<div class="fields">${fld('cName','Name',`<input type="text" id="cName" value="${esc(c?.name||'')}" required>`,true)}${fld('cKind','Type',`<select id="cKind"><option value="customer" ${k==='customer'?'selected':''}>Customer</option><option value="vendor" ${k==='vendor'?'selected':''}>Vendor</option></select>`)}${fld('cEmail','Email',`<input type="email" id="cEmail" value="${esc(c?.email||'')}">`)}${fld('cPhone','Phone',`<input type="tel" id="cPhone" value="${esc(c?.phone||'')}">`)}${fld('cAddr','Address',`<textarea id="cAddr">${esc(c?.address||'')}</textarea>`,true)}${fld('cNotes','Notes',`<textarea id="cNotes">${esc(c?.notes||'')}</textarea>`,true)}</div>${refs?'<div class="muted" style="font-size:13px">This contact appears on transactions, so it can\'t be deleted.</div>':''}`,saveFoot(!!c&&!refs));
+  const f=openModal(c?c.name:`New ${k}`,`<div class="fields">${fld('cName','Name',`<input type="text" id="cName" value="${esc(c?.name||'')}" required>`,true)}${fld('cKind','Type',`<select id="cKind"><option value="customer" ${k==='customer'?'selected':''}>Customer</option><option value="vendor" ${k==='vendor'?'selected':''}>Vendor</option></select>`)}${fld('cTax','Default sales tax',`<select id="cTax"><option value="">Same as the company (${esc(S.company.taxName||'Tax')})</option>${TAX_CODES.filter(t=>t[0]!=='std').map(([k])=>`<option value="${k}" ${c?.taxCode===k?'selected':''}>${esc(taxCodeLabel(k))}</option>`).join('')}</select><span class="hint">For a customer outside Canada, such as in the US, choose Zero-rated export.</span>`)}${fld('cEmail','Email',`<input type="email" id="cEmail" value="${esc(c?.email||'')}">`)}${fld('cPhone','Phone',`<input type="tel" id="cPhone" value="${esc(c?.phone||'')}">`)}${fld('cAddr','Address',`<textarea id="cAddr">${esc(c?.address||'')}</textarea>`,true)}${fld('cNotes','Notes',`<textarea id="cNotes">${esc(c?.notes||'')}</textarea>`,true)}</div>${refs?'<div class="muted" style="font-size:13px">This contact appears on transactions, so it can\'t be deleted.</div>':''}`,saveFoot(!!c&&!refs));
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this contact?',`${c.name} will be removed.`))return;await del('contacts',c.id);closeModal();toast('Contact deleted')};
   f.onsubmit=async e=>{e.preventDefault();const name=$('#cName',f).value.trim();if(!name)return f.err('Enter a name.');
-    const id=c?.id||uid();if(await put('contacts',id,{...(c?strip(c):{created:Date.now()}),name,kind:$('#cKind',f).value,email:$('#cEmail',f).value.trim(),phone:$('#cPhone',f).value.trim(),address:$('#cAddr',f).value.trim(),notes:$('#cNotes',f).value.trim()})){closeModal();toast('Saved')}};
+    const id=c?.id||uid();if(await put('contacts',id,{...(c?strip(c):{created:Date.now()}),name,kind:$('#cKind',f).value,email:$('#cEmail',f).value.trim(),phone:$('#cPhone',f).value.trim(),address:$('#cAddr',f).value.trim(),notes:$('#cNotes',f).value.trim(),taxCode:$('#cTax',f).value})){closeModal();toast('Saved')}};
 }
 
 /* ---------- chrome ---------- */

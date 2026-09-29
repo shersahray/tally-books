@@ -154,10 +154,11 @@ function buildWrites(b,sel){
     const net=useTax?r2(amt/(1+rate/100)):amt,parts=useTax?splitTaxTotal(r2(amt-net)):[];
     if(parts.some(p=>!p.account))throw new Error(`Add a “${parts.find(p=>!p.account).name} payable” account first.`);
     const tax=r2(parts.reduce((s,p)=>s+p.amount,0));
-    const lines=into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:net}]:[{account:cat.id,debit:net,credit:0}];
+    const code=useTax?'std':'none';
+    const lines=into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:net,taxCode:code}]:[{account:cat.id,debit:net,credit:0,taxCode:code}];
     parts.forEach(p=>lines.push(into?{account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}:{account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));
     if(!into)lines.push({account:a.id,debit:0,credit:amt});
-    entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:sel.contactId||'',form:{bank:a.id,lines:[{account:cat.id,desc:b.desc,amount:net,tax:!!tax}]},lines};
+    entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:sel.contactId||'',form:{bank:a.id,lines:[{account:cat.id,desc:b.desc,amount:net,taxCode:code,tax:!!tax}]},lines};
   }
   entry.clear={[a.id]:'c'};entry.created=Date.now();
   return[{op:'set',collection:'entries',id,data:entry},{op:'set',collection:'bankTxns',id:b.id,data:{...b,status:'added',entryId:id,made:true,cat:{account:cat.id,contactId:sel.contactId||'',tax:!!sel.tax}}}];

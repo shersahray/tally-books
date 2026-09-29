@@ -12,7 +12,12 @@ S.stax={tax:'gst',period:null,drill:'',manual:{}};
 
 const TAX_LINES={
   gst:[
-    ['101','Total sales and other revenue','sales'],
+    ['90','Taxable sales made in Canada (including zero-rated supplies in Canada)','s90'],
+    ['91','Exempt supplies, zero-rated exports and other sales and revenue','s91'],
+    ['','Zero-rated exports (for example, US customers)','sExport','sub'],
+    ['','Exempt supplies','sExempt','sub'],
+    ['','Other revenue with no sales tax','sOther','sub'],
+    ['101','Total sales and other revenue','=90+91'],
     ['103','GST/HST collected or collectible','collected'],
     ['104','Adjustments to be added to net tax','addAdj'],
     ['105','Total GST/HST and adjustments for period','=103+104'],
@@ -74,15 +79,17 @@ const filedPeriodOn=(date,k)=>S.filings.find(f=>(!k||f.tax===k)&&f.from<=date&&d
 /* ---------- worksheet ---------- */
 function worksheet(k,from,to){
   const a=taxAcctFor(k);if(!a)return null;
-  const v={collected:0,addAdj:0,itc:0,dedAdj:0,instal:0,sales:0},src={collected:[],addAdj:[],itc:[],dedAdj:[],instal:[],sales:[]};
+  const v={collected:0,addAdj:0,itc:0,dedAdj:0,instal:0,sales:0,s90:0,s91:0,sExport:0,sExempt:0,sOther:0},src={collected:[],addAdj:[],itc:[],dedAdj:[],instal:[],sales:[],s90:[],s91:[],sExport:[],sExempt:[],sOther:[]};
   const push=(key,e,amt)=>{if(!amt)return;v[key]+=amt;src[key].push({e,amt})};
-  const income=new Set(S.accounts.filter(x=>x.type==='Income').map(x=>x.id));
+  const income=new Set(S.accounts.filter(x=>x.type==='Income').map(x=>x.id)),taxIds=taxAcctIds();
   for(const e of S.entries){
     if(e.date<from||e.date>to)continue;
-    let inc=0;
+    let inc=0;const byCode={};
+    // Older transactions have no tax code on their lines: taxed if the transaction charged sales tax.
+    const legacy=(e.lines||[]).some(l=>taxIds.has(l.account)&&(+l.credit||0)>0)?'std':'none';
     for(const l of e.lines||[]){
       const dr=+l.debit||0,cr=+l.credit||0;
-      if(income.has(l.account))inc+=cr-dr;
+      if(income.has(l.account)){inc+=cr-dr;const code=l.taxCode||legacy;byCode[code]=(byCode[code]||0)+cr-dr}
       if(l.account!==a.id)continue;
       if(e.type==='taxpayment'){if(e.taxKind==='instalment'&&e.tax===k)push('instal',e,dr);continue}
       if(e.type==='journal'){push('addAdj',e,cr);push('dedAdj',e,dr)}
@@ -91,11 +98,17 @@ function worksheet(k,from,to){
       else{push('collected',e,cr);push('itc',e,dr)}
     }
     if(inc)push('sales',e,inc);
+    for(const[code,amt]of Object.entries(byCode)){
+      if(!amt)continue;
+      if(code==='std'||code==='zero')push('s90',e,amt);
+      else{push('s91',e,amt);push(code==='export'?'sExport':code==='exempt'?'sExempt':'sOther',e,amt)}
+    }
   }
   const filed=filingFor(k,from,to);
   const man=filed?filed.lines:(S.stax.manual[k+from]||{});
   const vals={};
-  for(const[no,,how]of TAX_LINES[k]){
+  for(const[no,,how,sub]of TAX_LINES[k]){
+    if(sub){vals['·'+how]=r2(v[how]);continue}
     if(how.startsWith('m:'))vals[no]=r2(+man[no]||0);
     else if(how.startsWith('=')){const parts=how.slice(1).split(/(?=[+-])/);vals[no]=r2(parts.reduce((s,p)=>{const sign=p[0]==='-'?-1:1;return s+sign*vals[p.replace(/^[+-]/,'')]},0))}
     else vals[no]=r2(v[how]);
@@ -137,10 +150,13 @@ function vSalesTax(){
 function vWorksheet(k,from,to){
   const w=worksheet(k,from,to),T=S.stax,bl=BAL_LINE[k],bal=w.vals[bl];
   const filed=w.filed,st=periodStatus(k,filingPeriods().find(p=>p.from===from)||{from,to,due:to});
-  const changed=filed&&TAX_LINES[k].some(([no,,how])=>!how.startsWith('m:')&&Math.abs((w.live[no]||0)-(filed.lines[no]||0))>0.004);
-  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1};
+  const changed=filed&&TAX_LINES[k].some(([no,,how,sub])=>!sub&&!how.startsWith('m:')&&no in filed.lines&&Math.abs((w.live[no]||0)-(filed.lines[no]||0))>0.004);
+  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1};
   let rows='';
-  for(const[no,label,how]of TAX_LINES[k]){
+  for(const[no,label,how,sub]of TAX_LINES[k]){
+    if(sub){const val=w.vals['·'+how]||0;if(!val&&how!=='sExport')continue;
+      rows+=`<tr class="subline"><td></td><td>${label}</td><td class="n">${val?`<button class="link" data-stdrill="${how}">${money(val)}</button>`:'<span class="muted">$0.00</span>'}</td></tr>`;
+      if(T.drill===how)rows+=`<tr><td></td><td colspan="2">${drillTable(w.src[how])}</td></tr>`;continue}
     const total=how.startsWith('=')||no===bl,val=w.vals[no];
     let cell;
     if(how.startsWith('m:')&&!filed)cell=`<input type="number" step="0.01" data-stman="${no}" value="${val||''}" placeholder="0.00" style="width:130px" aria-label="Line ${no}">`;
@@ -187,7 +203,7 @@ async function stClick(ev,t,d){
     case 'file':fileForm(T.tax,from,to,true);return true;
     case 'pay-later':fileForm(T.tax,from,to,false);return true;
     case 'unfile':await unfile(T.tax,from,to);return true;
-    case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...TAX_LINES[T.tax].map(([no,label])=>[no,label,w.vals[no]])];
+    case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...TAX_LINES[T.tax].map(([no,label,how,sub])=>sub?['',`  of line 91: ${label}`,w.vals['·'+how]||0]:[no,label,w.vals[no]])];
       saveFile(`${T.tax==='qst'?'qst':'gst-hst'}-return_${from}_${to}.csv`,new Blob(['﻿'+rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:v).join(',')).join('\r\n')],{type:'text/csv'}));return true}
   }
   return false;

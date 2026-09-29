@@ -244,3 +244,5 @@ svg.chart .base{stroke:var(--line-strong);stroke-width:1}
 .lock-brand{display:flex;align-items:center;gap:10px}
 .lock-brand b{font-family:var(--f-head);font-size:20px}
 .lock-card input{width:100%;padding:9px 11px}
+.report table.ws tr.subline td{font-size:13px;color:var(--muted);padding-top:2px;padding-bottom:2px}
+.report table.ws tr.subline td:nth-child(2){padding-left:32px}

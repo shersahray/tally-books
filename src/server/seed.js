@@ -111,26 +111,31 @@ function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0) {
    ['c_harbour', 'Harbour Yoga Studio', 'customer', 'hello@harbouryoga.example'],
    ['c_north', 'Northline Office Supply', 'vendor', 'billing@northline.example'],
    ['c_city', 'Cityview Property Management', 'vendor', 'rent@cityviewpm.example'],
-  ].forEach(([id, name, kind, email]) => out.push({ collection: 'contacts', id, data: { name, kind, email, phone: '', address: '', notes: '', example: true, created: cr() } }));
+   ['c_cascade', 'Cascade Outfitters LLC (Seattle, WA)', 'customer', 'ap@cascadeoutfitters.example', 'export'],
+  ].forEach(([id, name, kind, email, taxCode]) => out.push({ collection: 'contacts', id, data: { name, kind, email, phone: '', address: '', notes: '', taxCode: taxCode || '', example: true, created: cr() } }));
 
   add('entries', 'x_ob', { type: 'journal', date: daysAgo(89, now), memo: 'Opening balance',
     lines: [{ account: 'a1000', debit: 12000, credit: 0 }, { account: 'a3900', debit: 0, credit: 12000 }] });
 
   function doc(id, kind, number, contactId, date, due, lines) {
-    const ls = lines.map(([desc, account, qty, rate_, tax]) => ({ desc, account, qty, rate: rate_, tax }));
+    // tax: true = standard rate, false = no tax, or a tax code such as 'export'
+    const ls = lines.map(([desc, account, qty, rate_, tax]) => {
+      const taxCode = typeof tax === 'string' ? tax : tax ? 'std' : 'none';
+      return { desc, account, qty, rate: rate_, taxCode, tax: taxCode === 'std' };
+    });
     const sub = r2(ls.reduce((s, l) => s + l.qty * l.rate, 0));
     const taxable = ls.filter(l => l.tax).reduce((s, l) => s + l.qty * l.rate, 0);
     const tax = r2(taxOn(taxable));
     const total = r2(sub + tax);
     const g = {};
-    ls.forEach(l => (g[l.account] = r2((g[l.account] || 0) + l.qty * l.rate)));
+    ls.forEach(l => { const k = l.account + '|' + l.taxCode; g[k] = r2((g[k] || 0) + l.qty * l.rate); });
     const pl = [];
     if (kind === 'invoice') {
       pl.push({ account: 'a1200', debit: total, credit: 0 });
-      Object.entries(g).forEach(([a, v]) => pl.push({ account: a, debit: 0, credit: v }));
+      Object.entries(g).forEach(([k, v]) => { const [a, taxCode] = k.split('|'); pl.push({ account: a, debit: 0, credit: v, taxCode }); });
       pl.push(...taxLines(taxable, 'credit', 'collected'));
     } else {
-      Object.entries(g).forEach(([a, v]) => pl.push({ account: a, debit: v, credit: 0 }));
+      Object.entries(g).forEach(([k, v]) => { const [a, taxCode] = k.split('|'); pl.push({ account: a, debit: v, credit: 0, taxCode }); });
       pl.push(...taxLines(taxable, 'debit', 'paid'));
       pl.push({ account: 'a2000', debit: 0, credit: total });
     }
@@ -169,6 +174,7 @@ function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0) {
   const i1 = doc('x_inv1001', 'invoice', '1001', 'c_maple', daysAgo(55, now), daysAgo(25, now), [['Monthly bookkeeping', 'a4100', 1, 1200, true]]);
   const i2 = doc('x_inv1002', 'invoice', '1002', 'c_harbour', daysAgo(44, now), daysAgo(14, now), [['Website refresh', 'a4100', 1, 2400, true], ['Hosting setup', 'a4100', 1, 150, true]]);
   doc('x_inv1003', 'invoice', '1003', 'c_maple', daysAgo(24, now), daysAgo(-6, now), [['Monthly bookkeeping', 'a4100', 1, 1200, true]]);
+  doc('x_inv1004', 'invoice', '1004', 'c_cascade', daysAgo(20, now), daysAgo(-10, now), [['Bookkeeping for Canadian subsidiary (export, no tax)', 'a4100', 1, 900, 'export']]);
   doc('x_bill1', 'bill', 'R-0926', 'c_city', daysAgo(27, now), daysAgo(-3, now), [['Office rent', 'a6600', 1, 1800, true]]);
   const b2 = doc('x_bill2', 'bill', '55821', 'c_north', daysAgo(39, now), daysAgo(9, now), [['Printer paper and toner', 'a6400', 1, 240, true]]);
   pay('x_p1', 'payment', i1, daysAgo(31, now), i1.total, 'a1000', 'E-transfer');

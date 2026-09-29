@@ -436,3 +436,16 @@ test('staff users see only their companies and must change a temporary password'
   const me = (await call('GET', '/api/users')).json.users.find(u => u.role === 'owner');
   assert.equal((await call('PUT', `/api/users/${me.id}`, { role: 'staff' })).status, 409);
 });
+
+test('export sales carry a tax code and no sales tax', async () => {
+  const r = await call('POST', '/api/companies', { name: 'Export Co', province: 'ON', examples: true });
+  const st = await (await afetch(`${base}/api/c/${r.json.company.id}/state`)).json();
+  const us = st.contacts.find(c => c.taxCode === 'export');
+  assert.ok(us, 'example US customer defaults to zero-rated export');
+  const inv = st.docs.find(d => d.contactId === us.id);
+  assert.equal(inv.tax, 0);
+  assert.equal(inv.total, 900);
+  const e = st.entries.find(x => x.id === 'd_' + inv.id);
+  assert.ok(e.lines.some(l => l.account === 'a4100' && l.credit === 900 && l.taxCode === 'export'));
+  assert.ok(!e.lines.some(l => l.account === 'a2200'), 'no HST line');
+});
