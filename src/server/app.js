@@ -7,6 +7,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
+const { Backups } = require('./backups');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 
@@ -28,6 +29,9 @@ const BACKUP_FORMAT = 'tally-books-backup';
  */
 function createApp(opts) {
   const reg = new Registry(opts.dataDir);
+  const backups = new Backups(opts.dataDir, reg);
+  if (opts.backupFolder) backups.update({ folder: opts.backupFolder });
+  if (opts.autoBackup !== false) backups.start();
   const publicDir = opts.publicDir || PUBLIC_DIR;
   const clients = new Set();
 
@@ -153,6 +157,23 @@ function createApp(opts) {
       if (patch.archived !== undefined) broadcast({ companies: true });
       return { ok: true, company: summary(reg.get(id)) };
     }],
+    ['GET', /^\/api\/backups$/, () => backups.status()],
+    ['PUT', /^\/api\/backups$/, async req => backups.update(await readJson(req))],
+    ['POST', /^\/api\/backups\/run$/, () => {
+      const r = backups.run();
+      if (!r.ok) throw new ValidationError(r.error, 409);
+      return { ...r, status: backups.status() };
+    }],
+    ['POST', /^\/api\/backups\/open$/, req => {
+      // Only for someone sitting at this computer: opens the folder in File Explorer / Finder.
+      const ip = req.socket.remoteAddress || '';
+      if (!/^(::1|127\.|::ffff:127\.)/.test(ip)) throw new ValidationError('The backup folder can only be opened on the computer running Tally Books.', 403);
+      const dir = fs.existsSync(backups.target()) ? backups.target() : backups.settings.folder;
+      const { spawn } = require('node:child_process');
+      const [cmd, args] = process.platform === 'win32' ? ['explorer', [dir]] : process.platform === 'darwin' ? ['open', [dir]] : ['xdg-open', [dir]];
+      try { spawn(cmd, args, { stdio: 'ignore', detached: true }).unref(); } catch { /* shown in the UI instead */ }
+      return { ok: true, path: dir };
+    }],
     ['GET', /^\/api\/events$/, (req, m, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
       res.write(`retry: 3000\ndata: ${JSON.stringify({ hello: true })}\n\n`);
@@ -266,7 +287,7 @@ function createApp(opts) {
     }
   });
 
-  server.on('close', () => reg.closeAll());
+  server.on('close', () => { backups.stop(); reg.closeAll(); });
   /** Stop accepting requests, end live-update streams, and close the databases. */
   server.shutdown = () => new Promise(resolve => {
     for (const res of clients) res.end();
@@ -275,6 +296,7 @@ function createApp(opts) {
     server.closeIdleConnections();
   });
   server.registry = reg;
+  server.backups = backups;
   return server;
 }
 

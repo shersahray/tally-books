@@ -10,7 +10,7 @@ let server, base, dir, co;
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-test-'));
-  server = createApp({ dataDir: dir });
+  server = createApp({ dataDir: dir, autoBackup: false });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
   const res = await fetch(base + '/api/companies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Test Co', province: 'ON' }) });
@@ -22,7 +22,7 @@ after(async () => {
 });
 
 // Company-scoped calls: '/api/state' goes to '/api/c/<test company>/state'.
-const scoped = url => (/^\/api\/(companies|health|events)/.test(url) || !url.startsWith('/api/') ? url : url.replace(/^\/api\//, `/api/c/${co}/`));
+const scoped = url => (/^\/api\/(companies|health|events|backups)/.test(url) || !url.startsWith('/api/') ? url : url.replace(/^\/api\//, `/api/c/${co}/`));
 async function call(method, url, body) {
   const res = await fetch(base + scoped(url), {
     method,
@@ -163,7 +163,7 @@ test('blocks cross-site writes', async () => {
 
 test('password protection', async () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-auth-'));
-  const s = createApp({ dataDir: d, password: 's3cret' });
+  const s = createApp({ dataDir: d, password: 's3cret', autoBackup: false });
   await new Promise(r => s.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${s.address().port}/api/companies`;
   assert.equal((await fetch(url)).status, 401);
@@ -270,7 +270,7 @@ test('books from the single-company version become the first company', async () 
   seedDefaults(old, { company: { name: 'Legacy Bakery' } });
   old.put('contacts', 'c1', { name: 'Old Customer', kind: 'customer' });
   old.close();
-  const s = createApp({ dataDir: d });
+  const s = createApp({ dataDir: d, autoBackup: false });
   await new Promise(r => s.listen(0, '127.0.0.1', r));
   const b = `http://127.0.0.1:${s.address().port}`;
   const list = (await (await fetch(b + '/api/companies')).json()).companies;
@@ -280,7 +280,7 @@ test('books from the single-company version become the first company', async () 
   assert.ok(st.contacts.find(c => c.name === 'Old Customer'));
   await s.shutdown();
   // starting again doesn't adopt it twice
-  const s2 = createApp({ dataDir: d });
+  const s2 = createApp({ dataDir: d, autoBackup: false });
   assert.equal(s2.registry.list().length, 1);
   s2.registry.closeAll();
   fs.rmSync(d, { recursive: true, force: true });
@@ -312,4 +312,44 @@ test('sales tax filings are validated and cannot overlap', async () => {
   // a sales tax payment is a valid transaction type
   const r = await call('PUT', '/api/records/entries/tp1', entry([{ account: 'a2200', debit: 100 }, { account: 'a1000', credit: 100 }], { type: 'taxpayment', tax: 'gst', taxKind: 'payment' }));
   assert.equal(r.status, 200, r.text);
+});
+
+test('automatic backups write every company and remove old days', async () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-bk-'));
+  let r = await call('PUT', '/api/backups', { folder: path.join(out, 'nope') });
+  assert.equal(r.status, 400, 'folder must exist');
+  r = await call('PUT', '/api/backups', { folder: out, keepDays: 3, enabled: true });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.target, path.join(out, 'Tally Books Backups'));
+
+  // an old day that should be pruned, an old folder with foreign files that must be kept
+  const root = path.join(out, 'Tally Books Backups');
+  fs.mkdirSync(path.join(root, '2020-01-01'), { recursive: true });
+  fs.writeFileSync(path.join(root, '2020-01-01', 'x.json'), '{}');
+  fs.mkdirSync(path.join(root, '2020-01-02'), { recursive: true });
+  fs.writeFileSync(path.join(root, '2020-01-02', 'notes.docx'), 'mine');
+
+  r = await call('POST', '/api/backups/run');
+  assert.equal(r.status, 200, r.text);
+  const companies = (await call('GET', '/api/companies')).json.companies;
+  assert.equal(r.json.count, companies.length);
+  const files = fs.readdirSync(r.json.path).filter(f => f.endsWith('.json') && f !== 'companies.json');
+  assert.equal(files.length, companies.length);
+  assert.ok(!fs.existsSync(path.join(root, '2020-01-01')), 'old backup removed');
+  assert.ok(fs.existsSync(path.join(root, '2020-01-02', 'notes.docx')), 'foreign files left alone');
+
+  // a backup file restores through the normal restore route
+  const testFile = files.find(f => f.includes(co));
+  const body = JSON.parse(fs.readFileSync(path.join(r.json.path, testFile), 'utf8'));
+  assert.equal(body.format, 'tally-books-backup');
+  const before = (await call('GET', '/api/state')).json;
+  r = await call('POST', '/api/restore', body);
+  assert.equal(r.status, 200, r.text);
+  const after = (await call('GET', '/api/state')).json;
+  assert.equal(after.entries.length, before.entries.length);
+
+  const st = (await call('GET', '/api/backups')).json;
+  assert.equal(st.dueToday, false);
+  assert.equal(st.lastError, '');
+  fs.rmSync(out, { recursive: true, force: true });
 });

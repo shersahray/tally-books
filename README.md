@@ -34,6 +34,7 @@ It runs two ways from the same code:
   - **Filing:** marking a return as filed saves its figures and can record the payment to the government, or the refund, which clears the tax account. Instalments can be recorded too.
   - **Filed periods:** changing a transaction in a filed period asks for confirmation first, and the worksheet shows when the books no longer match what was filed.
   - The app produces the figures; returns are still submitted on CRA My Business Account or with Revenu Québec.
+- **Automatic backups:** every company is backed up once a day while the app is open. Backups go to OneDrive by default, or any folder you pick, such as Google Drive. Each day gets its own dated folder, and backups older than the keep period (30 days unless you change it) are removed. Each file restores through **Settings → Restore from backup**. Settings and the company list show backup status, with **Back up now**, **Change folder** and **Open backup folder**.
 - **Journal entries:** manual entries with debit and credit lines. The server rejects any entry that doesn't balance.
 - **Chart of accounts:** set up for a Canadian small business charging HST (13%). The tax name, rate and fiscal year start are all in Settings.
 - **Reports:** profit and loss, balance sheet, trial balance, A/R aging and A/P aging, for any date range. All of them export to CSV.
@@ -134,6 +135,7 @@ src/server/
   app.js           HTTP server: JSON API, static files, live updates
   db.js            SQLite storage (Node's built-in node:sqlite)
   companies.js     Company list; one database file per company
+  backups.js       Daily automatic backups to a folder of your choice
   validate.js      Bookkeeping rules enforced on every write
   seed.js          Default chart of accounts and example data
   index.js         Command-line entry point
@@ -168,6 +170,9 @@ GROUP BY account_id;
 | `GET` | `/api/companies` | Every company with a summary, plus the province tax presets |
 | `POST` | `/api/companies` | `{ "name", "province", "fyStart", "copyFrom", "examples" }` creates a company |
 | `PUT` | `/api/companies/:id` | `{ "archived": true \| false }` |
+| `GET` | `/api/backups` | Backup settings and status |
+| `PUT` | `/api/backups` | `{ "enabled", "folder", "keepDays" }` |
+| `POST` | `/api/backups/run` | Back up every company now |
 | `GET` | `/api/events` | Server-sent events: `{ company, rev }` when a company's books change, `{ companies: true }` when the list changes |
 
 **Inside one company:** every path below is under `/api/c/:companyId`.

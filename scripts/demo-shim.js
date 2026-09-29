@@ -84,6 +84,10 @@
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
+    if (path.startsWith('/api/backups')) {
+      if (method === 'GET') return { enabled: true, folder: 'Demo', target: 'Not available in the demo: nothing is saved', keepDays: 30, lastRun: Date.now(), lastCount: cos.length, lastError: '', suggestions: [] };
+      throw new ApiError(400, 'Backups aren’t available in the demo, because nothing in it is saved.');
+    }
     if (path === '/api/companies' && method === 'GET') return { companies: cos.map(summary), provinces: PROVS };
     if (path === '/api/companies' && method === 'POST') return { ok: true, company: summary(createCompany(body)) };
     let m = path.match(/^\/api\/companies\/([^/]+)$/);

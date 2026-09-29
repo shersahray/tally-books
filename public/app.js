@@ -34,7 +34,7 @@ COLS.forEach(c=>{if(!S[c])S[c]=[]});
 let CO=null; // id of the company whose books are open
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -132,6 +132,7 @@ function banners(){
   let h='';
   if(S.connErr)h+=`<div class="banner err"><span><b>Can't reach the server.</b> Showing the last data loaded. Changes won't save until the connection is back.</span><button class="btn sm" data-act="retry">Try again</button></div>`;
   else if(!S.entries.length&&!S.docs.length&&!S.contacts.length)h+=`<div class="banner"><span><b>Your books are empty.</b> Start with + New, or load example data to see how everything fits together.</span><button class="btn sm" data-act="load-examples">Load example data</button></div>`;
+  if(typeof BK!=='undefined'&&BK&&(!BK.enabled||BK.lastError))h+=`<div class="banner err"><span><b>${BK.enabled?'Backups aren’t working.':'Automatic backups are off.'}</b> ${BK.enabled?esc(BK.lastError):'Turn them on so your clients’ books are safe if this computer fails.'}</span><button class="btn sm" data-go="settings">Fix in Settings</button></div>`;
   if(hasExamples())h+=`<div class="banner"><span><b>Example data is loaded</b> so you can see how things work. Clear it when you're ready to enter your real books.</span><button class="btn sm" data-act="clear-examples">Clear example data</button></div>`;
   return h;
 }
@@ -326,6 +327,7 @@ function vSettings(){
     <div class="field"><label for="sBn">Business / tax number</label><input type="text" id="sBn" value="${esc(c.bn||'')}"><span class="hint">Shown for your reference</span></div>
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
+  ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
     <span class="muted">A backup is a single file with every account, contact, invoice, bill and transaction. Keep one somewhere safe, and restore it here or on another computer.</span>
     <div class="actions"><button class="btn" data-act="backup">Download backup</button><button class="btn" data-act="restore">Restore from backup…</button><input type="file" id="restoreFile" accept=".json,application/json" hidden></div>
@@ -341,6 +343,7 @@ function bindMain(m){
     if(S.view==='banking'&&await bankClick(e,t,d))return;
     if(S.view==='companies'&&await coClick(e,t,d))return;
     if(S.view==='salestax'&&await stClick(e,t,d))return;
+    if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.new)return openNew(d.new);
     if(d.go)return go(d.go);
     if(d.pay){e.stopPropagation();const doc=S.docs.find(x=>x.id===d.pay);return payForm(doc.kind==='invoice'?'payment':'billpayment',null,doc.id)}
@@ -368,6 +371,7 @@ function bindMain(m){
   const rf2=$('#restoreFile',m);if(rf2)rf2.onchange=()=>{const f=rf2.files[0];rf2.value='';if(f)restoreBackup(f)};
   if(S.view==='banking')bindBanking(m);
   if(S.view==='companies')bindCompanies(m);
+  bindBackups(m);
   if(S.view==='salestax')bindSalesTax(m);
   const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value};if(await putCompany(data))toast('Settings saved')};

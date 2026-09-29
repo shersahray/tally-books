@@ -16,7 +16,7 @@ const pub = f => fs.readFileSync(path.join(root, 'public', f), 'utf8');
 
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-demo-'));
-  const server = createApp({ dataDir: dir, demo: true });
+  const server = createApp({ dataDir: dir, demo: true, autoBackup: false });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const post = (url, body) => fetch(base + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -46,7 +46,7 @@ ${body}
 <div class="demo-ribbon">Demo · example data · changes aren’t saved</div>
 <script>window.__TALLY_DEMO__=${safe(JSON.stringify(data))};</script>
 <script>${safe(fs.readFileSync(path.join(__dirname, 'demo-shim.js'), 'utf8'))}</script>
-${['bankparse.js', 'app.js', 'banking.js', 'salestax.js', 'companies.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
+${['bankparse.js', 'app.js', 'banking.js', 'salestax.js', 'backups.js', 'companies.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
 `;
   fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'dist', 'demo.html'), html);
