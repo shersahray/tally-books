@@ -1,4 +1,5 @@
 'use strict';
+const GIFI = require('../../public/gifi.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -46,7 +47,14 @@ function validateAccount(data, store, id) {
     throw new ValidationError('This account has transactions, so its type can’t change.', 409);
   }
   const cf = ['operating', 'investing', 'financing'].includes(data.cf) ? data.cf : '';
-  return { ...data, name: str(data.name, 120).trim(), code, detail, desc: str(data.desc), cf, active: data.active !== false };
+  // GIFI code for the T2 return. A new account added without one (by payroll or sales tax, say) gets a likely one.
+  let gifi = data.gifi === undefined || data.gifi === null ? (prev ? prev.gifi || '' : GIFI.suggest({ ...data, detail })) : str(data.gifi, 8).trim();
+  const bad = GIFI.problem(gifi, data.type);
+  if (bad) {
+    if (data.gifi === undefined || data.gifi === null) gifi = ''; // kept from before a type change, or a suggestion: just drop it
+    else throw new ValidationError(bad);
+  }
+  return { ...data, name: str(data.name, 120).trim(), code, detail, desc: str(data.desc), cf, gifi, active: data.active !== false };
 }
 
 function validateContact(data) {

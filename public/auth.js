@@ -205,7 +205,7 @@ function renderUserBox(){
   box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span>${roleLabel(ME)}</span></div>
     <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}<button class="link" data-signout>Sign out</button></div>
     <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;align-items:flex-start">${langSwitch()}${TallyTheme.html()}</div>`;
-  box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))accountForm();if(b.hasAttribute('data-users'))showUsers()};
+  box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))myAccountForm();if(b.hasAttribute('data-users'))showUsers()};
 }
 function passwordPrompt(title,msg,ok){
   return new Promise(res=>{
@@ -214,7 +214,7 @@ function passwordPrompt(title,msg,ok){
     $$('[data-close]',f).forEach(b=>b.addEventListener('click',()=>res(null)));
   });
 }
-function accountForm(){
+function myAccountForm(){
   const two=ME.twoStep,required=ME.mustEnroll||(REQ2FA==='everyone'||(REQ2FA==='owners'&&ME.role==='owner'));
   const f=openModal('Your account',`<div class="muted"><span translate="no">${esc(ME.name)} · ${esc(ME.username)}</span> <span>· ${roleLabel(ME)}</span></div>
     <h3 class="fsec">Language</h3>

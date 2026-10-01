@@ -125,7 +125,7 @@ function vConvert(){
   // 3. Accounts
   const errs=[...p.errors],warns=p.warnings;
   if(amb&&C.dateFormat==='auto')errs.push({code:'date-format'});
-  const tOpts=(a)=>TYPES.map(t=>`<option ${a.type===t?'selected':''}>${t}</option>`).join('');
+  const tOpts=(a)=>TYPES.map(t=>`<option value="${t}" ${a.type===t?'selected':''}>${t}</option>`).join('');
   const dOpts=(a)=>(DETAILS[a.type]||[]).map(([k,v])=>`<option value="${k}" ${(a.detail||'')===k?'selected':''}>${esc(v)}</option>`).join('');
   h+=`<div class="panel" style="margin-top:16px"><h3>3. Check the accounts</h3><div class="pad muted" style="font-size:13px;padding-bottom:0">Each account’s type was worked out from the other program. Change any that look wrong; bank and credit card accounts need the right detail so statements can be imported into them.</div>
     <div class="tbl-wrap"><table><thead><tr><th>No.</th><th>Account</th><th>Before</th><th>Type</th><th>Detail</th><th class="n">${p.tb&&p.tb.date?`Balance ${fmtDate(p.tb.date)}`:'Balance'}</th><th></th></tr></thead><tbody>

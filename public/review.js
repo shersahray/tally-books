@@ -171,7 +171,7 @@ function reviewItems(){
   return{sus,uncategorized,waiting,noAcct,dups:dups.sort((x,y)=>y[1].date.localeCompare(x[1].date))};
 }
 const reviewCount=()=>{if(!ME||ME.role==='client')return 0;const r=reviewItems();return r.uncategorized.length+r.dups.length+r.noAcct.length};
-function vReview(){
+function vReviewPage(){
   const staff=ME&&ME.role!=='client',R=S.review;
   if(!staff)R.tab='questions';
   const qOpen=S.questions.filter(q=>q.status!=='resolved');

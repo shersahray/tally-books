@@ -148,7 +148,7 @@ function renderMain(){
   const nr=S.receipts.filter(r=>r.status==='inbox').length;const rc=$('#rcCount');if(rc){rc.hidden=!nr;rc.textContent=nr}
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReview,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(noCo?'':banners())+V();
@@ -255,12 +255,13 @@ function vAccounts(){
   const list=sortAccts(S.accounts);
   let rows='',cur='';
   for(const a of list){
-    if(a.type!==cur){cur=a.type;rows+=`<tr><td colspan="4" style="background:var(--surface-2);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">${cur}</td></tr>`}
+    if(a.type!==cur){cur=a.type;rows+=`<tr><td colspan="5" style="background:var(--surface-2);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">${cur}</td></tr>`}
     const b=isPL(a.type)?bal(a.id,fyStartOf(today()),today()):bal(a.id);
-    rows+=`<tr class="click" data-acct="${a.id}"><td class="mono">${esc(a.code||'')}</td><td><span translate="no">${esc(a.name)}</span> ${a.active===false?'<span class="pill quiet">Inactive</span>':''}</td><td class="muted">${detailLabel(a)}</td><td class="n">${mcell(b)}</td></tr>`;
+    rows+=`<tr class="click" data-acct="${a.id}"><td class="mono">${esc(a.code||'')}</td><td><span translate="no">${esc(a.name)}</span> ${a.active===false?'<span class="pill quiet">Inactive</span>':''}</td><td class="mono" ${a.gifi?`title="${esc(gifiName(a.gifi))}"`:''}>${esc(a.gifi||'')}</td><td class="muted">${detailLabel(a)}</td><td class="n">${mcell(b)}</td></tr>`;
   }
-  return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`<button class="btn primary" data-new="account">+ Add account</button>`)+
-  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th>Detail</th><th class="n">Balance</th></tr></thead><tbody>${rows||emptyRow(4,'No accounts yet','Add accounts to start recording transactions.')}</tbody></table></div></div>`;
+  const staff=ME&&ME.role!=='client'&&!ME.readOnly;
+  return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`${staff?'<button class="btn" data-act="gifi">GIFI codes…</button>':''}<button class="btn primary" data-new="account">+ Add account</button>`)+
+  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th title="CRA GIFI code (T2 Schedules 100 and 125)">GIFI</th><th>Detail</th><th class="n">Balance</th></tr></thead><tbody>${rows||emptyRow(5,'No accounts yet','Add accounts to start recording transactions.')}</tbody></table></div></div>`;
 }
 
 function vRegister(){
@@ -311,11 +312,11 @@ function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:()=>S.rep.tbAdj?rTBAdj():r
 const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font-weight:600;margin-top:2px">${t}</div><span>${sub}</span></div>`;
 const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}" translate="no">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
 function rTB(){
-  const to=S.rep.to,fy=fyStartOf(to);const csv=[['Code','Account','Type','Debit','Credit']];let h='',td=0,tc=0;
-  const add=(code,name,type,raw,id)=>{if(Math.abs(raw)<0.005)return;const d=raw>0?raw:0,c=raw<0?-raw:0;td+=d;tc+=c;h+=`<tr><td class="mono">${esc(code)}</td><td>${id?`<button class="link" data-acct="${id}" translate="no">${esc(name)}</button>`:esc(name)}</td><td class="n">${d?money(d):''}</td><td class="n">${c?money(c):''}</td></tr>`;csv.push([code,name,type,r2(d),r2(c)])};
-  for(const a of sortAccts(S.accounts))add(a.code||'',a.name,a.type,isPL(a.type)?rawBal(a.id,fy,to):rawBal(a.id,null,to),a.id);
-  add('',W('Retained earnings'),'Equity',-netIncome(null,addDays(fy,-1)));
-  csv.push(['','Total','',r2(td),r2(tc)]);
+  const to=S.rep.to,fy=fyStartOf(to);const csv=[['Code','Account','Type','Debit','Credit','GIFI']];let h='',td=0,tc=0;
+  const add=(code,name,type,raw,id,gifi)=>{if(Math.abs(raw)<0.005)return;const d=raw>0?raw:0,c=raw<0?-raw:0;td+=d;tc+=c;h+=`<tr><td class="mono">${esc(code)}</td><td>${id?`<button class="link" data-acct="${id}" translate="no">${esc(name)}</button>`:esc(name)}</td><td class="n">${d?money(d):''}</td><td class="n">${c?money(c):''}</td></tr>`;csv.push([code,name,type,r2(d),r2(c),gifi||''])};
+  for(const a of sortAccts(S.accounts))add(a.code||'',a.name,a.type,isPL(a.type)?rawBal(a.id,fy,to):rawBal(a.id,null,to),a.id,a.gifi);
+  add('',W('Retained earnings'),'Equity',-netIncome(null,addDays(fy,-1)),null,'3600');
+  csv.push(['','Total','',r2(td),r2(tc),'']);
   return{html:`<div class="report">${rh('Trial balance',`As of ${fmtDate(to)} · income and expenses from ${fmtDate(fy)}`)}<div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th class="n">Debit</th><th class="n">Credit</th></tr></thead><tbody>${h||`<tr><td colspan="4" class="muted">No balances.</td></tr>`}</tbody><tfoot><tr class="grand"><td></td><td>Total</td><td class="n">${money(td)}</td><td class="n">${money(tc)}</td></tr></tfoot></table></div></div>`,csv,name:`trial-balance_${to}`};
 }
 /* General ledger: every posting in the period, grouped by account, with an opening balance, a running balance
@@ -455,6 +456,7 @@ function bindMain(m){
     if(d.act==='retry')return load();
     if(d.act==='activity')return showActivity();
     if(d.act==='caseware')return casewareForm();
+    if(d.act==='gifi')return gifiForm();
     if(d.act==='load-examples')return loadExamples();
     if(d.act==='backup')return saveFile(`${(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase()}-backup-${today()}.json`,await fetch(coUrl('/api/backup')).then(r=>r.blob()));
     if(d.act==='restore')return $('#restoreFile').click();
@@ -534,6 +536,28 @@ async function closingAction(act){
     await api('PUT','/api/closing',body);await load();toast(`Books closed through ${fmtDate(date)}`);
   }catch(e){toast(e.message,true)}
 }
+/* ---------- GIFI codes ----------
+   CRA's General Index of Financial Information: the code each account is reported under on a corporation's
+   T2 balance sheet (Schedule 100) and income statement (Schedule 125). See gifi.js. */
+const gifiName=code=>TallyGIFI.describe(code,isFr()?'fr':'en');
+/** Fill in missing GIFI codes (and fix ones that don't fit the account type) for the whole chart at once. */
+function gifiForm(){
+  const list=sortAccts(S.accounts).map(a=>({a,bad:TallyGIFI.problem(a.gifi,a.type,I18N.lang),sug:TallyGIFI.suggest(a)})).filter(x=>!x.a.gifi||x.bad);
+  const all=S.accounts.length,done=S.accounts.filter(a=>a.gifi&&!TallyGIFI.problem(a.gifi,a.type,I18N.lang)).length;
+  const f=openModal('GIFI codes',`<div class="muted" style="font-size:13px">Each account’s GIFI code is the line it goes on in the T2 return (Schedule 100 for the balance sheet, 125 for the income statement). It’s included in the trial balance and CaseWare exports. ${done} of ${all} accounts have one.</div>
+    ${list.length?`<div class="tbl-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th style="width:32px"><input type="checkbox" data-gall checked aria-label="All"></th><th>Account</th><th>Type</th><th style="width:96px">GIFI code</th><th>Description</th></tr></thead><tbody>${list.map(({a,bad,sug})=>`<tr><td><input type="checkbox" data-gpick="${a.id}" ${sug?'checked':''} aria-label="Include"></td><td><span translate="no">${esc((a.code?a.code+' ':'')+a.name)}</span>${bad?`<div class="neg" style="font-size:12px">${esc(bad)}</div>`:''}</td><td class="muted">${T(a.type)}</td><td><input type="text" data-gcode="${a.id}" value="${esc(sug)}" maxlength="4" inputmode="numeric" list="gfList_${a.type.replace(/\W/g,'')}" translate="no" style="width:80px"></td><td class="muted" data-gdesc="${a.id}">${esc(gifiName(sug))}</td></tr>`).join('')}</tbody></table></div>
+      ${[...new Set(list.map(x=>x.a.type))].map(t=>`<datalist id="gfList_${t.replace(/\W/g,'')}">${TallyGIFI.forType(t).map(x=>`<option value="${x.code}">${esc(isFr()?x.fr:x.en)}</option>`).join('')}</datalist>`).join('')}
+      <div class="muted" style="font-size:12.5px">Codes are suggested from each account’s name and kind. Check them; you can type any code. Accounts with no suggestion are left unticked.</div>`:'<div class="banner"><span>Every account has a GIFI code.</span></div>'}`,
+    list.length?`<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save codes</button>`:`<button type="button" class="btn primary" data-close>Close</button>`,'wide');
+  if(!list.length)return;
+  const all_=$('[data-gall]',f);all_.onchange=()=>$$('[data-gpick]',f).forEach(x=>x.checked=all_.checked);
+  $$('[data-gcode]',f).forEach(inp=>inp.oninput=()=>{const id=inp.dataset.gcode,a=acct(id),v=inp.value.trim(),bad=TallyGIFI.problem(v,a.type,I18N.lang);$(`[data-gdesc="${id}"]`,f).innerHTML=bad?`<span class="neg">${esc(bad)}</span>`:esc(gifiName(v)||(v?T('Not in Tally Books’ list of GIFI codes. Check it against CRA’s current list.'):''));const pick=$(`[data-gpick="${id}"]`,f);if(v&&!bad)pick.checked=true});
+  f.onsubmit=async e=>{e.preventDefault();f.err('');const writes=[];
+    for(const x of $$('[data-gpick]',f).filter(x=>x.checked)){const a=acct(x.dataset.gpick),v=$(`[data-gcode="${a.id}"]`,f).value.trim();if(!v)continue;const bad=TallyGIFI.problem(v,a.type,I18N.lang);if(bad)return f.err(`${a.name}: ${bad}`);if(v!==a.gifi)writes.push({op:'set',collection:'accounts',id:a.id,data:{...strip(a),gifi:v}})}
+    if(!writes.length)return f.err('Tick the accounts to save, with a code for each.');
+    if(await batch(writes)){closeModal();toast(`GIFI codes saved for ${writes.length} account${writes.length===1?'':'s'}`)}};
+}
+
 /* ---------- CaseWare export ----------
    A trial balance CaseWare Working Papers can import: one row per account with its number, name,
    map number, and the year-end balance (debits positive, credits negative) for this year and last.
@@ -556,22 +580,22 @@ function casewareForm(){
     ${fld('cwEnd','Year-end',`<select id="cwEnd">${ends.map(d=>`<option value="${d}" ${d===lastEnd?'selected':''}>${fmtDate(d)}</option>`).join('')}<option value="custom">Another date…</option></select><input type="date" id="cwCustom" hidden style="margin-top:6px">`)}
     <div class="field"><span class="flabel">Columns</span><label class="check" style="padding-top:6px"><input type="checkbox" id="cwPrior" checked> Include the prior year</label></div></div>
     <div data-cwwarn></div>
-    <div class="muted" style="font-size:13px">In CaseWare Working Papers, import the file with the Excel/ASCII import and match the columns: Account number, Description, Map number, Current year, Prior year. Debits are positive and credits negative. Map numbers come from each account’s “CaseWare map no.” in the chart of accounts; CaseWare remembers mappings for accounts it already knows.</div>`,
+    <div class="muted" style="font-size:13px">In CaseWare Working Papers, import the file with the Excel/ASCII import and match the columns: Account number, Description, Map number, GIFI code, Current year, Prior year. Debits are positive and credits negative. Map numbers come from each account’s “CaseWare map no.” in the chart of accounts; CaseWare remembers mappings for accounts it already knows.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Download</button>`);
   const end=()=>$('#cwEnd',f).value==='custom'?$('#cwCustom',f).value:$('#cwEnd',f).value;
-  const warn=()=>{const e=end();if(!e){$('[data-cwwarn]',f).innerHTML='';return}const{rows}=casewareRows(e);const nocode=rows.filter(x=>Math.abs(x.v)>=0.005&&!x.a.code).length;
+  const warn=()=>{const e=end();if(!e){$('[data-cwwarn]',f).innerHTML='';return}const{rows}=casewareRows(e);const nocode=rows.filter(x=>Math.abs(x.v)>=0.005&&!x.a.code).length,nogifi=rows.filter(x=>Math.abs(x.v)>=0.005&&!x.a.gifi).length;
     const cl=S.company.closingDate;const notClosed=!cl||cl<e;
-    $('[data-cwwarn]',f).innerHTML=[nocode?`<div>${nocode} account${nocode===1?' has':'s have'} a balance but no account number. CaseWare needs one, so ${nocode===1?'it gets':'they get'} a temporary number (TB-1, TB-2…). Add numbers in the chart of accounts to keep them steady.</div>`:'',notClosed?`<div>The books aren’t closed through ${fmtDate(e)} yet, so the figures can still change. Close them in Settings once the year-end is final.</div>`:''].filter(Boolean).map(x=>`<div class="banner" style="margin:0">${x}</div>`).join('')};
+    $('[data-cwwarn]',f).innerHTML=[nocode?`<div>${nocode} account${nocode===1?' has':'s have'} a balance but no account number. CaseWare needs one, so ${nocode===1?'it gets':'they get'} a temporary number (TB-1, TB-2…). Add numbers in the chart of accounts to keep them steady.</div>`:'',nogifi?`<div>${nogifi} account${nogifi===1?' has':'s have'} a balance but no GIFI code. <button type="button" class="link" data-cwgifi>Fill in GIFI codes</button></div>`:'',notClosed?`<div>The books aren’t closed through ${fmtDate(e)} yet, so the figures can still change. Close them in Settings once the year-end is final.</div>`:''].filter(Boolean).map(x=>`<div class="banner" style="margin:0">${x}</div>`).join('');const g=$('[data-cwgifi]',f);if(g)g.onclick=()=>{closeModal();gifiForm()}};
   $('#cwEnd',f).onchange=()=>{$('#cwCustom',f).hidden=$('#cwEnd',f).value!=='custom';warn()};$('#cwCustom',f).onchange=warn;warn();
   f.onsubmit=e=>{e.preventDefault();const ye=end();if(!ye)return f.err('Choose the year-end.');
     const prior=$('#cwPrior',f).checked,pe=addDays(fyStartOf(ye),-1);
     const cur=casewareRows(ye),pri=prior?casewareRows(pe):null;
     const pv=id=>{if(!pri)return 0;const x=pri.rows.find(y=>y.a.id===id);return x?x.v:0};
-    const head=['Account number','Description','Map number','Account type','Current year'].concat(prior?['Prior year']:[]);
+    const head=['Account number','Description','Map number','GIFI code','Account type','Current year'].concat(prior?['Prior year']:[]);
     const out=[head];let n=0,tc=0,tp=0;
-    for(const{a,v}of cur.rows){const p=pv(a.id);if(Math.abs(v)<0.005&&Math.abs(p)<0.005)continue;const code=a.code||`TB-${++n}`;tc+=v;tp+=p;out.push([code,a.name,a.cwMap||'',a.type,v.toFixed(2)].concat(prior?[p.toFixed(2)]:[]))}
+    for(const{a,v}of cur.rows){const p=pv(a.id);if(Math.abs(v)<0.005&&Math.abs(p)<0.005)continue;const code=a.code||`TB-${++n}`;tc+=v;tp+=p;out.push([code,a.name,a.cwMap||'',a.gifi||'',a.type,v.toFixed(2)].concat(prior?[p.toFixed(2)]:[]))}
     const pre=pri?pri.re:0;
-    if(Math.abs(cur.re)>=0.005||Math.abs(pre)>=0.005){tc+=cur.re;tp+=pre;out.push(['RE-OPEN','Retained earnings, beginning of year (earnings of earlier years)','', 'Equity',cur.re.toFixed(2)].concat(prior?[pre.toFixed(2)]:[]))}
+    if(Math.abs(cur.re)>=0.005||Math.abs(pre)>=0.005){tc+=cur.re;tp+=pre;out.push(['RE-OPEN','Retained earnings, beginning of year (earnings of earlier years)','','3600','Equity',cur.re.toFixed(2)].concat(prior?[pre.toFixed(2)]:[]))}
     if(Math.abs(r2(tc))>=0.01||(prior&&Math.abs(r2(tp))>=0.01)){f.err('The trial balance doesn’t add up to zero. Check for unbalanced entries before exporting.');return}
     const text=out.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
     const safe=(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();
@@ -971,7 +995,7 @@ function journalForm(entry){
 
 function accountForm(a){
   const used=a?postings().some(p=>p.account===a.id):false;
-  const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`)}${fld('aMap','CaseWare map no.',`<input type="text" id="aMap" value="${esc(a?.cwMap||'')}" maxlength="20" translate="no"><span class="hint">Optional. Goes with the account in the CaseWare export.</span>`)}<div data-cf style="display:contents">${fld('aCf','Cash flow statement',`<select id="aCf">${[['','Automatic'],['operating','Operating activities'],['investing','Investing activities'],['financing','Financing activities']].map(([k,v])=>`<option value="${k}" ${(a?.cf||'')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Which section changes in this account go in</span>`)}</div></div>
+  const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option value="${t}" ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`)}${fld('aMap','CaseWare map no.',`<input type="text" id="aMap" value="${esc(a?.cwMap||'')}" maxlength="20" translate="no"><span class="hint">Optional. Goes with the account in the CaseWare export.</span>`)}${fld('aGifi','GIFI code',`<input type="text" id="aGifi" value="${esc(a?.gifi||'')}" maxlength="4" inputmode="numeric" autocomplete="off" list="aGifiList" translate="no" placeholder="e.g. 8811"><datalist id="aGifiList"></datalist><span class="hint" data-gifihint></span>`)}<div data-cf style="display:contents">${fld('aCf','Cash flow statement',`<select id="aCf">${[['','Automatic'],['operating','Operating activities'],['investing','Investing activities'],['financing','Financing activities']].map(([k,v])=>`<option value="${k}" ${(a?.cf||'')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Which section changes in this account go in</span>`)}</div></div>
   <div data-ob ${a?'hidden':''} class="fields">${fld('aOb','Opening balance',`<input type="number" id="aOb" step="0.01" inputmode="decimal" placeholder="0.00">`)}${fld('aObD','As of',`<input type="date" id="aObD" value="${today()}">`)}</div>
   ${a?`<label class="check"><input type="checkbox" id="aInactive" ${a.active===false?'checked':''}> Inactive (hide from new transactions)</label>`:''}
   ${used?`<div class="muted" style="font-size:13px">This account has transactions, so its type can't change. You can rename it or mark it inactive.</div>`:''}`,saveFoot(!!a&&!used));
@@ -979,10 +1003,22 @@ function accountForm(a){
   const fillDet=()=>{de.innerHTML=(DETAILS[ty.value]||[]).map(([k,v])=>`<option value="${k}" ${(a?.detail||'')===k?'selected':''}>${v}</option>`).join('');ob.hidden=!!a||!(ty.value==='Asset'||ty.value==='Liability');$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none'};
   de.addEventListener('change',()=>{$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none'});
   ty.onchange=fillDet;fillDet();
+  // GIFI code: the list for this account type, what the code means, and a suggestion from the name.
+  const gi=$('#aGifi',f),gh=$('[data-gifihint]',f);let gTouched=!!a?.gifi;
+  const gifiHint=()=>{const t=ty.value,v=gi.value.trim(),sug=TallyGIFI.suggest({name:$('#aName',f).value,type:t,detail:de.value});
+    if(!a&&!gTouched&&sug!==v){gi.value=sug;return gifiHint()}
+    const bad=TallyGIFI.problem(v,t,I18N.lang);
+    gh.className='hint'+(bad?' neg':'');
+    gh.innerHTML=bad?esc(bad):v?esc(gifiName(v)||T('Not in Tally Books’ list of GIFI codes. Check it against CRA’s current list.')):sug?`${esc(T('Suggested:'))} <button type="button" class="link" data-gifiuse="${sug}">${sug}</button> ${esc(gifiName(sug))}`:esc(T('Optional. The code this account goes under on the T2 return (Schedules 100 and 125).'));
+    const u=$('[data-gifiuse]',gh);if(u)u.onclick=()=>{gi.value=u.dataset.gifiuse;gTouched=true;gifiHint()}};
+  const gifiList=()=>{$('#aGifiList',f).innerHTML=TallyGIFI.forType(ty.value).map(x=>`<option value="${x.code}">${esc(isFr()?x.fr:x.en)}</option>`).join('')};
+  gi.oninput=()=>{gTouched=true;gifiHint()};$('#aName',f).addEventListener('input',gifiHint);
+  ty.addEventListener('change',()=>{gifiList();gifiHint()});de.addEventListener('change',gifiHint);gifiList();gifiHint();
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this account?',`${a.name} has no transactions and will be removed.`))return;await del('accounts',a.id);closeModal();toast('Account deleted');if(S.view==='register')go('accounts')};
   f.onsubmit=async e=>{e.preventDefault();f.err('');const name=$('#aName',f).value.trim();if(!name)return f.err('Give the account a name.');
+    const gifi=gi.value.trim(),gBad=TallyGIFI.problem(gifi,ty.value,I18N.lang);if(gBad)return f.err(gBad);
     const code=$('#aCode',f).value.trim();if(code&&S.accounts.some(x=>x.code===code&&x.id!==a?.id))return f.err(`Code ${code} is already used.`);
-    const id=a?.id||uid();const data={...(a?strip(a):{}),type:ty.value,detail:de.value,code,name,desc:$('#aDesc',f).value.trim(),cwMap:$('#aMap',f).value.trim(),cf:['Asset','Liability','Equity'].includes(ty.value)?$('#aCf',f).value:'',active:a?!$('#aInactive',f).checked:true};
+    const id=a?.id||uid();const data={...(a?strip(a):{}),type:ty.value,detail:de.value,code,name,desc:$('#aDesc',f).value.trim(),cwMap:$('#aMap',f).value.trim(),gifi,cf:['Asset','Liability','Equity'].includes(ty.value)?$('#aCf',f).value:'',active:a?!$('#aInactive',f).checked:true};
     const writes=[{op:'set',collection:'accounts',id,data}];
     const amt=r2($('#aOb',f)?.value);if(!a&&amt){const obA=needAcct('ob','Opening balance equity');if(!obA)return;const pos=amt>0;writes.push({op:'set',collection:'entries',id:uid(),data:{type:'journal',date:$('#aObD',f).value||today(),ref:'',memo:'Opening balance',lines:[{account:id,debit:pos===debitNormal(data.type)?Math.abs(amt):0,credit:pos===debitNormal(data.type)?0:Math.abs(amt)},{account:obA.id,debit:pos===debitNormal(data.type)?0:Math.abs(amt),credit:pos===debitNormal(data.type)?Math.abs(amt):0}],created:Date.now()}})}
     if(!await batch(writes))return;

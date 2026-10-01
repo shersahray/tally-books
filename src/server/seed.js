@@ -1,4 +1,5 @@
 'use strict';
+const GIFI = require('../../public/gifi.js');
 // Default chart of accounts (set up for a Canadian small business charging HST) and optional example data.
 
 const DEFAULT_COMPANY = { name: 'My Business', fyStart: 1, taxName: 'HST', taxRate: 13, terms: 30, currency: '$', bn: '', province: 'ON' };
@@ -123,7 +124,7 @@ function seedDefaults(store, init = {}) {
       if (init.accounts && init.accounts.length) {
         for (const a of init.accounts) {
           const { id, importMap, lastStatement, ...data } = a;
-          store.put('accounts', id, data);
+          store.put('accounts', id, { ...data, gifi: data.gifi || GIFI.suggest(data) });
         }
       } else {
         const split = Number(company.qstRate) > 0, fr = company.lang === 'fr';
@@ -133,9 +134,9 @@ function seedDefaults(store, init = {}) {
           const label = detail === 'tax'
             ? (fr ? (split ? 'TPS à payer' : `${TAX_NAME_FR[tn] || tn} à payer`) : (split ? 'GST payable' : `${tn} payable`))
             : (fr ? (npo && NPO_NAMES_FR[code]) || ACCOUNT_NAMES_FR[code] || name : name);
-          store.put('accounts', 'a' + code, { code, name: label, type, detail, desc: '', active: true });
+          store.put('accounts', 'a' + code, { code, name: label, type, detail, desc: '', gifi: GIFI.suggest({ name, type, detail }), active: true });
         }
-        if (split) store.put('accounts', 'a2210', { code: '2210', name: fr ? 'TVQ à payer' : 'QST payable', type: 'Liability', detail: 'qst', desc: '', active: true });
+        if (split) store.put('accounts', 'a2210', { code: '2210', name: fr ? 'TVQ à payer' : 'QST payable', type: 'Liability', detail: 'qst', desc: '', gifi: '2680', active: true });
       }
     }
     store.putMeta('seeded', new Date().toISOString());

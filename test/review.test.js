@@ -89,3 +89,43 @@ test('adjusting and reversing entries, cash flow sections and saved reports are 
   assert.deepEqual(c.notDuplicates, ['a|b']);
   assert.equal((await call(client, 'PUT', '/api/c/settings', { ...s })).status, 403, 'clients can’t save reports or settings');
 });
+
+test('GIFI codes: new charts get them, the server checks them, added accounts get a likely one', async () => {
+  const G = require('../public/gifi.js');
+  assert.equal(G.describe('8811'), 'Office stationery and supplies');
+  assert.equal(G.describe('8811', 'fr'), 'Papeterie et fournitures de bureau');
+  assert.equal(G.problem('', 'Asset'), '');
+  assert.match(G.problem('8811', 'Asset'), /1000 to 2599/);
+  assert.match(G.problem('88', 'Expense'), /4 digits/);
+  assert.equal(G.problem('9270', 'Expense'), '');
+  assert.equal(G.problem('9990', 'Expense'), '', 'income taxes');
+  assert.equal(G.suggest({ type: 'Expense', name: 'Employer payroll taxes' }), '8622');
+  assert.equal(G.suggest({ type: 'Expense', name: 'Frais bancaires' }), '8715');
+  assert.equal(G.suggest({ type: 'Liability', name: 'Anything', detail: 'payroll_cra' }), '2627');
+  assert.equal(G.suggest({ type: 'Equity', name: 'Opening balance equity', detail: 'ob' }), '');
+
+  const accts = (await call(owner, 'GET', '/api/c/state')).json.accounts;
+  const by = code => accts.find(a => a.code === code);
+  assert.equal(by('1000').gifi, '1002');
+  assert.equal(by('1500').gifi, '1740');
+  assert.equal(by('2200').gifi, '2680');
+  assert.equal(by('6400').gifi, '8811');
+  assert.equal(by('3900').gifi, '', 'nothing sensible to suggest');
+
+  const put = (id, data) => call(owner, 'PUT', `/api/c/records/accounts/${id}`, data);
+  const r = await put('a1500', { ...by('1500'), gifi: '8811' });
+  assert.equal(r.status, 400); assert.match(r.json.error, /Asset accounts/);
+  assert.equal((await put('a1500', { ...by('1500'), gifi: '17x4' })).status, 400);
+  assert.equal((await put('a1500', { ...by('1500'), gifi: '1774' })).status, 200);
+  // Added without a code (as payroll and sales tax do): a likely one. Added with a blank code: left blank.
+  assert.equal((await put('aPay', { code: '7110', name: 'Employer payroll taxes', type: 'Expense', detail: 'payroll_tax' })).status, 200);
+  assert.equal((await put('aBlank', { code: '6990', name: 'Bank charges 2', type: 'Expense', detail: '', gifi: '' })).status, 200);
+  const after = (await call(owner, 'GET', '/api/c/state')).json.accounts;
+  assert.equal(after.find(a => a.id === 'aPay').gifi, '8622');
+  assert.equal(after.find(a => a.id === 'aBlank').gifi, '');
+  assert.equal(after.find(a => a.id === 'a1500').gifi, '1774');
+  // Saving without the field keeps the code it had.
+  const { gifi, ...noGifi } = after.find(a => a.id === 'a1500');
+  assert.equal((await put('a1500', { ...noGifi, name: 'Computers' })).status, 200);
+  assert.equal((await call(owner, 'GET', '/api/c/state')).json.accounts.find(a => a.id === 'a1500').gifi, '1774');
+});
