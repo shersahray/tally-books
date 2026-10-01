@@ -34,7 +34,7 @@ COLS.forEach(c=>{if(!S[c])S[c]=[]});
 let CO=null; // id of the company whose books are open
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|ai$)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|ai$|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -45,6 +45,8 @@ async function api(method,url,body,retried){
   let j=null;try{j=await r.json()}catch(e){}
   if(!r.ok){
     // The books are closed for that date: offer to unlock them, then try again once.
+    // This company has a code and this session hasn't typed it (or the code changed): ask, then try again once.
+    if(r.status===423&&j&&j.codeRequired&&!retried&&CO&&url.startsWith(`/api/c/${encodeURIComponent(CO)}/`)&&await askCode(CO))return api(method,asked,body,true);
     if(r.status===423&&j&&j.closedThrough&&!retried&&typeof ME!=='undefined'&&ME&&ME.role!=='client'&&await unlockClosed(j.closedThrough))return api(method,asked,body,true);
     const err=new Error((j&&j.error)||`The server answered ${r.status}.`);err.status=r.status;err.info=j||{};
     // Signed out (expired, locked, or another tab signed out): ask to sign in again, then carry on.
@@ -395,6 +397,7 @@ function vSettings(){
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
   ${typeof mailPanel==='function'?mailPanel():''}
+  ${codePanel()}
   ${closingPanel()}
   ${aiPanel()}
   ${payrollSettingsPanel()}
@@ -421,6 +424,7 @@ function bindMain(m){
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
     if(d.clact)return closingAction(d.clact);
+    if(d.ccact)return codeAction(d.ccact);
     if(t.hasAttribute('data-mlstatements'))return statementsForm();
     if(t.hasAttribute('data-mlreminders'))return remindersForm();
     if(d.new)return openNew(d.new);
@@ -465,6 +469,25 @@ function bindMain(m){
   if(S.view==='payroll')bindPayroll(m);
   const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value};if(await putCompany(data))toast('Settings saved')};
+}
+/* ---------- company code ---------- */
+function codePanel(){
+  if(!ME||ME.role==='client')return '';
+  const c=S.company,owner=ME.role==='owner';
+  return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Company code</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
+    <div>${c.hasCode?'<span class="pill paid">On</span> A 4-digit code is needed to open this company':'<span class="pill open">Off</span> No code needed to open this company'}</div>
+    <div class="muted" style="font-size:13px">Owners and staff type the code each time they open the company, so nobody works in the wrong client’s books by mistake. Clients don’t need it.</div>
+    ${owner?`<div class="fields">${fld('ccNew',c.hasCode?'New code':'Code',`<input type="text" id="ccNew" class="code-in" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="4 digits">`)}</div>
+      <div class="actions"><button class="btn primary" data-ccact="save">${c.hasCode?'Change code':'Set code'}</button>${c.hasCode?'<button class="btn ghost" data-ccact="remove">Remove the code</button>':''}</div>`:'<div class="muted" style="font-size:13px">An owner sets or changes the code.</div>'}
+  </div></div>`;
+}
+async function codeAction(act){
+  try{
+    if(act==='remove'){if(!await confirmBox('Remove the company code?','Anyone with access to this company can then open it without a code.','Remove'))return;await api('PUT','/api/code',{remove:true});await load();refreshCompaniesSoon();toast('Company code removed');return}
+    const code=$('#ccNew').value.trim();if(!/^\d{4}$/.test(code)){toast('The company code has to be 4 digits.',true);return}
+    const had=S.company.hasCode;
+    await api('PUT','/api/code',{code});await load();refreshCompaniesSoon();toast(had?'Company code changed':'Company code set');
+  }catch(e){toast(e.message,true)}
 }
 /* ---------- closing date ---------- */
 function closingPanel(){
@@ -588,6 +611,26 @@ function unlockClosed(date){
     f.onsubmit=async e=>{e.preventDefault();e.stopPropagation();
       try{await api('POST','/api/closing/unlock',{password:pw?$('#clPw',r).value:''},true);toast('Unlocked for 15 minutes');done(true)}
       catch(err){$('#clErr',r).textContent=err.message}};
+  });
+}
+// Asks for a company's 4-digit code. Resolves true once the server accepts it.
+const codeAsks={};
+function askCode(id){
+  if(codeAsks[id])return codeAsks[id];
+  const c=(typeof CO_LIST!=='undefined'&&CO_LIST.find(x=>x.id===id))||{name:S.company&&S.company.name||''};
+  return codeAsks[id]=new Promise(res=>{const r=$('#confirmRoot');
+    r.innerHTML=`<div class="scrim" style="z-index:60"><form class="modal small" role="alertdialog" aria-modal="true" aria-label="Company code"><header><h2>Open <span translate="no">${esc(c.name)}</span></h2></header><div class="mbody" style="display:flex;flex-direction:column;gap:10px"><div>Enter this company’s 4-digit code.</div><input type="password" id="coCode" class="code-in" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-label="Company code"><div class="neg" id="coCodeErr" style="font-size:13px"></div></div><div class="mfoot"><button type="button" class="btn" data-no>Cancel</button><button type="submit" class="btn primary">Open</button></div></form></div>`;
+    const done=v=>{r.innerHTML='';document.removeEventListener('keydown',k);delete codeAsks[id];res(v)};const k=e=>{if(e.key==='Escape'){e.stopPropagation();done(false)}};
+    document.addEventListener('keydown',k);$('[data-no]',r).onclick=()=>done(false);
+    const f=$('form',r),inp=$('#coCode',r);inp.focus();
+    inp.oninput=()=>{inp.value=inp.value.replace(/\D/g,'').slice(0,4);$('#coCodeErr',r).textContent='';if(inp.value.length===4)f.requestSubmit()};
+    let busy=false;
+    f.onsubmit=async e=>{e.preventDefault();e.stopPropagation();if(busy)return;
+      if(!/^\d{4}$/.test(inp.value)){$('#coCodeErr',r).textContent='The code is 4 digits.';return}
+      busy=true;
+      try{await api('POST',`/api/c/${encodeURIComponent(id)}/code/check`,{code:inp.value},true);done(true)}
+      catch(err){$('#coCodeErr',r).textContent=err.message;inp.value='';inp.focus()}
+      busy=false};
   });
 }
 function confirmBox(title,msg,ok='Delete'){

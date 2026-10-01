@@ -20,6 +20,7 @@
   const rid = p => p + Math.random().toString(16).slice(2, 14);
   const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
+  const codes = {}; // demo only: kept in this page, never saved
   function summary(c) {
     const b = books[c.id], s = b.company, paid = {};
     for (const e of b.entries) if (e.applyTo) paid[e.applyTo] = (paid[e.applyTo] || 0) + (+e.amount || 0);
@@ -33,7 +34,7 @@
     return { ...c, name: s.name, province: s.province, taxName: s.taxName, taxRate: s.taxRate, fyStart: s.fyStart,
       toReview: b.bankTxns.filter(x => x.status === 'new').length, overdueCount, overdue: r2(overdue),
       receivable: r2(receivable), payable: r2(payable), lastReconciled: recons[recons.length - 1] || '',
-      lastEntry: b.entries.reduce((m, e) => (e.date > m ? e.date : m), ''), transactions: b.entries.length };
+      lastEntry: b.entries.reduce((m, e) => (e.date > m ? e.date : m), ''), transactions: b.entries.length, hasCode: !!codes[c.id] };
   }
 
   function check(b, w) {
@@ -68,6 +69,7 @@
     const company = { name, fyStart: +body.fyStart || 1, taxName: body.taxName || p.taxName || 'HST', taxRate: body.taxRate ?? p.taxRate ?? 13,
       qstRate: p.qstRate || 0, terms: 30, currency: '$', bn: '', province: body.province || '', filingFreq: 'quarterly' };
     const id = rid('co_'), b = { company };
+    if (/^\d{4}$/.test(String(body.code || ''))) { codes[id] = String(body.code); company.hasCode = true; }
     COLS.forEach(c => (b[c] = []));
     if (body.copyFrom && books[body.copyFrom]) b.accounts = clone(books[body.copyFrom].accounts).map(a => { delete a.importMap; delete a.lastStatement; return a; });
     else {
@@ -143,6 +145,12 @@
     if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Tally Books, receipts go to this screen from a phone or a computer.');
     if (rest === '/closing') { const out = transact(id, w => { w.company = { ...w.company, closingDate: body.date || '', closingPassword: body.password !== undefined ? !!body.password : !!w.company.closingPassword }; }); return out; }
     if (rest === '/closing/unlock') return { ok: true, minutes: 15 };
+    if (rest === '/code') {
+      if (!body.remove && !/^\d{4}$/.test(String(body.code))) throw new ApiError(400, 'The company code has to be 4 digits.');
+      if (body.remove) delete codes[id]; else codes[id] = String(body.code);
+      return transact(id, w => { w.company = { ...w.company, hasCode: !body.remove }; });
+    }
+    if (rest === '/code/check') { if (codes[id] && String(body.code) !== codes[id]) throw new ApiError(403, 'That code isn’t right for this company.'); return { ok: true }; }
     if (rest === '/mail' && method === 'GET') return { configured: false, sentToday: 0 };
     if (rest.startsWith('/mail') || rest === '/logo') throw new ApiError(400, 'Email and logos aren’t available in the demo, because nothing in it is saved. You can still download invoices and statements as PDFs.');
     if (rest === '/import') throw new ApiError(400, 'Importing isn’t available in the demo, because nothing in it is saved. You can still choose files to see how they’re read and checked.');

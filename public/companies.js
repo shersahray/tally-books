@@ -35,7 +35,10 @@ function resetBooks(){
 const startView=()=>typeof ME!=='undefined'&&ME&&ME.role==='client'&&window.matchMedia&&matchMedia('(max-width: 760px)').matches?'receipts':'dashboard';
 async function openCompany(id,view){
   view=view||startView();
-  if(!CO_LIST.some(c=>c.id===id))return;
+  const co=CO_LIST.find(c=>c.id===id);if(!co)return;
+  // A company with a code: owners and staff type it every time they open it.
+  if(co.hasCode&&!co.justMade&&ME&&ME.role!=='client'&&!await askCode(id)){if(!CO)showCompanies();else if(location.hash.slice(1)!==CO)try{history.replaceState(null,'','#'+CO)}catch(e){}return}
+  delete co.justMade;
   closeModal();
   CO=id;resetBooks();lsSet(id);
   try{if(location.hash.slice(1)!==id)history.replaceState(null,'','#'+id)}catch(e){}
@@ -65,7 +68,7 @@ function vCompanies(){
     ${nArch?`<label class="check"><input type="checkbox" id="coArch" ${S.co.showArchived?'checked':''}> Show archived (${nArch})</label>`:''}
   </div><div class="tbl-wrap"><table><thead><tr><th class="co-col">Company</th><th class="n" title="Bank lines waiting in For review">To review</th><th class="n" title="Overdue customer invoices">Overdue</th><th class="n" title="Customers owe the company">Receivable</th><th>Reconciled to</th><th>Last entry</th><th></th></tr></thead><tbody>
   ${list.length?list.map(c=>`<tr class="click ${c.archived?'archived':''}" data-coopen="${c.id}">
-    <td class="co-col"><div class="co-name">${esc(c.name)} ${c.id===CO?'<span class="pill paid">Open</span>':''} ${c.archived?'<span class="pill quiet">Archived</span>':''}</div><div class="co-meta">${esc(PROVS[c.province]?.name||'')}${PROVS[c.province]?' · ':''}${esc(c.taxName||'')} ${c.taxRate??''}% · ${fyEnd(c)}</div></td>
+    <td class="co-col"><div class="co-name">${esc(c.name)} ${c.hasCode?'<span class="pill quiet" title="A 4-digit code is needed to open it">Code</span>':''} ${c.id===CO?'<span class="pill paid">Open</span>':''} ${c.archived?'<span class="pill quiet">Archived</span>':''}</div><div class="co-meta">${esc(PROVS[c.province]?.name||'')}${PROVS[c.province]?' · ':''}${esc(c.taxName||'')} ${c.taxRate??''}% · ${fyEnd(c)}</div></td>
     <td class="n">${c.toReview?`<b style="color:var(--info)">${c.toReview}</b>`:'<span class="muted">—</span>'}</td>
     <td class="n">${c.overdueCount?`<span class="neg">${c.overdueCount} · ${money(c.overdue)}</span>`:'<span class="muted">—</span>'}</td>
     <td class="n">${c.receivable?money(c.receivable):'<span class="muted">—</span>'}</td>
@@ -102,6 +105,7 @@ function companyForm(convert){
     ${fld('nProv','Province or territory',`<select id="nProv">${provinceOptions('ON')}</select>`)}
     ${fld('nFy','Fiscal year-end',`<select id="nFy">${fyOptions(1)}</select>`)}
     ${fld('nLang','Language of the books',`<select id="nLang"><option value="en" ${isFr()?'':'selected'}>English</option><option value="fr" ${isFr()?'selected':''}>Français</option></select><span class="hint">Account names and example data. Each person still chooses the language of the screens.</span>`)}
+    ${fld('nCode','Company code',`<input type="text" id="nCode" class="code-in" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="4 digits"><span class="hint">Typed each time someone on your team opens this company, so nobody works in the wrong client’s books. Clients don’t need it.</span>`,true)}
     ${fld('nCopy','Chart of accounts',`<select id="nCopy"><option value="">Standard small-business chart</option>${active.map(c=>`<option value="${c.id}">Copy from ${esc(c.name)}</option>`).join('')}</select>`,true)}
     </div>
     <div class="fields" data-custom hidden>${fld('nTaxName','Sales tax name',`<input type="text" id="nTaxName" value="VAT">`)}${fld('nTaxRate','Sales tax rate (%)',`<input type="number" id="nTaxRate" min="0" step="0.001" value="0">`)}</div>
@@ -114,10 +118,11 @@ function companyForm(convert){
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const name=$('#nName',f).value.trim();if(!name)return f.err('Give the company a name.');
     if(CO_LIST.some(c=>c.name.toLowerCase()===name.toLowerCase())&&!await confirmBox('A company with this name exists','Create another company with the same name anyway?','Create'))return;
-    const body={name,province:prov.value,fyStart:+$('#nFy',f).value,copyFrom:$('#nCopy',f).value,examples:$('#nEx',f).checked,lang:$('#nLang',f).value};
+    const code=$('#nCode',f).value.trim();if(!/^\d{4}$/.test(code))return f.err('Choose a 4-digit company code.');
+    const body={name,province:prov.value,fyStart:+$('#nFy',f).value,copyFrom:$('#nCopy',f).value,examples:$('#nEx',f).checked,lang:$('#nLang',f).value,code};
     if(!prov.value){body.taxName=$('#nTaxName',f).value.trim()||'Sales tax';body.taxRate=Math.max(0,+$('#nTaxRate',f).value||0)}
     const btn=f.querySelector('button[type=submit]');btn.disabled=true;btn.textContent='Creating…';
-    try{const r=await api('POST','/api/companies',body);await loadCompanies();S.cv=null;await openCompany(r.company.id,convert?'convert':undefined);toast(`${name} is ready`)}
+    try{const r=await api('POST','/api/companies',body);await loadCompanies();S.cv=null;const nc=CO_LIST.find(c=>c.id===r.company.id);if(nc)nc.justMade=true;await openCompany(r.company.id,convert?'convert':undefined);toast(`${name} is ready`)}
     catch(err){f.err(err.message);btn.disabled=false;btn.textContent='Create company'}
   };
 }

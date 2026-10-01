@@ -370,3 +370,5 @@ label.btn.disabled{opacity:.6;pointer-events:none}
 @media (max-width:520px){.side{position:static}}
 .doc-acts{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
 .apply table input{text-align:right}
+.code-in{letter-spacing:.4em;font-variant-numeric:tabular-nums;max-width:9em}
+.code-in::placeholder{letter-spacing:normal}

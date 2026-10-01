@@ -166,9 +166,31 @@ function createApp(opts) {
     };
   }
 
+  /* ---------- company code ----------
+     An optional 4-digit code per company, so the team opens the right client's books.
+     Owners and staff type it each time they open the company; clients never need it. */
+  const CODE_TTL = 12 * 60 * 60 * 1000;
+  const codeOpen = new Map(); // `${session}|${companyId}` -> expiry
+  const codeFails = new Map();
+  function hashCode(code) {
+    code = String(code == null ? '' : code);
+    if (!/^\d{4}$/.test(code)) throw new ValidationError('The company code has to be 4 digits.');
+    const salt = crypto.randomBytes(16).toString('hex');
+    return { salt, hash: crypto.scryptSync(code, salt, 32).toString('hex') };
+  }
+  const hasCode = store => !!(store.getSetting('companyCode') || {}).hash;
+  function codeGate(user, cid, store) {
+    if (!user || user.role === 'client' || !hasCode(store)) return;
+    const k = `${user.token}|${cid}`, t = codeOpen.get(k);
+    if (t && t > Date.now()) return;
+    codeOpen.delete(k);
+    throw Object.assign(new ValidationError('Enter this company’s 4-digit code to open it.', 423), { codeRequired: true });
+  }
+
   function createCompany(body, user) {
     const name = String(body.name || '').trim();
     if (!name) throw new ValidationError('Give the company a name.');
+    if (body.code !== undefined && body.code !== '' && !/^\d{4}$/.test(String(body.code))) throw new ValidationError('The company code has to be 4 digits.');
     const preset = PROVINCES[body.province] || {};
     const company = validateCompany({
       ...DEFAULT_COMPANY, name, province: body.province || '',
@@ -189,6 +211,7 @@ function createApp(opts) {
     const store = reg.store(entry.id);
     seedDefaults(store, { company, accounts });
     if (body.examples) loadExamples(store);
+    if (body.code !== undefined && body.code !== '') { store.putSetting('companyCode', hashCode(body.code)); codeOpen.set(`${user.token}|${entry.id}`, Date.now() + CODE_TTL); }
     store.audit(user, 'create', { summary: `company created${body.copyFrom ? ' with a copied chart of accounts' : ''}${body.examples ? ', with example data' : ''}` });
     broadcast({ companies: true });
     return entry;
@@ -227,12 +250,32 @@ function createApp(opts) {
       lastReconciled: recons[recons.length - 1] || '',
       lastEntry: entries.reduce((m, e) => (e.date > m ? e.date : m), ''),
       transactions: entries.length,
+      hasCode: hasCode(store),
     };
+  }
+
+  async function checkCode(ctx, req) {
+    const cc = ctx.store.getSetting('companyCode') || {};
+    const k = `${ctx.user.token}|${ctx.id}`;
+    if (ctx.user.role === 'client' || !cc.hash) return { ok: true };
+    const body = (await readJson(req)) || {};
+    const fk = `${ctx.user.username}|${ctx.id}`, f = codeFails.get(fk) || { n: 0, until: 0 };
+    if (f.until > Date.now()) throw new ValidationError('Too many wrong codes. Try again in 15 minutes.', 429);
+    const got = await new Promise((res, rej) => crypto.scrypt(String(body.code || '').slice(0, 20), cc.salt, 32, (e, b) => (e ? rej(e) : res(b))));
+    if (!crypto.timingSafeEqual(got, Buffer.from(cc.hash, 'hex'))) {
+      f.n++; if (f.n >= 5) { f.n = 0; f.until = Date.now() + 15 * 60 * 1000; }
+      codeFails.set(fk, f);
+      throw new ValidationError('That code isn’t right for this company.', 403);
+    }
+    codeFails.delete(fk);
+    for (const [key, t] of codeOpen) if (t < Date.now()) codeOpen.delete(key);
+    codeOpen.set(k, Date.now() + CODE_TTL);
+    return { ok: true };
   }
 
   function state(ctx) {
     const cl = ctx.store.getSetting('closing') || {};
-    const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}), closingDate: cl.date || '', closingPassword: !!cl.hash } };
+    const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}), closingDate: cl.date || '', closingPassword: !!cl.hash, hasCode: hasCode(ctx.store) } };
     for (const c of COLLECTIONS) out[c] = ctx.store.list(c);
     return out;
   }
@@ -600,6 +643,20 @@ function createApp(opts) {
       for (const k of [...unlocks.keys()]) if (k.endsWith('|' + ctx.store.file)) unlocks.delete(k);
       return { ok: true, rev: ctx.bump() };
     }],
+    ['PUT', /^\/code$/, async (ctx, req) => {
+      ownerOnly(ctx.user);
+      const body = (await readJson(req)) || {};
+      const had = hasCode(ctx.store);
+      ctx.store.transaction(() => {
+        if (body.remove) ctx.store.putSetting('companyCode', {});
+        else ctx.store.putSetting('companyCode', hashCode(body.code));
+        ctx.store.audit(ctx.user, 'company-code', { collection: 'settings', id: 'companyCode', summary: body.remove ? 'company code removed' : had ? 'company code changed' : 'company code set' });
+      });
+      // Everyone else types the new code next time; the owner who changed it stays in.
+      for (const k of [...codeOpen.keys()]) if (k.endsWith('|' + ctx.id)) codeOpen.delete(k);
+      if (!body.remove) codeOpen.set(`${ctx.user.token}|${ctx.id}`, Date.now() + CODE_TTL);
+      return { ok: true, rev: ctx.bump() };
+    }],
     ['POST', /^\/closing\/unlock$/, async (ctx, req) => {
       notClient(ctx.user);
       const cl = ctx.store.getSetting('closing') || {};
@@ -818,9 +875,12 @@ function createApp(opts) {
         if (cm) {
           const cid = decodeURIComponent(cm[1]);
           if (!auth.canSee(user, cid)) throw new ValidationError('You don’t have access to that company.', 403);
-          if (user.readOnly && req.method !== 'GET') throw new ValidationError('Your account is view only, so you can’t make changes.', 403);
+          if (user.readOnly && req.method !== 'GET' && cm[2] !== '/code/check') throw new ValidationError('Your account is view only, so you can’t make changes.', 403);
           const ctx = ctxFor(cid);
           ctx.user = user;
+          if (req.method === 'POST' && cm[2] === '/code/check') return sendJson(res, 200, await checkCode(ctx, req));
+          // An owner who forgot the code can still set a new one.
+          if (!(req.method === 'PUT' && cm[2] === '/code' && user.role === 'owner')) codeGate(user, cid, ctx.store);
           for (const [method, re, handler] of companyRoutes) {
             const m = cm[2].match(re);
             if (m && method === req.method) {
@@ -845,7 +905,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}) });
     }
   });
 
