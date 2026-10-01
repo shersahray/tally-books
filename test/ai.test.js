@@ -66,7 +66,7 @@ test('AI suggestions: set up, suggest only, validated answers, spending limit', 
   assert.equal(s.configured, true); assert.equal(s.keyHint, '…xxxx');
   assert.ok(!JSON.stringify(s).includes(KEY), 'the key is never sent back');
   assert.ok(!JSON.stringify((await call('GET', '/api/ai')).json).includes(KEY));
-  assert.equal(fs.statSync(path.join(dir, 'ai-settings.json')).mode & 0o077, 0, 'key file readable only by its owner');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(dir, 'ai-settings.json')).mode & 0o077, 0, 'key file readable only by its owner');
 
   // Off for the company until switched on.
   assert.equal((await call('POST', '/api/c/ai/suggest', { ids: ['b1'] })).status, 409);
