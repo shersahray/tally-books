@@ -1309,4 +1309,6 @@ addFr({
   'Registered charities and qualifying non-profits can’t use the Quick Method. Saving turns it off; returns already filed stay as they were.':'Les organismes de bienfaisance enregistrés et les OSBL admissibles ne peuvent pas utiliser la méthode rapide. L’enregistrement la désactive; les déclarations déjà produites restent telles quelles.',
   'Public service bodies’ rebate: {0} of the GST and QST':'Remboursement pour les organismes de services publics : {0} de la TPS et de la TVQ',
   'The sales tax adjustment for this filing doesn’t exist.':'Le redressement de taxes de vente de cette déclaration n’existe pas.',
+  'Appearance':'Apparence','Automatic':'Automatique','Light':'Clair','Dark':'Sombre','Follow this computer’s setting':'Suivre le réglage de cet ordinateur',
+  'Automatic follows this computer’s light or dark setting.':'Automatique suit le réglage clair ou sombre de cet ordinateur.',
 });

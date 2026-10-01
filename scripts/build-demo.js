@@ -45,6 +45,7 @@ ${fonts}
 ${pub('styles.css')}
 .demo-ribbon{position:fixed;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:70;background:var(--ink);color:var(--bg);font-size:12px;padding:6px 10px;border-radius:6px;opacity:.85;max-width:calc(100% - 24px)}
 </style>
+<script>${safe(pub('theme.js'))}</script>
 ${body}
 <div class="demo-ribbon">Demo · example data · changes aren’t saved</div>
 <script>window.__TALLY_DEMO__=${safe(JSON.stringify(data))};</script>

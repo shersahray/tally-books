@@ -24,6 +24,7 @@ function unlocked(user,idle){
 /** After a password or code is accepted: finish anything the account still needs, then unlock. */
 async function afterSignIn(){
   const me=await api('GET','/api/auth/me');REQ2FA=me.require2fa||'off';
+  if(me.user.theme&&me.user.theme!==TallyTheme.get())TallyTheme.set(me.user.theme,false);
   if(syncAccountLang(me.user))return;
   if(me.user.mustChange){ME=me.user;return renderLock('password')}
   if(me.user.mustEnroll){ME=me.user;return renderLock('enroll')}
@@ -36,7 +37,7 @@ const lockCard=(title,sub,body,submit,extra='')=>`<div class="lock"><form class=
     <div class="fields" style="grid-template-columns:1fr">${body}</div>
     <div class="err-msg" data-lockerr></div>
     ${submit?`<button type="submit" class="btn primary block">${submit}</button>`:''}${extra}
-    <div style="display:flex;justify-content:center;margin-top:4px">${langSwitch()}</div>
+    <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:4px">${langSwitch()}${TallyTheme.html()}</div>
   </form></div>`;
 
 function renderLock(mode,opt=''){
@@ -179,6 +180,7 @@ async function authStart(){
   try{me=await api('GET','/api/auth/me')}
   catch(e){if(e.status===401)return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode}):requireSignIn('signin');throw e}
   REQ2FA=me.require2fa||'off';ME=me.user;IDLE_MIN=me.idleMinutes;
+  if(me.user.theme&&me.user.theme!==TallyTheme.get())TallyTheme.set(me.user.theme,false);
   if(syncAccountLang(me.user))return new Promise(()=>{});
   if(me.user.mustChange)return requireSignIn('password');
   if(me.user.mustEnroll)return requireSignIn('enroll');
@@ -202,7 +204,7 @@ function renderUserBox(){
   if(!ME){box.innerHTML='';return}
   box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span>${roleLabel(ME)}</span></div>
     <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}<button class="link" data-signout>Sign out</button></div>
-    <div style="margin-top:8px">${langSwitch()}</div>`;
+    <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;align-items:flex-start">${langSwitch()}${TallyTheme.html()}</div>`;
   box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))accountForm();if(b.hasAttribute('data-users'))showUsers()};
 }
 function passwordPrompt(title,msg,ok){
@@ -217,6 +219,8 @@ function accountForm(){
   const f=openModal('Your account',`<div class="muted"><span translate="no">${esc(ME.name)} · ${esc(ME.username)}</span> <span>· ${roleLabel(ME)}</span></div>
     <h3 class="fsec">Language</h3>
     <div>${langSwitch()}</div>
+    <h3 class="fsec">Appearance</h3>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${TallyTheme.html()}<span class="muted" style="font-size:13px">Automatic follows this computer’s light or dark setting.</span></div>
     <h3 class="fsec">Two-step sign-in</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${two?`<span class="pill paid">On</span><span class="muted" style="font-size:13px">${ME.recoveryLeft} recovery code${ME.recoveryLeft===1?'':'s'} left</span>`:'<span class="pill quiet">Off</span><span class="muted" style="font-size:13px">Recommended: a code from your phone as well as your password.</span>'}</div>
     <div class="actions" style="justify-content:flex-start">${two?`<button type="button" class="btn sm" data-2fanew>New recovery codes</button>${required?'':'<button type="button" class="btn sm danger" data-2faoff>Turn off</button>'}`:'<button type="button" class="btn sm primary" data-2faon>Set up two-step sign-in</button>'}</div>

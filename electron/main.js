@@ -8,7 +8,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, net } = require('electron');
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, net, nativeTheme } = require('electron');
 const { serverOrigin, netMessage } = require('./connection');
 
 let server = null;    // the private server, in "this computer" mode only
@@ -88,7 +88,7 @@ async function start() {
     height: 860,
     minWidth: 380,
     title: 'Tally Books',
-    backgroundColor: '#eef2f0',
+    backgroundColor: nativeTheme && nativeTheme.shouldUseDarkColors ? '#0e1412' : '#eef2f0',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.js') },
   });

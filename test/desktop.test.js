@@ -40,6 +40,7 @@ function fakeElectron() {
     shell: { openExternal: u => opened.push(u), openPath() {} }, dialog: { showErrorBox() {} },
     ipcMain: { handle: (n, fn) => { handlers[n] = fn; } },
     net: { fetch: (u, o) => fetch(u, o) },
+    nativeTheme: { shouldUseDarkColors: false },
   };
 }
 const fromPage = { senderFrame: { url: 'file:///app/electron/connect.html?page=setup' } };
