@@ -510,6 +510,13 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   const s = (await call('GET', '/api/state')).json.company;
   assert.equal((await call('PUT', '/api/settings', { ...s, payroll: { remitFreq: 'quarterly', hsfRate: 1.25 } })).status, 200);
   assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25, craAccount: '', rqId: '', hsfPrimary: false, assocPayroll: 0 });
+  // Quick Method settings: a start date is needed; rates are kept within 0–20%.
+  assert.equal((await call('PUT', '/api/settings', { ...s, quickMethod: { on: true } })).status, 400);
+  assert.equal((await call('PUT', '/api/settings', { ...s, quickMethod: { on: true, from: '2026-01-01', type: 'goods', gstRate: 99, qstRate: '', credit: false, extra: 'x' } })).status, 200);
+  assert.deepEqual((await call('GET', '/api/state')).json.company.quickMethod, { on: true, from: '2026-01-01', type: 'goods', gstRate: 20, qstRate: '', credit: false });
+  // Capital asset accounts, and the adjustment the Quick Method posts when a return is filed.
+  assert.equal((await call('PUT', '/api/records/accounts/a1500', { code: '1500', name: 'Equipment', type: 'Asset', detail: 'capital' })).status, 200);
+  assert.equal((await call('PUT', '/api/records/entries/qm1', { type: 'qmadjust', date: '2026-09-30', lines: [{ account: 'a1500', debit: 10, credit: 0 }, { account: 'a1000', debit: 0, credit: 10 }] })).status, 200);
 });
 
 // A fresh server for one test; returns helpers bound to it.

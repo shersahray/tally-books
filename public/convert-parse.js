@@ -386,6 +386,8 @@
     if (/\bbank\b|banque|\bcash\b|encaisse/.test(t) || /^(bank|cash|chequing|checking|savings|cash on hand)$/.test(d)) return { type: 'Asset', detail: 'bank' };
     if (/accounts receivable|\ba\/r\b|comptes clients/.test(all) && !/other|allowance|provision/.test(all)) return { type: 'Asset', detail: 'ar' };
     if (/accounts payable|\ba\/p\b|comptes fournisseurs/.test(all) && !/other|accrued/.test(all)) return { type: 'Liability', detail: 'ap' };
+    // Fixed assets keep their sales tax credits under the Quick Method; accumulated depreciation is a separate account.
+    if (/fixed asset|property, plant|immobilisation/.test(all) && !/accumulated|depreciation|amorti/.test(`${all} ${n}`)) return { type: 'Asset', detail: 'capital' };
     if (/liabilit|payable|passif|current liabilities/.test(all) || (!t && num >= 2000 && num < 3000)) {
       if (qstName(n) || qstName(d)) return { type: 'Liability', detail: 'qst' };
       if (taxName(n) || taxName(d)) return { type: 'Liability', detail: 'tax' };

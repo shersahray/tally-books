@@ -17,11 +17,11 @@ function money(n,o={}){n=r2(n);const s=Math.abs(n).toLocaleString(LOC(),{minimum
 const mcell=n=>`<span class="${r2(n)<0?'neg':''}">${money(n)}</span>`;
 
 const TYPES=['Asset','Liability','Equity','Income','Cost of Goods Sold','Expense'];
-const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts receivable']],Liability:[['','Other liability'],['card','Credit card'],['ap','Accounts payable'],['tax','Sales tax payable (GST/HST)'],['qst','QST payable']],Equity:[['','Other equity'],['ob','Opening balance equity']],Income:[['','Income']],'Cost of Goods Sold':[['','Cost of goods sold']],Expense:[['','Expense']]};
+const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts receivable'],['capital','Capital asset (equipment, vehicles, buildings)']],Liability:[['','Other liability'],['card','Credit card'],['ap','Accounts payable'],['tax','Sales tax payable (GST/HST)'],['qst','QST payable']],Equity:[['','Other equity'],['ob','Opening balance equity']],Income:[['','Income']],'Cost of Goods Sold':[['','Cost of goods sold']],Expense:[['','Expense']]};
 const detailLabel=a=>(DETAILS[a.type]||[]).find(d=>d[0]===(a.detail||''))?.[1]||'';
 const debitNormal=t=>t==='Asset'||t==='Expense'||t==='Cost of Goods Sold';
 const isPL=t=>t==='Income'||t==='Expense'||t==='Cost of Goods Sold';
-const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor'};
+const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Quick Method adjustment'};
 
 /* ---------- state + server API ---------- */
 const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',fyStart:1,taxName:'HST',taxRate:13,terms:30,currency:'$'},
@@ -710,6 +710,7 @@ function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-ex
 async function openEntry(e){if(!e)return;
   if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id);if(r)return payRunView(r)}
   if(e.type==='payremit')return remitForm(e.agency+'|'+e.period,e);
+  if(e.type==='qmadjust'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast('This adjustment was posted when the return was filed. To change it, undo the filing.');return}
   if(e.type==='taxpayment'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast(e.taxKind==='instalment'?'Instalments are listed in the Sales tax worksheets. To remove one, delete it from the account register.':'Sales tax payments are managed from the return they belong to.');return}
   if(Object.values(e.clear||{}).includes('r')&&!await confirmBox('This transaction is reconciled','Changing its amount or bank account will change a balance you already reconciled. Open it anyway?','Open'))return;
   if(e.type==='invoice'||e.type==='bill'||e.type==='credit'||e.type==='vcredit'){const d=S.docs.find(x=>x.id===e.docId);if(d)return docForm(d.kind,d)}

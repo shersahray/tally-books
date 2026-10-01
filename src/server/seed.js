@@ -8,7 +8,7 @@ const DEFAULT_ACCOUNTS = [
   ['1010', 'Savings', 'Asset', 'bank'],
   ['1200', 'Accounts receivable', 'Asset', 'ar'],
   ['1300', 'Prepaid expenses', 'Asset', ''],
-  ['1500', 'Equipment', 'Asset', ''],
+  ['1500', 'Equipment', 'Asset', 'capital'],
   ['2000', 'Accounts payable', 'Liability', 'ap'],
   ['2100', 'Credit card', 'Liability', 'card'],
   ['2200', 'HST payable', 'Liability', 'tax'],

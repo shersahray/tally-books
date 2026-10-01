@@ -3,14 +3,14 @@
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
-  Asset: ['', 'bank', 'ar'],
+  Asset: ['', 'bank', 'ar', 'capital'],
   Liability: ['', 'card', 'ap', 'tax', 'qst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
   Expense: ['', 'wages', 'payroll_tax'],
 };
-const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund'];
+const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust'];
 const PAY_PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
 const PAY_FREQ = ['weekly', 'biweekly', 'semimonthly', 'monthly'];
 const ID_RE = /^[A-Za-z0-9_.:@+~-]{1,120}$/;
@@ -438,7 +438,16 @@ function validateCompany(data) {
     invoiceNote: str(data.invoiceNote, 1000).trim(),
     logoFile: /^[A-Za-z0-9-]{0,64}$/.test(String(data.logoFile || '')) ? String(data.logoFile || '') : '',
     payroll: validatePayrollSettings(data.payroll),
+    quickMethod: validateQuickMethod(data.quickMethod),
   };
+}
+/** Quick Method of accounting for GST/HST and QST. Rates blank = the published rate for the business type. */
+function validateQuickMethod(q) {
+  if (!isObj(q)) return { on: false };
+  const rate = v => (v === '' || v === null || v === undefined ? '' : Math.max(0, Math.min(20, Number(v) || 0)));
+  const from = isDate(q.from) ? q.from : '';
+  if (q.on && !from) throw new ValidationError('Choose the date you start using the Quick Method.');
+  return { on: !!q.on, from, type: q.type === 'goods' ? 'goods' : 'services', gstRate: rate(q.gstRate), qstRate: rate(q.qstRate), credit: q.credit !== false };
 }
 
 module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate, str, sanitizeDraft };

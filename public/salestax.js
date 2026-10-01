@@ -48,6 +48,61 @@ const TAX_LINES={
     ['213','Balance (positive: amount owing, negative: refund)','=209-210-211'],
   ],
 };
+/* Quick Method: tax is remitted as a percentage of sales including the tax, instead of tax collected minus ITCs.
+   Input tax credits are still claimed on capital purchases (accounts marked "Capital asset"). Lines starting with x are
+   working lines, not on the return. */
+const QM_LINES={
+  gst:[
+    ['90','Taxable sales made in Canada (including zero-rated supplies in Canada)','s90'],
+    ['91','Exempt supplies, zero-rated exports and other sales and revenue','s91'],
+    ['','Zero-rated exports (for example, US customers)','sExport','sub'],
+    ['','Exempt supplies','sExempt','sub'],
+    ['','Other revenue with no sales tax','sOther','sub'],
+    ['101','Sales that qualify for the Quick Method, including GST/HST','qmBase'],
+    ['103','GST/HST to remit (line 101 × the remittance rate)','qmTax'],
+    ['104','Adjustments to be added to net tax','addAdj'],
+    ['105','Total GST/HST and adjustments for period','=103+104'],
+    ['106','Input tax credits on capital purchases','itcCap'],
+    ['107','1% credit on the first $30,000, and other adjustments','ded107'],
+    ['108','Total ITCs and adjustments','=106+107'],
+    ['109','Net tax','=105-108'],
+    ['110','Instalments and other annual filer payments made','instal'],
+    ['111','Total GST/HST rebates','m:111'],
+    ['112','Total other credits','=110+111'],
+    ['113A','Balance','=109-112'],
+    ['205','GST/HST due on real property or emission allowances','m:205'],
+    ['405','Other GST/HST to be self-assessed','m:405'],
+    ['113B','Total other debits','=205+405'],
+    ['113C','Balance (positive: amount owing, negative: refund)','=113A+113B'],
+  ],
+  qst:[
+    ['101','Total supplies (same as the GST/HST part)','sales'],
+    ['x1','Sales that qualify for the Quick Method, including QST','qmBase'],
+    ['203','QST to remit (sales that qualify × the remittance rate)','qmTax'],
+    ['204','Adjustments to be added','addAdj'],
+    ['205','Total QST and adjustments','=203+204'],
+    ['206','Input tax refunds on capital purchases','itcCap'],
+    ['207','1% reduction on the first $31,421, and other adjustments','ded107'],
+    ['208','Total ITRs and adjustments','=206+207'],
+    ['209','Net tax','=205-208'],
+    ['210','Instalments paid','instal'],
+    ['211','Other credits and rebates','m:211'],
+    ['213','Balance (positive: amount owing, negative: refund)','=209-210-211'],
+  ],
+};
+/* Remittance rates (CRA RC4058, Revenu Québec) for a business selling in its own province.
+   GST/HST: by the tax rate charged (5% GST, 13% Ontario, 14% Nova Scotia from April 2025, 15% NB, NL, PEI). */
+const QM_RATES={services:{5:3.6,13:8.8,14:9.4,15:10},goods:{5:1.8,13:4.4,14:4.7,15:5}};
+const QM_QST={services:6.6,goods:3.4};
+const QM_CREDIT_MAX={gst:30000,qst:31421}; // 1% credit on the first sales of the fiscal year, tax included
+const QM_LIMIT=400000;
+const qmCfg=()=>{const q=S.company.quickMethod;return q&&q.on?q:null};
+const qmOn=(k,from)=>{const q=qmCfg();return !!q&&!!from&&from>=(q.from||'')};
+const gstRateCharged=()=>S.company.province==='QC'||taxesInUse().length>1?5:+S.company.taxRate;
+function qmSuggested(k,type){return k==='qst'?QM_QST[type]:(QM_RATES[type]||{})[gstRateCharged()]??null}
+function qmRate(k){const q=qmCfg()||{};const own=k==='qst'?q.qstRate:q.gstRate;return own!==''&&own!=null&&!isNaN(+own)?+own:qmSuggested(k,q.type||'services')}
+const isCapitalAcct=id=>{const a=acct(id);return !!a&&a.detail==='capital'};
+const linesFor=k=>qmOn(k,(S.stax.period||'').split('|')[0])?QM_LINES[k]:TAX_LINES[k];
 const BAL_LINE={gst:'113C',qst:'213'};
 // In Quebec, Revenu Québec administers the GST as well as the QST for most businesses.
 const AGENCY={get gst(){return S.company.province==='QC'?'Revenu Québec':'CRA'},qst:'Revenu Québec'};
@@ -81,11 +136,13 @@ const filedPeriodOn=(date,k)=>S.filings.find(f=>(!k||f.tax===k)&&f.from<=date&&d
 /* ---------- worksheet ---------- */
 function worksheet(k,from,to){
   const a=taxAcctFor(k);if(!a)return null;
-  const v={collected:0,addAdj:0,itc:0,dedAdj:0,instal:0,sales:0,s90:0,s91:0,sExport:0,sExempt:0,sOther:0},src={collected:[],addAdj:[],itc:[],dedAdj:[],instal:[],sales:[],s90:[],s91:[],sExport:[],sExempt:[],sOther:[]};
+  const qm=qmOn(k,from);
+  const keys=['collected','addAdj','itc','dedAdj','instal','sales','s90','s91','sExport','sExempt','sOther','sStd','itcCap','itcOps','qmBase','ded107'];
+  const v={},src={};for(const x of keys){v[x]=0;src[x]=[]}
   const push=(key,e,amt)=>{if(!amt)return;v[key]+=amt;src[key].push({e,amt})};
   const income=new Set(S.accounts.filter(x=>x.type==='Income').map(x=>x.id)),taxIds=taxAcctIds();
   for(const e of S.entries){
-    if(e.date<from||e.date>to||e.opening)continue;
+    if(e.date<from||e.date>to||e.opening||e.type==='qmadjust')continue;
     let inc=0;const byCode={};
     // Older transactions have no tax code on their lines: taxed if the transaction charged sales tax.
     const legacy=(e.lines||[]).some(l=>taxIds.has(l.account)&&(+l.credit||0)>0)?'std':'none';
@@ -96,26 +153,46 @@ function worksheet(k,from,to){
       if(e.type==='taxpayment'){if(e.taxKind==='instalment'&&e.tax===k)push('instal',e,dr);continue}
       if(e.type==='journal'){push('addAdj',e,cr);push('dedAdj',e,dr)}
       else if(SALE_TYPES.has(e.type))push('collected',e,cr-dr);
-      else if(BUY_TYPES.has(e.type))push('itc',e,dr-cr);
+      else if(BUY_TYPES.has(e.type)){push('itc',e,dr-cr);
+        // Quick Method: credits are kept only for the share of the purchase that's a capital asset.
+        const cost=(e.lines||[]).filter(x=>(+x.debit||0)>0&&!taxIds.has(x.account)&&!['bank','ar','ap','card'].includes(acct(x.account)?.detail));
+        const all=cost.reduce((t,x)=>t+(+x.debit||0),0),cap=cost.filter(x=>isCapitalAcct(x.account)).reduce((t,x)=>t+(+x.debit||0),0);
+        const capPart=all?r2((dr-cr)*cap/all):0;push('itcCap',e,capPart);push('itcOps',e,r2(dr-cr-capPart))}
       else{push('collected',e,cr);push('itc',e,dr)}
     }
     if(inc)push('sales',e,inc);
     for(const[code,amt]of Object.entries(byCode)){
       if(!amt)continue;
-      if(code==='std'||code==='zero')push('s90',e,amt);
+      if(code==='std'||code==='zero'){push('s90',e,amt);if(code==='std')push('sStd',e,amt)}
       else{push('s91',e,amt);push(code==='export'?'sExport':code==='exempt'?'sExempt':'sOther',e,amt)}
     }
+  }
+  // Quick Method figures.
+  let quick=null;
+  if(qm){
+    v.qmBase=r2(v.sStd+v.collected);src.qmBase=[...src.sStd,...src.collected];
+    const rate=qmRate(k),cfg=qmCfg();
+    const tax=rate==null?0:r2(v.qmBase*rate/100);
+    let credit=0,used=0;
+    if(cfg.credit!==false){
+      // The credit covers the first $30,000 ($31,421 for QST) of the fiscal year, across its periods.
+      const fy=fyStartOf(from),start=fy>cfg.from?fy:cfg.from;
+      for(const p of filingPeriods())if(p.from>=start&&p.to<from){const pw=worksheet(k,p.from,p.to);used+=pw.filed?(+pw.filed.lines.qmBaseRaw||+pw.filed.lines[k==='qst'?'x1':'101']||0):(pw.live[k==='qst'?'x1':'101']||0)}
+      credit=r2(0.01*Math.max(0,Math.min(v.qmBase,QM_CREDIT_MAX[k]-used)));
+    }
+    v.qmTax=tax;v.ded107=r2(credit+v.dedAdj);src.ded107=src.dedAdj;
+    quick={rate,credit,used,collected:r2(v.collected),tax,gain:r2(v.collected-tax+credit),itcOps:r2(v.itcOps),itcCap:r2(v.itcCap)};
   }
   const filed=filingFor(k,from,to);
   const man=filed?filed.lines:(S.stax.manual[k+from]||{});
   const vals={};
-  for(const[no,,how,sub]of TAX_LINES[k]){
+  for(const[no,,how,sub]of (qm?QM_LINES:TAX_LINES)[k]){
     if(sub){vals['·'+how]=r2(v[how]);continue}
     if(how.startsWith('m:'))vals[no]=r2(+man[no]||0);
     else if(how.startsWith('=')){const parts=how.slice(1).split(/(?=[+-])/);vals[no]=r2(parts.reduce((s,p)=>{const sign=p[0]==='-'?-1:1;return s+sign*vals[p.replace(/^[+-]/,'')]},0))}
     else vals[no]=r2(v[how]);
   }
-  return{account:a,vals:filed?filed.lines:vals,live:vals,src,filed};
+  return{account:a,vals:filed?filed.lines:vals,live:vals,src,filed,quick};
 }
 function periodStatus(k,p){
   const f=filingFor(k,p.from,p.to);
@@ -132,8 +209,10 @@ function overdueReturns(){let n=0;for(const k of taxesInUse())for(const p of fil
 function vSalesTax(){
   const T=S.stax,taxes=taxesInUse();if(!taxes.includes(T.tax))T.tax='gst';
   const freq={monthly:'monthly',quarterly:'quarterly',annual:'annual'}[S.company.filingFreq||'quarterly'];
-  let h=head('Sales tax',`Files ${freq}${S.company.bn?` · BN ${esc(S.company.bn)}`:''} · <button class="link" data-go="settings">Change in Settings</button>`,
-    `<button class="btn" data-stact="instalment">Record instalment</button>`);
+  const q=qmCfg();
+  let h=head('Sales tax',`Files ${freq}${q?` · <span>Quick Method from ${fmtDate(q.from)}</span>`:''}${S.company.bn?` · BN ${esc(S.company.bn)}`:''} · <button class="link" data-go="settings">Change in Settings</button>`,
+    `<button class="btn" data-stact="quick">Quick Method</button><button class="btn" data-stact="instalment">Record instalment</button>`);
+  if(q){const big=qmOverLimit();if(big)h+=`<div class="banner err"><span>Sales including tax were ${money(big.total)} in the 12 months to ${fmtDate(big.to)}, over the $400,000 limit for the Quick Method. Check whether you can still use it.</span></div>`}
   if(S.company.province==='QC'&&!byDetail('qst'))h+=`<div class="banner"><span><b>Track GST and QST separately?</b> This Quebec company records both taxes in one account. Split them to get a separate QST return worksheet.</span><button class="btn sm" data-stact="split-qst">Set up QST account</button></div>`;
   if(!taxAcctFor('gst'))return h+`<div class="panel"><div class="empty"><b>No sales tax account</b>Add a Liability account with the detail “Sales tax payable” in Chart of accounts.</div></div>`;
   if(taxes.length>1)h+=`<div class="tabs" role="tablist">${taxes.map(k=>`<button role="tab" data-sttax="${k}" aria-selected="${T.tax===k}">${k==='qst'?'QST (Revenu Québec)':`GST (${AGENCY.gst})`}</button>`).join('')}</div>`;
@@ -152,10 +231,11 @@ function vSalesTax(){
 function vWorksheet(k,from,to){
   const w=worksheet(k,from,to),T=S.stax,bl=BAL_LINE[k],bal=w.vals[bl];
   const filed=w.filed,st=periodStatus(k,filingPeriods().find(p=>p.from===from)||{from,to,due:to});
-  const changed=filed&&TAX_LINES[k].some(([no,,how,sub])=>!sub&&!how.startsWith('m:')&&no in filed.lines&&Math.abs((w.live[no]||0)-(filed.lines[no]||0))>0.004);
-  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1};
+  const LINES=(w.quick?QM_LINES:TAX_LINES)[k];
+  const changed=filed&&LINES.some(([no,,how,sub])=>!sub&&!how.startsWith('m:')&&no in filed.lines&&Math.abs((w.live[no]||0)-(filed.lines[no]||0))>0.004);
+  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1,qmBase:1,itcCap:1};
   let rows='';
-  for(const[no,label,how,sub]of TAX_LINES[k]){
+  for(const[no,label,how,sub]of LINES){
     if(sub){const val=w.vals['·'+how]||0;if(!val&&how!=='sExport')continue;
       rows+=`<tr class="subline"><td></td><td>${label}</td><td class="n">${val?`<button class="link" data-stdrill="${how}">${money(val)}</button>`:'<span class="muted">$0.00</span>'}</td></tr>`;
       if(T.drill===how)rows+=`<tr><td></td><td colspan="2">${drillTable(w.src[how])}</td></tr>`;continue}
@@ -164,7 +244,7 @@ function vWorksheet(k,from,to){
     if(how.startsWith('m:')&&!filed)cell=`<input type="number" step="0.01" data-stman="${no}" value="${val||''}" placeholder="0.00" style="width:130px" aria-label="Line ${no}">`;
     else if(drillable[how]&&val)cell=`<button class="link" data-stdrill="${how}">${money(val)}</button>`;
     else cell=mcell(val);
-    rows+=`<tr class="${no===bl?'grand':total?'tot':'item'}"><td class="mono" style="width:60px">${no}</td><td>${label}</td><td class="n">${cell}</td></tr>`;
+    rows+=`<tr class="${no===bl?'grand':total?'tot':'item'}"><td class="mono" style="width:60px">${no.startsWith('x')?'':no}</td><td>${label}</td><td class="n">${cell}</td></tr>`;
     if(T.drill===how&&drillable[how])rows+=`<tr><td></td><td colspan="2">${drillTable(w.src[how])}</td></tr>`;
   }
   const outcome=bal>0.004?`Amount owing to ${AGENCY[k]}: <b>${money(bal)}</b> (line ${k==='gst'?'115':bl})`:bal<-0.004?`Refund claimed from ${AGENCY[k]}: <b>${money(-bal)}</b> (line ${k==='gst'?'114':bl})`:'Nothing owing and no refund';
@@ -176,6 +256,7 @@ function vWorksheet(k,from,to){
     ${changed?`<div class="banner err" style="margin:0 16px 12px"><span>Transactions in this period changed after it was filed. The figures below are what you filed; the books now show net tax of ${money(w.live[k==='qst'?'209':'109'])}. You may need to file an amended return.</span></div>`:''}
     <div class="tbl-wrap"><table class="ws">${rows}</table></div>
     <div class="pad" style="text-align:center">${outcome}</div>
+    ${w.quick?qmBox(k,w,filed):''}
     <div class="toolbar" style="border-top:1px solid var(--line);border-bottom:0;justify-content:flex-end">
       <button class="btn sm" data-stact="export">Export CSV</button>
       ${filed?`${!filed.entryId&&Math.abs(filed.lines[bl])>0.004?`<button class="btn sm" data-stact="pay-later">Record ${filed.lines[bl]>0?'payment':'refund'}</button>`:''}<button class="btn sm danger" data-stact="unfile">Undo filing</button>`
@@ -205,7 +286,8 @@ async function stClick(ev,t,d){
     case 'file':fileForm(T.tax,from,to,true);return true;
     case 'pay-later':fileForm(T.tax,from,to,false);return true;
     case 'unfile':await unfile(T.tax,from,to);return true;
-    case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...TAX_LINES[T.tax].map(([no,label,how,sub])=>sub?['',`  of line 91: ${label}`,w.vals['·'+how]||0]:[no,label,w.vals[no]])];
+    case 'quick':quickForm();return true;
+    case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...(w.quick?QM_LINES:TAX_LINES)[T.tax].map(([no,label,how,sub])=>sub?['',`  of line 91: ${label}`,w.vals['·'+how]||0]:[no.startsWith('x')?'':no,label,w.vals[no]])];
       saveFile(`${T.tax==='qst'?'qst':'gst-hst'}-return_${from}_${to}.csv`,new Blob(['﻿'+rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:v).join(',')).join('\r\n')],{type:'text/csv'}));return true}
   }
   return false;
@@ -233,6 +315,7 @@ function fileForm(k,from,to,filing){
       ${needMoney?fld('fAmt','Amount',`<input type="number" id="fAmt" step="0.01" value="${Math.abs(bal).toFixed(2)}">`):''}
     </div>
     ${needMoney&&filing?`<label class="check"><input type="checkbox" id="fNow" ${kind==='payment'?'checked':''}> Record the ${kind} now ${kind==='refund'?'(leave unticked until the refund arrives)':''}</label>`:''}
+    ${filing&&w.quick&&(w.quick.gain||w.quick.itcOps)?`<div class="muted" style="font-size:13px">Under the Quick Method, filing also posts an adjustment on ${fmtDate(to)}: ${money(w.quick.gain)} of the tax charged to customers becomes income, and ${money(w.quick.itcOps)} of tax paid on expenses becomes part of the expenses.</div>`:''}
     <div class="muted" style="font-size:13px">${filing?'Filing saves a copy of these figures. If transactions in this period change later, the worksheet warns you.':''} The ${kind} is recorded as a sales tax payment that clears the ${esc(taxAcctFor(k).name)} account.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${filing?'Mark as filed':'Record '+kind}</button>`);
   f.onsubmit=async e=>{e.preventDefault();f.err('');
@@ -243,7 +326,9 @@ function fileForm(k,from,to,filing){
       const amt=r2($('#fAmt',f).value);if(!(amt>0))return f.err('Enter the amount.');
       entryId=uid();writes.push({op:'set',collection:'entries',id:entryId,data:payEntry(k,kind,amt,$('#fBank',f).value,$('#fDate',f).value||today(),from,to)});
     }
-    if(filing)writes.push({op:'set',collection:'filings',id:uid(),data:{tax:k,from,to,lines:w.vals,filedOn:$('#fOn',f).value||today(),entryId,created:Date.now()}});
+    let qmEntryId='';
+    if(filing&&w.quick){const adj=qmAdjustment(k,from,to,w);if(adj){writes.push(...adj.writes);qmEntryId=adj.id}}
+    if(filing)writes.push({op:'set',collection:'filings',id:uid(),data:{tax:k,from,to,lines:w.vals,filedOn:$('#fOn',f).value||today(),entryId,qmEntryId,created:Date.now()}});
     else writes.push({op:'set',collection:'filings',id:w.filed.id,data:{...w.filed,entryId}});
     if(await batch(writes)){closeModal();toast(filing?'Return marked as filed':`${kind==='refund'?'Refund':'Payment'} recorded`)}
   };
@@ -251,8 +336,9 @@ function fileForm(k,from,to,filing){
 async function unfile(k,from,to){
   const f=filingFor(k,from,to);if(!f)return;
   const pay=f.entryId?S.entries.find(e=>e.id===f.entryId):null;
-  if(!await confirmBox('Undo this filing?',`The period goes back to not filed${pay?`, and the ${pay.taxKind==='refund'?'refund':'payment'} of ${money(entryTotal(pay))} on ${fmtDate(pay.date)} is deleted`:''}. Use this if you marked it filed by mistake.`,'Undo filing'))return;
-  const w=[{op:'delete',collection:'filings',id:f.id}];if(pay)w.push({op:'delete',collection:'entries',id:pay.id});
+  const adj=f.qmEntryId?S.entries.find(e=>e.id===f.qmEntryId):null;
+  if(!await confirmBox('Undo this filing?',`The period goes back to not filed${pay?`, and the ${pay.taxKind==='refund'?'refund':'payment'} of ${money(entryTotal(pay))} on ${fmtDate(pay.date)} is deleted`:''}.${adj?' The Quick Method adjustment is deleted too.':''} Use this if you marked it filed by mistake.`,'Undo filing'))return;
+  const w=[{op:'delete',collection:'filings',id:f.id}];if(pay)w.push({op:'delete',collection:'entries',id:pay.id});if(adj)w.push({op:'delete',collection:'entries',id:adj.id});
   if(await batch(w))toast('Filing undone');
 }
 function instalmentForm(){
@@ -279,8 +365,96 @@ async function splitQst(){
 function filedWarning(entries){
   const ids=taxAcctIds();
   for(const e of entries){
-    if(!e||e.type==='taxpayment'||!(e.lines||[]).some(l=>ids.has(l.account)))continue;
+    if(!e||e.type==='taxpayment'||e.type==='qmadjust'||!(e.lines||[]).some(l=>ids.has(l.account)))continue;
     const f=filedPeriodOn(e.date);if(f)return f;
   }
   return null;
 }
+
+/* ---------- Quick Method ---------- */
+const QM_ACCTS={gain:['4950','Sales tax Quick Method gain','Gain – méthode rapide de taxes','Income'],itc:['6950','Sales tax paid on expenses (Quick Method)','Taxes payées sur les dépenses (méthode rapide)','Expense']};
+/** Sales including tax over the last 12 months, when it's more than the Quick Method limit. */
+function qmOverLimit(){
+  for(const k of ['gst']){
+    const ps=filingPeriods().filter(p=>p.to<today()&&qmOn(k,p.from));if(!ps.length)return null;
+    const to=ps[0].to,from=addDays(to,-365);
+    const total=r2(ps.filter(p=>p.from>from).reduce((t,p)=>t+(worksheet(k,p.from,p.to).live['101']||0),0));
+    if(total>QM_LIMIT)return{total,to};
+  }
+  return null;
+}
+/** What the Quick Method changes, under the worksheet. */
+function qmBox(k,w,filed){
+  const Q=w.quick,q=qmCfg(),name=k==='qst'?'QST':taxLabel(k);
+  const adj=filed&&filed.qmEntryId?S.entries.find(e=>e.id===filed.qmEntryId):null;
+  const row=(l,v,b)=>`<tr${b?' class="tot"':''}><td>${l}</td><td class="n">${b?`<b>${money(v)}</b>`:money(v)}</td></tr>`;
+  return `<div class="pad" style="border-top:1px solid var(--line)">
+    <div class="flabel" style="margin-bottom:6px">Quick Method</div>
+    ${Q.rate==null?`<div class="banner err" style="margin:0 0 10px"><span>There’s no remittance rate for this sales tax rate. Enter one in Quick Method settings.</span></div>`:`<div class="muted" style="font-size:13px;margin-bottom:8px"><span>${q.type==='goods'?'Buying goods to resell':'Services and other businesses'}:</span> <span>${Q.rate}% of sales including ${esc(name)}.</span>${q.credit!==false?` <span>Credit used earlier this fiscal year on ${money(Q.used)} of sales.</span>`:''}</div>`}
+    <table class="ws" style="max-width:520px"><tbody>
+      ${row(`${name} charged to customers`,Q.collected)}${row('Remitted under the Quick Method',-Q.tax)}${row('1% credit',Q.credit)}
+      ${row('Kept as income',Q.gain,true)}
+      ${row(`${name} paid on expenses, not claimed (becomes part of expenses)`,Q.itcOps)}
+      ${row(`${name} paid on capital purchases, still claimed (line ${k==='qst'?'206':'106'})`,Q.itcCap)}
+    </tbody></table>
+    <div class="muted" style="font-size:13px;margin-top:8px">${adj?`Posted on ${fmtDate(adj.date)} when this return was filed.`:`When you mark the return as filed, Tally Books posts these to income and expenses on ${fmtDate(w.filed?w.filed.to:(S.stax.period||'|').split('|')[1])}, so the sales tax account matches the return.`} <span>Mark purchases of equipment, vehicles and buildings as capital assets in the chart of accounts to keep their credits.</span></div>
+  </div>`;
+}
+/** The journal entry that brings the tax account to the Quick Method amount: the gain to income, unclaimed tax to expenses. */
+function qmAdjustment(k,from,to,w){
+  const Q=w.quick,gain=Q.gain,ops=Q.itcOps;if(Math.abs(gain)<0.005&&Math.abs(ops)<0.005)return null;
+  const writes=[],ids={};
+  for(const[key,[code,en,fr,type]]of Object.entries(QM_ACCTS)){
+    let a=S.accounts.find(x=>x.type===type&&(x.name===en||x.name===fr))||S.accounts.find(x=>x.type===type&&x.code===code&&x.desc==='Added by the Quick Method');
+    if(!a){const id=uid();writes.push({op:'set',collection:'accounts',id,data:{code:S.accounts.some(x=>x.code===code)?'':code,name:S.company.lang==='fr'?fr:en,type,detail:'',desc:'Added by the Quick Method',active:true}});a={id}}
+    ids[key]=a.id;
+  }
+  const tax=w.account.id,lines=[];
+  if(Math.abs(gain)>=0.005)lines.push({account:tax,debit:gain>0?gain:0,credit:gain<0?-gain:0,memo:'Tax kept under the Quick Method'},{account:ids.gain,debit:gain<0?-gain:0,credit:gain>0?gain:0,memo:'Quick Method gain'});
+  if(Math.abs(ops)>=0.005)lines.push({account:ids.itc,debit:ops>0?ops:0,credit:ops<0?-ops:0,memo:'Tax paid on expenses, not claimed'},{account:tax,debit:ops<0?-ops:0,credit:ops>0?ops:0,memo:'Tax paid on expenses, not claimed'});
+  const id=uid();
+  writes.push({op:'set',collection:'entries',id,data:{type:'qmadjust',tax:k,period:{from,to},date:to,ref:'',memo:`${k==='qst'?'QST':taxLabel(k)} Quick Method adjustment, ${fmtDate(from)} – ${fmtDate(to)}`,contactId:'',lines,created:Date.now()}});
+  return{writes,id};
+}
+function quickForm(){
+  const q=S.company.quickMethod||{},taxes=taxesInUse(),qc=S.company.province==='QC';
+  const type=q.type||'services';
+  const fy=fyStartOf(today());
+  const capCands=sortAccts(S.accounts.filter(a=>a.type==='Asset'&&!['bank','ar'].includes(a.detail)&&a.active!==false));
+  const looksCap=a=>a.detail==='capital'||/equip|vehic|truck|car\b|furnit|computer|building|machin|tool|leasehold|fixture|immobil|matériel|véhicule|mobilier|ordinateur|bâtiment|outillage/i.test(a.name);
+  const f=openModal('Quick Method',`
+    <div class="muted" style="font-size:13px">With the Quick Method you still charge customers the full ${qc?'GST and QST':esc(S.company.taxName||'GST/HST')}, but you remit a set percentage of your sales including tax instead of tax collected minus credits. You keep the difference as income, and you don’t claim tax paid on everyday expenses, only on capital purchases.</div>
+    <div class="banner" style="margin:0"><span>It’s for businesses with sales of $400,000 or less a year, tax included. Bookkeepers, accountants, lawyers, tax preparers and financial consultants can’t use it. Elect with ${qc?'Revenu Québec':'form GST74 (CRA)'} by the due date of the first return you file with it.</span></div>
+    <label class="check"><input type="checkbox" id="qmOn" ${q.on?'checked':''}> Use the Quick Method</label>
+    <div class="fields" data-qm>
+      ${fld('qmFrom','Starting',`<input type="date" id="qmFrom" value="${esc(q.from||fy)}"><span class="hint">The first day of a reporting period, usually the start of the fiscal year: ${fmtDate(fy)}.</span>`)}
+      ${fld('qmType','The business mostly',`<select id="qmType"><option value="services" ${type==='services'?'selected':''}>Provides services, or other</option><option value="goods" ${type==='goods'?'selected':''}>Buys goods to resell (at least 40% of sales)</option></select>`)}
+      ${fld('qmGst',`${qc||taxes.length>1?'GST':esc(S.company.taxName||'GST/HST')} remittance rate (%)`,`<input type="number" id="qmGst" step="0.1" min="0" max="20" value="${esc(q.gstRate??'')}"><span class="hint" data-qmhint="gst"></span>`)}
+      ${taxes.includes('qst')?fld('qmQst','QST remittance rate (%)',`<input type="number" id="qmQst" step="0.1" min="0" max="20" value="${esc(q.qstRate??'')}"><span class="hint" data-qmhint="qst"></span>`):''}
+    </div>
+    <label class="check" data-qm><input type="checkbox" id="qmCredit" ${q.credit!==false?'checked':''}> Claim the 1% credit on the first $30,000 of sales each fiscal year${taxes.includes('qst')?' ($31,421 for QST)':''}</label>
+    ${capCands.length?`<div data-qm><div class="flabel" style="margin-bottom:6px">Capital assets: credits on these purchases are still claimed</div><div class="muted" style="font-size:13px;margin-bottom:6px">Ticked accounts are marked “Capital asset” in the chart of accounts.</div><div style="display:flex;flex-wrap:wrap;gap:6px 18px">${capCands.map(a=>`<label class="check"><input type="checkbox" data-cap="${a.id}" ${looksCap(a)?'checked':''}> <span translate="no">${esc((a.code?a.code+' · ':'')+a.name)}</span></label>`).join('')}</div></div>`:''}
+    ${qc&&taxes.length<2?'<div class="banner err" style="margin:0"><span>Set up a separate QST account first (on the Sales tax page): the Quick Method works out GST and QST separately.</span></div>':''}`,
+    `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`,'wide');
+  const sync=()=>{const on=$('#qmOn',f).checked;$$('[data-qm]',f).forEach(x=>x.style.display=on?'':'none');const t=$('#qmType',f).value;
+    for(const k of ['gst','qst']){const el=$(`[data-qmhint=${k}]`,f);if(!el)continue;const sug=qmSuggested(k,t);
+      el.textContent=sug==null?'Enter the rate from CRA’s Quick Method guide (RC4058).':t==='goods'?`Blank = ${sug}%, the rate for goods bought to resell.`:`Blank = ${sug}%, the rate for services.`;
+      $(k==='gst'?'#qmGst':'#qmQst',f).placeholder=sug??''}};
+  $('#qmOn',f).onchange=$('#qmType',f).onchange=sync;sync();
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const on=$('#qmOn',f).checked,from=$('#qmFrom',f).value;
+    if(on&&qc&&taxes.length<2)return f.err('Set up a separate QST account first.');
+    if(on&&!from)return f.err('Choose the date you start using the Quick Method.');
+    const num=id=>{const el=$(id,f);if(!el||el.value==='')return '';return Math.max(0,Math.min(20,+el.value||0))};
+    const next={...q,on,from,type:$('#qmType',f).value,gstRate:num('#qmGst'),qstRate:num('#qmQst'),credit:$('#qmCredit',f).checked};
+    if(on&&qmRateFor(next,'gst')==null)return f.err('Enter the remittance rate.');
+    const done=S.filings.some(x=>x.to>=from&&qmOn(x.tax,x.from)!==(on&&x.from>=from));
+    if(done&&!await confirmBox('Returns already filed','Some returns from that date were filed the other way. Their filed figures stay as they are. Undo and refile them if they should change.','Save anyway'))return;
+    const writes=[];
+    for(const box of $$('[data-cap]',f)){const a=acct(box.dataset.cap);if(!a)continue;const want=box.checked?'capital':(a.detail==='capital'?'':a.detail);
+      if(on&&want!==a.detail)writes.push({op:'set',collection:'accounts',id:a.id,data:{...strip(a),detail:want}})}
+    if(writes.length&&!await batch(writes))return;
+    if(await putCompany({...strip(S.company),quickMethod:next})){closeModal();toast(on?'Quick Method turned on':'Quick Method turned off')}
+  };
+}
+const qmRateFor=(q,k)=>{const own=k==='qst'?q.qstRate:q.gstRate;return own!==''&&own!=null?+own:qmSuggested(k,q.type||'services')};
