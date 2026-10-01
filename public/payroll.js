@@ -29,7 +29,7 @@ function ytdFor(empId,until,inclusive){
   const y={gross:0,pensionable:0,insurable:0,rrsp:0,union:0,net:0,ded:{},er:{}};
   const o=e.openingYtd;
   if(o&&String(o.year)===year){
-    y.gross=+o.gross||0;y.pensionable=+(o.pensionable||o.gross)||0;y.insurable=+(o.insurable||o.gross)||0;
+    const has=v=>v!==undefined&&v!==null&&v!=='';y.gross=+o.gross||0;y.pensionable=+(has(o.pensionable)?o.pensionable:o.gross)||0;y.insurable=+(has(o.insurable)?o.insurable:o.gross)||0;
     DED_KEYS.forEach(k=>y.ded[k]=+o[k]||0);y.er.qpip=+o.erQpip||0;
   }
   for(const r of S.payruns.slice().sort(runOrder)){
@@ -37,7 +37,7 @@ function ytdFor(empId,until,inclusive){
     const before=runOrder(r,until)<0||(inclusive&&r.id===until.id);
     if(!before||(until.id&&r.id===until.id&&!inclusive))continue;
     for(const l of r.lines)if(l.employeeId===empId){
-      y.gross=r2(y.gross+l.gross);y.pensionable=r2(y.pensionable+(l.pensionable??l.gross));y.insurable=r2(y.insurable+(l.insurable??l.gross));
+      y.gross=r2(y.gross+l.gross);y.pensionable=r2(y.pensionable+(l.cppExempt?0:(l.pensionable??l.gross)));y.insurable=r2(y.insurable+(l.insurable??l.gross));
       y.rrsp=r2(y.rrsp+(+l.rrsp||0));y.union=r2(y.union+(+l.union||0));y.net=r2(y.net+l.net);sumObj(y.ded,l.ded);sumObj(y.er,l.er);
     }
   }
@@ -147,13 +147,13 @@ function employeeForm(emp){
   const yr=today().slice(0,4),o=e.openingYtd&&String(e.openingYtd.year)===yr?e.openingYtd:{};
   const v=x=>x===undefined||x===null?'':esc(x);
   const num=(id,label,val,hint,span)=>fld(id,label,`<input type="number" id="${id}" step="0.01" min="0" inputmode="decimal" value="${v(val)}">${hint?`<span class="hint">${hint}</span>`:''}`,span);
-  const ytdF=(k,label)=>num('eo_'+k,label,o[k]||'');
+  const ytdF=(k,label,hint)=>num('eo_'+k,label,o[k]===undefined||o[k]===null||(o[k]===0&&!['pensionable','insurable','erEi'].includes(k))?'':o[k],hint);
   const f=openModal(emp?emp.name:'New employee',`
     <div class="fields">${fld('eName','Name',`<input type="text" id="eName" value="${v(e.name)}" required>`)}${fld('eEmail','Email',`<input type="email" id="eEmail" value="${v(e.email)}">`)}
       ${fld('eProv','Province of employment',`<select id="eProv">${PR.PROVINCES.map(k=>`<option value="${k}" ${e.prov===k?'selected':''}>${esc(provName(k))}</option>`).join('')}</select>`)}
       ${fld('eHire','Hire date',`<input type="date" id="eHire" value="${v(e.hireDate)}">`)}
       ${fld('eSin','Social insurance number',`<input type="text" id="eSin" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789" value="${v(e.sin?String(e.sin).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3'):'')}" translate="no"><span class="hint">For the T4 and RL-1 (box 12). Kept only in this company’s books.</span>`)}
-      ${fld('eDental','Dental benefits offered (T4 box 45)',`<select id="eDental">${[[1,'1 · Not eligible for any dental care insurance'],[2,'2 · Employee only'],[3,'3 · Employee, spouse and dependent children'],[4,'4 · Employee and spouse'],[5,'5 · Employee and dependent children']].map(([k,l])=>`<option value="${k}" ${(e.dental||1)===k?'selected':''}>${l}</option>`).join('')}</select>`)}
+      ${fld('eDental','Dental benefits offered (T4 box 45)',`<select id="eDental">${e.dental?'':'<option value="" selected>Choose…</option>'}${[[1,'1 · Not eligible for any dental care insurance'],[2,'2 · Employee only'],[3,'3 · Employee, spouse and dependent children'],[4,'4 · Employee and spouse'],[5,'5 · Employee and dependent children']].map(([k,l])=>`<option value="${k}" ${e.dental===k?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${fld('eAddr','Address',`<textarea id="eAddr">${esc(e.address||'')}</textarea>`,true)}</div>
     <h3 class="fsec">Pay</h3>
     <div class="fields">${fld('eFreq','Pay schedule',`<select id="eFreq">${Object.keys(PR.FREQUENCIES).map(k=>`<option value="${k}" ${e.freq===k?'selected':''}>${PR.FREQ_LABEL[k]}</option>`).join('')}</select>`)}
@@ -168,28 +168,32 @@ function employeeForm(emp){
       <div data-qc style="display:contents">${num('eExtraQ','Additional Quebec tax per pay',e.extraQcTax)}</div>
       <div data-on style="display:contents">${num('eDep','Dependants (Ontario tax reduction)',e.dependants,'Children under 19 and dependants with a disability')}</div></div>
     <h3 class="fsec">Deductions and exemptions</h3>
-    <div class="fields">${num('eRrsp','RRSP / pension deducted each pay',e.rrsp,'Reduces taxable income')}${fld('ePen','That deduction goes to',`<select id="ePen"><option value="rrsp" ${e.pensionType!=='rpp'?'selected':''}>A group RRSP (not on the T4)</option><option value="rpp" ${e.pensionType==='rpp'?'selected':''}>A registered pension plan (T4 box 20, RL-1 box D)</option></select>`)}${num('eUnion','Union dues each pay',e.union)}</div>
+    <div class="fields">${num('eRrsp','RRSP / pension deducted each pay',e.rrsp,'Reduces taxable income')}${fld('ePen','That deduction goes to',`<select id="ePen"><option value="rrsp" ${e.pensionType!=='rpp'?'selected':''}>A group RRSP (not on the T4)</option><option value="rpp" ${e.pensionType==='rpp'?'selected':''}>A registered pension plan (T4 box 20, RL-1 box D)</option></select>`)}${num('eUnion','Union dues each pay',e.union)}
+      <div data-rpp style="display:contents">${fld('eRppNo','Pension plan registration number (T4 box 50)',`<input type="text" id="eRppNo" inputmode="numeric" maxlength="7" value="${v(e.rppNo)}" translate="no">`)}</div></div>
     <div style="display:flex;gap:18px;flex-wrap:wrap"><label class="check"><input type="checkbox" id="eCppX" ${e.cppExempt?'checked':''}> Exempt from <span data-cpplbl>CPP</span></label><label class="check"><input type="checkbox" id="eEiX" ${e.eiExempt?'checked':''}> Exempt from EI</label><label class="check" data-qc><input type="checkbox" id="eQpipX" ${e.qpipExempt?'checked':''}> Exempt from QPIP</label>${emp?`<label class="check"><input type="checkbox" id="eInactive" ${e.active===false?'checked':''}> Inactive (no longer paid)</label>`:''}</div>
     <details ${Object.keys(o).length>1?'open':''}><summary class="fsum">Paid earlier in ${yr} outside Tally Books?</summary>
       <div class="muted" style="font-size:13px;margin:8px 0">Enter this year’s totals from your previous payroll so CPP, EI and QPIP stop at the yearly maximums and pay stubs show the right year-to-date.</div>
       <div class="fields">${ytdF('gross','Gross pay')}${ytdF('pensionable','Pensionable earnings (if different)')}${ytdF('insurable','Insurable earnings (if different)')}
         <div data-notqc style="display:contents">${ytdF('cpp','CPP')}${ytdF('cpp2','CPP2')}</div><div data-qc style="display:contents">${ytdF('qpp','QPP')}${ytdF('qpp2','QPP2')}${ytdF('qpip','QPIP (employee)')}${ytdF('erQpip','QPIP (employer)')}</div>
-        ${ytdF('ei','EI')}${ytdF('fedTax','Federal income tax')}<div data-notqc style="display:contents">${ytdF('provTax','Provincial income tax')}</div><div data-qc style="display:contents">${ytdF('qcTax','Quebec income tax')}</div></div>
+        ${ytdF('ei','EI')}${ytdF('erEi','Employer EI','Blank = 1.4 × the employee’s EI')}${ytdF('rrsp','RRSP / pension deducted')}${ytdF('union','Union dues')}
+        ${fld('eo_prov','Province where it was earned',`<select id="eo_prov"><option value="">Same as above</option>${PR.PROVINCES.map(p=>`<option value="${p}" ${o.prov===p?'selected':''}>${esc(provName(p))}</option>`).join('')}</select>`)}${ytdF('fedTax','Federal income tax')}<div data-notqc style="display:contents">${ytdF('provTax','Provincial income tax')}</div><div data-qc style="display:contents">${ytdF('qcTax','Quebec income tax')}</div></div>
     </details>`,saveFoot(!!emp&&!paid),'wide');
   const sync=()=>{const p=$('#eProv',f).value,qc=p==='QC';$$('[data-qc]',f).forEach(x=>x.style.display=qc?(x.classList.contains('check')?'':'contents'):'none');$$('[data-notqc]',f).forEach(x=>x.style.display=qc?'none':'contents');$$('[data-on]',f).forEach(x=>x.style.display=p==='ON'?'contents':'none');$('[data-cpplbl]',f).textContent=qc?'QPP':'CPP';
+    $$('[data-rpp]',f).forEach(x=>x.style.display=$('#ePen',f).value==='rpp'?'contents':'none');
     const h=$('#eType',f).value==='hourly';$('label[for=eRate]',f).textContent=h?'Hourly rate':'Annual salary'};
-  $('#eProv',f).onchange=$('#eType',f).onchange=sync;sync();
+  $('#eProv',f).onchange=$('#eType',f).onchange=$('#ePen',f).onchange=sync;sync();
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this employee?',`${emp.name} will be removed.`))return;if(await del('employees',emp.id)){closeModal();toast('Employee deleted')}};
   f.onsubmit=async ev=>{ev.preventDefault();f.err('');
     const name=$('#eName',f).value.trim();if(!name)return f.err('Enter the employee’s name.');
     const val=id=>{const x=$('#'+id,f).value;return x===''?'':Math.max(0,+x)};
     if(!(+$('#eRate',f).value>0))return f.err($('#eType',f).value==='hourly'?'Enter the hourly rate.':'Enter the annual salary.');
     const prov=$('#eProv',f).value,qc=prov==='QC';
-    const oy={year:+yr};['gross','pensionable','insurable','cpp','cpp2','qpp','qpp2','qpip','erQpip','ei','fedTax','provTax','qcTax'].forEach(k=>{const x=+$('#eo_'+k,f).value||0;if(x)oy[k]=r2(x)});
+    const oy={year:+yr};['gross','pensionable','insurable','cpp','cpp2','qpp','qpp2','qpip','erQpip','ei','erEi','rrsp','union','fedTax','provTax','qcTax'].forEach(k=>{const raw=$('#eo_'+k,f).value,x=+raw||0;if(x||(raw!==''&&['pensionable','insurable','erEi'].includes(k)))oy[k]=r2(x)});
+    if($('#eo_prov',f).value)oy.prov=$('#eo_prov',f).value;
     const data={...(emp?strip(emp):{created:Date.now()}),name,email:$('#eEmail',f).value.trim(),address:$('#eAddr',f).value.trim(),prov,hireDate:$('#eHire',f).value,
       freq:$('#eFreq',f).value,payType:$('#eType',f).value,rate:val('eRate'),hours:val('eHours'),
       td1Fed:val('eTd1'),td1Prov:qc?'':val('eTd1p'),td1Qc:qc?val('eTd1q'):'',extraTax:val('eExtra'),extraQcTax:qc?val('eExtraQ'):'',dependants:prov==='ON'?val('eDep'):'',
-      rrsp:val('eRrsp'),union:val('eUnion'),sin:$('#eSin',f).value.replace(/\D/g,''),dental:+$('#eDental',f).value||1,pensionType:$('#ePen',f).value,cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
+      rrsp:val('eRrsp'),union:val('eUnion'),sin:$('#eSin',f).value.replace(/\D/g,''),dental:+$('#eDental',f).value||0,rppNo:$('#ePen',f).value==='rpp'?$('#eRppNo',f).value.replace(/\D/g,''):'',pensionType:$('#ePen',f).value,cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
       active:emp?!$('#eInactive',f).checked:true,openingYtd:oy};
     if(await put('employees',emp?.id||uid(),data)){closeModal();toast('Employee saved')}
   };
@@ -257,7 +261,7 @@ function payRunForm(){
     const ded={},er={};box.querySelectorAll('[data-ded]').forEach(x=>ded[x.dataset.ded]=r2(+x.value||0));box.querySelectorAll('[data-er]').forEach(x=>er[x.dataset.er]=r2(+x.value||0));
     DED_KEYS.forEach(k=>ded[k]=ded[k]||0);ER_KEYS.forEach(k=>er[k]=er[k]||0);
     const regular=g('[data-reg]'),other=g('[data-other]'),gross=r2(regular+other);
-    const l={employeeId:e.id,name:e.name,prov:e.prov,payType:e.payType,rate:+e.rate||0,hours:e.payType==='hourly'?g('[data-hours]'):'',regular,other,gross,pensionable:gross,insurable:gross,
+    const l={employeeId:e.id,name:e.name,prov:e.prov,payType:e.payType,rate:+e.rate||0,hours:e.payType==='hourly'?g('[data-hours]'):'',regular,other,gross,pensionable:gross,insurable:gross,cppExempt:!!e.cppExempt,eiExempt:!!e.eiExempt,qpipExempt:e.prov==='QC'&&!!e.qpipExempt,
       rrsp:g('[data-x=rrsp]'),union:g('[data-x=union]'),ded,er,overridden:[...box.querySelectorAll('[data-ov]')].map(x=>x.dataset.ded||x.dataset.er||x.dataset.x||'').filter(Boolean)};
     l.net=r2(gross-lineDed(l));return l};
   const recalcAll=()=>{$$('.prl',f).forEach(recalc);totals()};
@@ -387,7 +391,8 @@ function payrollSettingsPanel(){
     ${fld('psHsf','Quebec Health Services Fund rate (%)',`<input type="number" id="psHsf" min="0" max="10" step="0.01" value="${esc(c.hsfRate)}"><span class="hint">Only for employees in Quebec. 1.65% for most small employers.</span>`)}
     ${fld('psCra','CRA payroll account number',`<input type="text" id="psCra" maxlength="15" placeholder="123456789RP0001" value="${esc(c.craAccount||'')}" translate="no"><span class="hint">Your business number + RP + 4 digits. T4 box 54.</span>`)}
     ${fld('psRq','Revenu Québec identification number',`<input type="text" id="psRq" maxlength="16" placeholder="1234567890RS0001" value="${esc(c.rqId||'')}" translate="no"><span class="hint">For RL-1 slips and the RL-1 Summary, if you have employees in Quebec.</span>`)}</div>
+    <div class="fields">${fld('psAssoc','Payroll of associated employers',`<input type="number" id="psAssoc" step="0.01" min="0" value="${c.assocPayroll||''}"><span class="hint">Only if this business is associated with others. Revenu Québec sets the Health Services Fund rate from everyone’s total payroll.</span>`)}</div>
     <label class="check"><input type="checkbox" id="psPrim" ${c.hsfPrimary?'checked':''}> Primary or manufacturing business (lower Health Services Fund rate)</label>
     <div><button class="btn" type="submit">Save payroll settings</button></div></form></div>`;
 }
-function bindPayrollSettings(m){const f=$('#paySetForm',m);if(!f)return;f.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),payroll:{...payCfg(),remitFreq:$('#psFreq',f).value,hsfRate:+$('#psHsf',f).value||0,craAccount:$('#psCra',f).value.trim(),rqId:$('#psRq',f).value.trim(),hsfPrimary:$('#psPrim',f).checked}}))toast('Payroll settings saved')}}
+function bindPayrollSettings(m){const f=$('#paySetForm',m);if(!f)return;f.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),payroll:{...payCfg(),remitFreq:$('#psFreq',f).value,hsfRate:+$('#psHsf',f).value||0,craAccount:$('#psCra',f).value.trim(),rqId:$('#psRq',f).value.trim(),hsfPrimary:$('#psPrim',f).checked,assocPayroll:+$('#psAssoc',f).value||0}}))toast('Payroll settings saved')}}

@@ -42,6 +42,8 @@ It runs two ways from the same code:
   - Posting a pay run records one journal entry: wages and employer contributions as expenses, source deductions as liabilities to CRA and Revenu Québec, and net pay out of the bank. Payroll accounts (2300, 2310, 2320, 7110) are added the first time they're needed.
   - **Pay stubs** with this-pay and year-to-date amounts, printed one at a time or all together.
   - **Remittances:** what's owed to each agency per month (or quarter), the due date (the 15th of the following month), the figures for the PD7A voucher and for Revenu Québec, and payments that clear the liability.
+  - **Year-end (T4 and RL-1):** a T4 for every employee (one per province they worked in), an RL-1 for Quebec employees, the T4 Summary and the RL-1 Summary, built from the year's pay runs, amounts paid earlier outside Tally Books, and recorded remittances. It covers boxes 14 to 56 (including CPP2/QPP2 in 16A/17A, RPP box 20 with registration number 50 and pension adjustment 52, exemptions in 28, and dental benefits in 45) and RL-1 boxes A to I. Yearly maximums for insurable and pensionable earnings are shared across an employee's slips in date order. The Health Services Fund rate is set from total payroll (all provinces, plus associated employers) and applied to Quebec payroll, and the labour standards contribution is worked out too. Checks flag a missing or invalid SIN, a missing dental code or pension adjustment, and deductions that don't match what CRA's year-end review expects. Export the figures to CSV or print worksheets.
+  - Tally Books prepares the figures; you file them with CRA's T4 Web Forms and Revenu Québec's My Account for businesses. Revenu Québec accepts printed RL-1 slips only from certified software, so the printouts are worksheets, not slips.
   - Rates are loaded for pay dates from July 1 to December 31, 2026. Quebec income tax follows Revenu Québec's TP-1015.F method but hasn't been checked line by line against WebRAS yet, so compare a first pay run with WebRAS. Always check unusual cases against CRA's PDOC.
 - **English and French:** every screen, form, message, report and pay stub is available in Canadian French, with Quebec terms (TPS/TVQ, RRQ, RQAP, AE, état des résultats, grand livre…) and French number and date formats (1 234,56 $ · 18 sept. 2026). Each person picks their language from the sidebar, the sign-in screen or Account, and it's saved with their account. New companies can keep their books in French, with a French chart of accounts. Names and other data you type stay exactly as entered.
 - **Sign-in security:** nobody sees any data without signing in.
@@ -161,8 +163,9 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   banking.js       Banking screens: import, review, rules, reconcile
   companies.js     Client list, company switcher, new company
   salestax.js      GST/HST and QST return worksheets, filing, payments
-  payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas
+  payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas, and year-end slip figures
   payroll.js       Employees, pay runs, pay stubs, remittances
+  payroll-yearend.js  T4 and RL-1 slips and summaries
   activity.js      Activity log screen
   auth.js          Sign-in, two-step codes, invitations, users and security
   qr.js            QR code generator for the two-step setup screen
@@ -249,7 +252,7 @@ The tests start a real server against a temporary database. They cover the bookk
 
 ## Not built yet
 
-Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, emailing invoices or saving them as PDFs, T4 and RL-1 slips, records of employment (ROE), vacation and statutory holiday pay, multiple currencies, and emailing invitations directly (for now you send the link yourself).
+Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, emailing invoices or saving them as PDFs, filing T4 and RL-1 slips electronically (XML), records of employment (ROE), vacation and statutory holiday pay, multiple currencies, and emailing invitations directly (for now you send the link yourself).
 
 ## License
 

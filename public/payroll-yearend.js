@@ -8,7 +8,7 @@
 S.ye={year:null};
 const T4_BOXES=[[10,'Province of employment'],[12,'Social insurance number'],[14,'Employment income'],[16,'Employee’s CPP contributions'],['16A','Employee’s second CPP contributions'],
   [17,'Employee’s QPP contributions'],['17A','Employee’s second QPP contributions'],[18,'Employee’s EI premiums'],[20,'RPP contributions'],[22,'Income tax deducted'],
-  [24,'EI insurable earnings'],[26,'CPP/QPP pensionable earnings'],[28,'Exempt'],[44,'Union dues'],[45,'Employer-offered dental benefits'],[55,'Employee’s PPIP premiums'],[56,'PPIP insurable earnings']];
+  [24,'EI insurable earnings'],[26,'CPP/QPP pensionable earnings'],[28,'Exempt'],[44,'Union dues'],[45,'Employer-offered dental benefits'],[50,'RPP registration number'],[52,'Pension adjustment'],[55,'Employee’s PPIP premiums'],[56,'PPIP insurable earnings']];
 const RL1_BOXES=[['A','Employment income'],['B.A','QPP contributions (base and first additional)'],['B.B','QPP contributions (second additional)'],['C','EI premiums'],['D','RPP contributions'],
   ['E','Quebec income tax withheld'],['F','Union dues'],['G','Pensionable salary under the QPP'],['H','QPIP premiums'],['I','Salary insurable under the QPIP']];
 const DENTAL={1:'Not eligible',2:'Employee only',3:'Employee, spouse and dependent children',4:'Employee and spouse',5:'Employee and dependent children'};
@@ -22,7 +22,7 @@ function yeData(){
   const years=yeYears();if(!years.length)return null;
   if(!years.includes(S.ye.year))S.ye.year=years.includes(+today().slice(0,4))?+today().slice(0,4):years[0];
   const remittances=S.entries.filter(e=>e.type==='payremit').map(e=>({agency:e.agency,period:e.period,amount:+e.amount||0}));
-  return PR.yearEnd({year:S.ye.year,employees:S.employees,payruns:S.payruns,remittances,hsfPrimary:!!payCfg().hsfPrimary});
+  return PR.yearEnd({year:S.ye.year,employees:S.employees,payruns:S.payruns,remittances,hsfPrimary:!!payCfg().hsfPrimary,assocPayroll:+payCfg().assocPayroll||0});
 }
 const sinMasked=s=>s?'•••-•••-'+String(s).slice(-3):'';
 const sinFull=s=>s?String(s).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3'):'';
@@ -30,19 +30,25 @@ function boxVal(k,v,slip){
   if(k===10)return esc(v);
   if(k===12)return v?`<span translate="no">${sinFull(v)}</span>`:'<span class="neg">Missing</span>';
   if(k===28){const x=[v.cppQpp?(slip.prov==='QC'?'QPP':'CPP'):'',v.ei?'EI':'',v.ppip?'PPIP':''].filter(Boolean);return x.length?esc(x.join(', ')):''}
-  if(k===45)return `${v} · ${esc(DENTAL[v]||'')}`;
+  if(k===45)return v?`${v} · ${esc(DENTAL[v]||'')}`:'<span class="neg">Not chosen</span>';
+  if(k===50)return v?`<span translate="no">${esc(v)}</span>`:'';
   if(k===24||k===26||(k===56&&slip.prov==='QC'))return money(v,{sym:false}); // these show 0 rather than blank
   return v?money(v,{sym:false}):'';
 }
 function checkText(c){
-  const m=v=>money(v);
+  const m=v=>money(v),all=c.many?' (all of this employee’s slips together)':'';
   switch(c.code){
     case 'sin-missing':return 'SIN missing. Add it on the employee (box 12).';
     case 'sin-invalid':return 'This SIN isn’t valid. Check it on the employee.';
-    case 'ei':return `EI deducted is ${m(c.got)}, but ${m(c.want)} was expected on these insurable earnings. CRA may assess the difference.`;
-    case 'cpp':return `CPP/QPP deducted is ${m(c.got)}; a full-year employee would have ${m(c.want)}. That’s normal if they started, left or turned 18 or 70 during the year.`;
-    case 'cpp2':return `CPP2/QPP2 deducted is ${m(c.got)}, but ${m(c.want)} was expected.`;
-    case 'qpip':return `QPIP deducted is ${m(c.got)}, but ${m(c.want)} was expected.`;
+    case 'sin-none':return 'SIN not provided (000 000 000). The slip can still be filed, but ask the employee for their SIN.';
+    case 'dental':return 'Choose the dental benefits offered (box 45) on the employee. It’s required on every T4.';
+    case 'rpp-no':return 'RPP contributions are in box 20, so the plan’s registration number (box 50) is needed. Add it on the employee.';
+    case 'rpp-pa':return 'RPP contributions are in box 20, so a pension adjustment (box 52) is needed. Get it from the plan administrator and enter it here.';
+    case 'ei':return `EI deducted is ${m(c.got)}, but ${m(c.want)} was expected on these insurable earnings${all}. CRA may assess the difference.`;
+    case 'cpp':return c.qc?`CPP/QPP deducted is ${m(c.got)}; a full-year employee would have ${m(c.want)}${all}. That’s normal if they started, left, turned 18 or were exempt for part of the year.`
+      :`CPP/QPP deducted is ${m(c.got)}; a full-year employee would have ${m(c.want)}${all}. That’s normal if they started, left, turned 18 or 70, or were exempt for part of the year.`;
+    case 'cpp2':return `CPP2/QPP2 deducted is ${m(c.got)}, but ${m(c.want)} was expected${all}.`;
+    case 'qpip':return `QPIP deducted is ${m(c.got)}, but ${m(c.want)} was expected${all}.`;
     default:return c.code;
   }
 }
@@ -71,22 +77,22 @@ function vYearEnd(){
     <div class="panel"><h3>T4 Summary</h3><div class="tbl-wrap"><table><tbody>
       ${row('Number of T4 slips',sum[88],88)}${row('Employment income',money(sum[14]),14)}${row('Employees’ CPP contributions',money(sum[16]),16)}${row('Employees’ second CPP contributions',money(sum['16A']),'16A')}
       ${sum[17]?row('Employees’ QPP contributions (for your records, not on the summary)',money(sum[17]),'17'):''}
-      ${row('Employees’ EI premiums',money(sum[18]),18)}${row('RPP contributions',money(sum[20]),20)}${row('Income tax deducted',money(sum[22]),22)}${row('Employer’s CPP contributions',money(sum[27]),27)}
+      ${row('Employees’ EI premiums',money(sum[18]),18)}${row('RPP contributions',money(sum[20]),20)}${sum[52]?row('Pension adjustments',money(sum[52]),52):''}${row('Income tax deducted',money(sum[22]),22)}${row('Employer’s CPP contributions',money(sum[27]),27)}
       ${row('Employer’s second CPP contributions',money(sum['27A']),'27A')}${row('Employer’s EI premiums',money(sum[19]),19)}
       <tr class="tot"><td><span class="mono muted" translate="no">80</span> Total deductions reported</td><td class="n">${money(sum[80])}</td></tr>
       ${row('Minus: remittances',money(sum[82]),82)}
-      ${sum[86]?`<tr class="tot"><td><span class="mono muted" translate="no">86</span> Balance due</td><td class="n neg">${money(sum[86])}</td></tr>`:sum[84]?`<tr class="tot"><td><span class="mono muted" translate="no">84</span> Overpayment</td><td class="n">${money(sum[84])}</td></tr>`:'<tr class="tot"><td>Difference</td><td class="n">0.00</td></tr>'}
+      ${sum[86]?`<tr class="tot"><td><span class="mono muted" translate="no">86</span> Balance due</td><td class="n neg">${money(sum[86])}</td></tr>`:sum[84]?`<tr class="tot"><td><span class="mono muted" translate="no">84</span> Overpayment</td><td class="n">${money(sum[84])}</td></tr>`:`<tr class="tot"><td>Difference</td><td class="n">${money(Math.abs(sum.difference||0))}</td></tr>`}
     </tbody></table></div>
-    <div class="pad muted" style="font-size:13px">Remittances count payments recorded under Remittances for ${Y.year}. A balance due usually means a remittance wasn’t recorded or December’s isn’t paid yet.</div></div>
+    <div class="pad muted" style="font-size:13px">Remittances count payments recorded under Remittances for ${Y.year}. A balance due usually means a remittance wasn’t recorded or December’s isn’t paid yet. CRA doesn’t charge or refund a difference of $2 or less.</div></div>
     ${R?`<div class="panel"><h3>RL-1 Summary (Revenu Québec)</h3><div class="tbl-wrap"><table><tbody>
       ${row('Number of RL-1 slips',R.slips)}${row('QPP: employees',money(R.qppEmployee))}${row('QPP: employer',money(R.qppEmployer))}${row('QPP2: employees',money(R.qpp2Employee))}${row('QPP2: employer',money(R.qpp2Employer))}
       ${row('QPIP: employees',money(R.qpipEmployee))}${row('QPIP: employer',money(R.qpipEmployer))}${row('Quebec income tax withheld',money(R.qcTax))}
-      ${row('Total Quebec payroll',money(R.payroll))}${row(`Health Services Fund at ${R.hsfRate}%`,money(R.hsf))}
+      ${row('Total Quebec payroll',money(R.payroll))}${R.totalPayroll!==R.payroll?row('Total payroll for the rate (all provinces'+(R.assocPayroll?' and associated employers':'')+')',money(R.totalPayroll)):''}${row(`Health Services Fund at ${R.hsfRate}%`,money(R.hsf))}
       <tr class="tot"><td>Total</td><td class="n">${money(R.total)}</td></tr>${row('Minus: remittances',money(R.remitted))}
       <tr class="tot"><td>${R.balance>=0?'Balance due':'Overpayment'}</td><td class="n ${R.balance>0.004?'neg':''}">${money(Math.abs(R.balance))}</td></tr>
       ${row('Labour standards contribution (0.06%, paid with the summary)',money(R.cnt))}
     </tbody></table></div>
-    <div class="pad muted" style="font-size:13px">The Health Services Fund rate is recalculated from the year’s total Quebec payroll. ${R.wsdrf?'<b>Payroll is over $2 million:</b> the 1% workforce training contribution (WSDRF) may apply. ':''}CNESST workplace health and safety premiums are separate.</div></div>`:''}
+    <div class="pad muted" style="font-size:13px">The Health Services Fund rate is set from total payroll (every province, plus associated employers from Settings → Payroll) and applied to Quebec payroll. ${R.wsdrf?'<b>Payroll is over $2 million:</b> the 1% workforce training contribution (WSDRF) may apply. ':''}CNESST workplace health and safety premiums are separate.</div></div>`:''}
   </div>
   <div class="panel" style="margin-top:16px"><h3>How to file</h3><div class="pad"><ol class="steps">
     <li><b>T4 slips:</b> sign in to CRA My Business Account (or use a web access code) and open <b>T4 Web Forms</b>. Enter each slip from these figures, then the T4 Summary. Web Forms also prints the copies for your employees. More than 5 slips must be filed electronically.</li>
@@ -95,22 +101,29 @@ function vYearEnd(){
     <li>Pay any balance due by the same date.</li></ol></div></div>`;
 }
 
+const yeBoxes=s=>T4_BOXES.filter(([k])=>s.prov==='QC'||!['17','17A','55','56'].includes(String(k))).filter(([k])=>s.prov!=='QC'||!['16','16A'].includes(String(k)))
+  .filter(([k])=>!(k===50||k===52)||s.t4[20]>0||s.t4[50]||s.t4[52]);
 function yeSlipModal(i){
   const Y=yeData(),s=Y.slips[i];if(!s)return;
+  const emp=employee(s.employeeId)||{},rpp=emp.pensionType==='rpp'&&Y.slips.filter(x=>x.employeeId===s.employeeId).some(x=>x.t4[20]>0);
+  const last=Y.slips.filter(x=>x.employeeId===s.employeeId).pop()===s;
   const f=openModal(`T4${s.rl1?' and RL-1':''} · ${s.name} · ${Y.year}`,`
     ${s.checks.length?`<div class="banner ${s.checks.some(c=>c.level==='error')?'err':''}" style="margin:0"><span>${s.checks.map(c=>esc(checkText(c))).join('<br>')}</span></div>`:''}
     <div class="grid2" style="gap:16px">
-      <div><div class="flabel" style="margin-bottom:6px">T4 · ${esc(s.prov)}</div><div class="tbl-wrap"><table class="boxes"><tbody>${T4_BOXES.filter(([k])=>s.prov==='QC'||!['17','17A','55','56'].includes(String(k))).filter(([k])=>s.prov!=='QC'||!['16','16A'].includes(String(k))).map(([k,l])=>`<tr><td class="mono" translate="no">${k}</td><td>${esc(l)}</td><td class="n">${boxVal(k,s.t4[k],s)}</td></tr>`).join('')}</tbody></table></div></div>
+      <div><div class="flabel" style="margin-bottom:6px">T4 · ${esc(s.prov)}</div><div class="tbl-wrap"><table class="boxes"><tbody>${yeBoxes(s).map(([k,l])=>`<tr><td class="mono" translate="no">${k}</td><td>${esc(l)}</td><td class="n">${boxVal(k,s.t4[k],s)}</td></tr>`).join('')}</tbody></table></div></div>
       ${s.rl1?`<div><div class="flabel" style="margin-bottom:6px">RL-1</div><div class="tbl-wrap"><table class="boxes"><tbody>${RL1_BOXES.map(([k,l])=>`<tr><td class="mono" translate="no">${k}</td><td>${esc(l)}</td><td class="n">${k==='G'||k==='I'?money(s.rl1[k],{sym:false}):s.rl1[k]?money(s.rl1[k],{sym:false}):''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     </div>
+    ${rpp&&last?`<div class="fields" data-yepa style="align-items:end">${fld('yePa',`Pension adjustment for ${Y.year} (box 52)`,`<input type="number" id="yePa" step="0.01" min="0" value="${(emp.paByYear||{})[Y.year]||''}"><span class="hint">From the pension plan administrator. Goes on this employee’s last slip only.</span>`)}<div><button class="btn" type="button" data-yepasave>Save</button></div></div>`:''}
     <div class="muted" style="font-size:12.5px">Boxes with nothing in them stay blank on the slip, except 24, 26${s.prov==='QC'?' and 56':''}, which show 0.00 when there are no earnings. Box 54 (your payroll account number) goes on your copy and CRA’s, not the employee’s.</div>`,
     `<button type="button" class="btn left" data-yeemp>Edit employee</button><button type="button" class="btn" data-yeprint1>Print worksheet</button><button type="button" class="btn primary" data-close>Done</button>`,'wide');
   $('[data-yeemp]',f).onclick=()=>{closeModal();employeeForm(employee(s.employeeId))};
   $('[data-yeprint1]',f).onclick=()=>yePrint([s],Y);
+  const pb=$('[data-yepasave]',f);if(pb)pb.onclick=async()=>{const m={...(emp.paByYear||{})},x=r2(+$('#yePa',f).value||0);if(x)m[Y.year]=x;else delete m[Y.year];
+    if(await put('employees',emp.id,{...strip(emp),paByYear:m})){closeModal();toast('Pension adjustment saved');yeSlipModal(i)}};
 }
 function yeWorksheet(s,Y){
   const c=payCfg();
-  const t4=T4_BOXES.filter(([k])=>s.prov==='QC'||!['17','17A','55','56'].includes(String(k))).filter(([k])=>s.prov!=='QC'||!['16','16A'].includes(String(k)));
+  const t4=yeBoxes(s);
   return `<section class="stub"><header><div><b>${esc(S.company.name)}</b><div class="muted">${c.craAccount?`T4 box 54: <span translate="no">${esc(c.craAccount)}</span>`:''}${s.rl1&&c.rqId?` · RQ: <span translate="no">${esc(c.rqId)}</span>`:''}</div></div>
     <div style="text-align:right"><b>Year-end worksheet ${Y.year}</b><div class="muted">For filing: not an official slip</div></div></header>
     <div class="stub-emp"><b translate="no">${esc(s.name)}</b>${s.address?`<div class="muted" style="white-space:pre-line" translate="no">${esc(s.address)}</div>`:''}</div>
@@ -128,10 +141,10 @@ function yePrint(slips,Y){
 }
 function yeCSV(){
   const Y=yeData();if(!Y)return;
-  const head=['Employee','SIN','Province (10)','Box 14','Box 16','Box 16A','Box 17','Box 17A','Box 18','Box 20','Box 22','Box 24','Box 26','Box 28 exempt','Box 44','Box 45','Box 55','Box 56','RL-1 A','RL-1 B.A','RL-1 B.B','RL-1 C','RL-1 D','RL-1 E','RL-1 F','RL-1 G','RL-1 H','RL-1 I'];
+  const head=['Employee','SIN','Province (10)','Box 14','Box 16','Box 16A','Box 17','Box 17A','Box 18','Box 20','Box 22','Box 24','Box 26','Box 28 exempt','Box 44','Box 45','Box 50','Box 52','Box 55','Box 56','RL-1 A','RL-1 B.A','RL-1 B.B','RL-1 C','RL-1 D','RL-1 E','RL-1 F','RL-1 G','RL-1 H','RL-1 I'];
   const rows=Y.slips.map(s=>{const t=s.t4,r=s.rl1||{};const ex=[t[28].cppQpp?'CPP/QPP':'',t[28].ei?'EI':'',t[28].ppip?'PPIP':''].filter(Boolean).join(' ');
-    return [s.name,t[12],t[10],t[14],t[16],t['16A'],t[17],t['17A'],t[18],t[20],t[22],t[24],t[26],ex,t[44],t[45],t[55],t[56],r.A??'',r['B.A']??'',r['B.B']??'',r.C??'',r.D??'',r.E??'',r.F??'',r.G??'',r.H??'',r.I??'']});
-  const headFr=['Employé','NAS','Province (10)','Case 14','Case 16','Case 16A','Case 17','Case 17A','Case 18','Case 20','Case 22','Case 24','Case 26','Case 28 exemption','Case 44','Case 45','Case 55','Case 56','RL-1 A','RL-1 B.A','RL-1 B.B','RL-1 C','RL-1 D','RL-1 E','RL-1 F','RL-1 G','RL-1 H','RL-1 I'];
+    return [s.name,t[12],t[10],t[14],t[16],t['16A'],t[17],t['17A'],t[18],t[20],t[22],t[24],t[26],ex,t[44],t[45],t[50],t[52],t[55],t[56],r.A??'',r['B.A']??'',r['B.B']??'',r.C??'',r.D??'',r.E??'',r.F??'',r.G??'',r.H??'',r.I??'']});
+  const headFr=['Employé','NAS','Province (10)','Case 14','Case 16','Case 16A','Case 17','Case 17A','Case 18','Case 20','Case 22','Case 24','Case 26','Case 28 exemption','Case 44','Case 45','Case 50','Case 52','Case 55','Case 56','RL-1 A','RL-1 B.A','RL-1 B.B','RL-1 C','RL-1 D','RL-1 E','RL-1 F','RL-1 G','RL-1 H','RL-1 I'];
   const text=[isFr()?headFr:head,...rows].map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
   saveFile(`t4-rl1_${Y.year}.csv`,new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'}));
 }

@@ -168,12 +168,29 @@ function validateEmployee(data) {
     if (sin.length !== 9) throw new ValidationError('A social insurance number has 9 digits.');
     out.sin = sin;
   } else out.sin = '';
-  out.dental = [1, 2, 3, 4, 5].includes(Number(data.dental)) ? Number(data.dental) : 1;
+  out.dental = [1, 2, 3, 4, 5].includes(Number(data.dental)) ? Number(data.dental) : 0; // 0 = not chosen yet
   out.pensionType = data.pensionType === 'rpp' ? 'rpp' : 'rrsp';
+  const rppNo = String(data.rppNo ?? '').replace(/\D/g, '');
+  if (rppNo.length > 7) throw new ValidationError('A pension plan registration number has up to 7 digits.');
+  out.rppNo = rppNo;
+  if (data.paByYear !== undefined) {
+    if (!isObj(data.paByYear)) throw new ValidationError('Pension adjustments must be an object.');
+    const pa = {};
+    for (const [y, v] of Object.entries(data.paByYear)) {
+      if (!/^\d{4}$/.test(y)) throw new ValidationError('Pension adjustments are by year.');
+      const a = optAmount(v, 'Pension adjustment ' + y) || 0;
+      if (a) pa[y] = a;
+    }
+    out.paByYear = pa;
+  }
   if (data.openingYtd !== undefined) {
     if (!isObj(data.openingYtd)) throw new ValidationError('Opening year-to-date amounts must be an object.');
     const o = { year: parseInt(data.openingYtd.year, 10) || 0 };
-    for (const [k, v] of Object.entries(data.openingYtd)) if (k !== 'year') o[k] = optAmount(v, 'Opening year-to-date ' + k) || 0;
+    for (const [k, v] of Object.entries(data.openingYtd)) {
+      if (k === 'year') continue;
+      if (k === 'prov') { if (PAY_PROVINCES.includes(v)) o.prov = v; continue; }
+      o[k] = optAmount(v, 'Opening year-to-date ' + k) || 0;
+    }
     out.openingYtd = o;
   }
   return out;
@@ -259,6 +276,7 @@ function validatePayrollSettings(p) {
     craAccount: str(p.craAccount, 20).toUpperCase().replace(/\s/g, ''),
     rqId: str(p.rqId, 20).toUpperCase().replace(/\s/g, ''),
     hsfPrimary: !!p.hsfPrimary,
+    assocPayroll: optAmount(p.assocPayroll, 'Associated employers’ payroll') || 0,
   };
 }
 

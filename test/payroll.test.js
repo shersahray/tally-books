@@ -118,7 +118,7 @@ test('T4 boxes add up the year, with the right caps and checks', () => {
 
 test('Quebec employees get a T4 with QPP and PPIP boxes, and an RL-1', () => {
   const runs = yearOfPays('q1', 4500, 'QC'); // $117,000 a year
-  const ye = P.yearEnd({ year: 2026, employees: [{ id: 'q1', name: 'Dominique', prov: 'QC', sin: '130692551' }], payruns: runs, remittances: [] });
+  const ye = P.yearEnd({ year: 2026, employees: [{ id: 'q1', name: 'Dominique', prov: 'QC', sin: '130692551', dental: 1 }], payruns: runs, remittances: [] });
   const { t4, rl1 } = ye.slips[0];
   assert.equal(t4[16], 0); assert.equal(t4[17], 4479.30); assert.equal(t4['17A'], 416);
   assert.equal(t4[18], 895.70); assert.equal(t4[55], 442.90); assert.equal(t4[56], 103000); assert.equal(t4[26], 85000);
@@ -141,10 +141,89 @@ test('Year-end checks: SIN, a province change and under-deducted EI', () => {
   ];
   const ye = P.yearEnd({ year: 2026, employees: [{ id: 'e2', name: 'Lee', prov: 'BC', sin: '123' }], payruns: runs });
   assert.deepEqual(ye.slips.map(s => s.prov), ['AB', 'BC'], 'one T4 per province');
-  const ab = ye.slips[0];
+  const [ab, bc] = ye.slips;
   assert.ok(ab.checks.some(c => c.code === 'sin-invalid'));
-  assert.ok(ab.checks.some(c => c.code === 'ei' && c.want === 32.6 && c.got === 10));
+  assert.ok(ab.checks.some(c => c.code === 'dental'), 'box 45 has to be chosen');
+  assert.ok(!ab.checks.some(c => c.code === 'ei'), 'deduction checks cover all of an employee’s slips, on the last one');
+  assert.ok(bc.checks.some(c => c.code === 'ei' && c.want === 65.2 && c.got === 42.6 && c.many));
   assert.equal(P.sinProblem(''), 'missing');
   assert.equal(P.hsfRateFor(3000000), 2.4176);
   assert.throws(() => P.yearEnd({ year: 2030, employees: [], payruns: [] }), /aren't loaded/);
+});
+
+const line = (employeeId, prov, gross, extra = {}) => ({ employeeId, prov, gross, rrsp: 0, union: 0, ded: {}, er: {}, ...extra });
+
+test('Moving provinces: yearly maximums are shared across the employee’s slips, in date order', () => {
+  const runs = [
+    { payDate: '2026-03-31', lines: [line('m', 'ON', 60000)] },
+    { payDate: '2026-10-30', lines: [line('m', 'QC', 40000)] },
+  ];
+  const ye = P.yearEnd({ year: 2026, employees: [{ id: 'm', name: 'Sam', prov: 'QC', sin: '130692544', dental: 1 }], payruns: runs });
+  const [on, qc] = ye.slips;
+  assert.equal(on.t4[24], 60000); assert.equal(on.t4[26], 60000);
+  assert.equal(qc.t4[24], 8900, '68,900 − 60,000 already reported on the Ontario slip');
+  assert.equal(qc.t4[26], 25000, '85,000 − 60,000');
+  assert.equal(qc.t4[56], 40000, 'QPIP only counts Quebec earnings');
+  assert.equal(qc.rl1.G, 14600, 'no QPP2 deducted, so G stops at the YMPE (74,600 − 60,000)');
+  assert.ok(qc.checks.some(c => c.code === 'cpp2'), 'CPP2/QPP2 was owed on 60,000 to 85,000 and nothing was deducted');
+});
+
+test('Exemptions come from each pay, and box 28 only for a full year', () => {
+  const runs = [
+    { payDate: '2026-02-27', lines: [line('x', 'ON', 5000, { cppExempt: true })] },
+    { payDate: '2026-06-30', lines: [line('x', 'ON', 5000, { cppExempt: false, ded: { cpp: 286.70 } })] },
+  ];
+  const emp = { id: 'x', name: 'Ari', prov: 'ON', sin: '130692544', dental: 1, cppExempt: false, eiExempt: true };
+  const ye = P.yearEnd({ year: 2026, employees: [emp], payruns: runs });
+  const t4 = ye.slips[0].t4;
+  assert.equal(t4[26], 5000, 'only the pay CPP applied to is pensionable');
+  assert.equal(t4[28].cppQpp, false, 'part-year exemption is not box 28');
+  assert.equal(t4[28].ei, true, 'old pay lines without flags use the employee setting'); assert.equal(t4[24], 0);
+  const full = P.yearEnd({ year: 2026, employees: [{ ...emp, cppExempt: true }], payruns: [{ payDate: '2026-02-27', lines: [line('x', 'ON', 5000, { cppExempt: true })] }] });
+  assert.equal(full.slips[0].t4[28].cppQpp, true); assert.equal(full.slips[0].t4[26], 0);
+});
+
+test('Registered pension plans need the PA (box 52) and registration number (box 50)', () => {
+  const runs = [{ payDate: '2026-05-15', lines: [line('r', 'ON', 4000, { rrsp: 200 })] }];
+  const emp = { id: 'r', name: 'Kim', prov: 'ON', sin: '130692544', dental: 2, pensionType: 'rpp' };
+  const bad = P.yearEnd({ year: 2026, employees: [emp], payruns: runs }).slips[0];
+  assert.equal(bad.t4[20], 200);
+  assert.ok(bad.checks.some(c => c.code === 'rpp-pa' && c.level === 'error'));
+  assert.ok(bad.checks.some(c => c.code === 'rpp-no' && c.level === 'error'));
+  const ye = P.yearEnd({ year: 2026, employees: [{ ...emp, rppNo: '1234567', paByYear: { 2026: 3100 } }], payruns: runs });
+  assert.equal(ye.slips[0].t4[52], 3100); assert.equal(ye.slips[0].t4[50], '1234567'); assert.equal(ye.t4sum[52], 3100);
+  assert.ok(!ye.slips[0].checks.some(c => /^rpp/.test(c.code)));
+});
+
+test('Health Services Fund rate comes from total payroll, applied to Quebec payroll', () => {
+  const runs = [{ payDate: '2026-12-15', lines: [line('o', 'ON', 900000), line('q', 'QC', 200000)] }];
+  const emps = [{ id: 'o', name: 'O', prov: 'ON', dental: 1 }, { id: 'q', name: 'Q', prov: 'QC', dental: 1 }];
+  const R = P.yearEnd({ year: 2026, employees: emps, payruns: runs }).rl1sum;
+  assert.equal(R.payroll, 200000); assert.equal(R.totalPayroll, 1100000);
+  assert.equal(R.hsfRate, P.hsfRateFor(1100000)); assert.ok(R.hsfRate > 1.65);
+  assert.equal(R.hsf, P.r2(200000 * R.hsfRate / 100));
+  const withAssoc = P.yearEnd({ year: 2026, employees: emps, payruns: runs, assocPayroll: 2000000 }).rl1sum;
+  assert.equal(withAssoc.hsfRate, P.hsfRateFor(3100000));
+});
+
+test('Earlier payroll: its own province, RRSP/RPP, union dues, a real zero and employer EI', () => {
+  const emp = { id: 'p', name: 'Pat', prov: 'QC', sin: '000 000 000', dental: 1, pensionType: 'rpp', rppNo: '7654321', paByYear: { 2026: 900 },
+    openingYtd: { year: 2026, prov: 'ON', gross: 20000, pensionable: 0, rrsp: 500, union: 120, ei: 326, erEi: 400, cpp: 0 } };
+  const runs = [{ payDate: '2026-11-13', lines: [line('p', 'QC', 3000)] }];
+  const ye = P.yearEnd({ year: 2026, employees: [emp], payruns: runs, remittances: [{ agency: 'cra', period: '2026-05', amount: 0 }] });
+  const on = ye.slips.find(s => s.prov === 'ON');
+  assert.ok(on, 'earlier payroll goes on the province it was earned in');
+  assert.equal(on.t4[26], 0, 'a pensionable amount of 0 stays 0'); assert.equal(on.t4[20], 500); assert.equal(on.t4[44], 120);
+  assert.equal(on.er.ei, 400);
+  assert.ok(on.checks.some(c => c.code === 'sin-none' && c.level === 'warn'), '000 000 000 can still be filed');
+});
+
+test('A difference of $2 or less is neither owed nor refunded', () => {
+  const runs = [{ payDate: '2026-04-15', lines: [line('d', 'ON', 1000, { ded: { fedTax: 100 } })] }];
+  const emps = [{ id: 'd', name: 'D', prov: 'ON', dental: 1 }];
+  const s1 = P.yearEnd({ year: 2026, employees: emps, payruns: runs, remittances: [{ agency: 'cra', period: '2026-04', amount: 98.5 }] }).t4sum;
+  assert.equal(s1[86], 0); assert.equal(s1.difference, 1.5);
+  const s2 = P.yearEnd({ year: 2026, employees: emps, payruns: runs, remittances: [{ agency: 'cra', period: '2026-04', amount: 97 }] }).t4sum;
+  assert.equal(s2[86], 3);
+  assert.equal(P.sinProblem('000000000'), 'none');
 });
