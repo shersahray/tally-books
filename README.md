@@ -163,7 +163,16 @@ To build an installer for the computer you're on:
 npm run dist         # output goes to dist/
 ```
 
-The desktop app keeps its books in your user data folder. **File → Show data folder** in the app opens it.
+The desktop app keeps its books in your user data folder (on Windows `C:\Users\<you>\AppData\Roaming\Tally Books`). **File → Show data folder** in the app opens it.
+
+To keep them somewhere else, such as a second drive, open **File → Where the books are**, and under *On this computer* click **Choose folder…**:
+- Your books are moved there: closed, copied, every file checked, opened from the new folder, and only then removed from the old one. If anything goes wrong they stay where they were.
+- A folder that already has books in it opens those books instead (the ones in the old folder stay put).
+- A folder with other files in it gets a *Tally Books* folder inside it, so nothing of yours is touched.
+- Folders synced by OneDrive, Google Drive, Dropbox or iCloud, and network drives, get a warning: syncing or a dropped connection can damage books while they're being saved. Put the daily backups there instead (Settings → Backups).
+- If the folder can't be found when the app starts (an unplugged drive), the app says so and lets you try again or choose the folder, rather than starting empty books.
+
+Choosing the standard folder again moves the books back.
 
 ### Automatic installers from GitHub
 

@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, Menu, shell, dialog, ipcMain, net, nativeTheme } = require('electron');
 const { serverOrigin, netMessage } = require('./connection');
+const folders = require('./datafolder');
 
 let server = null;    // the private server, in "this computer" mode only
 let win = null;
@@ -29,16 +30,21 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-const dataDir = () => app.getPath('userData');
-const configFile = () => path.join(dataDir(), 'desktop.json');
+// The app's own folder holds desktop.json (and Electron's files). The books are there too unless
+// someone chose another folder (File → Where the books are → Choose folder).
+const appDir = () => app.getPath('userData');
+const configFile = () => path.join(appDir(), 'desktop.json');
+const dataDir = () => { const c = readConfig(); return (c && c.dataDir) || appDir(); };
 function readConfig() {
   try { const c = JSON.parse(fs.readFileSync(configFile(), 'utf8')); return c && (c.mode === 'local' || c.mode === 'server') ? c : null; } catch { return null; }
 }
 function saveConfig(c) {
-  fs.mkdirSync(dataDir(), { recursive: true });
-  fs.writeFileSync(configFile(), JSON.stringify(c, null, 2));
+  fs.mkdirSync(appDir(), { recursive: true });
+  const tmp = configFile() + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(c, null, 2));
+  fs.renameSync(tmp, configFile());
 }
-const hasLocalBooks = () => ['companies.json', 'users.json', 'tally-books.db'].some(f => fs.existsSync(path.join(dataDir(), f)));
+const hasLocalBooks = () => folders.hasBooks(dataDir());
 
 /** Is a Tally Books server answering there? */
 async function checkServer(o) {
@@ -63,6 +69,8 @@ async function openBooks() {
   const c = readConfig();
   if (!c) return showConnect('setup');
   if (c.mode === 'local') {
+    // A chosen folder that isn't there (a drive that's unplugged or not connected): say so rather than start empty books.
+    if (c.dataDir && !fs.existsSync(c.dataDir)) { lastError = ''; return showConnect('missing'); }
     await startLocal();
     origin = `http://127.0.0.1:${server.address().port}`;
   } else {
@@ -117,12 +125,12 @@ async function start() {
   ipcMain.handle('desktop:info', e => {
     if (!fromConnectPage(e)) return null;
     const c = readConfig();
-    return { mode: c ? c.mode : '', serverUrl: (c && c.serverUrl) || '', lastServerUrl: (c && (c.serverUrl || c.lastServerUrl)) || '', hasLocalBooks: hasLocalBooks(), error: lastError };
+    return { mode: c ? c.mode : '', serverUrl: (c && c.serverUrl) || '', lastServerUrl: (c && (c.serverUrl || c.lastServerUrl)) || '', hasLocalBooks: fs.existsSync(dataDir()) && hasLocalBooks(), dataDir: dataDir(), standardDir: !(c && c.dataDir), error: lastError };
   });
   ipcMain.handle('desktop:use-local', async e => {
     if (!fromConnectPage(e)) return { error: 'Not allowed.' };
     const c = readConfig() || {};
-    saveConfig({ mode: 'local', lastServerUrl: c.serverUrl || c.lastServerUrl || '' });
+    saveConfig({ mode: 'local', lastServerUrl: c.serverUrl || c.lastServerUrl || '', ...(c.dataDir ? { dataDir: c.dataDir } : {}) });
     await openBooks();
     return { ok: true };
   });
@@ -131,7 +139,8 @@ async function start() {
     try {
       const o = serverOrigin(input);
       await checkServer(o);
-      saveConfig({ mode: 'server', serverUrl: o });
+      const c = readConfig() || {};
+      saveConfig({ mode: 'server', serverUrl: o, ...(c.dataDir ? { dataDir: c.dataDir } : {}) });
       await openBooks();
       return { ok: true };
     } catch (err) { return { error: err.message }; }
@@ -142,6 +151,69 @@ async function start() {
     return { ok: true };
   });
   ipcMain.handle('desktop:change', e => (fromConnectPage(e) ? showConnect('setup') : null));
+
+  // Choosing the folder for the books on this computer. Only a folder picked in the system's own
+  // folder window can be used, so a page can't point the books somewhere on its own.
+  let picked = null, busy = false;
+  ipcMain.handle('desktop:pick-folder', async e => {
+    if (!fromConnectPage(e)) return { error: 'Not allowed.' };
+    if (busy) return { error: 'The books are being moved. Wait a moment.' };
+    const fr = /^fr/i.test(app.getLocale ? app.getLocale() : '');
+    const r = await dialog.showOpenDialog(win, {
+      title: fr ? 'Dossier des livres' : 'Folder for the books',
+      defaultPath: fs.existsSync(dataDir()) ? dataDir() : appDir(),
+      buttonLabel: fr ? 'Choisir ce dossier' : 'Choose this folder',
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths[0]) { picked = null; return { cancel: true }; }
+    try { fs.mkdirSync(r.filePaths[0], { recursive: true }); } catch { /* checked next */ }
+    const check = folders.checkFolder(r.filePaths[0], dataDir(), { standard: appDir() });
+    picked = check.target && !check.same ? check : null;
+    return { ...check, hasBooks: fs.existsSync(dataDir()) && hasLocalBooks() };
+  });
+  ipcMain.handle('desktop:use-folder', async (e, how) => {
+    if (!fromConnectPage(e)) return { error: 'Not allowed.' };
+    if (busy) return { error: 'The books are being moved. Wait a moment.' };
+    if (!picked) return { error: 'Choose a folder.' };
+    const check = picked; picked = null;
+    busy = true;
+    try { return await useFolder(check, how); } finally { busy = false; }
+  });
+  async function useFolder(check, how) {
+    const c = readConfig() || {};
+    const keep = { lastServerUrl: c.serverUrl || c.lastServerUrl || '' };
+    const conf = dir => (check.standard || folders.same(dir, appDir()) ? { mode: 'local', ...keep } : { mode: 'local', ...keep, dataDir: dir });
+    const from = dataDir();
+    if (how === 'open' || check.booksThere || !fs.existsSync(from) || !folders.hasBooks(from)) {
+      // Use that folder as it is (its own books, or new empty books). The books here stay where they are.
+      await stopLocal(); // the private server still has the old folder open
+      saveConfig(conf(check.target));
+      await openBooks();
+      return { ok: true };
+    }
+    // Move: close the books, copy them, check every file, open them from the new folder, then remove the old copy.
+    await stopLocal();
+    let items;
+    try { items = folders.copyBooks(from, check.target); } catch (err) {
+      await openBooks();
+      return { error: 'The books couldn’t be moved, so they stay where they were. ' + err.message };
+    }
+    saveConfig(conf(check.target));
+    try { await openBooks(); } catch (err) {
+      await stopLocal();
+      folders.removeBooks(check.target, folders.BOOK_ITEMS); // the copy, and anything the new server started there
+      saveConfig(c.mode ? c : { mode: 'local' });
+      await openBooks();
+      return { error: 'The books couldn’t be opened from the new folder, so they stay where they were.' };
+    }
+    const left = folders.removeBooks(from, items);
+    if (left.length) {
+      const fr = /^fr/i.test(app.getLocale ? app.getLocale() : '');
+      dialog.showMessageBox(win, { type: 'warning', message: fr ? 'Les livres ont été déplacés.' : 'Your books were moved.',
+        detail: (fr ? 'L’ancienne copie n’a pas pu être entièrement supprimée. Vous pouvez supprimer ces éléments vous-même :\n' : 'The old copy couldn’t all be removed. You can delete these yourself:\n') + left.map(n => path.join(from, n)).join('\n') }).catch(() => {});
+    }
+    return { ok: true };
+  }
 
   await openBooks();
 }

@@ -8,5 +8,7 @@ if (location.protocol === 'file:') {
     useServer: url => ipcRenderer.invoke('desktop:use-server', String(url || '')),
     retry: () => ipcRenderer.invoke('desktop:retry'),
     change: () => ipcRenderer.invoke('desktop:change'),
+    pickFolder: () => ipcRenderer.invoke('desktop:pick-folder'),
+    useFolder: how => ipcRenderer.invoke('desktop:use-folder', how === 'open' ? 'open' : 'move'),
   });
 }

@@ -30,6 +30,9 @@
   .hint{font-size:13px;color:var(--muted)}
   .pill{display:inline-block;font-size:11.5px;font-weight:600;border-radius:10px;padding:1px 9px;background:var(--accent-soft);color:var(--accent);margin-left:6px;vertical-align:2px}
   .row{display:flex;gap:10px;flex-wrap:wrap}
+  .path{font-weight:600;word-break:break-all}
+  .panel{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:10px;font-size:14px}
+  .warn{color:var(--neg)}
   [hidden]{display:none!important}
 </style>
 </head>
@@ -55,10 +58,24 @@
         <p data-t>Just you, on this computer. The books are saved here and backed up every day. Nobody else can open them.</p>
         <p id="localHas" hidden data-t>This computer already has books in Tally Books. They stay here whichever you choose.</p>
         <div class="grow"></div>
-        <div><button type="button" id="localBtn" data-t>Use this computer</button></div>
+        <div class="hint"><span data-t>Books folder:</span> <b id="dirPath" class="path" translate="no"></b></div>
+        <div class="row"><button type="button" id="localBtn" data-t>Use this computer</button><button type="button" id="dirBtn" data-t>Choose folder…</button></div>
+        <div class="err" id="dirErr" role="alert"></div>
+        <div class="panel" id="dirPanel" hidden></div>
       </div>
     </div>
     <div class="row" style="margin-top:18px" id="backRow" hidden><button type="button" id="backBtn" data-t>Back to my books</button></div>
+  </section>
+
+  <section id="missing" hidden>
+    <h1 data-t>Can’t find your books folder</h1>
+    <p class="lead"><b id="missPath" class="path" translate="no"></b></p>
+    <div class="card">
+      <p data-t>The folder may be on a drive that isn’t connected right now. Connect it and try again, or choose the folder where the books are now.</p>
+      <div class="row"><button class="primary" type="button" id="missRetry" data-t>Try again</button><button type="button" id="missPick" data-t>Choose folder…</button><button type="button" id="missChange" data-t>Other choices</button></div>
+      <div class="err" id="missErr" role="alert"></div>
+      <div class="panel" id="missPanel" hidden></div>
+    </div>
   </section>
 
   <section id="offline" hidden>
