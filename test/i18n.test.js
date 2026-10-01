@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 function load(lang) {
-  const ctx = { navigator: { language: lang }, localStorage: { getItem: () => null, setItem() {} }, document: { addEventListener() {}, documentElement: {} },
+  const ctx = { navigator: { language: lang }, localStorage: { getItem: () => null, setItem() {} }, document: { addEventListener() {}, documentElement: { setAttribute() {} } },
     location: {}, MutationObserver: class { observe() {} }, Document: class {}, NodeFilter: {}, console };
   vm.createContext(ctx);
   const pub = f => fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8');
