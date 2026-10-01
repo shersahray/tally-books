@@ -28,7 +28,9 @@ const runOrder=(a,b)=>a.payDate.localeCompare(b.payDate)||(a.created||0)-(b.crea
    "accrue": set aside each pay (a liability) and paid out when the employee takes vacation or leaves.
    "each": added to every pay. "salary": the salary simply continues while they're on vacation. */
 const VAC_MODES=[['accrue','Set it aside, and pay it when they take vacation or leave'],['each','Add it to every pay'],['salary','None: their salary continues while they’re on vacation']];
-const vacMode=e=>['accrue','each','salary'].includes(e.vacMode)?e.vacMode:(e.payType==='hourly'?'accrue':'salary');
+// Employees saved before vacation pay existed have no method yet: nothing is set aside until one is chosen.
+const vacMode=e=>['accrue','each','salary'].includes(e.vacMode)?e.vacMode:'salary';
+const vacModeDefault=e=>['accrue','each','salary'].includes(e.vacMode)?e.vacMode:(e.payType==='hourly'?'accrue':'salary');
 function vacRateFor(e,date){
   if(e.vacRate!==''&&e.vacRate!=null&&!isNaN(+e.vacRate))return{rate:+e.vacRate,custom:true};
   return PR.vacationRate(e.prov,e.hireDate,date);
@@ -203,7 +205,7 @@ function employeeForm(emp){
       ${num('eRate',e.payType==='hourly'?'Hourly rate':'Annual salary',e.rate)}
       ${num('eHours','Usual hours per pay',e.hours,'Filled in on each pay run')}</div>
     <h3 class="fsec">Vacation pay</h3>
-    <div class="fields">${fld('eVacMode','Vacation pay',`<select id="eVacMode">${VAC_MODES.map(([k,l])=>`<option value="${k}" ${vacMode(e)===k?'selected':''}>${l}</option>`).join('')}</select>`,true)}
+    <div class="fields">${fld('eVacMode','Vacation pay',`<select id="eVacMode">${VAC_MODES.map(([k,l])=>`<option value="${k}" ${vacModeDefault(e)===k?'selected':''}>${l}</option>`).join('')}</select>`,true)}
       <div data-vac style="display:contents">${fld('eVacRate','Vacation pay rate (%)',`<input type="number" id="eVacRate" step="0.01" min="0" max="100" inputmode="decimal" value="${v(e.vacRate)}" placeholder="${vr.rate}"><span class="hint" data-vachint></span>`)}</div>
       <div data-vacacc style="display:contents">${num('eVacOpen','Vacation pay owed before Tally Books',e.vacOpening,'Set aside and not yet paid, from your previous payroll')}</div></div>
     <h3 class="fsec">Tax claims (TD1)</h3>
@@ -298,6 +300,7 @@ function payRunForm(){
         <div class="fields">${PR.EMPLOYEE_ITEMS.filter(([k])=>qc?!['cpp','cpp2','provTax'].includes(k):!['qpp','qpp2','qpip','qcTax'].includes(k)).map(([k,l])=>inp(k,l,'ded')).join('')}${inp('rrsp','RRSP / pension','x')}${inp('union','Union dues','x')}</div>
         <div class="flabel" style="margin:10px 0 6px">Employer contributions</div>
         <div class="fields">${PR.EMPLOYER_ITEMS.filter(([k])=>qc?!['cpp','cpp2'].includes(k):!['qpp','qpp2','qpip','hsf'].includes(k)).map(([k,l])=>inp(k,l,'er')).join('')}</div>
+        ${e.payType==='hourly'&&!e.vacMode?`<div class="neg" style="font-size:12.5px;margin-top:8px">Vacation pay isn’t set up for this employee yet. Choose how it’s paid on their employee page.</div>`:''}
         <div data-note class="muted" style="font-size:12.5px;margin-top:8px"></div>
         <button type="button" class="btn ghost sm" data-reset style="margin-top:6px">Recalculate all amounts</button>
       </div></div>`};
@@ -323,7 +326,7 @@ function payRunForm(){
       hn.innerHTML=parts.map(x=>`<div><b>${esc(x.h.name)}</b> · <span>${fmtDate(x.h.date)}: ${money(x.pay)}, which is 1/20 of ${money(x.base)} earned from ${fmtDate(x.window.from)} to ${fmtDate(x.window.to)}</span></div>`).join('')+
         (short?`<div class="neg">Tally Books has ${esc(e.name)}’s pay only from ${fmtDate(firstPay)}, so pay before that isn’t counted. Check the holiday pay against your earlier payroll.</div>`:'')+
         `<div>${['ON','QC'].includes(e.prov)?'':'<span>This is the Ontario and Quebec formula. Check your province’s rule.</span> '}<span>If ${esc(e.name)} worked on the holiday, add the premium pay under Other pay.</span>${e.prov==='ON'?' <span>Ontario counts vacation pay paid in those weeks too.</span>':''}</div>`;
-    }else{auto('[data-hol]',0);auto('[data-holhrs]',0)}
+    }else for(const k of ['[data-hol]','[data-holhrs]']){const el=q(k);if(el){delete el.dataset.ov;delete el.dataset.ovk;el.value=''}}
     // Vacation pay on regular, holiday and other pay.
     const vm=vacMode(e),vr=vacRateFor(e,date).rate,base=val('[data-reg]')+val('[data-hol]')+val('[data-other]');
     const fin=q('[data-final]').checked;
@@ -331,7 +334,7 @@ function payRunForm(){
     if(vm==='accrue'){
       auto('[data-vacacc]',base*vr/100);
       const owed=vacBalance(e.id,{payDate:date+'~'},false);
-      auto('[data-vac]',fin?owed+val('[data-vacacc]'):0);
+      auto('[data-vac]',fin?Math.max(0,owed+val('[data-vacacc]')):0);
       q('[data-vachint]').textContent=`${vr}% · owed before this pay: ${money(owed)}`;
     }
     const gross=r2(val('[data-reg]')+val('[data-hol]')+val('[data-other]')+val('[data-bonus]')+val('[data-vac]'));

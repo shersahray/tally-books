@@ -486,6 +486,13 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, vacRate: 150 })).status, 400);
   assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, vacMode: 'sometimes' })).status, 400);
   assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, roes: 'x' })).status, 400);
+  const parts2 = await call('POST', '/api/batch', { writes: [entry,
+    { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, regular: 1500, other: 100 }] } }] });
+  assert.equal(parts2.status, 400, 'regular + other must add up too');
+  const roe = await call('PUT', '/api/records/employees/e1', { ...emp, roes: [{ reason: 'E', calc: { type: '<img src=x onerror=alert(1)>', hours: '<b>', periods: [{ n: '<i>', amount: 5 }] } }] });
+  assert.equal(roe.status, 200);
+  const roeCalc = (await call('GET', '/api/state')).json.employees.find(x => x.id === 'e1').roes[0].calc;
+  assert.equal(roeCalc.type, 'B'); assert.equal(roeCalc.hours, 0); assert.equal(roeCalc.periods[0].n, 0);
   const ok = await call('POST', '/api/batch', { writes: [
     { op: 'set', collection: 'entries', id: 'pr_1', data: { type: 'payrun', date: '2026-09-18', lines } },
     { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, regular: 1900, holiday: 100, holidays: [{ date: '2026-09-07', name: 'Labour Day' }, { date: 'bad' }], vacMode: 'accrue', vacAccrued: 80, vacPay: 0 }] } }] });

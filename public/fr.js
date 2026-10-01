@@ -1208,4 +1208,5 @@ addFr({
   'British Columbia Day':'Jour de la Colombie-Britannique','Saskatchewan Day':'Fête de la Saskatchewan','New Brunswick Day':'Jour du Nouveau-Brunswick','Discovery Day':'Jour de la découverte',
   'Labour Day':'Fête du Travail','National Day for Truth and Reconciliation':'Journée nationale de la vérité et de la réconciliation','Thanksgiving':'Action de grâce',
   'Remembrance Day':'Jour du Souvenir','Christmas Day':'Noël','Boxing Day':'Lendemain de Noël',
+  'Vacation pay isn’t set up for this employee yet. Choose how it’s paid on their employee page.':'L’indemnité de vacances n’est pas encore configurée pour cet employé. Choisissez comment elle est versée dans sa fiche d’employé.',
 });

@@ -238,6 +238,13 @@ function validateEmployee(data) {
   if (data.termDate !== undefined && data.termDate !== '' && !isDate(data.termDate)) throw new ValidationError('The last day worked must be YYYY-MM-DD.');
   if (data.roes !== undefined) {
     if (!Array.isArray(data.roes) || data.roes.length > 50 || data.roes.some(r => !isObj(r) || JSON.stringify(r).length > 30000)) throw new ValidationError('The records of employment aren’t valid.');
+    // The figures are numbers, the pay period type one letter.
+    const n = v => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
+    out.roes = data.roes.map(r => {
+      const c = isObj(r.calc) ? r.calc : null;
+      return { ...r, calc: c && { type: ['W', 'B', 'S', 'M'].includes(c.type) ? c.type : 'B', count: n(c.count), hours: n(c.hours), total: n(c.total), vacation: n(c.vacation), outside: n(c.outside),
+        due: isDate(c.due) ? c.due : '', periods: (Array.isArray(c.periods) ? c.periods : []).slice(0, 60).filter(isObj).map(p => ({ n: n(p.n), from: isDate(p.from) ? p.from : '', to: isDate(p.to) ? p.to : '', amount: n(p.amount) })) } };
+    });
   }
   if (data.openingYtd !== undefined) {
     if (!isObj(data.openingYtd)) throw new ValidationError('Opening year-to-date amounts must be an object.');
@@ -283,7 +290,7 @@ function validatePayrun(data, store) {
       if (l[k] === undefined || l[k] === '') continue;
       parts[k] = amt(l[k], { regular: 'regular pay', holiday: 'holiday pay', other: 'other pay', bonus: 'bonus', vacPay: 'vacation pay', vacAccrued: 'vacation pay set aside', holHours: 'holiday hours', hours: 'hours', vacRate: 'vacation pay rate' }[k]) / 100;
     }
-    if (parts.regular !== undefined && ['holiday', 'bonus', 'vacPay'].some(k => parts[k] !== undefined)) {
+    if (parts.regular !== undefined && ['holiday', 'other', 'bonus', 'vacPay'].some(k => parts[k] !== undefined)) {
       const sum = ['regular', 'holiday', 'other', 'bonus', 'vacPay'].reduce((t, k) => t + cents(parts[k] || 0), 0);
       if (sum !== gross) throw new ValidationError(`${emp.name}: regular, holiday, other, bonus and vacation pay don’t add up to gross pay.`);
     }

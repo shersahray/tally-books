@@ -508,7 +508,7 @@
     goodfriday: ['Good Friday', y => addD(easter(y), -2)],
     victoria: ['Victoria Day', y => addD(ymd(y, 5, 25), -(((D(ymd(y, 5, 25)).getUTCDay() + 6) % 7) || 7))],
     patriots: ['National Patriots’ Day', y => addD(ymd(y, 5, 25), -(((D(ymd(y, 5, 25)).getUTCDay() + 6) % 7) || 7))],
-    stjean: ['Fête nationale du Québec', y => ymd(y, 6, 24)],
+    stjean: ['Fête nationale du Québec', y => (D(ymd(y, 6, 24)).getUTCDay() === 0 ? ymd(y, 6, 25) : ymd(y, 6, 24))], // June 25 when the 24th is a Sunday
     indigenous: ['National Indigenous Peoples Day', y => ymd(y, 6, 21)],
     canada: ['Canada Day', y => ymd(y, 7, 1)],
     canadaQc: ['Canada Day', y => (D(ymd(y, 7, 1)).getUTCDay() === 0 ? ymd(y, 7, 2) : ymd(y, 7, 1))], // Quebec: July 2 when July 1 is a Sunday
@@ -607,7 +607,7 @@
       const p = periods.find(x => day >= x.from && day <= x.to);
       vacation = r2(vacation + num(l.separationVac));
       if (!p) { if (day > finalPeriodEnd) outside++; continue; }
-      p.amount = r2(p.amount + num(l.insurable) - num(l.separationVac));
+      p.amount = r2(p.amount + Math.max(0, num(l.insurable) - num(l.separationVac)));
       p.hours = r2(p.hours + num(l.hours));
     }
     return {

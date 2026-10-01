@@ -11,7 +11,8 @@ function roeLines(e){
     if(l.employeeId!==e.id)continue;
     const[from,to]=runPeriod(r);
     const hours=l.payType==='hourly'?(+l.hours||0)+(+l.holHours||0):(+l.hours||+e.hours||0);
-    out.push({from,to,payDate:r.payDate,insurable:l.eiExempt?0:(l.insurable??l.gross),hours,separationVac:l.final&&l.vacMode==='accrue'?(+l.vacPay||0):0,final:!!l.final,eiExempt:!!l.eiExempt});
+    const ex=!!l.eiExempt; // no insurable earnings or hours when exempt from EI
+    out.push({from,to,payDate:r.payDate,insurable:ex?0:(l.insurable??l.gross),hours:ex?0:hours,separationVac:!ex&&l.final&&l.vacMode==='accrue'?(+l.vacPay||0):0,final:!!l.final,eiExempt:ex});
   }
   return out;
 }
@@ -90,10 +91,10 @@ function roeBlocks(emp,r,print){
   const row=(b,label,val)=>`<tr><td class="muted" style="white-space:nowrap">${b}</td><td>${label}</td><td>${val}</td></tr>`;
   const recall=r.recall==='Y'?fmtDate(r.recallDate):r.recall==='N'?'Not returning':'Unknown';
   const name=String(emp.name||'').trim().split(/\s+/),first=name.length>1?name.slice(0,-1).join(' '):name[0],lastName=name.length>1?name[name.length-1]:'';
-  const pp=c.periods.map(p=>`<div class="roe-pp"><span class="muted">${p.n}</span><span>${money(p.amount)}</span></div>`).join('');
+  const pp=(c.periods||[]).map(p=>`<div class="roe-pp"><span class="muted">${+p.n||0}</span><span>${money(+p.amount||0)}</span></div>`).join('');
   return `<div class="tbl-wrap"><table class="roe-tbl"><tbody>
     ${row('5','CRA payroll account number',`<span translate="no">${esc(cfg.craAccount||'—')}</span>`)}
-    ${row('6','Pay period type',`${c.type} · ${ROE_TYPE_LABEL[c.type]||''}`)}
+    ${row('6','Pay period type',`${esc(c.type)} · ${ROE_TYPE_LABEL[c.type]||''}`)}
     ${row('8','Social insurance number',`<span translate="no">${esc(String(emp.sin||'').replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3')||'—')}</span>`)}
     ${row('9','Employee',`<span translate="no">${esc(first)} <b>${esc(lastName)}</b></span>${emp.address?`<div class="muted" style="white-space:pre-line" translate="no">${esc(emp.address)}</div>`:''}`)}
     ${row('10','First day worked',fmtDate(r.firstDay))}
@@ -101,10 +102,10 @@ function roeBlocks(emp,r,print){
     ${row('12','Final pay period ending date',fmtDate(r.finalEnd))}
     ${row('13','Occupation',`<span translate="no">${esc(r.occupation||'—')}</span>`)}
     ${row('14','Expected date of recall',recall)}
-    ${row('15A','Total insurable hours',`<b>${c.hours}</b> <span class="muted">In the last ${c.count} pay periods</span>`)}
-    ${row('15C','Insurable earnings by pay period',`<b>${money(c.total)}</b> <span class="muted">Pay period 1 is the final one.</span><div class="roe-pps">${pp}</div>`)}
+    ${row('15A','Total insurable hours',`<b>${+c.hours||0}</b> <span class="muted">In the last ${+c.count||0} pay periods</span>`)}
+    ${row('15C','Insurable earnings by pay period',`<b>${money(+c.total||0)}</b> <span class="muted">Pay period 1 is the final one.</span><div class="roe-pps">${pp}</div>`)}
     ${row('16','Reason for issuing',r.reason?`${esc(r.reason)} · ${esc(ROE_REASON[r.reason]||'')}${r.contact?`<div class="muted"><span>Contact:</span> <span translate="no">${esc(r.contact)}${r.phone?`, ${esc(r.phone)}`:''}</span></div>`:''}`:'—')}
-    ${row('17A','Vacation pay paid because they’re leaving',c.vacation?money(c.vacation):'—')}
+    ${row('17A','Vacation pay paid because they’re leaving',+c.vacation?money(+c.vacation):'—')}
     ${row('17B','Statutory holiday pay after the last day',r.holAmt?`${fmtDate(r.holDate)} · ${money(r.holAmt)}`:'—')}
     ${row('17C','Other money',r.otherAmt?`<span translate="no">${esc(r.other)}</span> · ${money(r.otherAmt)}`:'—')}
     ${row('18','Comments',`<span translate="no">${esc(r.comments||'—')}</span>`)}

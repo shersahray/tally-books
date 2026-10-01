@@ -281,3 +281,10 @@ test('ROE: insurable earnings and hours by pay period, newest first, vacation pa
   assert.equal(P.roe({ freq: 'monthly', finalPeriodEnd: '2026-08-31', lines }).outside, 2);
   assert.equal(P.roe({ freq: 'semimonthly', finalPeriodEnd: '2026-09-30', lines: [] }).count, 25);
 });
+
+test('Review fixes: Fête nationale on a Sunday, and no negative ROE earnings', () => {
+  assert.equal(P.holidays('QC', 2029).find(h => h.key === 'stjean').date, '2029-06-25');
+  assert.equal(P.holidays('QC', 2026).find(h => h.key === 'stjean').date, '2026-06-24');
+  const r = P.roe({ freq: 'biweekly', finalPeriodEnd: '2026-09-26', lines: [{ to: '2026-09-26', insurable: 0, separationVac: 500 }] });
+  assert.equal(r.periods[0].amount, 0);
+});

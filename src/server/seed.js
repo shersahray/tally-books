@@ -226,8 +226,8 @@ function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0, province = 
   // Two employees so the Payroll screen has someone to pay.
   const prov = province || (qstRate > 0 ? 'QC' : 'ON');
   const emp = (id, data) => out.push({ collection: 'employees', id, data: { prov, freq: 'biweekly', active: true, hireDate: daysAgo(400, now), example: true, created: cr(), ...data } });
-  emp('x_emp1', { name: 'Jordan Lee', email: 'jordan@example.com', payType: 'salary', rate: 58000, hours: 75 });
-  emp('x_emp2', { name: 'Sam Patel', email: 'sam@example.com', payType: 'hourly', rate: 24.5, hours: 60 });
+  emp('x_emp1', { name: 'Jordan Lee', email: 'jordan@example.com', payType: 'salary', rate: 58000, hours: 75, vacMode: 'salary', occupation: 'Studio manager' });
+  emp('x_emp2', { name: 'Sam Patel', email: 'sam@example.com', payType: 'hourly', rate: 24.5, hours: 60, vacMode: 'accrue', occupation: 'Instructor' });
   return out;
 }
 
