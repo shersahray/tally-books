@@ -12,6 +12,10 @@ const LS_LANG='tb_lang';
 function lsLang(){try{return localStorage.getItem(LS_LANG)||''}catch(e){return ''}}
 I18N.lang=(lsLang()||((navigator.language||'').toLowerCase().startsWith('fr')?'fr':'en'))==='fr'?'fr':'en';
 const LOC=()=>I18N.lang==='fr'?'fr-CA':'en-CA';
+// The app has its own English/Français switch. Browser auto-translation garbles accounting terms
+// (for example it reads “Rate” as the French “raté”, missed), so turn it off.
+document.documentElement.setAttribute('translate','no');
+document.documentElement.lang=I18N.lang==='fr'?'fr-CA':'en-CA';
 const isFr=()=>I18N.lang==='fr';
 
 /** Choose a language. Saved in this browser and, when signed in, on the account. Reloads to redraw everything. */

@@ -30,7 +30,7 @@ jobs:
           node scripts/build-demo.js
           mkdir -p site
           {
-            echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            echo '<!doctype html><html lang="en" translate="no"><head><meta charset="utf-8"><meta name="google" content="notranslate">'
             echo '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             echo '<link rel="icon" href="icon.svg" type="image/svg+xml"></head><body>'
             cat dist/demo.html
