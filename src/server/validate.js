@@ -103,7 +103,7 @@ function bankAccount(store, id) {
 }
 
 const BANK_STATUS = ['new', 'added', 'matched', 'excluded'];
-function validateBankTxn(data, store) {
+function validateBankTxn(data, store, id) {
   bankAccount(store, data.account);
   if (!isDate(data.date)) throw new ValidationError('Bank transaction date must be YYYY-MM-DD.');
   const amt = Number(data.amount);
@@ -112,7 +112,12 @@ function validateBankTxn(data, store) {
   if ((data.status === 'added' || data.status === 'matched') && !store.get('entries', data.entryId)) {
     throw new ValidationError('The transaction this bank line points to doesn’t exist.');
   }
-  return { ...data, amount: cents(amt) / 100, desc: str(data.desc, 300), entryId: data.status === 'added' || data.status === 'matched' ? data.entryId : '' };
+  // AI suggestions are only written by the server's AI route; an edit can keep one but not make one up.
+  const prev = id ? store.get('bankTxns', id) : null;
+  const out = { ...data, amount: cents(amt) / 100, desc: str(data.desc, 300), entryId: data.status === 'added' || data.status === 'matched' ? data.entryId : '' };
+  delete out.ai;
+  if (data.ai && prev && prev.ai && JSON.stringify(prev.ai) === JSON.stringify(data.ai)) out.ai = prev.ai;
+  return out;
 }
 
 function validateRule(data, store) {
@@ -235,7 +240,7 @@ function validateRecord(collection, id, data, store) {
     case 'contacts': return validateContact(data);
     case 'docs': return validateDoc(data);
     case 'entries': return validateEntry(data, store);
-    case 'bankTxns': return validateBankTxn(data, store);
+    case 'bankTxns': return validateBankTxn(data, store, id);
     case 'rules': return validateRule(data, store);
     case 'recons': return validateRecon(data, store);
     case 'filings': return validateFiling({ ...data, id }, store);

@@ -6,7 +6,7 @@
 let AIS=null,aiTried=0,aiBusy=false;
 async function loadAI(){try{AIS=await api('GET','/api/ai')}catch(e){AIS={configured:false,unavailable:true}}}
 const usd=v=>isFr()?(+v||0).toLocaleString('fr-CA',{minimumFractionDigits:2,maximumFractionDigits:2})+' $ US':'US$'+(+v||0).toFixed(2);
-const aiOn=()=>!!(AIS&&AIS.configured&&S.company.ai&&ME&&!ME.readOnly);
+const aiOn=()=>!!(AIS&&AIS.configured&&S.company.ai&&ME&&!ME.readOnly&&ME.role!=='client');
 
 // Used by suggest() in banking.js, after matches, rules and "same as last time".
 function aiSuggestion(b){

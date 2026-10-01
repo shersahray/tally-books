@@ -24,6 +24,7 @@ const MODELS = {
 const DEFAULT_MODEL = 'claude-haiku-4-5';
 const PER_CALL = 40;          // bank lines per API request
 const MAX_LINES = 200;        // bank lines per click
+const MAX_INFLIGHT = 2;     // AI calls at once, for the whole server
 const API_URL = 'https://api.anthropic.com/v1/messages';
 
 class AI {
@@ -38,8 +39,24 @@ class AI {
     this.envKey = o.envKey || '';
     this.apiUrl = o.apiUrl || API_URL;
     this.settings = { apiKey: '', model: DEFAULT_MODEL, capUsd: 20, usage: {} };
+    this.inflight = 0; this.reserved = 0;
     try { Object.assign(this.settings, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch { /* first run */ }
     if (!MODELS[this.settings.model]) this.settings.model = DEFAULT_MODEL;
+  }
+  /** Refuse early (before reading an upload) when AI can't or shouldn't run. */
+  precheck(company) {
+    if (!this.key()) throw new ValidationError('AI suggestions aren’t set up yet. An owner adds the API key in Settings.', 409);
+    if (!company.ai) throw new ValidationError('AI suggestions are turned off for this company. Turn them on in Settings.', 409);
+    if (this.spent() + this.reserved >= this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} has been reached. An owner can raise it in Settings.`, 429);
+    if (this.inflight >= MAX_INFLIGHT) throw new ValidationError('AI is busy with another request. Try again in a moment.', 429);
+  }
+  /** Hold back an estimate of a call's cost so parallel requests can't run past the monthly limit. */
+  async reserve(model, inTokens, outTokens, fn) {
+    const p = MODELS[model], est = (inTokens * p.in + outTokens * p.out) / 1e6;
+    if (this.spent() + this.reserved + est > this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} would be passed. An owner can raise it in Settings.`, 429);
+    if (this.inflight >= MAX_INFLIGHT) throw new ValidationError('AI is busy with another request. Try again in a moment.', 429);
+    this.inflight++; this.reserved += est;
+    try { return await fn(); } finally { this.inflight--; this.reserved = Math.max(0, this.reserved - est); }
   }
   key() { return this.envKey || this.settings.apiKey || ''; }
   month() { return new Date().toISOString().slice(0, 7); }
@@ -56,6 +73,7 @@ class AI {
     return out;
   }
   update(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ValidationError('Send the AI settings as an object.');
     if (body.apiKey !== undefined) {
       const k = String(body.apiKey || '').trim();
       if (k && !/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(k)) throw new ValidationError('That doesn’t look like a Claude API key. It starts with “sk-ant-”.');
@@ -73,8 +91,8 @@ class AI {
     this.save();
     return this.status(true);
   }
-  record(usage, lines) {
-    const p = MODELS[this.settings.model], m = this.month();
+  record(usage, lines, model) {
+    const p = MODELS[model] || MODELS[this.settings.model], m = this.month();
     const usd = ((usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) * 1.25 + (usage.cache_read_input_tokens || 0) * 0.1) * p.in / 1e6
       + (usage.output_tokens || 0) * p.out / 1e6;
     const u = this.settings.usage[m] || { usd: 0, lines: 0, calls: 0 };
@@ -94,9 +112,7 @@ class AI {
    * @returns {Promise<{suggestions: object, usd: number}>} suggestions keyed by bank line id.
    */
   async suggest(store, company, ids) {
-    if (!this.key()) throw new ValidationError('AI suggestions aren’t set up yet. An owner adds the API key in Settings.', 409);
-    if (!company.ai) throw new ValidationError('AI suggestions are turned off for this company. Turn them on in Settings.', 409);
-    if (this.spent() >= this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} has been reached. An owner can raise it in Settings.`, 429);
+    this.precheck(company);
     const lines = [...new Set(ids)].slice(0, MAX_LINES).map(id => store.get('bankTxns', id)).filter(b => b && b.status === 'new');
     if (!lines.length) return { suggestions: {}, usd: 0 };
 
@@ -156,7 +172,6 @@ class AI {
 
     const out = {}; let usd = 0;
     for (let i = 0; i < lines.length; i += PER_CALL) {
-      if (this.spent() >= this.settings.capUsd) break;
       const chunk = lines.slice(i, i + PER_CALL);
       const own = chunk.map(b => ({ line: b.id, date: b.date, description: b.desc, amount: b.amount,
         direction: b.amount > 0 ? 'money in' : 'money out', bankAccount: (byId.get(b.account) || {}).name || '' }));
@@ -168,8 +183,10 @@ class AI {
         tool_choice: { type: 'tool', name: tool.name },
         messages: [{ role: 'user', content: 'Suggest a category for each of these bank lines:\n' + JSON.stringify(own) }],
       };
-      const r = await this.call(body);
-      usd += this.record(r.usage || {}, chunk.length);
+      const inTok = Math.ceil((JSON.stringify(body.system).length + body.messages[0].content.length) / 3);
+      let r;
+      try { r = await this.reserve(body.model, inTok, body.max_tokens, () => this.call(body)); } catch (e) { if (i && e.status === 429) break; throw e; }
+      usd += this.record(r.usage || {}, chunk.length, body.model);
       const use = (r.content || []).find(c => c.type === 'tool_use');
       for (const s of (use && use.input && use.input.suggestions) || []) {
         const b = chunk.find(x => x.id === s.line), a = byId.get(s.account);
@@ -193,9 +210,7 @@ class AI {
    * @param {{fileName:string, mediaType:string, data:string}} file  data is base64.
    */
   async read(store, company, file) {
-    if (!this.key()) throw new ValidationError('AI suggestions aren’t set up yet. An owner adds the API key in Settings.', 409);
-    if (!company.ai) throw new ValidationError('AI suggestions are turned off for this company. Turn them on in Settings.', 409);
-    if (this.spent() >= this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} has been reached. An owner can raise it in Settings.`, 429);
+    this.precheck(company);
     const type = String(file.mediaType || '');
     const isPdf = type === 'application/pdf';
     if (!isPdf && !['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(type)) throw new ValidationError('Choose a PDF or a photo (JPEG, PNG or WebP).');
@@ -250,8 +265,10 @@ class AI {
         { type: 'text', text: 'Read this ' + (isPdf ? 'document' : 'photo') + ' and record it.' },
       ] }],
     };
-    const r = await this.call(body);
-    const usd = this.record(r.usage || {}, 0);
+    // Images are about 1,600 tokens; a PDF page is a few thousand. Estimate high so the limit holds.
+    const inTok = Math.ceil(JSON.stringify(body.system).length / 3) + (isPdf ? Math.min(400000, Math.ceil(data.length / 20)) : 2000);
+    const r = await this.reserve(body.model, inTok, body.max_tokens, () => this.call(body));
+    const usd = this.record(r.usage || {}, 0, body.model);
     const use = (r.content || []).find(c => c.type === 'tool_use');
     const x = (use && use.input) || {};
     const amt = v => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);

@@ -122,3 +122,27 @@ test('AI reads a receipt into a draft, checked against the books, and saves noth
   assert.equal((await call('GET', '/api/c/state')).json.entries.length, 0, 'nothing saved');
   assert.equal((await call('POST', '/api/c/ai/read', { fileName: 'x.exe', mediaType: 'application/x-msdownload', data: png })).status, 400);
 });
+
+test('AI: clients can’t spend, suggestions can’t be faked, and parallel calls respect the limit', async () => {
+  await call('PUT', '/api/ai', { apiKey: KEY, capUsd: 50 });
+  // A client who can edit still can't use AI.
+  const inv = (await call('POST', '/api/users', { name: 'C', username: 'c@example.com', role: 'client', companies: [co], invite: true })).json.user.link;
+  const acc = await fetch(base + '/api/auth/link/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: inv, password: 'client long phrase' }) });
+  const cc = acc.headers.get('set-cookie').split(';')[0];
+  const asClient = await fetch(`${base}/api/c/${co}/ai/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json', cookie: cc }, body: JSON.stringify({ ids: ['b3'] }) });
+  assert.equal(asClient.status, 403);
+  // Writing a bank line can't invent an AI suggestion.
+  await call('PUT', '/api/c/records/bankTxns/b9', { account: 'a1000', date: '2026-09-10', desc: 'X', amount: -1, status: 'new', ai: { account: 'a6400', confidence: 'high', reason: 'trust me' } });
+  assert.equal((await call('GET', '/api/c/state')).json.bankTxns.find(b => b.id === 'b9').ai, undefined);
+  assert.equal((await fetch(base + '/api/ai', { method: 'PUT', headers: { 'Content-Type': 'application/json', cookie }, body: 'null' })).status, 400);
+  // Slow API: three calls at once, only two run.
+  let release;
+  const gate = new Promise(r => { release = r; });
+  reply = () => ({ content: [{ type: 'tool_use', name: 'suggest_categories', input: { suggestions: [] } }], usage: { input_tokens: 100, output_tokens: 10 } });
+  fake.removeAllListeners('request');
+  fake.on('request', (req, res) => { let b = ''; req.on('data', c => { b += c; }); req.on('end', async () => { await gate; res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(reply(JSON.parse(b)))); }); });
+  const runs = ['b2', 'b3', 'b9'].map(id => call('POST', '/api/c/ai/suggest', { ids: [id] }));
+  await new Promise(r => setTimeout(r, 300)); release();
+  const codes = (await Promise.all(runs)).map(r => r.status).sort();
+  assert.deepEqual(codes, [200, 200, 429]);
+});

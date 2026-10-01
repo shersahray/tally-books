@@ -405,6 +405,7 @@ function createApp(opts) {
     }],
     // AI suggestions for bank lines waiting for review. Suggestions are saved on each line; nothing is added to the books.
     ['POST', /^\/ai\/suggest$/, async (ctx, req) => {
+      notClient(ctx.user); // AI costs money: only the bookkeeper's team uses it
       const body = await readJson(req);
       if (!Array.isArray(body.ids) || !body.ids.length) throw new ValidationError('Choose the bank lines to suggest categories for.');
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
@@ -422,10 +423,12 @@ function createApp(opts) {
     }],
     // Read a receipt or bill with AI and return a draft. Nothing is saved; the file isn't kept.
     ['POST', /^\/ai\/read$/, async (ctx, req) => {
-      const body = await readJson(req, 15 * 1024 * 1024);
+      notClient(ctx.user);
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
-      const out = await ai.read(ctx.store, company, body || {});
-      ctx.store.audit(ctx.user, 'ai', { collection: 'entries', summary: `AI read ${String(body.fileName || 'a document').slice(0, 80)}` });
+      ai.precheck(company); // before reading a large upload
+      const body = (await readJson(req, 15 * 1024 * 1024)) || {};
+      const out = await ai.read(ctx.store, company, body);
+      ctx.store.audit(ctx.user, 'ai', { summary: `AI read ${String(body.fileName || 'a document').slice(0, 80)}` });
       return { ok: true, ...out };
     }],
     ['POST', /^\/examples$/, ctx => {
