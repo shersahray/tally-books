@@ -517,6 +517,15 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   // Capital asset accounts, and the adjustment the Quick Method posts when a return is filed.
   assert.equal((await call('PUT', '/api/records/accounts/a1500', { code: '1500', name: 'Equipment', type: 'Asset', detail: 'capital' })).status, 200);
   assert.equal((await call('PUT', '/api/settings', { ...s, quickMethod: { on: true, from: '2026-02-01' } })).status, 400, 'mid-quarter start');
+  // Non-profit settings are cleaned up; unknown organization types become a business.
+  assert.equal((await call('PUT', '/api/settings', { ...s, orgType: 'charity', nonprofit: { charityNo: ' 123456789 rr0001 ', itcPct: 150, netTax: 'x', rebate: false } })).status, 200);
+  let co = (await call('GET', '/api/state')).json.company;
+  assert.equal(co.orgType, 'charity'); assert.deepEqual(co.nonprofit, { qualifying: false, charityNo: '123456789RR0001', netTax: 'charity', itcPct: 100, rebate: false, capitalItc: true });
+  // A charity can't keep the Quick Method on.
+  assert.equal((await call('PUT', '/api/settings', { ...s, orgType: 'charity', quickMethod: { on: true, from: '2026-01-01' } })).status, 200);
+  assert.equal((await call('GET', '/api/state')).json.company.quickMethod.on, false);
+  assert.equal((await call('PUT', '/api/settings', { ...s, orgType: 'club' })).status, 200);
+  co = (await call('GET', '/api/state')).json.company; assert.equal(co.orgType, 'business');
   assert.equal((await call('PUT', '/api/records/entries/qm1', { type: 'qmadjust', tax: 'gst', date: '2026-09-30', lines: [{ account: 'a1500', debit: 10, credit: 0 }, { account: 'a1000', debit: 0, credit: 10 }] })).status, 200);
   const filing = { tax: 'gst', from: '2026-07-01', to: '2026-09-30', filedOn: '2026-10-01', lines: { 109: 0 }, method: 'quick' };
   assert.equal((await call('PUT', '/api/records/filings/f1', { ...filing, qmEntryId: 'nope' })).status, 400);

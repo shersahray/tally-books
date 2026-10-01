@@ -35,6 +35,50 @@ const DEFAULT_ACCOUNTS = [
   ['7200', 'Utilities', 'Expense', ''],
 ];
 
+// Non-profit organizations and registered charities: revenue by source, and net assets instead of owner's equity.
+const NPO_ACCOUNTS = [
+  ['1000', 'Chequing', 'Asset', 'bank'],
+  ['1010', 'Savings', 'Asset', 'bank'],
+  ['1200', 'Accounts receivable', 'Asset', 'ar'],
+  ['1250', 'Grants receivable', 'Asset', ''],
+  ['1300', 'Prepaid expenses', 'Asset', ''],
+  ['1500', 'Equipment', 'Asset', 'capital'],
+  ['2000', 'Accounts payable', 'Liability', 'ap'],
+  ['2100', 'Credit card', 'Liability', 'card'],
+  ['2200', 'HST payable', 'Liability', 'tax'],
+  ['2500', 'Deferred contributions', 'Liability', ''],
+  ['3000', 'Unrestricted net assets', 'Equity', ''],
+  ['3100', 'Internally restricted net assets', 'Equity', ''],
+  ['3900', 'Opening balance net assets', 'Equity', 'ob'],
+  ['4000', 'Donations', 'Income', ''],
+  ['4100', 'Government grants', 'Income', ''],
+  ['4150', 'Other grants', 'Income', ''],
+  ['4200', 'Membership fees', 'Income', ''],
+  ['4300', 'Program and service fees', 'Income', ''],
+  ['4400', 'Fundraising events', 'Income', ''],
+  ['4900', 'Interest and other income', 'Income', ''],
+  ['6000', 'Advertising and promotion', 'Expense', ''],
+  ['6100', 'Bank charges', 'Expense', ''],
+  ['6200', 'Insurance', 'Expense', ''],
+  ['6300', 'Fundraising expenses', 'Expense', ''],
+  ['6400', 'Office supplies', 'Expense', ''],
+  ['6500', 'Professional fees', 'Expense', ''],
+  ['6600', 'Rent', 'Expense', ''],
+  ['6700', 'Software and subscriptions', 'Expense', ''],
+  ['6800', 'Telephone and internet', 'Expense', ''],
+  ['6900', 'Travel', 'Expense', ''],
+  ['7000', 'Program supplies', 'Expense', ''],
+  ['7100', 'Wages and salaries', 'Expense', ''],
+  ['7200', 'Utilities', 'Expense', ''],
+  ['7300', 'Gifts to qualified donees', 'Expense', ''],
+];
+const NPO_NAMES_FR = {
+  1250: 'Subventions à recevoir', 2500: 'Apports reportés', 3000: 'Actifs nets non affectés', 3100: 'Actifs nets grevés d’affectations internes',
+  3900: 'Actifs nets d’ouverture', 4000: 'Dons', 4100: 'Subventions gouvernementales', 4150: 'Autres subventions', 4200: 'Cotisations des membres',
+  4300: 'Revenus de programmes et de services', 4400: 'Activités de financement', 4900: 'Intérêts et autres revenus', 6000: 'Publicité et promotion',
+  6300: 'Frais de collecte de fonds', 7000: 'Fournitures de programmes', 7300: 'Dons à des donataires reconnus',
+};
+
 // The same chart in French, for companies whose books are kept in French.
 const ACCOUNT_NAMES_FR = {
   1000: 'Compte chèques', 1010: 'Compte d’épargne', 1200: 'Comptes clients', 1300: 'Charges payées d’avance', 1500: 'Matériel',
@@ -83,11 +127,12 @@ function seedDefaults(store, init = {}) {
         }
       } else {
         const split = Number(company.qstRate) > 0, fr = company.lang === 'fr';
-        for (const [code, name, type, detail] of DEFAULT_ACCOUNTS) {
+        const npo = company.orgType === 'npo' || company.orgType === 'charity';
+        for (const [code, name, type, detail] of npo ? NPO_ACCOUNTS : DEFAULT_ACCOUNTS) {
           const tn = company.taxName || 'Sales tax';
           const label = detail === 'tax'
             ? (fr ? (split ? 'TPS à payer' : `${TAX_NAME_FR[tn] || tn} à payer`) : (split ? 'GST payable' : `${tn} payable`))
-            : (fr ? ACCOUNT_NAMES_FR[code] || name : name);
+            : (fr ? (npo && NPO_NAMES_FR[code]) || ACCOUNT_NAMES_FR[code] || name : name);
           store.put('accounts', 'a' + code, { code, name: label, type, detail, desc: '', active: true });
         }
         if (split) store.put('accounts', 'a2210', { code: '2210', name: fr ? 'TVQ à payer' : 'QST payable', type: 'Liability', detail: 'qst', desc: '', active: true });

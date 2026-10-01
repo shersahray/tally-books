@@ -21,7 +21,7 @@ const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts
 const detailLabel=a=>(DETAILS[a.type]||[]).find(d=>d[0]===(a.detail||''))?.[1]||'';
 const debitNormal=t=>t==='Asset'||t==='Expense'||t==='Cost of Goods Sold';
 const isPL=t=>t==='Income'||t==='Expense'||t==='Cost of Goods Sold';
-const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Quick Method adjustment'};
+const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Sales tax adjustment'};
 
 /* ---------- state + server API ---------- */
 const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',fyStart:1,taxName:'HST',taxRate:13,terms:30,currency:'$'},
@@ -183,7 +183,7 @@ function vDashboard(){
     <div class="tile"><span class="lbl">Cash on hand</span><span class="val">${mcell(cash)}</span><span class="note">${(n=>`${n} bank account${n===1?'':'s'}`)(S.accounts.filter(a=>a.detail==='bank').length)}</span></div>
     <div class="tile"><span class="lbl">Customers owe you</span><span class="val">${money(ar)}</span><span class="note">${od.length?`<span class="neg">${od.length} overdue · ${money(od.reduce((s,x)=>s+x.st.bal,0))}</span>`:'Nothing overdue'}</span></div>
     <div class="tile"><span class="lbl">You owe vendors</span><span class="val">${money(ap)}</span><span class="note">${(n=>`${n} unpaid bill${n===1?'':'s'}`)(bills.filter(x=>x.st.bal>0).length)}</span></div>
-    <div class="tile"><span class="lbl">Net income, this fiscal year</span><span class="val">${mcell(ni)}</span><span class="note">${fmtDate(fy)} – today</span></div>
+    <div class="tile"><span class="lbl">${W('Net income, this fiscal year')}</span><span class="val">${mcell(ni)}</span><span class="note">${fmtDate(fy)} – today</span></div>
   </div>
   <div class="grid2">
     <div class="stack">
@@ -290,7 +290,7 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep;const T=[['pl','Profit and loss'],['bs','Balance sheet'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']];
+  const R=S.rep;const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']];
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
   const pointInTime=R.tab!=='pl'&&R.tab!=='gl';
   return head('Reports','')+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
@@ -306,12 +306,12 @@ const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font
 const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}" translate="no">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
 function rPL(){
   const{from,to}=S.rep;const csv=[['Account','Amount']];let h='';
-  const sec=(type,title)=>{const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({a,v:bal(a.id,from,to)})).filter(x=>x.v);const tot=r2(as.reduce((s,x)=>s+x.v,0));if(!as.length&&type==='Cost of Goods Sold')return 0;h+=rrow('sec',title,null);as.forEach(x=>{h+=rrow('item',(x.a.code?x.a.code+' ':'')+x.a.name,x.v,x.a.id);csv.push([(x.a.code?x.a.code+' ':'')+x.a.name,x.v])});h+=rrow('tot','Total '+title.toLowerCase(),tot);csv.push(['Total '+title.toLowerCase(),tot]);return tot};
-  const inc=sec('Income','Income');const cogs=sec('Cost of Goods Sold','Cost of goods sold');
-  if(cogs){h+=rrow('tot','Gross profit',r2(inc-cogs));csv.push(['Gross profit',r2(inc-cogs)])}
+  const sec=(type,title)=>{const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({a,v:bal(a.id,from,to)})).filter(x=>x.v);const tot=r2(as.reduce((s,x)=>s+x.v,0));if(!as.length&&type==='Cost of Goods Sold')return 0;h+=rrow('sec',title,null);as.forEach(x=>{h+=rrow('item',(x.a.code?x.a.code+' ':'')+x.a.name,x.v,x.a.id);csv.push([(x.a.code?x.a.code+' ':'')+x.a.name,x.v])});h+=rrow('tot',W('Total '+title.toLowerCase()),tot);csv.push([W('Total '+title.toLowerCase()),tot]);return tot};
+  const inc=sec('Income',W('Income'));const cogs=sec('Cost of Goods Sold','Cost of goods sold');
+  if(cogs){h+=rrow('tot',W('Gross profit'),r2(inc-cogs));csv.push([W('Gross profit'),r2(inc-cogs)])}
   const exp=sec('Expense','Expenses');const ni=r2(inc-cogs-exp);
-  h+=`<tr class="spacer"><td colspan="2"></td></tr>`+rrow('grand','Net income',ni);csv.push(['Net income',ni]);
-  return{html:`<div class="report">${rh('Profit and loss',`${fmtDate(from)} – ${fmtDate(to)}`)}<div class="tbl-wrap"><table>${h}</table></div></div>`,csv,name:`profit-and-loss_${from}_${to}`};
+  h+=`<tr class="spacer"><td colspan="2"></td></tr>`+rrow('grand',W('Net income'),ni);csv.push([W('Net income'),ni]);
+  return{html:`<div class="report">${rh(W('Profit and loss'),`${fmtDate(from)} – ${fmtDate(to)}`)}<div class="tbl-wrap"><table>${h}</table></div></div>`,csv,name:`profit-and-loss_${from}_${to}`};
 }
 function rBS(){
   const to=S.rep.to,fy=fyStartOf(to);const csv=[['Account','Amount']];let h='';
@@ -319,16 +319,16 @@ function rBS(){
   const sec=(type,title,extra=[])=>{const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({l:(a.code?a.code+' ':'')+a.name,v:bal(a.id,null,to),id:a.id})).filter(x=>x.v).concat(extra.filter(x=>x.v));const tot=r2(as.reduce((s,x)=>s+x.v,0));h+=rrow('sec',title,null);as.forEach(x=>{h+=rrow('item',x.l,x.v,x.id);csv.push([x.l,x.v])});h+=rrow('tot','Total '+title.toLowerCase(),tot);csv.push(['Total '+title.toLowerCase(),tot]);return tot};
   const A=sec('Asset','Assets');h+=`<tr class="spacer"><td colspan="2"></td></tr>`;
   const L=sec('Liability','Liabilities');
-  const E=sec('Equity','Equity',[{l:'Retained earnings',v:re},{l:'Net income, current fiscal year',v:cy}]);
-  h+=rrow('grand','Total liabilities and equity',r2(L+E));csv.push(['Total liabilities and equity',r2(L+E)]);
+  const E=sec('Equity',W('Equity'),[{l:W('Retained earnings'),v:re},{l:W('Net income, current fiscal year'),v:cy}]);
+  h+=rrow('grand',W('Total liabilities and equity'),r2(L+E));csv.push([W('Total liabilities and equity'),r2(L+E)]);
   const off=r2(A-L-E);
-  return{html:`<div class="report">${rh('Balance sheet',`As of ${fmtDate(to)}`)}<div class="tbl-wrap"><table>${h}</table></div>${Math.abs(off)>0.004?`<div class="banner err" style="margin:12px 16px">Out of balance by ${money(off)}. Check for entries posted to deleted accounts.</div>`:''}</div>`,csv,name:`balance-sheet_${to}`};
+  return{html:`<div class="report">${rh(W('Balance sheet'),`As of ${fmtDate(to)}`)}<div class="tbl-wrap"><table>${h}</table></div>${Math.abs(off)>0.004?`<div class="banner err" style="margin:12px 16px">Out of balance by ${money(off)}. Check for entries posted to deleted accounts.</div>`:''}</div>`,csv,name:`balance-sheet_${to}`};
 }
 function rTB(){
   const to=S.rep.to,fy=fyStartOf(to);const csv=[['Code','Account','Type','Debit','Credit']];let h='',td=0,tc=0;
   const add=(code,name,type,raw,id)=>{if(Math.abs(raw)<0.005)return;const d=raw>0?raw:0,c=raw<0?-raw:0;td+=d;tc+=c;h+=`<tr><td class="mono">${esc(code)}</td><td>${id?`<button class="link" data-acct="${id}" translate="no">${esc(name)}</button>`:esc(name)}</td><td class="n">${d?money(d):''}</td><td class="n">${c?money(c):''}</td></tr>`;csv.push([code,name,type,r2(d),r2(c)])};
   for(const a of sortAccts(S.accounts))add(a.code||'',a.name,a.type,isPL(a.type)?rawBal(a.id,fy,to):rawBal(a.id,null,to),a.id);
-  add('','Retained earnings','Equity',-netIncome(null,addDays(fy,-1)));
+  add('',W('Retained earnings'),'Equity',-netIncome(null,addDays(fy,-1)));
   csv.push(['','Total','',r2(td),r2(tc)]);
   return{html:`<div class="report">${rh('Trial balance',`As of ${fmtDate(to)} · income and expenses from ${fmtDate(fy)}`)}<div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th class="n">Debit</th><th class="n">Credit</th></tr></thead><tbody>${h||`<tr><td colspan="4" class="muted">No balances.</td></tr>`}</tbody><tfoot><tr class="grand"><td></td><td>Total</td><td class="n">${money(td)}</td><td class="n">${money(tc)}</td></tr></tfoot></table></div></div>`,csv,name:`trial-balance_${to}`};
 }
@@ -378,8 +378,16 @@ function rAging(kind){
   return{html:`<div class="report" style="max-width:none">${rh(kind==='invoice'?'Accounts receivable aging':'Accounts payable aging',`As of ${fmtDate(t)} · days past due`)}<div class="tbl-wrap"><table><thead><tr><th>${kind==='invoice'?'Customer':'Vendor'}</th>${B.map(b=>`<th class="n">${b}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>${rows||`<tr><td colspan="7" class="muted" style="padding:16px">Nothing outstanding.</td></tr>`}</tbody>${rows?`<tfoot><tr class="grand"><td>Total</td>${tot.map(x=>`<td class="n">${money(x)}</td>`).join('')}<td class="n">${money(all)}</td></tr></tfoot>`:''}</table></div></div>`,csv,name:`${kind==='invoice'?'ar':'ap'}-aging_${t}`};
 }
 
+/* Non-profits and charities: financial statements use non-profit names (ASNPO). */
+const isNpo=()=>['npo','charity'].includes(S.company.orgType);
+const NPO_WORDS={'Profit and loss':'Statement of operations','Balance sheet':'Statement of financial position','Income':'Revenue','Total income':'Total revenue',
+  'Net income':'Excess of revenue over expenses','Equity':'Net assets','Total equity':'Total net assets','Total liabilities and equity':'Total liabilities and net assets',
+  'Retained earnings':'Net assets from earlier years','Net income, current fiscal year':'Excess of revenue over expenses, current year',
+  'Net income, this fiscal year':'Excess of revenue over expenses, this fiscal year','Gross profit':'Revenue less cost of goods sold'};
+const W=s=>(isNpo()&&NPO_WORDS[s])||s;
+const ORG_TYPES=[['business','Business'],['npo','Non-profit organization'],['charity','Registered charity']];
 function vSettings(){
-  const c=S.company;
+  const c=S.company,np=c.nonprofit||{};
   return head('Settings','Company details and defaults used on new transactions')+`<div class="panel" style="max-width:640px"><form class="pad" id="setForm" style="display:flex;flex-direction:column;gap:14px">
   <div class="fields">
     <div class="field" style="grid-column:1/-1"><label for="sName">Business name</label><input type="text" id="sName" value="${esc(c.name)}" required></div>
@@ -391,6 +399,18 @@ function vSettings(){
     <div class="field"><label for="sTaxRate">Sales tax rate (%)</label><input type="number" id="sTaxRate" min="0" step="0.001" value="${esc(c.taxRate)}"></div>
     <div class="field"><label for="sCur">Currency symbol</label><input type="text" id="sCur" maxlength="4" value="${esc(c.currency)}"></div>
     <div class="field"><label for="sBn">Business / tax number</label><input type="text" id="sBn" value="${esc(c.bn||'')}"><span class="hint">Shown for your reference</span></div>
+    <div class="field"><label for="sOrg">Organization type</label><select id="sOrg">${ORG_TYPES.map(([k,v])=>`<option value="${k}" ${(c.orgType||'business')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Non-profits get non-profit report names and sales tax rules</span></div>
+  </div>
+  <div data-npo style="display:flex;flex-direction:column;gap:12px">
+    <h3 class="fsec" style="margin:0">Non-profit and charity</h3>
+    <div class="fields">
+      <div class="field" data-charity><label for="sCharNo">Charity registration number</label><input type="text" id="sCharNo" maxlength="20" placeholder="123456789RR0001" value="${esc(np.charityNo||'')}" translate="no"></div>
+      <div class="field" data-charity><label for="sNetTax">GST/HST and QST returns</label><select id="sNetTax"><option value="charity" ${np.netTax!=='regular'?'selected':''}>Net tax calculation for charities (60%)</option><option value="regular" ${np.netTax==='regular'?'selected':''}>Regular method (elected out with GST488 / FP-2488)</option></select><span class="hint">Registered charities use the 60% calculation unless they elected out</span></div>
+      <div class="field" data-itc><label for="sItc">Purchases used in taxable activities (%)</label><input type="number" id="sItc" min="0" max="100" step="1" value="${esc(np.itcPct??'')}" placeholder="100"><span class="hint">Input tax credits are claimed on this share of the tax paid on purchases. The rest is for exempt activities. Blank = 100%.</span></div>
+    </div>
+    <label class="check" data-npoonly><input type="checkbox" id="sQual" ${np.qualifying?'checked':''}> Qualifying non-profit: at least 40% of its revenue comes from government funding</label>
+    <label class="check"><input type="checkbox" id="sCapItc" ${np.capitalItc!==false?'checked':''}> Equipment, vehicles and other capital property are used mainly (more than 50%) in taxable activities, so their tax is claimed as credits</label>
+    <label class="check" data-rebate><input type="checkbox" id="sRebate" ${np.rebate!==false?'checked':''}> Claim the public service bodies’ rebate on the sales tax that can’t be claimed as credits</label>
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
@@ -467,8 +487,15 @@ function bindMain(m){
   if(S.view==='salestax')bindSalesTax(m);
   bindPayrollSettings(m);
   if(S.view==='payroll')bindPayroll(m);
+  const so=$('#sOrg',m);if(so){const sync=()=>{const t=so.value,npo=t!=='business';$('[data-npo]',m).style.display=npo?'flex':'none';
+    $$('[data-charity]',m).forEach(x=>x.style.display=t==='charity'?'':'none');$$('[data-npoonly]',m).forEach(x=>x.style.display=t==='npo'?'':'none');
+    const charityMethod=t==='charity'&&$('#sNetTax',m).value!=='regular';$$('[data-itc]',m).forEach(x=>x.style.display=npo&&!charityMethod?'':'none');
+    $$('[data-rebate]',m).forEach(x=>x.style.display=t==='charity'||(t==='npo'&&$('#sQual',m).checked)?'':'none')};
+    so.onchange=$('#sNetTax',m).onchange=$('#sQual',m).onchange=sync;sync()}
   const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
-  const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value};if(await putCompany(data))toast('Settings saved')};
+  const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value,
+    orgType:$('#sOrg').value,nonprofit:{...(S.company.nonprofit||{}),charityNo:$('#sCharNo').value.trim(),netTax:$('#sNetTax').value,itcPct:$('#sItc').value===''?'':Math.max(0,Math.min(100,+$('#sItc').value||0)),qualifying:$('#sQual').checked,rebate:$('#sRebate').checked,capitalItc:$('#sCapItc').checked}};
+    if(data.orgType!=='business'&&S.company.quickMethod?.on&&(data.orgType==='charity'||data.nonprofit.qualifying)&&!await confirmBox('Turn off the Quick Method?','Registered charities and qualifying non-profits can’t use the Quick Method. Saving turns it off; returns already filed stay as they were.','Save'))return;if(await putCompany(data))toast('Settings saved')};
 }
 /* ---------- company code ---------- */
 function codePanel(){
@@ -560,7 +587,7 @@ function casewareForm(){
 function exportCSV(){
   const R=S.rep;const r=({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
   // Column headings and report totals follow the screen language; account names stay as they are.
-  const LBL=new Set(['Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
+  const LBL=new Set([...Object.values(NPO_WORDS),'Total net assets','Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
   if(isFr())r.csv=r.csv.map((row,i)=>row.map(v=>typeof v==='string'&&(i===0||LBL.has(v))?T(v):v));
   const text=r.csv.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
   saveFile(r.name+'.csv',new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'}));

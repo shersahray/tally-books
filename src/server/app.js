@@ -200,6 +200,7 @@ function createApp(opts) {
       filingFreq: body.filingFreq,
       fyStart: body.fyStart || 1,
       lang: body.lang,
+      orgType: body.orgType,
     });
     let accounts = null;
     if (body.copyFrom) {
@@ -210,7 +211,7 @@ function createApp(opts) {
     const entry = reg.create(company.name);
     const store = reg.store(entry.id);
     seedDefaults(store, { company, accounts });
-    if (body.examples) loadExamples(store);
+    if (body.examples && company.orgType === 'business') loadExamples(store);
     if (body.code !== undefined && body.code !== '') { store.putSetting('companyCode', hashCode(body.code)); codeOpen.set(`${user.token}|${entry.id}`, Date.now() + CODE_TTL); }
     store.audit(user, 'create', { summary: `company created${body.copyFrom ? ' with a copied chart of accounts' : ''}${body.examples ? ', with example data' : ''}` });
     broadcast({ companies: true });

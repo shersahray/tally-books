@@ -105,6 +105,7 @@ function companyForm(convert){
     ${fld('nProv','Province or territory',`<select id="nProv">${provinceOptions('ON')}</select>`)}
     ${fld('nFy','Fiscal year-end',`<select id="nFy">${fyOptions(1)}</select>`)}
     ${fld('nLang','Language of the books',`<select id="nLang"><option value="en" ${isFr()?'':'selected'}>English</option><option value="fr" ${isFr()?'selected':''}>Français</option></select><span class="hint">Account names and example data. Each person still chooses the language of the screens.</span>`)}
+    ${fld('nOrg','Organization type',`<select id="nOrg">${ORG_TYPES.map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><span class="hint">Non-profits and charities start with a non-profit chart of accounts</span>`)}
     ${fld('nCode','Company code',`<input type="text" id="nCode" class="code-in" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="4 digits"><span class="hint">Typed each time someone on your team opens this company, so nobody works in the wrong client’s books. Clients don’t need it.</span>`,true)}
     ${fld('nCopy','Chart of accounts',`<select id="nCopy"><option value="">Standard small-business chart</option>${active.map(c=>`<option value="${c.id}">Copy from ${esc(c.name)}</option>`).join('')}</select>`,true)}
     </div>
@@ -115,11 +116,13 @@ function companyForm(convert){
   const prov=$('#nProv',f);
   const sync=()=>{$('[data-custom]',f).hidden=prov.value!=='';$('[data-qc]',f).hidden=prov.value!=='QC'};
   prov.onchange=sync;sync();
+  $('#nOrg',f).onchange=()=>{const b=$('#nOrg',f).value==='business',ex=$('#nEx',f).closest('label');if(!convert)ex.hidden=!b;
+    const std=$('#nCopy option[value=""]',f);if(std)std.textContent=b?'Standard small-business chart':'Standard non-profit chart'};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const name=$('#nName',f).value.trim();if(!name)return f.err('Give the company a name.');
     if(CO_LIST.some(c=>c.name.toLowerCase()===name.toLowerCase())&&!await confirmBox('A company with this name exists','Create another company with the same name anyway?','Create'))return;
     const code=$('#nCode',f).value.trim();if(!/^\d{4}$/.test(code))return f.err('Choose a 4-digit company code.');
-    const body={name,province:prov.value,fyStart:+$('#nFy',f).value,copyFrom:$('#nCopy',f).value,examples:$('#nEx',f).checked,lang:$('#nLang',f).value,code};
+    const body={name,province:prov.value,fyStart:+$('#nFy',f).value,copyFrom:$('#nCopy',f).value,examples:$('#nEx',f).checked&&$('#nOrg',f).value==='business',lang:$('#nLang',f).value,code,orgType:$('#nOrg',f).value};
     if(!prov.value){body.taxName=$('#nTaxName',f).value.trim()||'Sales tax';body.taxRate=Math.max(0,+$('#nTaxRate',f).value||0)}
     const btn=f.querySelector('button[type=submit]');btn.disabled=true;btn.textContent='Creating…';
     try{const r=await api('POST','/api/companies',body);await loadCompanies();S.cv=null;const nc=CO_LIST.find(c=>c.id===r.company.id);if(nc)nc.justMade=true;await openCompany(r.company.id,convert?'convert':undefined);toast(`${name} is ready`)}

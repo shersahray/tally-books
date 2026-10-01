@@ -188,9 +188,9 @@ function validateFiling(data, store) {
   if (data.entryId && !store.get('entries', data.entryId)) throw new ValidationError('The payment or refund for this filing doesn’t exist.');
   if (data.qmEntryId) {
     const adj = store.get('entries', data.qmEntryId);
-    if (!adj || adj.type !== 'qmadjust' || adj.tax !== data.tax) throw new ValidationError('The Quick Method adjustment for this filing doesn’t exist.');
+    if (!adj || adj.type !== 'qmadjust' || adj.tax !== data.tax) throw new ValidationError('The sales tax adjustment for this filing doesn’t exist.');
   }
-  if (data.method !== undefined && !['quick', 'regular'].includes(data.method)) throw new ValidationError('Unknown filing method.');
+  if (data.method !== undefined && !['quick', 'regular', 'charity', 'npo'].includes(data.method)) throw new ValidationError('Unknown filing method.');
   const clash = store.list('filings').find(f => f.tax === data.tax && f.from <= data.to && data.from <= f.to && f.id !== data.id);
   if (clash) throw new ValidationError(`That period overlaps a return already filed (${clash.from} to ${clash.to}).`, 409);
   return data;
@@ -422,7 +422,7 @@ function validatePayrollSettings(p) {
 function validateCompany(data) {
   if (!isObj(data)) throw new ValidationError('Settings must be a JSON object.');
   const fy = Number(data.fyStart);
-  return {
+  const out = {
     name: str(data.name, 120).trim() || 'My Business',
     fyStart: fy >= 1 && fy <= 12 ? Math.floor(fy) : 1,
     taxName: str(data.taxName, 20).trim() || 'Sales tax',
@@ -444,7 +444,19 @@ function validateCompany(data) {
     logoFile: /^[A-Za-z0-9-]{0,64}$/.test(String(data.logoFile || '')) ? String(data.logoFile || '') : '',
     payroll: validatePayrollSettings(data.payroll),
     quickMethod: validateQuickMethod(data.quickMethod, fy >= 1 && fy <= 12 ? Math.floor(fy) : 1, data.filingFreq),
+    // Business, non-profit organization or registered charity: changes report wording and how sales tax is worked out.
+    orgType: ['npo', 'charity'].includes(data.orgType) ? data.orgType : 'business',
+    nonprofit: validateNonprofit(data.nonprofit),
   };
+  // Registered charities and qualifying non-profits can't use the Quick Method.
+  if (out.quickMethod.on && (out.orgType === 'charity' || (out.orgType === 'npo' && out.nonprofit.qualifying))) out.quickMethod = { ...out.quickMethod, on: false };
+  return out;
+}
+/** Non-profit and charity settings. itcPct: share of tax paid on purchases used in taxable activities (blank = all). */
+function validateNonprofit(n) {
+  n = isObj(n) ? n : {};
+  const pct = n.itcPct === '' || n.itcPct === null || n.itcPct === undefined ? '' : Math.max(0, Math.min(100, Number(n.itcPct) || 0));
+  return { qualifying: !!n.qualifying, charityNo: str(n.charityNo, 20).replace(/\s+/g, '').toUpperCase(), netTax: n.netTax === 'regular' ? 'regular' : 'charity', itcPct: pct, rebate: n.rebate !== false, capitalItc: n.capitalItc !== false };
 }
 /** Quick Method of accounting for GST/HST and QST. Rates blank = the published rate for the business type. */
 function validateQuickMethod(q, fy, freq) {

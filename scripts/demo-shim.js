@@ -67,7 +67,7 @@
     const name = String(body.name || '').trim(); if (!name) throw new ApiError(400, 'Give the company a name.');
     const p = PROVS[body.province] || {};
     const company = { name, fyStart: +body.fyStart || 1, taxName: body.taxName || p.taxName || 'HST', taxRate: body.taxRate ?? p.taxRate ?? 13,
-      qstRate: p.qstRate || 0, terms: 30, currency: '$', bn: '', province: body.province || '', filingFreq: 'quarterly' };
+      qstRate: p.qstRate || 0, terms: 30, currency: '$', bn: '', province: body.province || '', filingFreq: 'quarterly', orgType: ['npo', 'charity'].includes(body.orgType) ? body.orgType : 'business' };
     const id = rid('co_'), b = { company };
     if (/^\d{4}$/.test(String(body.code || ''))) { codes[id] = String(body.code); company.hasCode = true; }
     COLS.forEach(c => (b[c] = []));

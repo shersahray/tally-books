@@ -102,6 +102,60 @@ const gstRateCharged=()=>S.company.province==='QC'||taxesInUse().length>1?5:+S.c
 function qmSuggested(k,type){return k==='qst'?QM_QST[type]:(QM_RATES[type]||{})[gstRateCharged()]??null}
 function qmRate(k){const q=qmCfg()||{};const own=k==='qst'?q.qstRate:q.gstRate;return own!==''&&own!=null&&!isNaN(+own)?+own:qmSuggested(k,q.type||'services')}
 const isCapitalAcct=id=>{const a=acct(id);return !!a&&a.detail==='capital'};
+/* Charities and non-profits.
+   Registered charities use the net tax calculation (CRA RC4082, Revenu Québec): remit 60% of the tax charged (100% on
+   sales of capital property), claim credits only on capital property, and claim the public service bodies' (PSB)
+   rebate on the rest of the tax paid. Other non-profits use the regular method, with credits on the share of
+   purchases used in taxable activities; qualifying non-profits (40% or more government funding) get the rebate too.
+   PSB rebate for charities and qualifying non-profits (CRA RC4034, Revenu Québec): 50% of the GST or federal part of
+   the HST; provincial part 82% Ontario, 50% New Brunswick, Newfoundland and Labrador, Nova Scotia and PEI; 50% of QST. */
+const PSB_PROV={ON:82,NB:50,NL:50,NS:50,PE:50};
+const npoCfg=()=>typeof isNpo==='function'&&isNpo()?{type:S.company.orgType,...(S.company.nonprofit||{})}:null;
+const rebateEligible=()=>{const n=npoCfg();return !!n&&n.rebate!==false&&(n.type==='charity'||!!n.qualifying)};
+const quickBarred=()=>{const n=npoCfg();return !!n&&(n.type==='charity'||!!n.qualifying)};
+/** The sales tax rate an entry was charged at: its tax on this account over its taxed amounts, snapped to a real rate. */
+function entryTaxRate(e,accId){
+  const taxIds=taxAcctIds();
+  const tax=(e.lines||[]).filter(l=>l.account===accId).reduce((t,l)=>t+(+l.debit||0)-(+l.credit||0),0);
+  const cost=(e.lines||[]).filter(l=>!taxIds.has(l.account)&&!COST_SKIP.includes(acct(l.account)?.detail));
+  const taxed=cost.filter(l=>(l.taxCode||'std')==='std');
+  const net=(taxed.length?taxed:cost).reduce((t,l)=>t+(+l.debit||0)-(+l.credit||0),0);
+  const r=Math.abs(net)>0.005?Math.abs(tax/net)*100:null,known=[5,13,14,15];
+  const near=r==null?null:known.reduce((b,x)=>Math.abs(x-r)<Math.abs(b-r)?x:b,known[0]);
+  return near!=null&&Math.abs(near-r)<0.6?near:gstRateCharged();
+}
+/** PSB rebate on tax paid, entry by entry so GST-only purchases and other provinces' HST split correctly.
+    items: [{e, amt}] tax paid that isn't claimed as credits. provPct: the province's share (kept on a filed return). */
+function psbRebate(k,items,accId,provPct){
+  let total=0;
+  for(const{e,amt}of items){
+    if(Math.abs(amt)<0.005)continue;
+    if(k==='qst'||S.company.province==='QC'){total+=amt*0.5;continue}
+    const rate=entryTaxRate(e,accId);
+    if(rate>5&&provPct!=null){const fed=amt*5/rate;total+=fed*0.5+(amt-fed)*provPct/100}
+    else total+=amt*0.5;
+  }
+  return Math.max(0,r2(total)); // a rebate can't be negative; tax refunded by vendors just lowers it
+}
+/** How a period's return is worked out: as filed, or from the settings now. */
+function methodFor(k,from,filed){
+  if(filed)return filed.method||'regular';
+  if(qmOn(k,from))return 'quick';
+  const n=npoCfg();if(!n)return 'regular';
+  return n.type==='charity'&&n.netTax!=='regular'?'charity':'npo';
+}
+const swapLines=(base,changes)=>base.map(r=>changes[r[0]]||r);
+// The rebate is worked out; other rebates and credits are still typed in. Lines starting with x are working lines.
+const withRebate=(lines,no,label)=>lines.flatMap(r=>r[0]!==no?[r]:[['x2','Public service bodies’ rebate','rebate'],['x3','Other rebates and credits','m:x3'],[no,label,'=x2+x3']]);
+const CHARITY_LINES={
+  gst:withRebate(swapLines(TAX_LINES.gst,{103:['103','GST/HST to remit: 60% of the tax charged, 100% on sales of capital property','ch103'],106:['106','Input tax credits on capital property','itcCh']}),'111','Total GST/HST rebates'),
+  qst:withRebate(swapLines(TAX_LINES.qst,{203:['203','QST to remit: 60% of the tax charged, 100% on sales of capital property','ch103'],206:['206','Input tax refunds on capital property and immovables','itcCh']}),'211','Other credits and rebates'),
+};
+function npoLines(k,rebate){
+  const l=swapLines(TAX_LINES[k],k==='qst'?{206:['206','Input tax refunds: the share used in taxable activities','itcNpo']}:{106:['106','Input tax credits: the share used in taxable activities','itcNpo']});
+  return rebate?withRebate(l,k==='qst'?'211':'111',k==='qst'?'Other credits and rebates':'Total GST/HST rebates'):l;
+}
+function linesOf(k,method,rebate){return method==='quick'?QM_LINES[k]:method==='charity'?CHARITY_LINES[k]:method==='npo'?npoLines(k,rebate):TAX_LINES[k]}
 const BAL_LINE={gst:'113C',qst:'213'};
 // In Quebec, Revenu Québec administers the GST as well as the QST for most businesses.
 const AGENCY={get gst(){return S.company.province==='QC'?'Revenu Québec':'CRA'},qst:'Revenu Québec'};
@@ -205,9 +259,33 @@ function worksheet(k,from,to){
   const a=taxAcctFor(k);if(!a)return null;
   const filed=filingFor(k,from,to);
   // A filed return keeps the method it was filed with, whatever the settings say now.
-  const qm=filed?filed.method==='quick':qmOn(k,from);
+  const method=methodFor(k,from,filed),qm=method==='quick';
   const {v:base,src}=scan(k,from,to),v={...base};
-  let quick=null;
+  let quick=null,special=null,rebateOn=false;
+  if(method==='charity'||method==='npo'){
+    const n=npoCfg()||{};
+    rebateOn=filed?!!filed.rebate:rebateEligible();
+    // Credits on capital property only when it's used mainly (more than 50%) in taxable activities; otherwise the rebate applies.
+    const capComm=filed&&filed.capComm!=null?filed.capComm:n.capitalItc!==false;
+    const provPct=filed&&filed.psbProv!==undefined?filed.psbProv:PSB_PROV[S.company.province];
+    const capItems=capComm?[]:src.itcCap,capAmt=capComm?0:v.itcCap;
+    if(method==='charity'){
+      v.ch103=r2(0.6*(v.collected-v.capSaleTax)+v.capSaleTax);src.ch103=src.collected;
+      v.itcCh=capComm?v.itcCap:0;src.itcCh=capComm?src.itcCap:[];
+      const items=[...src.itcOps,...src.other,...capItems],paid=r2(v.itcOps+v.other+capAmt);
+      const rebate=rebateOn?psbRebate(k,items,a.id,provPct):0;v.rebate=rebate;
+      special={kind:'charity',collected:v.collected,capSaleTax:v.capSaleTax,tax:v.ch103,gain:r2(v.collected-v.ch103),paid,rebate,itcCap:v.itcCh,ops:r2(paid-rebate),capComm,provPct};
+    }else{
+      const pct=filed&&filed.itcPct!=null?filed.itcPct:(n.itcPct===''||n.itcPct==null?100:+n.itcPct);
+      const opsItc=r2(v.itc-v.itcCap);
+      v.itcNpo=r2(opsItc*pct/100+(capComm?v.itcCap:0));src.itcNpo=src.itc;
+      const items=[...[...src.itcOps,...src.other].map(x=>({e:x.e,amt:x.amt*(100-pct)/100})),...capItems];
+      const paid=r2(v.itc-v.itcNpo),rebate=rebateOn?psbRebate(k,items,a.id,provPct):0;v.rebate=rebate;
+      special={kind:'npo',pct,itc:v.itc,itcNpo:v.itcNpo,paid,rebate,gain:0,ops:r2(paid-rebate),capComm,provPct};
+    }
+    // Tax put on the account by journal entries goes on lines 104 and 107 in full: the special rules can't see what it was for.
+    special.journals=r2(v.addAdj+v.dedAdj);
+  }
   if(qm){
     const cfg=qmCfg()||{},rate=filed&&filed.qmRate!=null?filed.qmRate:qmRate(k);
     v.qmBase=r2(v.sStd+v.collected-v.capSaleTax);src.qmBase=[...src.sStd,...src.collected];
@@ -222,13 +300,14 @@ function worksheet(k,from,to){
   }
   const man=filed?filed.lines:(S.stax.manual[k+from]||{});
   const vals={};
-  for(const[no,,how,sub]of (qm?QM_LINES:TAX_LINES)[k]){
+  const lines=linesOf(k,method,rebateOn);
+  for(const[no,,how,sub]of lines){
     if(sub){vals['·'+how]=r2(v[how]);continue}
     if(how.startsWith('m:'))vals[no]=r2(+man[no]||0);
     else if(how.startsWith('=')){const parts=how.slice(1).split(/(?=[+-])/);vals[no]=r2(parts.reduce((s,p)=>{const sign=p[0]==='-'?-1:1;return s+sign*vals[p.replace(/^[+-]/,'')]},0))}
     else vals[no]=r2(v[how]);
   }
-  return{account:a,vals:filed?filed.lines:vals,live:vals,src,filed,quick};
+  return{account:a,vals:filed?filed.lines:vals,live:vals,src,filed,quick,special,method,lines,rebate:rebateOn};
 }
 function periodStatus(k,p){
   const f=filingFor(k,p.from,p.to);
@@ -257,7 +336,7 @@ function vSalesTax(){
   const bal=r2(-rawBal(taxAcctFor(k).id));
   h+=`<div class="chips"><div class="chip"><div class="lbl">${esc(taxLabel(k))} account balance today</div><div class="val">${mcell(bal)}</div><div class="lbl">${bal>=0?`Owing to ${AGENCY[k]} if positive`:`Refund due from ${AGENCY[k]}`}</div></div>
     <div class="chip"><div class="lbl">Returns overdue</div><div class="val ${overdueReturns()?'neg':''}">${overdueReturns()}</div></div></div>`;
-  return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Period</th><th>Due</th><th class="n">${qmCfg()?'Collected or to remit':'Collected'}</th><th class="n">${qmCfg()?'Credits (ITCs) claimed':'Credits (ITCs)'}</th><th class="n">Net tax</th><th>Status</th><th></th></tr></thead><tbody>${periods.length?periods.map(p=>{
+  return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Period</th><th>Due</th><th class="n">${qmCfg()||npoCfg()?'Collected or to remit':'Collected'}</th><th class="n">${qmCfg()||npoCfg()?'Credits (ITCs) claimed':'Credits (ITCs)'}</th><th class="n">Net tax</th><th>Status</th><th></th></tr></thead><tbody>${periods.length?periods.map(p=>{
     const w=worksheet(k,p.from,p.to),st=periodStatus(k,p),net=w.vals[k==='qst'?'209':'109'];
     const ln=k==='qst'?['203','206']:['103','106'];
     return `<tr class="click" data-stperiod="${p.from}|${p.to}"><td style="white-space:nowrap"><b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b></td><td style="white-space:nowrap" class="${st.k==='overdue'?'neg':'muted'}">${fmtDate(p.due)}</td><td class="n">${money(w.vals[ln[0]])}</td><td class="n">${money(w.vals[ln[1]])}</td><td class="n"><b>${mcell(net)}</b></td><td><span class="pill ${st.k}">${st.label}</span></td><td class="n"><button class="btn sm" data-stperiod="${p.from}|${p.to}">${w.filed?'View':'Open worksheet'}</button></td></tr>`}).join(''):emptyRow(7,'No periods yet','Periods appear once there are transactions with sales tax.')}</tbody></table></div></div>
@@ -267,17 +346,17 @@ function vSalesTax(){
 function vWorksheet(k,from,to){
   const w=worksheet(k,from,to),T=S.stax,bl=BAL_LINE[k],bal=w.vals[bl];
   const filed=w.filed,st=periodStatus(k,filingPeriods().find(p=>p.from===from)||{from,to,due:to});
-  const LINES=(w.quick?QM_LINES:TAX_LINES)[k];
+  const LINES=w.lines;
   const changed=filed&&LINES.some(([no,,how,sub])=>!sub&&!how.startsWith('m:')&&no in filed.lines&&Math.abs((w.live[no]||0)-(filed.lines[no]||0))>0.004);
-  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1,qmBase:1,itcCap:1,addQ:1};
+  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1,qmBase:1,itcCap:1,addQ:1,ch103:1,itcNpo:1,itcCh:1};
   let rows='';
   for(const[no,label,how,sub]of LINES){
     if(sub){const val=w.vals['·'+how]||0;if(!val&&how!=='sExport')continue;
-      rows+=`<tr class="subline"><td></td><td>${label}</td><td class="n">${val?`<button class="link" data-stdrill="${how}">${money(val)}</button>`:'<span class="muted">$0.00</span>'}</td></tr>`;
+      rows+=`<tr class="subline"><td></td><td>${label}</td><td class="n">${val?`<button class="link" data-stdrill="${how}">${money(val)}</button>`:`<span class="muted">${money(0)}</span>`}</td></tr>`;
       if(T.drill===how)rows+=`<tr><td></td><td colspan="2">${drillTable(w.src[how])}</td></tr>`;continue}
     const total=how.startsWith('=')||no===bl,val=w.vals[no];
     let cell;
-    if(how.startsWith('m:')&&!filed)cell=`<input type="number" step="0.01" data-stman="${no}" value="${val||''}" placeholder="0.00" style="width:130px" aria-label="Line ${no}">`;
+    if(how.startsWith('m:')&&!filed)cell=`<input type="number" step="0.01" data-stman="${no}" value="${val||''}" placeholder="0.00" style="width:130px" aria-label="${no.startsWith('x')?esc(label):'Line '+no}">`;
     else if(drillable[how]&&val)cell=`<button class="link" data-stdrill="${how}">${money(val)}</button>`;
     else cell=mcell(val);
     rows+=`<tr class="${no===bl?'grand':total?'tot':'item'}"><td class="mono" style="width:60px">${no.startsWith('x')?'':no}</td><td>${label}</td><td class="n">${cell}</td></tr>`;
@@ -292,7 +371,7 @@ function vWorksheet(k,from,to){
     ${changed?`<div class="banner err" style="margin:0 16px 12px"><span>Transactions in this period changed after it was filed. The figures below are what you filed; the books now show net tax of ${money(w.live[k==='qst'?'209':'109'])}. You may need to file an amended return.</span></div>`:''}
     <div class="tbl-wrap"><table class="ws">${rows}</table></div>
     <div class="pad" style="text-align:center">${outcome}</div>
-    ${w.quick?qmBox(k,w,filed):''}
+    ${w.quick?qmBox(k,w,filed):w.special&&(w.special.kind==='charity'||w.special.paid||w.special.rebate)?npoBox(k,w,filed):''}
     <div class="toolbar" style="border-top:1px solid var(--line);border-bottom:0;justify-content:flex-end">
       <button class="btn sm" data-stact="export">Export CSV</button>
       ${filed?`${!filed.entryId&&Math.abs(filed.lines[bl])>0.004?`<button class="btn sm" data-stact="pay-later">Record ${filed.lines[bl]>0?'payment':'refund'}</button>`:''}<button class="btn sm danger" data-stact="unfile">Undo filing</button>`
@@ -323,7 +402,7 @@ async function stClick(ev,t,d){
     case 'pay-later':fileForm(T.tax,from,to,false);return true;
     case 'unfile':await unfile(T.tax,from,to);return true;
     case 'quick':quickForm();return true;
-    case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...(w.quick?QM_LINES:TAX_LINES)[T.tax].map(([no,label,how,sub])=>sub?['',`  of line 91: ${label}`,w.vals['·'+how]||0]:[no.startsWith('x')?'':no,label,w.vals[no]])];
+    case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...w.lines.map(([no,label,how,sub])=>sub?['',`  of line 91: ${label}`,w.vals['·'+how]||0]:[no.startsWith('x')?'':no,label,w.vals[no]])];
       saveFile(`${T.tax==='qst'?'qst':'gst-hst'}-return_${from}_${to}.csv`,new Blob(['﻿'+rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:v).join(',')).join('\r\n')],{type:'text/csv'}));return true}
   }
   return false;
@@ -351,6 +430,7 @@ function fileForm(k,from,to,filing){
       ${needMoney?fld('fAmt','Amount',`<input type="number" id="fAmt" step="0.01" value="${Math.abs(bal).toFixed(2)}">`):''}
     </div>
     ${needMoney&&filing?`<label class="check"><input type="checkbox" id="fNow" ${kind==='payment'?'checked':''}> Record the ${kind} now ${kind==='refund'?'(leave unticked until the refund arrives)':''}</label>`:''}
+    ${filing&&w.special&&(w.special.gain||w.special.ops)?`<div class="muted" style="font-size:13px">${w.special.gain?`Filing also posts an adjustment on ${fmtDate(to)}: ${money(w.special.gain)} of the tax charged becomes income, and ${money(w.special.ops)} of tax paid that isn’t recovered becomes an expense.`:`Filing also posts an adjustment on ${fmtDate(to)}: ${money(w.special.ops)} of tax paid that isn’t recovered becomes an expense.`}</div>`:''}
     ${filing&&w.quick&&(w.quick.gain||w.quick.itcOps)?`<div class="muted" style="font-size:13px">Under the Quick Method, filing also posts an adjustment on ${fmtDate(to)}: ${money(w.quick.gain)} of the tax charged to customers becomes income, and ${money(w.quick.itcOps)} of tax paid on expenses becomes part of the expenses.</div>`:''}
     <div class="muted" style="font-size:13px">${filing?'Filing saves a copy of these figures. If transactions in this period change later, the worksheet warns you.':''} The ${kind} is recorded as a sales tax payment that clears the ${esc(taxAcctFor(k).name)} account.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${filing?'Mark as filed':'Record '+kind}</button>`);
@@ -364,8 +444,8 @@ function fileForm(k,from,to,filing){
     }
     let qmEntryId='';
     if(filing&&w.quick&&w.quick.rate==null)return f.err('Enter the Quick Method remittance rate first (Sales tax → Quick Method).');
-    if(filing&&w.quick){const adj=qmAdjustment(k,from,to,w);if(adj){writes.push(...adj.writes);qmEntryId=adj.id}}
-    if(filing)writes.push({op:'set',collection:'filings',id:uid(),data:{tax:k,from,to,lines:w.vals,filedOn:$('#fOn',f).value||today(),entryId,qmEntryId,...(w.quick?{method:'quick',qmRate:w.quick.rate}:{}),created:Date.now()}});
+    if(filing&&(w.quick||w.special)){const adj=qmAdjustment(k,from,to,w);if(adj){writes.push(...adj.writes);qmEntryId=adj.id}}
+    if(filing)writes.push({op:'set',collection:'filings',id:uid(),data:{tax:k,from,to,lines:w.vals,filedOn:$('#fOn',f).value||today(),entryId,qmEntryId,method:w.method,...(w.quick?{qmRate:w.quick.rate}:{}),...(w.special?{rebate:w.rebate,capComm:w.special.capComm,psbProv:w.special.provPct??null,...(w.special.kind==='npo'?{itcPct:w.special.pct}:{})}:{}),created:Date.now()}});
     else writes.push({op:'set',collection:'filings',id:w.filed.id,data:{...w.filed,entryId}});
     if(await batch(writes)){closeModal();toast(filing?'Return marked as filed':`${kind==='refund'?'Refund':'Payment'} recorded`)}
   };
@@ -374,7 +454,7 @@ async function unfile(k,from,to){
   const f=filingFor(k,from,to);if(!f)return;
   const pay=f.entryId?S.entries.find(e=>e.id===f.entryId):null;
   const adj=f.qmEntryId?S.entries.find(e=>e.id===f.qmEntryId):null;
-  if(!await confirmBox('Undo this filing?',`The period goes back to not filed${pay?`, and the ${pay.taxKind==='refund'?'refund':'payment'} of ${money(entryTotal(pay))} on ${fmtDate(pay.date)} is deleted`:''}.${adj?' The Quick Method adjustment is deleted too.':''} Use this if you marked it filed by mistake.`,'Undo filing'))return;
+  if(!await confirmBox('Undo this filing?',`The period goes back to not filed${pay?`, and the ${pay.taxKind==='refund'?'refund':'payment'} of ${money(entryTotal(pay))} on ${fmtDate(pay.date)} is deleted`:''}.${adj?' The adjustment posted with it is deleted too.':''} Use this if you marked it filed by mistake.`,'Undo filing'))return;
   const w=[{op:'delete',collection:'filings',id:f.id}];if(pay)w.push({op:'delete',collection:'entries',id:pay.id});if(adj)w.push({op:'delete',collection:'entries',id:adj.id});
   if(await batch(w))toast('Filing undone');
 }
@@ -423,7 +503,7 @@ function qmOverLimit(){
 }
 /** What the Quick Method changes, under the worksheet. */
 function qmBox(k,w,filed){
-  const Q=w.quick,q=qmCfg(),name=k==='qst'?'QST':taxLabel(k);
+  const Q=w.quick,q=qmCfg(),name=esc(k==='qst'?'QST':taxLabel(k));
   const adj=filed&&filed.qmEntryId?S.entries.find(e=>e.id===filed.qmEntryId):null;
   const row=(l,v,b)=>`<tr${b?' class="tot"':''}><td>${l}</td><td class="n">${b?`<b>${money(v)}</b>`:money(v)}</td></tr>`;
   return `<div class="pad" style="border-top:1px solid var(--line)">
@@ -439,19 +519,23 @@ function qmBox(k,w,filed){
   </div>`;
 }
 /** The journal entry that brings the tax account to the Quick Method amount: the gain to income, unclaimed tax to expenses. */
+const NPO_ACCTS={gain:['4960','Sales tax retained (charity net tax calculation)','Taxes conservées (calcul de la taxe nette des organismes de bienfaisance)','Income'],itc:['6960','Sales tax not recovered','Taxes non récupérées','Expense']};
 function qmAdjustment(k,from,to,w){
-  const Q=w.quick,gain=Q.gain,ops=Q.itcOps;if(Math.abs(gain)<0.005&&Math.abs(ops)<0.005)return null;
-  const writes=[],ids={};
-  for(const[key,[code,en,fr,type]]of Object.entries(QM_ACCTS)){
-    let a=S.accounts.find(x=>x.type===type&&(x.name===en||x.name===fr))||S.accounts.find(x=>x.type===type&&x.code===code&&x.desc==='Added by the Quick Method');
-    if(!a){const id=uid();writes.push({op:'set',collection:'accounts',id,data:{code:S.accounts.some(x=>x.code===code)?'':code,name:S.company.lang==='fr'?fr:en,type,detail:'',desc:'Added by the Quick Method',active:true}});a={id}}
+  const Q=w.quick,X=w.special,gain=Q?Q.gain:X.gain,ops=Q?Q.itcOps:X.ops;if(Math.abs(gain)<0.005&&Math.abs(ops)<0.005)return null;
+  const writes=[],ids={},ACC=Q?QM_ACCTS:NPO_ACCTS,by=Q?'Added by the Quick Method':'Added by sales tax for non-profits';
+  for(const[key,[code,en,fr,type]]of Object.entries(ACC)){
+    if(key==='gain'&&Math.abs(gain)<0.005)continue;
+    if(key==='itc'&&Math.abs(ops)<0.005)continue;
+    let a=S.accounts.find(x=>x.type===type&&(x.name===en||x.name===fr))||S.accounts.find(x=>x.type===type&&x.code===code&&x.desc===by);
+    if(!a){const id=uid();writes.push({op:'set',collection:'accounts',id,data:{code:S.accounts.some(x=>x.code===code)?'':code,name:S.company.lang==='fr'?fr:en,type,detail:'',desc:by,active:true}});a={id}}
     ids[key]=a.id;
   }
   const tax=w.account.id,lines=[];
-  if(Math.abs(gain)>=0.005)lines.push({account:tax,debit:gain>0?gain:0,credit:gain<0?-gain:0,memo:'Tax kept under the Quick Method'},{account:ids.gain,debit:gain<0?-gain:0,credit:gain>0?gain:0,memo:'Quick Method gain'});
-  if(Math.abs(ops)>=0.005)lines.push({account:ids.itc,debit:ops>0?ops:0,credit:ops<0?-ops:0,memo:'Tax paid on expenses, not claimed'},{account:tax,debit:ops<0?-ops:0,credit:ops>0?ops:0,memo:'Tax paid on expenses, not claimed'});
+  const gm=Q?'Tax kept under the Quick Method':'Tax kept under the net tax calculation for charities',om=Q?'Tax paid on expenses, not claimed':'Tax paid that isn’t recovered';
+  if(Math.abs(gain)>=0.005)lines.push({account:tax,debit:gain>0?gain:0,credit:gain<0?-gain:0,memo:gm},{account:ids.gain,debit:gain<0?-gain:0,credit:gain>0?gain:0,memo:gm});
+  if(Math.abs(ops)>=0.005)lines.push({account:ids.itc,debit:ops>0?ops:0,credit:ops<0?-ops:0,memo:om},{account:tax,debit:ops<0?-ops:0,credit:ops>0?ops:0,memo:om});
   const id=uid();
-  writes.push({op:'set',collection:'entries',id,data:{type:'qmadjust',tax:k,period:{from,to},date:to,ref:'',memo:`${k==='qst'?'QST':taxLabel(k)} Quick Method adjustment, ${fmtDate(from)} – ${fmtDate(to)}`,contactId:'',lines,created:Date.now()}});
+  writes.push({op:'set',collection:'entries',id,data:{type:'qmadjust',tax:k,period:{from,to},date:to,ref:'',memo:`${k==='qst'?'QST':taxLabel(k)} ${Q?'Quick Method adjustment':'adjustment for non-profits'}, ${fmtDate(from)} – ${fmtDate(to)}`,contactId:'',lines,created:Date.now()}});
   return{writes,id};
 }
 function quickForm(){
@@ -463,7 +547,8 @@ function quickForm(){
   const f=openModal('Quick Method',`
     <div class="muted" style="font-size:13px">With the Quick Method you still charge customers the full ${qc?'GST and QST':esc(S.company.taxName||'GST/HST')}, but you remit a set percentage of your sales including tax instead of tax collected minus credits. You keep the difference as income, and you don’t claim tax paid on everyday expenses, only on capital purchases.</div>
     <div class="banner" style="margin:0"><span>It’s for businesses with sales of $400,000 or less a year, tax included. Bookkeepers, accountants, lawyers, tax preparers and financial consultants can’t use it. Elect with ${qc?'Revenu Québec':'form GST74 (CRA)'} by the due date of the first return you file with it.</span></div>
-    <label class="check"><input type="checkbox" id="qmOn" ${q.on?'checked':''}> Use the Quick Method</label>
+    ${quickBarred()?'<div class="banner err" style="margin:0"><span>Registered charities and qualifying non-profits can’t use the Quick Method. Their returns use the rules for non-profits instead (Settings → Organization type).</span></div>':''}
+    <label class="check"><input type="checkbox" id="qmOn" ${q.on?'checked':''} ${quickBarred()&&!q.on?'disabled':''}> Use the Quick Method</label>
     <div class="fields" data-qm>
       ${fld('qmFrom','Starting',`<input type="date" id="qmFrom" value="${esc(q.from||fy)}"><span class="hint">The first day of a reporting period, usually the start of the fiscal year: ${fmtDate(fy)}.</span>`)}
       ${fld('qmType','The business mostly',`<select id="qmType"><option value="services" ${type==='services'?'selected':''}>Provides services, or other</option><option value="goods" ${type==='goods'?'selected':''}>Buys goods to resell (at least 40% of sales)</option></select>`)}
@@ -482,6 +567,7 @@ function quickForm(){
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const on=$('#qmOn',f).checked,from=$('#qmFrom',f).value;
     if(on&&qc&&taxes.length<2)return f.err('Set up a separate QST account first.');
+    if(on&&quickBarred())return f.err('Registered charities and qualifying non-profits can’t use the Quick Method.');
     if(on&&!from)return f.err('Choose the date you start using the Quick Method.');
     const num=id=>{const el=$(id,f);if(!el||el.value==='')return '';return Math.max(0,Math.min(20,+el.value||0))};
     const next={...q,on,from,type:$('#qmType',f).value,gstRate:num('#qmGst'),qstRate:num('#qmQst'),credit:$('#qmCredit',f).checked};
@@ -496,3 +582,25 @@ function quickForm(){
   };
 }
 const qmRateFor=(q,k)=>{const own=k==='qst'?q.qstRate:q.gstRate;return own!==''&&own!=null?+own:qmSuggested(k,q.type||'services')};
+
+/** What the rules for charities and non-profits change, under the worksheet. */
+function npoBox(k,w,filed){
+  const X=w.special,name=esc(k==='qst'?'QST':taxLabel(k)),qc=S.company.province==='QC';
+  const adj=filed&&filed.qmEntryId?S.entries.find(e=>e.id===filed.qmEntryId):null;
+  const row=(l,v,b)=>`<tr${b?' class="tot"':''}><td>${l}</td><td class="n">${b?`<b>${money(v)}</b>`:money(v)}</td></tr>`;
+  const prov=X.provPct,hst=k==='gst'&&!qc&&gstRateCharged()>5&&prov!=null;
+  const rates=k==='qst'?'50% of the QST':qc&&taxesInUse().length<2?'50% of the GST and QST':hst?`50% of the federal part and ${prov}% of the provincial part of the HST`:'50% of the GST';
+  const form=qc||k==='qst'?'FP-2066':'GST66';
+  return `<div class="pad" style="border-top:1px solid var(--line)">
+    <div class="flabel" style="margin-bottom:6px">${X.kind==='charity'?'Net tax calculation for charities':'Sales tax for non-profits'}</div>
+    <table class="ws" style="max-width:560px"><tbody>
+      ${X.kind==='charity'?`${row(`${name} charged`,X.collected)}${X.capSaleTax?row('On sales of capital property, remitted in full',-X.capSaleTax):''}${row('Remitted: 60% of the rest',-r2(X.tax-X.capSaleTax))}${row('Kept as income',X.gain,true)}`
+        :`${row(`${name} paid on purchases`,X.itc)}${row(`Claimed as credits: ${X.pct}% used in taxable activities`,X.itcNpo)}`}
+      ${row(`${name} paid that isn’t claimed as credits`,X.paid)}
+      ${w.rebate?row(`Public service bodies’ rebate: ${rates}`,X.rebate):''}
+      ${row('Not recovered (becomes an expense)',X.ops,true)}
+    </tbody></table>
+    ${X.journals?`<div class="banner" style="margin:8px 0 0"><span>${money(X.journals)} of tax was posted by journal entries. It’s on lines ${k==='qst'?'204 and 207':'104 and 107'} in full, without the rules for non-profits. Record purchases and sales as bills, expenses, invoices or deposits so the rules apply.</span></div>`:''}
+    <div class="muted" style="font-size:13px;margin-top:8px">${w.rebate?`<span>Claim the rebate with form ${form} and include it on line ${k==='qst'?'211':'111'}.</span> `:''}${X.capComm?'<span>Credits on capital property assume it’s used mainly (more than 50%) in taxable activities. Change this in Settings if it isn’t.</span> ':''}${adj?`<span>Posted on ${fmtDate(adj.date)} when this return was filed.</span>`:'<span>When you mark the return as filed, Tally Books posts the tax kept to income and the tax not recovered to expenses, so the sales tax account matches the return.</span>'}</div>
+  </div>`;
+}
