@@ -252,5 +252,157 @@
     return `${ny}-${String(nm).padStart(2, '0')}-15`;
   }
 
-  return { calc, remitSplit, remittanceDue, tableFor, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2 };
+  /* ---------- year-end: T4 and RL-1 slips and summaries ----------
+     Box rules from CRA's "Filling out the T4 slip" and Revenu Québec's RL-1 guide (RL-1.G).
+     A separate T4 (and RL-1) is made for each province an employee worked in during the year. */
+  const YEAR_LIMITS = {
+    2026: { ympe: 74600, yampe: 85000, exemption: 3500, cppRate: 0.0595, cppMax: 4230.45, qppRate: 0.063, qppMax: 4479.30, cpp2Rate: 0.04,
+      eiMax: 68900, eiRate: 0.0163, eiRateQc: 0.013, qpipMax: 103000, qpipRate: 0.0043, cntRate: 0.0006, cntMax: 103000 },
+  };
+  /** SIN check (Luhn). Returns '' when fine, or what's wrong. */
+  function sinProblem(sin) {
+    const d = String(sin || '').replace(/\D/g, '');
+    if (!d) return 'missing';
+    if (d.length !== 9) return 'invalid';
+    let sum = 0;
+    for (let i = 0; i < 9; i++) { let n = +d[i]; if (i % 2 === 1) { n *= 2; if (n > 9) n -= 9; } sum += n; }
+    return sum % 10 === 0 && d[0] !== '0' && d[0] !== '8' ? '' : 'invalid';
+  }
+  /** Slips are due the last day of February; on a weekend, the next Monday. */
+  function slipsDue(year) {
+    const d = new Date(Date.UTC(year + 1, 2, 0)); // last day of February
+    const dow = d.getUTCDay();
+    if (dow === 6) d.setUTCDate(d.getUTCDate() + 2); else if (dow === 0) d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+  /** Health Services Fund rate from total Quebec payroll (Revenu Québec's table). */
+  function hsfRateFor(payroll, primary) {
+    if (payroll <= 1000000) return primary ? 1.25 : 1.65;
+    if (payroll >= 7800000) return 4.26;
+    const m = payroll / 1000000;
+    return Math.round((primary ? 0.8074 + 0.4426 * m : 1.2662 + 0.3838 * m) * 10000) / 10000;
+  }
+
+  /*
+   * yearEnd({ year, employees, payruns, remittances, hsfPrimary })
+   *   employees: [{ id, name, prov, sin, address, cppExempt, eiExempt, qpipExempt, pensionType ('rrsp'|'rpp'), dental (1–5), openingYtd }]
+   *   payruns:   pay runs as stored ({ payDate, lines:[{ employeeId, prov, gross, pensionable, insurable, rrsp, union, ded, er }] })
+   *   remittances: [{ agency: 'cra'|'rq', period: 'YYYY-MM' | 'YYYY-Qn', amount }]
+   * Returns { slips, t4sum, rl1sum, due, limits }.
+   */
+  function yearEnd({ year, employees, payruns, remittances = [], hsfPrimary = false }) {
+    const L = YEAR_LIMITS[year];
+    if (!L) { const e = new Error(`Year-end limits for ${year} aren't loaded yet.`); e.code = 'NO_RATES'; throw e; }
+    const empById = new Map(employees.map(e => [e.id, e]));
+    const acc = new Map(); // `${employeeId}|${prov}` -> running totals
+    const blank = () => ({ gross: 0, pensionable: 0, insurable: 0, rrsp: 0, union: 0, ded: {}, er: {} });
+    const add = (o, k, v) => { o[k] = r2((o[k] || 0) + num(v)); };
+    const bucket = (id, prov) => { const k = id + '|' + prov; if (!acc.has(k)) acc.set(k, { employeeId: id, prov, ...blank() }); return acc.get(k); };
+    for (const e of employees) {
+      const o = e.openingYtd;
+      if (!o || Number(o.year) !== year || !num(o.gross)) continue;
+      const b = bucket(e.id, e.prov);
+      add(b, 'gross', o.gross); add(b, 'pensionable', o.pensionable || o.gross); add(b, 'insurable', o.insurable || o.gross);
+      for (const k of ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'fedTax', 'provTax', 'qcTax']) add(b.ded, k, o[k]);
+      // Employer shares weren't entered for earlier payroll: CPP/QPP match the employee, EI is 1.4 times.
+      for (const k of ['cpp', 'cpp2', 'qpp', 'qpp2']) add(b.er, k, o[k]);
+      add(b.er, 'ei', r2(num(o.ei) * 1.4)); add(b.er, 'qpip', o.erQpip);
+    }
+    for (const r of payruns) {
+      if (String(r.payDate).slice(0, 4) !== String(year)) continue;
+      for (const l of r.lines || []) {
+        const e = empById.get(l.employeeId) || { id: l.employeeId };
+        const b = bucket(l.employeeId, l.prov || e.prov);
+        add(b, 'gross', l.gross); add(b, 'pensionable', l.pensionable ?? l.gross); add(b, 'insurable', l.insurable ?? l.gross);
+        add(b, 'rrsp', l.rrsp); add(b, 'union', l.union);
+        for (const [k, v] of Object.entries(l.ded || {})) add(b.ded, k, v);
+        for (const [k, v] of Object.entries(l.er || {})) add(b.er, k, v);
+      }
+    }
+    const slips = [];
+    for (const b of acc.values()) {
+      const e = empById.get(b.employeeId) || {};
+      const qc = b.prov === 'QC', d = k => r2(b.ded[k] || 0);
+      const rpp = e.pensionType === 'rpp' ? r2(b.rrsp) : 0;
+      const t4 = {
+        10: b.prov, 12: String(e.sin || '').replace(/\D/g, ''), 14: r2(b.gross),
+        16: qc ? 0 : d('cpp'), '16A': qc ? 0 : d('cpp2'), 17: qc ? d('qpp') : 0, '17A': qc ? d('qpp2') : 0,
+        18: d('ei'), 20: rpp, 22: r2(d('fedTax') + (qc ? 0 : d('provTax'))),
+        24: e.eiExempt ? 0 : r2(Math.min(b.insurable, L.eiMax)),
+        26: e.cppExempt ? 0 : r2(Math.min(b.pensionable, L.yampe)),
+        28: { cppQpp: !!e.cppExempt, ei: !!e.eiExempt, ppip: qc && !!e.qpipExempt },
+        44: r2(b.union), 45: e.dental || 1,
+        55: qc ? d('qpip') : 0, 56: qc ? (e.qpipExempt ? 0 : r2(Math.min(b.insurable, L.qpipMax))) : 0,
+      };
+      const rl1 = qc ? {
+        A: r2(b.gross), 'B.A': d('qpp'), 'B.B': d('qpp2'), C: d('ei'), D: rpp, E: d('qcTax'), F: r2(b.union),
+        G: e.cppExempt ? 0 : r2(Math.min(b.pensionable, d('qpp2') > 0 ? L.yampe : L.ympe)),
+        H: d('qpip'), I: e.qpipExempt ? 0 : r2(Math.min(b.insurable, L.qpipMax)),
+      } : null;
+      // Checks, like CRA's pensionable and insurable earnings review (PIER).
+      const checks = [];
+      const sp = sinProblem(e.sin);
+      if (sp) checks.push({ level: 'error', code: 'sin-' + sp });
+      const diff = (got, want) => Math.abs(r2(got) - r2(want)) > 1;
+      if (!e.eiExempt) {
+        const want = r2(Math.min(b.insurable, L.eiMax) * (qc ? L.eiRateQc : L.eiRate));
+        if (diff(d('ei'), want)) checks.push({ level: 'warn', code: 'ei', got: d('ei'), want });
+      }
+      if (!e.cppExempt) {
+        const rate = qc ? L.qppRate : L.cppRate, max = qc ? L.qppMax : L.cppMax;
+        const want = r2(Math.max(0, Math.min(max, rate * (Math.min(b.pensionable, L.ympe) - L.exemption))));
+        const got = qc ? d('qpp') : d('cpp');
+        if (diff(got, want)) checks.push({ level: 'info', code: 'cpp', got, want });
+        const want2 = r2(Math.max(0, Math.min(b.pensionable, L.yampe) - L.ympe) * L.cpp2Rate);
+        const got2 = qc ? d('qpp2') : d('cpp2');
+        if (diff(got2, want2)) checks.push({ level: 'warn', code: 'cpp2', got: got2, want: want2 });
+      }
+      if (qc && !e.qpipExempt) {
+        const want = r2(Math.min(b.insurable, L.qpipMax) * L.qpipRate);
+        if (diff(d('qpip'), want)) checks.push({ level: 'warn', code: 'qpip', got: d('qpip'), want });
+      }
+      slips.push({ employeeId: b.employeeId, name: e.name || '', address: e.address || '', prov: b.prov, t4, rl1, er: { ...b.er }, checks });
+    }
+    slips.sort((a, b) => a.name.localeCompare(b.name) || a.prov.localeCompare(b.prov));
+
+    const sum = (list, f) => r2(list.reduce((s, x) => s + num(f(x)), 0));
+    const remitted = ag => sum(remittances.filter(x => x.agency === ag && String(x.period).startsWith(String(year))), x => x.amount);
+    const t4sum = {
+      88: slips.length, 14: sum(slips, s => s.t4[14]), 16: sum(slips, s => s.t4[16]), '16A': sum(slips, s => s.t4['16A']),
+      17: sum(slips, s => s.t4[17]), '17A': sum(slips, s => s.t4['17A']), 18: sum(slips, s => s.t4[18]),
+      19: sum(slips, s => s.er.ei), 20: sum(slips, s => s.t4[20]), 22: sum(slips, s => s.t4[22]),
+      27: sum(slips.filter(s => s.prov !== 'QC'), s => s.er.cpp), '27A': sum(slips.filter(s => s.prov !== 'QC'), s => s.er.cpp2),
+    };
+    t4sum[80] = r2(t4sum[16] + t4sum['16A'] + t4sum[27] + t4sum['27A'] + t4sum[18] + t4sum[19] + t4sum[22]);
+    t4sum[82] = remitted('cra');
+    const t4diff = r2(t4sum[80] - t4sum[82]);
+    t4sum[84] = t4diff < 0 ? -t4diff : 0; // overpayment
+    t4sum[86] = t4diff > 0 ? t4diff : 0;  // balance due
+
+    const qcs = slips.filter(s => s.rl1);
+    let rl1sum = null;
+    if (qcs.length) {
+      const payroll = sum(qcs, s => s.rl1.A);
+      const rate = hsfRateFor(payroll, hsfPrimary);
+      const hsf = r2(payroll * rate / 100), hsfPaid = sum(qcs, s => s.er.hsf);
+      // Labour standards: 0.06% of each employee's pay up to the maximum (per employee, all their Quebec slips together).
+      const perEmp = new Map(); qcs.forEach(s => perEmp.set(s.employeeId, (perEmp.get(s.employeeId) || 0) + s.rl1.A));
+      const cntBase = r2([...perEmp.values()].reduce((t, a) => t + Math.min(a, L.cntMax), 0));
+      rl1sum = {
+        slips: qcs.length, payroll,
+        qppEmployee: sum(qcs, s => s.rl1['B.A']), qppEmployer: sum(qcs, s => s.er.qpp),
+        qpp2Employee: sum(qcs, s => s.rl1['B.B']), qpp2Employer: sum(qcs, s => s.er.qpp2),
+        qpipEmployee: sum(qcs, s => s.rl1.H), qpipEmployer: sum(qcs, s => s.er.qpip),
+        qcTax: sum(qcs, s => s.rl1.E), hsfRate: rate, hsf, hsfPaid, hsfBalance: r2(hsf - hsfPaid),
+        cntBase, cnt: r2(cntBase * L.cntRate), wsdrf: payroll > 2000000,
+      };
+      rl1sum.total = r2(rl1sum.qppEmployee + rl1sum.qppEmployer + rl1sum.qpp2Employee + rl1sum.qpp2Employer + rl1sum.qpipEmployee + rl1sum.qpipEmployer + rl1sum.qcTax + rl1sum.hsf);
+      rl1sum.remitted = remitted('rq');
+      rl1sum.balance = r2(rl1sum.total - rl1sum.remitted);
+    }
+    return { year, slips, t4sum, rl1sum, due: slipsDue(year), limits: L };
+  }
+
+  return { calc, remitSplit, remittanceDue, tableFor, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
+    yearEnd, sinProblem, slipsDue, hsfRateFor, YEAR_LIMITS };
 });

@@ -112,7 +112,8 @@ function vPayroll(){
   const act=S.employees.filter(e=>e.active!==false);
   const h=head('Payroll','Pay employees, print pay stubs and track what you owe CRA and Revenu Québec',
     `<button class="btn" data-pay-emp="new">+ Add employee</button><button class="btn primary" data-pay-run="new" ${act.length?'':'disabled'}>Run payroll</button>`)+
-    `<div class="tabs" role="tablist">${[['runs','Pay runs'],['employees','Employees'],['remit','Remittances']].map(([k,v])=>`<button role="tab" data-ptab="${k}" aria-selected="${P.tab===k}">${v}</button>`).join('')}</div>`;
+    `<div class="tabs" role="tablist">${[['runs','Pay runs'],['employees','Employees'],['remit','Remittances'],['yearend','Year-end (T4, RL-1)']].map(([k,v])=>`<button role="tab" data-ptab="${k}" aria-selected="${P.tab===k}">${v}</button>`).join('')}</div>`;
+  if(P.tab==='yearend')return h+vYearEnd();
   if(P.tab==='employees'){
     const list=S.employees.slice().sort((a,b)=>(a.active===false)-(b.active===false)||a.name.localeCompare(b.name));
     return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Province</th><th>Pay schedule</th><th class="n">Pay</th><th class="n">Gross, ${yr}</th><th>Status</th></tr></thead><tbody>${list.length?list.map(e=>`<tr class="click" data-pay-emp="${e.id}"><td>${esc(e.name)} ${e.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(provName(e.prov))}</td><td>${PR.FREQ_LABEL[e.freq]||''}</td><td class="n">${payOf(e)}</td><td class="n">${money(ytdFor(e.id,{payDate:t+'~'},false).gross)}</td><td>${e.active===false?'<span class="pill quiet">Inactive</span>':'<span class="pill paid">Active</span>'}</td></tr>`).join(''):emptyRow(6,'No employees yet','Add an employee with their TD1 amounts, then run payroll.')}</tbody></table></div></div>`;
@@ -129,6 +130,7 @@ function vPayroll(){
   return h+chips+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Pay date</th><th>Period</th><th class="n">Employees</th><th class="n">Gross</th><th class="n">Deductions</th><th class="n">Net pay</th><th class="n">To remit</th></tr></thead><tbody>${runs.length?runs.map(r=>{const t=runTotals(r);return `<tr class="click" data-pay-run="${r.id}"><td style="white-space:nowrap">${fmtDate(r.payDate)}</td><td class="muted" style="white-space:nowrap">${r.from?`${fmtDate(r.from)} – ${fmtDate(r.to)}`:''}</td><td class="n">${r.lines.length}</td><td class="n">${money(t.gross)}</td><td class="n">${money(t.ded)}</td><td class="n">${money(t.net)}</td><td class="n">${money(r2(t.cra+t.rq))}</td></tr>`}).join(''):emptyRow(7,'No pay runs yet',S.employees.length?'Choose Run payroll to calculate deductions and pay your employees.':'Start by adding an employee.')}</tbody></table></div></div>`;
 }
 async function payClick(e,t,d){
+  if(await yeClick(e,t,d))return true;
   if(d.ptab){S.pay.tab=d.ptab;renderMain();return true}
   if(d.payEmp){employeeForm(d.payEmp==='new'?null:employee(d.payEmp));return true}
   if(d.payRun){if(d.payRun==='new')payRunForm();else payRunView(S.payruns.find(r=>r.id===d.payRun));return true}
@@ -136,7 +138,7 @@ async function payClick(e,t,d){
   if(d.remit){remitDetail(d.remit);return true}
   return false;
 }
-function bindPayroll(){}
+function bindPayroll(m){bindYearEnd(m)}
 
 /* ---------- employee form ---------- */
 function employeeForm(emp){
@@ -150,6 +152,8 @@ function employeeForm(emp){
     <div class="fields">${fld('eName','Name',`<input type="text" id="eName" value="${v(e.name)}" required>`)}${fld('eEmail','Email',`<input type="email" id="eEmail" value="${v(e.email)}">`)}
       ${fld('eProv','Province of employment',`<select id="eProv">${PR.PROVINCES.map(k=>`<option value="${k}" ${e.prov===k?'selected':''}>${esc(provName(k))}</option>`).join('')}</select>`)}
       ${fld('eHire','Hire date',`<input type="date" id="eHire" value="${v(e.hireDate)}">`)}
+      ${fld('eSin','Social insurance number',`<input type="text" id="eSin" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789" value="${v(e.sin?String(e.sin).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3'):'')}" translate="no"><span class="hint">For the T4 and RL-1 (box 12). Kept only in this company’s books.</span>`)}
+      ${fld('eDental','Dental benefits offered (T4 box 45)',`<select id="eDental">${[[1,'1 · Not eligible for any dental care insurance'],[2,'2 · Employee only'],[3,'3 · Employee, spouse and dependent children'],[4,'4 · Employee and spouse'],[5,'5 · Employee and dependent children']].map(([k,l])=>`<option value="${k}" ${(e.dental||1)===k?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${fld('eAddr','Address',`<textarea id="eAddr">${esc(e.address||'')}</textarea>`,true)}</div>
     <h3 class="fsec">Pay</h3>
     <div class="fields">${fld('eFreq','Pay schedule',`<select id="eFreq">${Object.keys(PR.FREQUENCIES).map(k=>`<option value="${k}" ${e.freq===k?'selected':''}>${PR.FREQ_LABEL[k]}</option>`).join('')}</select>`)}
@@ -164,7 +168,7 @@ function employeeForm(emp){
       <div data-qc style="display:contents">${num('eExtraQ','Additional Quebec tax per pay',e.extraQcTax)}</div>
       <div data-on style="display:contents">${num('eDep','Dependants (Ontario tax reduction)',e.dependants,'Children under 19 and dependants with a disability')}</div></div>
     <h3 class="fsec">Deductions and exemptions</h3>
-    <div class="fields">${num('eRrsp','RRSP / pension deducted each pay',e.rrsp,'Reduces taxable income')}${num('eUnion','Union dues each pay',e.union)}</div>
+    <div class="fields">${num('eRrsp','RRSP / pension deducted each pay',e.rrsp,'Reduces taxable income')}${fld('ePen','That deduction goes to',`<select id="ePen"><option value="rrsp" ${e.pensionType!=='rpp'?'selected':''}>A group RRSP (not on the T4)</option><option value="rpp" ${e.pensionType==='rpp'?'selected':''}>A registered pension plan (T4 box 20, RL-1 box D)</option></select>`)}${num('eUnion','Union dues each pay',e.union)}</div>
     <div style="display:flex;gap:18px;flex-wrap:wrap"><label class="check"><input type="checkbox" id="eCppX" ${e.cppExempt?'checked':''}> Exempt from <span data-cpplbl>CPP</span></label><label class="check"><input type="checkbox" id="eEiX" ${e.eiExempt?'checked':''}> Exempt from EI</label><label class="check" data-qc><input type="checkbox" id="eQpipX" ${e.qpipExempt?'checked':''}> Exempt from QPIP</label>${emp?`<label class="check"><input type="checkbox" id="eInactive" ${e.active===false?'checked':''}> Inactive (no longer paid)</label>`:''}</div>
     <details ${Object.keys(o).length>1?'open':''}><summary class="fsum">Paid earlier in ${yr} outside Tally Books?</summary>
       <div class="muted" style="font-size:13px;margin:8px 0">Enter this year’s totals from your previous payroll so CPP, EI and QPIP stop at the yearly maximums and pay stubs show the right year-to-date.</div>
@@ -185,7 +189,7 @@ function employeeForm(emp){
     const data={...(emp?strip(emp):{created:Date.now()}),name,email:$('#eEmail',f).value.trim(),address:$('#eAddr',f).value.trim(),prov,hireDate:$('#eHire',f).value,
       freq:$('#eFreq',f).value,payType:$('#eType',f).value,rate:val('eRate'),hours:val('eHours'),
       td1Fed:val('eTd1'),td1Prov:qc?'':val('eTd1p'),td1Qc:qc?val('eTd1q'):'',extraTax:val('eExtra'),extraQcTax:qc?val('eExtraQ'):'',dependants:prov==='ON'?val('eDep'):'',
-      rrsp:val('eRrsp'),union:val('eUnion'),cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
+      rrsp:val('eRrsp'),union:val('eUnion'),sin:$('#eSin',f).value.replace(/\D/g,''),dental:+$('#eDental',f).value||1,pensionType:$('#ePen',f).value,cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
       active:emp?!$('#eInactive',f).checked:true,openingYtd:oy};
     if(await put('employees',emp?.id||uid(),data)){closeModal();toast('Employee saved')}
   };
@@ -380,7 +384,10 @@ function payrollSettingsPanel(){
   const c=payCfg();
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Payroll</h3><form class="pad" id="paySetForm" style="display:flex;flex-direction:column;gap:14px">
     <div class="fields">${fld('psFreq','Remitting source deductions',`<select id="psFreq"><option value="monthly" ${c.remitFreq==='monthly'?'selected':''}>Monthly (regular remitter)</option><option value="quarterly" ${c.remitFreq==='quarterly'?'selected':''}>Quarterly</option></select><span class="hint">CRA tells you which in your remitter letter</span>`)}
-    ${fld('psHsf','Quebec Health Services Fund rate (%)',`<input type="number" id="psHsf" min="0" max="10" step="0.01" value="${esc(c.hsfRate)}"><span class="hint">Only for employees in Quebec. 1.65% for most small employers.</span>`)}</div>
+    ${fld('psHsf','Quebec Health Services Fund rate (%)',`<input type="number" id="psHsf" min="0" max="10" step="0.01" value="${esc(c.hsfRate)}"><span class="hint">Only for employees in Quebec. 1.65% for most small employers.</span>`)}
+    ${fld('psCra','CRA payroll account number',`<input type="text" id="psCra" maxlength="15" placeholder="123456789RP0001" value="${esc(c.craAccount||'')}" translate="no"><span class="hint">Your business number + RP + 4 digits. T4 box 54.</span>`)}
+    ${fld('psRq','Revenu Québec identification number',`<input type="text" id="psRq" maxlength="16" placeholder="1234567890RS0001" value="${esc(c.rqId||'')}" translate="no"><span class="hint">For RL-1 slips and the RL-1 Summary, if you have employees in Quebec.</span>`)}</div>
+    <label class="check"><input type="checkbox" id="psPrim" ${c.hsfPrimary?'checked':''}> Primary or manufacturing business (lower Health Services Fund rate)</label>
     <div><button class="btn" type="submit">Save payroll settings</button></div></form></div>`;
 }
-function bindPayrollSettings(m){const f=$('#paySetForm',m);if(!f)return;f.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),payroll:{...payCfg(),remitFreq:$('#psFreq',f).value,hsfRate:+$('#psHsf',f).value||0}}))toast('Payroll settings saved')}}
+function bindPayrollSettings(m){const f=$('#paySetForm',m);if(!f)return;f.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),payroll:{...payCfg(),remitFreq:$('#psFreq',f).value,hsfRate:+$('#psHsf',f).value||0,craAccount:$('#psCra',f).value.trim(),rqId:$('#psRq',f).value.trim(),hsfPrimary:$('#psPrim',f).checked}}))toast('Payroll settings saved')}}

@@ -23,10 +23,18 @@ async function setLang(lang,{save=true}={}){
   lang=lang==='fr'?'fr':'en';
   try{localStorage.setItem(LS_LANG,lang)}catch(e){}
   if(save&&typeof ME!=='undefined'&&ME){try{await api('PUT','/api/auth/prefs',{lang})}catch(e){}}
+  // Chosen before signing in: remember to save it to the account once signed in.
+  else if(save){try{localStorage.setItem(LS_LANG+'_pick','1')}catch(e){}}
   if(lang!==I18N.lang)location.reload();
 }
-/** Called after sign-in with the account's saved language. */
-function useAccountLang(lang){if(lang&&lang!==I18N.lang)setLang(lang,{save:false})}
+/** After sign-in: a language picked on the sign-in screen wins and is saved to the account;
+    otherwise the account's saved language is used. Returns true when the page is about to reload. */
+function syncAccountLang(user){
+  let picked=false;try{picked=localStorage.getItem(LS_LANG+'_pick')==='1';localStorage.removeItem(LS_LANG+'_pick')}catch(e){}
+  if(picked||!user.lang){if(user.lang!==I18N.lang)api('PUT','/api/auth/prefs',{lang:I18N.lang}).catch(()=>{});return false}
+  if(user.lang!==I18N.lang){setLang(user.lang,{save:false});return true}
+  return false;
+}
 
 /* ---------- matching ---------- */
 const MONTHS_EN='Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec';
@@ -84,7 +92,8 @@ function addFr(entries){
 /* ---------- applying it to the page ---------- */
 const SKIP_TAGS=new Set(['SCRIPT','STYLE','TEXTAREA','CODE','svg','SVG']);
 const done=new WeakMap();
-function skip(el){for(let e=el;e;e=e.parentElement){if(SKIP_TAGS.has(e.tagName)||e.getAttribute&&e.getAttribute('translate')==='no')return true}return false}
+// translate="no" on the page itself only stops the browser's own translator; inside the page it marks data to leave alone.
+function skip(el){for(let e=el;e&&e!==document.documentElement;e=e.parentElement){if(SKIP_TAGS.has(e.tagName)||e.getAttribute&&e.getAttribute('translate')==='no')return true}return false}
 function translateText(node){
   if(done.get(node)===node.data)return;
   if(skip(node.parentElement))return;

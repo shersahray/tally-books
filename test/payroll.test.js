@@ -76,3 +76,75 @@ test('Refuses pay dates without loaded rates, and remittance due dates', () => {
   assert.equal(P.remittanceDue('2026-09-30'), '2026-10-15');
   assert.equal(P.remittanceDue('2026-12-31'), '2027-01-15');
 });
+
+// A full year of biweekly pays, calculated with year-to-date amounts so maximums are respected.
+function yearOfPays(emp, gross, prov) {
+  const runs = [];
+  const ytd = { pensionable: 0, cpp: 0, cpp2: 0, qpp: 0, qpp2: 0, ei: 0, qpip: 0, erQpip: 0 };
+  for (let i = 0; i < 26; i++) {
+    const d = new Date(Date.UTC(2026, 0, 9 + 14 * i)).toISOString().slice(0, 10);
+    const r = P.calc({ date: '2026-07-15', prov, P: 26, gross, ytd: { ...ytd } });
+    for (const k of ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip']) ytd[k] = P.r2(ytd[k] + r.employee[k]);
+    ytd.pensionable += gross; ytd.erQpip = P.r2(ytd.erQpip + r.employer.qpip);
+    const ded = r.employee, er = r.employer;
+    const net = P.r2(gross - Object.values(ded).reduce((s, v) => s + v, 0));
+    runs.push({ payDate: d, lines: [{ employeeId: emp, prov, gross, rrsp: 0, union: 0, ded, er, net }] });
+  }
+  return runs;
+}
+
+test('T4 boxes add up the year, with the right caps and checks', () => {
+  const runs = yearOfPays('e1', 3000, 'ON'); // $78,000 a year: over the YMPE, under the YAMPE
+  const ye = P.yearEnd({ year: 2026, employees: [{ id: 'e1', name: 'Pat', prov: 'ON', sin: '130 692 544', dental: 3 }], payruns: runs,
+    remittances: [{ agency: 'cra', period: '2026-03', amount: 1000 }, { agency: 'cra', period: '2025-12', amount: 999 }] });
+  assert.equal(ye.due, '2027-03-01', 'Feb 28, 2027 is a Sunday');
+  const t4 = ye.slips[0].t4;
+  assert.equal(t4[14], 78000);
+  assert.equal(t4[16], 4230.45, 'CPP reaches the maximum');
+  assert.equal(t4['16A'], P.r2((78000 - 74600) * 0.04));
+  assert.equal(t4[18], 1123.07, 'EI reaches the maximum');
+  assert.equal(t4[24], 68900, 'box 24 is capped at the maximum insurable earnings');
+  assert.equal(t4[26], 78000, 'box 26 is capped at the YAMPE, not the YMPE');
+  assert.equal(t4[45], 3);
+  assert.equal(t4[17], 0);
+  assert.deepEqual(ye.slips[0].checks, [], 'deductions match what CRA expects');
+  assert.equal(ye.t4sum[88], 1);
+  assert.equal(ye.t4sum[27], t4[16], 'employer CPP matches the employee');
+  assert.equal(ye.t4sum[19], P.r2(runs.reduce((s, r) => s + r.lines[0].er.ei, 0)));
+  assert.equal(ye.t4sum[82], 1000, 'only this year’s remittances count');
+  assert.equal(ye.t4sum[80], P.r2(ye.t4sum[16] + ye.t4sum['16A'] + ye.t4sum[27] + ye.t4sum['27A'] + ye.t4sum[18] + ye.t4sum[19] + ye.t4sum[22]));
+  assert.equal(ye.t4sum[86], P.r2(ye.t4sum[80] - 1000));
+});
+
+test('Quebec employees get a T4 with QPP and PPIP boxes, and an RL-1', () => {
+  const runs = yearOfPays('q1', 4500, 'QC'); // $117,000 a year
+  const ye = P.yearEnd({ year: 2026, employees: [{ id: 'q1', name: 'Dominique', prov: 'QC', sin: '130692551' }], payruns: runs, remittances: [] });
+  const { t4, rl1 } = ye.slips[0];
+  assert.equal(t4[16], 0); assert.equal(t4[17], 4479.30); assert.equal(t4['17A'], 416);
+  assert.equal(t4[18], 895.70); assert.equal(t4[55], 442.90); assert.equal(t4[56], 103000); assert.equal(t4[26], 85000);
+  assert.equal(t4[22], P.r2(runs.reduce((s, r) => s + r.lines[0].ded.fedTax, 0)), 'box 22 is federal tax only in Quebec');
+  assert.equal(rl1.A, 117000); assert.equal(rl1['B.A'], 4479.30); assert.equal(rl1['B.B'], 416); assert.equal(rl1.G, 85000);
+  assert.equal(rl1.H, 442.90); assert.equal(rl1.I, 103000); assert.equal(rl1.C, 895.70);
+  assert.equal(rl1.E, P.r2(runs.reduce((s, r) => s + r.lines[0].ded.qcTax, 0)));
+  assert.equal(ye.t4sum[27], 0, 'employer QPP goes to Revenu Québec, not box 27');
+  const s = ye.rl1sum;
+  assert.equal(s.payroll, 117000); assert.equal(s.hsfRate, 1.65); assert.equal(s.hsf, P.r2(117000 * 0.0165));
+  assert.equal(s.cntBase, 103000, 'labour standards stop at the maximum per employee'); assert.equal(s.cnt, 61.8);
+  assert.equal(s.qpipEmployer, 620.06);
+  assert.deepEqual(ye.slips[0].checks, []);
+});
+
+test('Year-end checks: SIN, a province change and under-deducted EI', () => {
+  const runs = [
+    { payDate: '2026-03-06', lines: [{ employeeId: 'e2', prov: 'AB', gross: 2000, ded: { cpp: 110.99, ei: 10 }, er: { cpp: 110.99, ei: 14 } }] },
+    { payDate: '2026-09-04', lines: [{ employeeId: 'e2', prov: 'BC', gross: 2000, ded: { cpp: 110.99, ei: 32.6 }, er: { cpp: 110.99, ei: 45.64 } }] },
+  ];
+  const ye = P.yearEnd({ year: 2026, employees: [{ id: 'e2', name: 'Lee', prov: 'BC', sin: '123' }], payruns: runs });
+  assert.deepEqual(ye.slips.map(s => s.prov), ['AB', 'BC'], 'one T4 per province');
+  const ab = ye.slips[0];
+  assert.ok(ab.checks.some(c => c.code === 'sin-invalid'));
+  assert.ok(ab.checks.some(c => c.code === 'ei' && c.want === 32.6 && c.got === 10));
+  assert.equal(P.sinProblem(''), 'missing');
+  assert.equal(P.hsfRateFor(3000000), 2.4176);
+  assert.throws(() => P.yearEnd({ year: 2030, employees: [], payruns: [] }), /aren't loaded/);
+});

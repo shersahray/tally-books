@@ -163,6 +163,13 @@ function validateEmployee(data) {
     ['td1Fed', 'Federal TD1 amount'], ['td1Prov', 'Provincial TD1 amount'], ['td1Qc', 'Quebec TP-1015.3 amount'],
     ['extraTax', 'Additional tax'], ['extraQcTax', 'Additional Quebec tax'], ['dependants', 'Dependants']]) out[k] = optAmount(data[k], label);
   if (data.hireDate && !isDate(data.hireDate)) throw new ValidationError('Hire date must be YYYY-MM-DD.');
+  if (data.sin !== undefined && data.sin !== '') {
+    const sin = String(data.sin).replace(/\D/g, '');
+    if (sin.length !== 9) throw new ValidationError('A social insurance number has 9 digits.');
+    out.sin = sin;
+  } else out.sin = '';
+  out.dental = [1, 2, 3, 4, 5].includes(Number(data.dental)) ? Number(data.dental) : 1;
+  out.pensionType = data.pensionType === 'rpp' ? 'rpp' : 'rrsp';
   if (data.openingYtd !== undefined) {
     if (!isObj(data.openingYtd)) throw new ValidationError('Opening year-to-date amounts must be an object.');
     const o = { year: parseInt(data.openingYtd.year, 10) || 0 };
@@ -249,6 +256,9 @@ function validatePayrollSettings(p) {
   return {
     hsfRate: Number.isFinite(hsf) && hsf >= 0 && hsf <= 10 ? hsf : 1.65,
     remitFreq: ['monthly', 'quarterly'].includes(p.remitFreq) ? p.remitFreq : 'monthly',
+    craAccount: str(p.craAccount, 20).toUpperCase().replace(/\s/g, ''),
+    rqId: str(p.rqId, 20).toUpperCase().replace(/\s/g, ''),
+    hsfPrimary: !!p.hsfPrimary,
   };
 }
 

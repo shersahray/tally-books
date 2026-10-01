@@ -179,11 +179,13 @@ function createApp(opts) {
   function applyWrite(store, w, user) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
-    const before = store.get(collection, id);
+    // Social insurance numbers never go into the activity log in full.
+    const hideSin = r => (r && r.sin ? { ...r, sin: '•••••' + String(r.sin).slice(-3) } : r);
+    const before = collection === 'employees' ? hideSin(store.get(collection, id)) : store.get(collection, id);
     if (op === 'set') {
       const data = validateRecord(collection, id, w.data, store);
       store.put(collection, id, data);
-      const after = store.get(collection, id);
+      const after = collection === 'employees' ? hideSin(store.get(collection, id)) : store.get(collection, id);
       if (JSON.stringify(before) !== JSON.stringify(after)) store.audit(user, before ? 'change' : 'add', { collection, id, summary: auditSummary(collection, after), before, after });
     } else if (op === 'delete') {
       checkDelete(collection, id, store);

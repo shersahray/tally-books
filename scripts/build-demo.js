@@ -49,7 +49,7 @@ ${body}
 <div class="demo-ribbon">Demo · example data · changes aren’t saved</div>
 <script>window.__TALLY_DEMO__=${safe(JSON.stringify(data))};</script>
 <script>${safe(fs.readFileSync(path.join(__dirname, 'demo-shim.js'), 'utf8'))}</script>
-${['i18n.js', 'fr.js', 'bankparse.js', 'app.js', 'banking.js', 'salestax.js', 'payroll-calc.js', 'payroll.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
+${['i18n.js', 'fr.js', 'bankparse.js', 'app.js', 'banking.js', 'salestax.js', 'payroll-calc.js', 'payroll.js', 'payroll-yearend.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
 `;
   fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'dist', 'demo.html'), html);

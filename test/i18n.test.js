@@ -45,3 +45,15 @@ test('every French entry keeps the placeholders its English has', () => {
     for (const ph of en.match(/\{s\d?\}/g) || []) assert.ok(fr.includes(ph), `${ph} missing in French for: ${en}`);
   }
 });
+
+test('the page-level "don’t translate" (for the browser) doesn’t stop the app’s own French', () => {
+  const ctx = load('fr-CA');
+  vm.runInContext('this.skip=skip', ctx);
+  const html = ctx.document.documentElement;
+  html.tagName = 'HTML'; html.getAttribute = a => (a === 'translate' ? 'no' : null);
+  const body = { tagName: 'BODY', getAttribute: () => null, parentElement: html };
+  const cell = { tagName: 'TD', getAttribute: () => null, parentElement: body };
+  const data = { tagName: 'SPAN', getAttribute: a => (a === 'translate' ? 'no' : null), parentElement: cell };
+  assert.equal(ctx.skip(cell), false, 'ordinary text is translated');
+  assert.equal(ctx.skip(data), true, 'data marked translate="no" is left alone');
+});

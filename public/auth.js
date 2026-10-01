@@ -24,8 +24,7 @@ function unlocked(user,idle){
 /** After a password or code is accepted: finish anything the account still needs, then unlock. */
 async function afterSignIn(){
   const me=await api('GET','/api/auth/me');REQ2FA=me.require2fa||'off';
-  if(me.user.lang&&me.user.lang!==I18N.lang)return setLang(me.user.lang,{save:false});
-  if(!me.user.lang)api('PUT','/api/auth/prefs',{lang:I18N.lang}).catch(()=>{});
+  if(syncAccountLang(me.user))return;
   if(me.user.mustChange){ME=me.user;return renderLock('password')}
   if(me.user.mustEnroll){ME=me.user;return renderLock('enroll')}
   unlocked(me.user,me.idleMinutes);
@@ -180,7 +179,7 @@ async function authStart(){
   try{me=await api('GET','/api/auth/me')}
   catch(e){if(e.status===401)return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode}):requireSignIn('signin');throw e}
   REQ2FA=me.require2fa||'off';ME=me.user;IDLE_MIN=me.idleMinutes;
-  if(me.user.lang&&me.user.lang!==I18N.lang){await setLang(me.user.lang,{save:false});return new Promise(()=>{})}
+  if(syncAccountLang(me.user))return new Promise(()=>{});
   if(me.user.mustChange)return requireSignIn('password');
   if(me.user.mustEnroll)return requireSignIn('enroll');
   unlocked(me.user,me.idleMinutes);

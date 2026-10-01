@@ -488,7 +488,7 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   // Payroll settings round-trip through company settings.
   const s = (await call('GET', '/api/state')).json.company;
   assert.equal((await call('PUT', '/api/settings', { ...s, payroll: { remitFreq: 'quarterly', hsfRate: 1.25 } })).status, 200);
-  assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25 });
+  assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25, craAccount: '', rqId: '', hsfPrimary: false });
 });
 
 // A fresh server for one test; returns helpers bound to it.
