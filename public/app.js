@@ -38,12 +38,14 @@ function coUrl(url){
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
-async function api(method,url,body){
-  let r;url=coUrl(url);
+async function api(method,url,body,retried){
+  let r;const asked=url;url=coUrl(url);
   try{r=await fetch(url,{method,headers:body!==undefined?{'Content-Type':'application/json'}:{},body:body!==undefined?JSON.stringify(body):undefined})}
   catch(e){throw new Error("Can't reach the Tally Books server. Check that it's still running.")}
   let j=null;try{j=await r.json()}catch(e){}
   if(!r.ok){
+    // The books are closed for that date: offer to unlock them, then try again once.
+    if(r.status===423&&j&&j.closedThrough&&!retried&&typeof ME!=='undefined'&&ME&&ME.role!=='client'&&await unlockClosed(j.closedThrough))return api(method,asked,body,true);
     const err=new Error((j&&j.error)||`The server answered ${r.status}.`);err.status=r.status;err.info=j||{};
     // Signed out (expired, locked, or another tab signed out): ask to sign in again, then carry on.
     if(r.status===401&&!url.startsWith('/api/auth/')&&typeof sessionEnded==='function')sessionEnded(j);
@@ -286,7 +288,7 @@ function vReports(){
     ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
     ${R.tab==='gl'?`<select id="repAcct" aria-label="Account"><option value="">All accounts</option>${acctOptions(R.acct||'')}</select>`:''}
-    <span class="grow"></span><button class="btn sm" data-act="export">Export CSV</button>
+    <span class="grow"></span>${R.tab==='tb'&&ME&&ME.role!=='client'?'<button class="btn sm" data-act="caseware">Export for CaseWare</button>':''}<button class="btn sm" data-act="export">Export CSV</button>
   </div><div id="repBody">${reportBody()}</div></div>`;
 }
 function reportBody(){return({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
@@ -381,6 +383,7 @@ function vSettings(){
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
+  ${closingPanel()}
   ${aiPanel()}
   ${payrollSettingsPanel()}
   ${backupPanel()}
@@ -405,6 +408,7 @@ function bindMain(m){
     if(S.view==='convert'&&cvClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
+    if(d.clact)return closingAction(d.clact);
     if(d.new)return openNew(d.new);
     if(d.go)return go(d.go);
     if(d.pay){e.stopPropagation();const doc=S.docs.find(x=>x.id===d.pay);return payForm(doc.kind==='invoice'?'payment':'billpayment',null,doc.id)}
@@ -420,6 +424,7 @@ function bindMain(m){
     if(d.act==='export')return exportCSV();
     if(d.act==='retry')return load();
     if(d.act==='activity')return showActivity();
+    if(d.act==='caseware')return casewareForm();
     if(d.act==='load-examples')return loadExamples();
     if(d.act==='backup')return saveFile(`${(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase()}-backup-${today()}.json`,await fetch(coUrl('/api/backup')).then(r=>r.blob()));
     if(d.act==='restore')return $('#restoreFile').click();
@@ -445,6 +450,74 @@ function bindMain(m){
   if(S.view==='payroll')bindPayroll(m);
   const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value};if(await putCompany(data))toast('Settings saved')};
+}
+/* ---------- closing date ---------- */
+function closingPanel(){
+  if(!ME||ME.role==='client')return '';
+  const c=S.company,owner=ME.role==='owner';
+  const status=c.closingDate?`<span class="pill paid">Closed</span> Through ${fmtDate(c.closingDate)}${c.closingPassword?' · password required to change':' · no password'}`:'<span class="pill open">Open</span> No closing date';
+  return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Close the books</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
+    <div>${status}</div>
+    <div class="muted" style="font-size:13px">${owner?'After a year-end or a filed return, close the books through that date. Transactions, invoices, bills and pay runs on or before it can’t be added, changed or deleted unless someone unlocks them for 15 minutes (with the password, if you set one). Clients can never change a closed period.':'After a year-end or a filed return, close the books through that date. Transactions, invoices, bills and pay runs on or before it can’t be added, changed or deleted unless someone unlocks them for 15 minutes. Clients can never change a closed period.'}</div>
+    ${owner?`<div class="fields">${fld('clDate','Closing date',`<input type="date" id="clDate" value="${esc(c.closingDate||'')}">`)}
+      ${fld('clPass',c.closingPassword?'New closing password':'Closing password (optional)',`<input type="password" id="clPass" autocomplete="new-password" placeholder="${c.closingPassword?'Leave blank to keep it':''}"><span class="hint">Different from your sign-in password. Share it only with whoever may change closed periods.</span>`)}</div>
+      ${c.closingPassword?'<label class="check"><input type="checkbox" id="clNoPass"> Remove the closing password</label>':''}
+      <div class="actions"><button class="btn primary" data-clact="save">Save closing date</button>${c.closingDate?'<button class="btn ghost" data-clact="clear">Reopen the books</button>':''}</div>`:'<div class="muted" style="font-size:13px">An owner sets the closing date.</div>'}
+  </div></div>`;
+}
+async function closingAction(act){
+  try{
+    if(act==='clear'){if(!await confirmBox('Reopen the books?','Every period can be changed again until you set a new closing date.','Reopen'))return;await api('PUT','/api/closing',{date:''});await load();toast('Books reopened');return}
+    const date=$('#clDate').value;if(!date){toast('Choose a closing date.',true);return}
+    const body={date},pw=$('#clPass').value;
+    if(pw)body.password=pw;else if($('#clNoPass')&&$('#clNoPass').checked)body.password='';
+    await api('PUT','/api/closing',body);await load();toast(`Books closed through ${fmtDate(date)}`);
+  }catch(e){toast(e.message,true)}
+}
+/* ---------- CaseWare export ----------
+   A trial balance CaseWare Working Papers can import: one row per account with its number, name,
+   map number, and the year-end balance (debits positive, credits negative) for this year and last.
+   Income and expense accounts show the year's total; balance sheet accounts the balance at year-end.
+   Earnings from earlier years, which Tally Books works out rather than posting, are a row of their own. */
+function casewareRows(yearEnd){
+  const fy=fyStartOf(yearEnd);
+  const rows=[];
+  for(const a of sortAccts(S.accounts)){
+    const v=r2(isPL(a.type)?rawBal(a.id,fy,yearEnd):rawBal(a.id,null,yearEnd));
+    rows.push({a,v});
+  }
+  const re=r2(-netIncome(null,addDays(fy,-1)));
+  return{rows,re,fy};
+}
+function casewareForm(){
+  const t=today(),thisEnd=fyEndOf(t),lastEnd=fyEndOf(addDays(fyStartOf(t),-1));
+  const ends=[lastEnd,fyEndOf(addDays(fyStartOf(lastEnd),-1)),thisEnd];
+  const f=openModal('Export for CaseWare',`<div class="fields">
+    ${fld('cwEnd','Year-end',`<select id="cwEnd">${ends.map(d=>`<option value="${d}" ${d===lastEnd?'selected':''}>${fmtDate(d)}</option>`).join('')}<option value="custom">Another date…</option></select><input type="date" id="cwCustom" hidden style="margin-top:6px">`)}
+    <div class="field"><span class="flabel">Columns</span><label class="check" style="padding-top:6px"><input type="checkbox" id="cwPrior" checked> Include the prior year</label></div></div>
+    <div data-cwwarn></div>
+    <div class="muted" style="font-size:13px">In CaseWare Working Papers, import the file with the Excel/ASCII import and match the columns: Account number, Description, Map number, Current year, Prior year. Debits are positive and credits negative. Map numbers come from each account’s “CaseWare map no.” in the chart of accounts; CaseWare remembers mappings for accounts it already knows.</div>`,
+    `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Download</button>`);
+  const end=()=>$('#cwEnd',f).value==='custom'?$('#cwCustom',f).value:$('#cwEnd',f).value;
+  const warn=()=>{const e=end();if(!e){$('[data-cwwarn]',f).innerHTML='';return}const{rows}=casewareRows(e);const nocode=rows.filter(x=>Math.abs(x.v)>=0.005&&!x.a.code).length;
+    const cl=S.company.closingDate;const notClosed=!cl||cl<e;
+    $('[data-cwwarn]',f).innerHTML=[nocode?`<div>${nocode} account${nocode===1?' has':'s have'} a balance but no account number. CaseWare needs one, so ${nocode===1?'it gets':'they get'} a temporary number (TB-1, TB-2…). Add numbers in the chart of accounts to keep them steady.</div>`:'',notClosed?`<div>The books aren’t closed through ${fmtDate(e)} yet, so the figures can still change. Close them in Settings once the year-end is final.</div>`:''].filter(Boolean).map(x=>`<div class="banner" style="margin:0">${x}</div>`).join('')};
+  $('#cwEnd',f).onchange=()=>{$('#cwCustom',f).hidden=$('#cwEnd',f).value!=='custom';warn()};$('#cwCustom',f).onchange=warn;warn();
+  f.onsubmit=e=>{e.preventDefault();const ye=end();if(!ye)return f.err('Choose the year-end.');
+    const prior=$('#cwPrior',f).checked,pe=addDays(fyStartOf(ye),-1);
+    const cur=casewareRows(ye),pri=prior?casewareRows(pe):null;
+    const pv=id=>{if(!pri)return 0;const x=pri.rows.find(y=>y.a.id===id);return x?x.v:0};
+    const head=['Account number','Description','Map number','Account type','Current year'].concat(prior?['Prior year']:[]);
+    const out=[head];let n=0,tc=0,tp=0;
+    for(const{a,v}of cur.rows){const p=pv(a.id);if(Math.abs(v)<0.005&&Math.abs(p)<0.005)continue;const code=a.code||`TB-${++n}`;tc+=v;tp+=p;out.push([code,a.name,a.cwMap||'',a.type,v.toFixed(2)].concat(prior?[p.toFixed(2)]:[]))}
+    const pre=pri?pri.re:0;
+    if(Math.abs(cur.re)>=0.005||Math.abs(pre)>=0.005){tc+=cur.re;tp+=pre;out.push(['RE-OPEN','Retained earnings, beginning of year (earnings of earlier years)','', 'Equity',cur.re.toFixed(2)].concat(prior?[pre.toFixed(2)]:[]))}
+    if(Math.abs(r2(tc))>=0.01||(prior&&Math.abs(r2(tp))>=0.01)){f.err('The trial balance doesn’t add up to zero. Check for unbalanced entries before exporting.');return}
+    const text=out.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
+    const safe=(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();
+    saveFile(`caseware-tb_${safe}_${ye}.csv`,new Blob(['\ufeff'+text],{type:'text/csv;charset=utf-8'}));
+    closeModal();toast('CaseWare trial balance downloaded');
+  };
 }
 function exportCSV(){
   const R=S.rep;const r=({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
@@ -489,6 +562,19 @@ function openModal(title,body,foot,size=''){
   return f;
 }
 function closeModal(){$('#modalRoot').innerHTML='';if(modalKey)document.removeEventListener('keydown',modalKey);modalKey=null}
+// Asks to unlock books closed through `date` (with the closing password if there is one). Resolves true once unlocked.
+function unlockClosed(date){
+  const pw=!!S.company.closingPassword;
+  return new Promise(res=>{const r=$('#confirmRoot');
+    r.innerHTML=`<div class="scrim" style="z-index:60"><form class="modal small" role="alertdialog" aria-modal="true" aria-label="Books closed"><header><h2>The books are closed</h2></header><div class="mbody" style="display:flex;flex-direction:column;gap:10px"><div>This change affects ${fmtDate(date)} or earlier, and the books are closed through that date. ${pw?'Enter the closing password to unlock them for 15 minutes.':'Unlock them for 15 minutes to make it?'}</div>${pw?`<input type="password" id="clPw" autocomplete="off" aria-label="Closing password">`:''}<div class="neg" id="clErr" style="font-size:13px"></div></div><div class="mfoot"><button type="button" class="btn" data-no>Cancel</button><button type="submit" class="btn primary">Unlock</button></div></form></div>`;
+    const done=v=>{r.innerHTML='';document.removeEventListener('keydown',k);res(v)};const k=e=>{if(e.key==='Escape'){e.stopPropagation();done(false)}};
+    document.addEventListener('keydown',k);$('[data-no]',r).onclick=()=>done(false);
+    const f=$('form',r);(pw?$('#clPw',r):$('[type=submit]',r)).focus();
+    f.onsubmit=async e=>{e.preventDefault();e.stopPropagation();
+      try{await api('POST','/api/closing/unlock',{password:pw?$('#clPw',r).value:''},true);toast('Unlocked for 15 minutes');done(true)}
+      catch(err){$('#clErr',r).textContent=err.message}};
+  });
+}
 function confirmBox(title,msg,ok='Delete'){
   return new Promise(res=>{const r=$('#confirmRoot');
     r.innerHTML=`<div class="scrim" style="z-index:60"><div class="modal small" role="alertdialog" aria-modal="true" aria-label="${esc(title)}"><header><h2>${esc(title)}</h2></header><div class="mbody">${esc(msg)}</div><div class="mfoot"><button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>${esc(ok)}</button></div></div></div>`;
@@ -728,7 +814,7 @@ function journalForm(entry){
 
 function accountForm(a){
   const used=a?postings().some(p=>p.account===a.id):false;
-  const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`,true)}</div>
+  const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`)}${fld('aMap','CaseWare map no.',`<input type="text" id="aMap" value="${esc(a?.cwMap||'')}" maxlength="20" translate="no"><span class="hint">Optional. Goes with the account in the CaseWare export.</span>`)}</div>
   <div data-ob ${a?'hidden':''} class="fields">${fld('aOb','Opening balance',`<input type="number" id="aOb" step="0.01" inputmode="decimal" placeholder="0.00">`)}${fld('aObD','As of',`<input type="date" id="aObD" value="${today()}">`)}</div>
   ${a?`<label class="check"><input type="checkbox" id="aInactive" ${a.active===false?'checked':''}> Inactive (hide from new transactions)</label>`:''}
   ${used?`<div class="muted" style="font-size:13px">This account has transactions, so its type can't change. You can rename it or mark it inactive.</div>`:''}`,saveFoot(!!a&&!used));
@@ -738,7 +824,7 @@ function accountForm(a){
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this account?',`${a.name} has no transactions and will be removed.`))return;await del('accounts',a.id);closeModal();toast('Account deleted');if(S.view==='register')go('accounts')};
   f.onsubmit=async e=>{e.preventDefault();f.err('');const name=$('#aName',f).value.trim();if(!name)return f.err('Give the account a name.');
     const code=$('#aCode',f).value.trim();if(code&&S.accounts.some(x=>x.code===code&&x.id!==a?.id))return f.err(`Code ${code} is already used.`);
-    const id=a?.id||uid();const data={...(a?strip(a):{}),type:ty.value,detail:de.value,code,name,desc:$('#aDesc',f).value.trim(),active:a?!$('#aInactive',f).checked:true};
+    const id=a?.id||uid();const data={...(a?strip(a):{}),type:ty.value,detail:de.value,code,name,desc:$('#aDesc',f).value.trim(),cwMap:$('#aMap',f).value.trim(),active:a?!$('#aInactive',f).checked:true};
     const writes=[{op:'set',collection:'accounts',id,data}];
     const amt=r2($('#aOb',f)?.value);if(!a&&amt){const obA=needAcct('ob','Opening balance equity');if(!obA)return;const pos=amt>0;writes.push({op:'set',collection:'entries',id:uid(),data:{type:'journal',date:$('#aObD',f).value||today(),ref:'',memo:'Opening balance',lines:[{account:id,debit:pos===debitNormal(data.type)?Math.abs(amt):0,credit:pos===debitNormal(data.type)?0:Math.abs(amt)},{account:obA.id,debit:pos===debitNormal(data.type)?0:Math.abs(amt),credit:pos===debitNormal(data.type)?Math.abs(amt):0}],created:Date.now()}})}
     if(!await batch(writes))return;

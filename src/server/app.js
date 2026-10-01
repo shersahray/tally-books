@@ -223,9 +223,38 @@ function createApp(opts) {
   }
 
   function state(ctx) {
-    const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) } };
+    const cl = ctx.store.getSetting('closing') || {};
+    const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}), closingDate: cl.date || '', closingPassword: !!cl.hash } };
     for (const c of COLLECTIONS) out[c] = ctx.store.list(c);
     return out;
+  }
+
+  /* ---------- closing date ----------
+     Transactions, bills and invoices, and pay runs dated on or before the closing date can't be added,
+     changed or deleted, unless an owner or staff member unlocks the books for 15 minutes (with the
+     closing password, if one is set). Ticking items as cleared or reconciled, or attaching a receipt,
+     is still allowed. */
+  const unlocks = new Map(); // `${session}|${store file}` -> expiry
+  const unlockFails = new Map();
+  const isUnlocked = (user, store) => { const k = `${user && user.token}|${store.file}`, t = unlocks.get(k); if (t && t > Date.now()) return true; unlocks.delete(k); return false; };
+  const DATED = { entries: 'date', docs: 'date', payruns: 'payDate' };
+  const canon = x => JSON.stringify(x, (k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o, key) => { o[key] = v[key]; return o; }, {}) : v));
+  const sameBut = (a, b) => { const drop = o => { const { clear, receiptId, id, ...rest } = o || {}; return canon(rest); }; return drop(a) === drop(b); };
+  function closedCheck(store, w, data, user) {
+    const field = DATED[w.collection];
+    if (!field) return;
+    const cl = store.getSetting('closing');
+    if (!cl || !cl.date) return;
+    const before = store.get(w.collection, w.id);
+    const dates = [before && before[field], w.op === 'set' && data && data[field]].filter(Boolean);
+    if (!dates.some(d => String(d) <= cl.date)) return;
+    if (w.op === 'set' && before && sameBut(before, data)) return;
+    if (isUnlocked(user, store)) return;
+    const e = new ValidationError(user && user.role === 'client'
+      ? `The books are closed through ${cl.date}. Ask your bookkeeper to make this change.`
+      : `The books are closed through ${cl.date}. Unlock them to make this change.`, 423);
+    e.closedThrough = cl.date;
+    throw e;
   }
 
   function applyWrite(store, w, user) {
@@ -245,11 +274,13 @@ function createApp(opts) {
     const before = collection === 'employees' ? hideSin(store.get(collection, id)) : store.get(collection, id);
     if (op === 'set') {
       const data = validateRecord(collection, id, w.data, store);
+      closedCheck(store, w, data, user);
       store.put(collection, id, data);
       const after = collection === 'employees' ? hideSin(store.get(collection, id)) : store.get(collection, id);
       if (JSON.stringify(before) !== JSON.stringify(after)) store.audit(user, before ? 'change' : 'add', { collection, id, summary: auditSummary(collection, after), before, after });
     } else if (op === 'delete') {
       checkDelete(collection, id, store);
+      closedCheck(store, w, null, user);
       store.delete(collection, id);
       if (collection === 'receipts' && before && before.fileId) store.deleteFile(before.fileId);
       // A receipt attached to a deleted transaction or bill goes back to the inbox.
@@ -458,6 +489,46 @@ function createApp(opts) {
       broadcast({ companies: true });
       return { ok: true, rev: ctx.bump() };
     }],
+    ['PUT', /^\/closing$/, async (ctx, req) => {
+      ownerOnly(ctx.user);
+      const body = (await readJson(req)) || {};
+      const date = String(body.date || '');
+      if (date && !isDate(date)) throw new ValidationError('Choose a closing date.');
+      const before = ctx.store.getSetting('closing') || {};
+      const next = { ...before, date, setBy: ctx.user.username, at: Date.now() };
+      if (body.password !== undefined) {
+        const pw = String(body.password || '');
+        if (pw && pw.length < 6) throw new ValidationError('Use at least 6 characters for the closing password.');
+        if (pw) { next.salt = crypto.randomBytes(16).toString('hex'); next.hash = crypto.scryptSync(pw, next.salt, 64).toString('hex'); }
+        else { delete next.salt; delete next.hash; }
+      }
+      ctx.store.transaction(() => {
+        ctx.store.putSetting('closing', next);
+        ctx.store.audit(ctx.user, 'closing', { collection: 'settings', id: 'closing', summary: date ? `books closed through ${date}${next.hash ? ' (password set)' : ''}` : 'closing date removed', before: { date: before.date || '', password: !!before.hash }, after: { date, password: !!next.hash } });
+      });
+      for (const k of [...unlocks.keys()]) if (k.endsWith('|' + ctx.store.file)) unlocks.delete(k);
+      return { ok: true, rev: ctx.bump() };
+    }],
+    ['POST', /^\/closing\/unlock$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const cl = ctx.store.getSetting('closing') || {};
+      if (!cl.date) return { ok: true };
+      const body = (await readJson(req)) || {};
+      const fk = `${ctx.user.username}|${ctx.store.file}`, f = unlockFails.get(fk) || { n: 0, until: 0 };
+      if (f.until > Date.now()) throw new ValidationError('Too many wrong closing passwords. Try again in 15 minutes.', 429);
+      if (cl.hash) {
+        const got = await new Promise((res, rej) => crypto.scrypt(String(body.password || '').slice(0, 200), cl.salt, 64, (e, k) => (e ? rej(e) : res(k))));
+        if (!crypto.timingSafeEqual(got, Buffer.from(cl.hash, 'hex'))) {
+          f.n++; if (f.n >= 5) { f.n = 0; f.until = Date.now() + 15 * 60 * 1000; }
+          unlockFails.set(fk, f);
+          throw new ValidationError('That closing password isn’t right.', 403);
+        }
+      }
+      unlockFails.delete(fk);
+      unlocks.set(`${ctx.user.token}|${ctx.store.file}`, Date.now() + 15 * 60 * 1000);
+      ctx.store.audit(ctx.user, 'unlock', { collection: 'settings', id: 'closing', summary: `unlocked the books closed through ${cl.date} for 15 minutes` });
+      return { ok: true, minutes: 15 };
+    }],
     ['POST', /^\/bank\/import$/, async (ctx, req) => {
       const body = await readJson(req, 20 * 1024 * 1024);
       const result = ctx.store.transaction(() => {
@@ -579,6 +650,7 @@ function createApp(opts) {
     }],
     ['POST', /^\/examples$/, ctx => {
       notClient(ctx.user);
+      if ((ctx.store.getSetting('closing') || {}).date) throw new ValidationError('These books are closed, so example data can’t be added. Try it in a new company.', 423);
       loadExamples(ctx.store);
       ctx.store.audit(ctx.user, 'examples', { summary: 'loaded example data' });
       return { ok: true, rev: ctx.bump() };
@@ -682,7 +754,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}) });
     }
   });
 

@@ -141,6 +141,8 @@
       return { ...out, added, skipped };
     }
     if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Tally Books, receipts go to this screen from a phone or a computer.');
+    if (rest === '/closing') { const out = transact(id, w => { w.company = { ...w.company, closingDate: body.date || '', closingPassword: body.password !== undefined ? !!body.password : !!w.company.closingPassword }; }); return out; }
+    if (rest === '/closing/unlock') return { ok: true, minutes: 15 };
     if (rest === '/import') throw new ApiError(400, 'Importing isn’t available in the demo, because nothing in it is saved. You can still choose files to see how they’re read and checked.');
     if (rest === '/ai/read') throw new ApiError(400, 'Reading receipts needs a Claude API key, so it isn’t available in the demo. Try “Suggest with AI” under Banking instead.');
     if (rest === '/ai/suggest') {
