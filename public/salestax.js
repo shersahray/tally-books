@@ -60,7 +60,7 @@ const QM_LINES={
     ['','Other revenue with no sales tax','sOther','sub'],
     ['101','Sales that qualify for the Quick Method, including GST/HST','qmBase'],
     ['103','GST/HST to remit (line 101 × the remittance rate)','qmTax'],
-    ['104','Adjustments to be added to net tax','addAdj'],
+    ['104','Adjustments to be added to net tax (including tax on sales of capital assets)','addQ'],
     ['105','Total GST/HST and adjustments for period','=103+104'],
     ['106','Input tax credits on capital purchases','itcCap'],
     ['107','1% credit on the first $30,000, and other adjustments','ded107'],
@@ -79,7 +79,7 @@ const QM_LINES={
     ['101','Total supplies (same as the GST/HST part)','sales'],
     ['x1','Sales that qualify for the Quick Method, including QST','qmBase'],
     ['203','QST to remit (sales that qualify × the remittance rate)','qmTax'],
-    ['204','Adjustments to be added','addAdj'],
+    ['204','Adjustments to be added (including tax on sales of capital assets)','addQ'],
     ['205','Total QST and adjustments','=203+204'],
     ['206','Input tax refunds on capital purchases','itcCap'],
     ['207','1% reduction on the first $31,421, and other adjustments','ded107'],
@@ -102,7 +102,6 @@ const gstRateCharged=()=>S.company.province==='QC'||taxesInUse().length>1?5:+S.c
 function qmSuggested(k,type){return k==='qst'?QM_QST[type]:(QM_RATES[type]||{})[gstRateCharged()]??null}
 function qmRate(k){const q=qmCfg()||{};const own=k==='qst'?q.qstRate:q.gstRate;return own!==''&&own!=null&&!isNaN(+own)?+own:qmSuggested(k,q.type||'services')}
 const isCapitalAcct=id=>{const a=acct(id);return !!a&&a.detail==='capital'};
-const linesFor=k=>qmOn(k,(S.stax.period||'').split('|')[0])?QM_LINES[k]:TAX_LINES[k];
 const BAL_LINE={gst:'113C',qst:'213'};
 // In Quebec, Revenu Québec administers the GST as well as the QST for most businesses.
 const AGENCY={get gst(){return S.company.province==='QC'?'Revenu Québec':'CRA'},qst:'Revenu Québec'};
@@ -134,31 +133,50 @@ const filingFor=(k,from,to)=>S.filings.find(f=>f.tax===k&&f.from===from&&f.to===
 const filedPeriodOn=(date,k)=>S.filings.find(f=>(!k||f.tax===k)&&f.from<=date&&date<=f.to);
 
 /* ---------- worksheet ---------- */
-function worksheet(k,from,to){
-  const a=taxAcctFor(k);if(!a)return null;
-  const qm=qmOn(k,from);
-  const keys=['collected','addAdj','itc','dedAdj','instal','sales','s90','s91','sExport','sExempt','sOther','sStd','itcCap','itcOps','qmBase','ded107'];
+/* What the books say for one tax and period. Kept until the books change, since the Quick Method's 1% credit
+   needs the earlier periods of the fiscal year and the Sales tax page shows many periods at once. */
+const scanCache={stamp:'',map:new Map()};
+const COST_SKIP=['bank','ar','ap','card'];
+function scan(k,from,to){
+  const key=`${k}|${from}|${to}`;
+  const stamp=`${typeof CO!=='undefined'?CO:''}|${S.rev}|${S.entries.length}|${S.accounts.length}`;
+  if(scanCache.stamp!==stamp){scanCache.stamp=stamp;scanCache.map.clear()}
+  if(scanCache.map.has(key))return scanCache.map.get(key);
+  const a=taxAcctFor(k);
+  const keys=['collected','addAdj','itc','dedAdj','instal','sales','s90','s91','sExport','sExempt','sOther','sStd','itcCap','itcOps','capSaleTax','other'];
   const v={},src={};for(const x of keys){v[x]=0;src[x]=[]}
   const push=(key,e,amt)=>{if(!amt)return;v[key]+=amt;src[key].push({e,amt})};
   const income=new Set(S.accounts.filter(x=>x.type==='Income').map(x=>x.id)),taxIds=taxAcctIds();
-  for(const e of S.entries){
+  /* The share of an entry's taxed amount that's for capital assets: lines that aren't tax, money or receivables,
+     weighted by their net amount on the side given (1 = debits, -1 = credits) and by the taxed lines only. */
+  const capShare=(e,side,legacy)=>{
+    const lines=(e.lines||[]).filter(x=>!taxIds.has(x.account)&&!COST_SKIP.includes(acct(x.account)?.detail));
+    const amt=x=>side*((+x.debit||0)-(+x.credit||0));
+    const taxed=lines.filter(x=>(x.taxCode||legacy)==='std');
+    const use=taxed.length?taxed:lines;
+    const all=use.reduce((t,x)=>t+amt(x),0),cap=use.filter(x=>isCapitalAcct(x.account)).reduce((t,x)=>t+amt(x),0);
+    if(Math.abs(all)<0.005)return lines.some(x=>isCapitalAcct(x.account))?1:0;
+    return Math.max(0,Math.min(1,cap/all));
+  };
+  if(a)for(const e of S.entries){
     if(e.date<from||e.date>to||e.opening||e.type==='qmadjust')continue;
     let inc=0;const byCode={};
     // Older transactions have no tax code on their lines: taxed if the transaction charged sales tax.
     const legacy=(e.lines||[]).some(l=>taxIds.has(l.account)&&(+l.credit||0)>0)?'std':'none';
+    const legacyBuy=(e.lines||[]).some(l=>taxIds.has(l.account)&&(+l.debit||0)>0)?'std':'none';
     for(const l of e.lines||[]){
       const dr=+l.debit||0,cr=+l.credit||0;
       if(income.has(l.account)){inc+=cr-dr;const code=l.taxCode||legacy;byCode[code]=(byCode[code]||0)+cr-dr}
       if(l.account!==a.id)continue;
       if(e.type==='taxpayment'){if(e.taxKind==='instalment'&&e.tax===k)push('instal',e,dr);continue}
       if(e.type==='journal'){push('addAdj',e,cr);push('dedAdj',e,dr)}
-      else if(SALE_TYPES.has(e.type))push('collected',e,cr-dr);
+      else if(SALE_TYPES.has(e.type)){push('collected',e,cr-dr);
+        // Selling a capital asset: under the Quick Method its tax is remitted in full, not at the remittance rate.
+        push('capSaleTax',e,r2((cr-dr)*capShare(e,-1,legacy)))}
       else if(BUY_TYPES.has(e.type)){push('itc',e,dr-cr);
-        // Quick Method: credits are kept only for the share of the purchase that's a capital asset.
-        const cost=(e.lines||[]).filter(x=>(+x.debit||0)>0&&!taxIds.has(x.account)&&!['bank','ar','ap','card'].includes(acct(x.account)?.detail));
-        const all=cost.reduce((t,x)=>t+(+x.debit||0),0),cap=cost.filter(x=>isCapitalAcct(x.account)).reduce((t,x)=>t+(+x.debit||0),0);
-        const capPart=all?r2((dr-cr)*cap/all):0;push('itcCap',e,capPart);push('itcOps',e,r2(dr-cr-capPart))}
-      else{push('collected',e,cr);push('itc',e,dr)}
+        // Quick Method: credits are kept only for the share of the purchase that's a capital asset (vendor credits too).
+        const capPart=r2((dr-cr)*capShare(e,1,legacyBuy));push('itcCap',e,capPart);push('itcOps',e,r2(dr-cr-capPart))}
+      else{push('collected',e,cr);push('itc',e,dr);push('other',e,dr)}
     }
     if(inc)push('sales',e,inc);
     for(const[code,amt]of Object.entries(byCode)){
@@ -167,23 +185,41 @@ function worksheet(k,from,to){
       else{push('s91',e,amt);push(code==='export'?'sExport':code==='exempt'?'sExempt':'sOther',e,amt)}
     }
   }
-  // Quick Method figures.
+  for(const x of keys)v[x]=r2(v[x]);
+  const out={v,src,qmBase:r2(v.sStd+v.collected-v.capSaleTax)};
+  scanCache.map.set(key,out);return out;
+}
+/** Quick Method sales (line 101 / the QST base) earlier in the fiscal year, for the 1% credit. */
+function qmUsedBefore(k,from){
+  const cfg=qmCfg();if(!cfg)return 0;
+  const fy=fyStartOf(from),start=fy>cfg.from?fy:cfg.from;let used=0;
+  for(const p of filingPeriods()){
+    if(p.from<start||p.to>=from)continue;
+    const f=filingFor(k,p.from,p.to);
+    if(f)used+=f.method==='quick'?(+f.lines[k==='qst'?'x1':'101']||0):0; // a return filed the regular way used no credit
+    else if(qmOn(k,p.from))used+=scan(k,p.from,p.to).qmBase;
+  }
+  return r2(used);
+}
+function worksheet(k,from,to){
+  const a=taxAcctFor(k);if(!a)return null;
+  const filed=filingFor(k,from,to);
+  // A filed return keeps the method it was filed with, whatever the settings say now.
+  const qm=filed?filed.method==='quick':qmOn(k,from);
+  const {v:base,src}=scan(k,from,to),v={...base};
   let quick=null;
   if(qm){
-    v.qmBase=r2(v.sStd+v.collected);src.qmBase=[...src.sStd,...src.collected];
-    const rate=qmRate(k),cfg=qmCfg();
+    const cfg=qmCfg()||{},rate=filed&&filed.qmRate!=null?filed.qmRate:qmRate(k);
+    v.qmBase=r2(v.sStd+v.collected-v.capSaleTax);src.qmBase=[...src.sStd,...src.collected];
     const tax=rate==null?0:r2(v.qmBase*rate/100);
-    let credit=0,used=0;
-    if(cfg.credit!==false){
-      // The credit covers the first $30,000 ($31,421 for QST) of the fiscal year, across its periods.
-      const fy=fyStartOf(from),start=fy>cfg.from?fy:cfg.from;
-      for(const p of filingPeriods())if(p.from>=start&&p.to<from){const pw=worksheet(k,p.from,p.to);used+=pw.filed?(+pw.filed.lines.qmBaseRaw||+pw.filed.lines[k==='qst'?'x1':'101']||0):(pw.live[k==='qst'?'x1':'101']||0)}
-      credit=r2(0.01*Math.max(0,Math.min(v.qmBase,QM_CREDIT_MAX[k]-used)));
-    }
+    const used=cfg.credit===false?0:qmUsedBefore(k,from);
+    const credit=cfg.credit===false?0:r2(0.01*Math.max(0,Math.min(v.qmBase,QM_CREDIT_MAX[k]-used)));
     v.qmTax=tax;v.ded107=r2(credit+v.dedAdj);src.ded107=src.dedAdj;
-    quick={rate,credit,used,collected:r2(v.collected),tax,gain:r2(v.collected-tax+credit),itcOps:r2(v.itcOps),itcCap:r2(v.itcCap)};
+    v.addQ=r2(v.addAdj+v.capSaleTax);src.addQ=[...src.addAdj,...src.capSaleTax];
+    // Tax on everyday expenses isn't claimed: it, and any other debit to the account, becomes an expense.
+    const ops=r2(v.itcOps+v.other);
+    quick={rate,credit,used,collected:v.collected,capSaleTax:v.capSaleTax,tax,gain:r2(v.collected-v.capSaleTax-tax+credit),itcOps:ops,itcCap:v.itcCap};
   }
-  const filed=filingFor(k,from,to);
   const man=filed?filed.lines:(S.stax.manual[k+from]||{});
   const vals={};
   for(const[no,,how,sub]of (qm?QM_LINES:TAX_LINES)[k]){
@@ -221,7 +257,7 @@ function vSalesTax(){
   const bal=r2(-rawBal(taxAcctFor(k).id));
   h+=`<div class="chips"><div class="chip"><div class="lbl">${esc(taxLabel(k))} account balance today</div><div class="val">${mcell(bal)}</div><div class="lbl">${bal>=0?`Owing to ${AGENCY[k]} if positive`:`Refund due from ${AGENCY[k]}`}</div></div>
     <div class="chip"><div class="lbl">Returns overdue</div><div class="val ${overdueReturns()?'neg':''}">${overdueReturns()}</div></div></div>`;
-  return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Period</th><th>Due</th><th class="n">Collected</th><th class="n">Credits (ITCs)</th><th class="n">Net tax</th><th>Status</th><th></th></tr></thead><tbody>${periods.length?periods.map(p=>{
+  return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Period</th><th>Due</th><th class="n">${qmCfg()?'Collected or to remit':'Collected'}</th><th class="n">${qmCfg()?'Credits (ITCs) claimed':'Credits (ITCs)'}</th><th class="n">Net tax</th><th>Status</th><th></th></tr></thead><tbody>${periods.length?periods.map(p=>{
     const w=worksheet(k,p.from,p.to),st=periodStatus(k,p),net=w.vals[k==='qst'?'209':'109'];
     const ln=k==='qst'?['203','206']:['103','106'];
     return `<tr class="click" data-stperiod="${p.from}|${p.to}"><td style="white-space:nowrap"><b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b></td><td style="white-space:nowrap" class="${st.k==='overdue'?'neg':'muted'}">${fmtDate(p.due)}</td><td class="n">${money(w.vals[ln[0]])}</td><td class="n">${money(w.vals[ln[1]])}</td><td class="n"><b>${mcell(net)}</b></td><td><span class="pill ${st.k}">${st.label}</span></td><td class="n"><button class="btn sm" data-stperiod="${p.from}|${p.to}">${w.filed?'View':'Open worksheet'}</button></td></tr>`}).join(''):emptyRow(7,'No periods yet','Periods appear once there are transactions with sales tax.')}</tbody></table></div></div>
@@ -233,7 +269,7 @@ function vWorksheet(k,from,to){
   const filed=w.filed,st=periodStatus(k,filingPeriods().find(p=>p.from===from)||{from,to,due:to});
   const LINES=(w.quick?QM_LINES:TAX_LINES)[k];
   const changed=filed&&LINES.some(([no,,how,sub])=>!sub&&!how.startsWith('m:')&&no in filed.lines&&Math.abs((w.live[no]||0)-(filed.lines[no]||0))>0.004);
-  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1,qmBase:1,itcCap:1};
+  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1,qmBase:1,itcCap:1,addQ:1};
   let rows='';
   for(const[no,label,how,sub]of LINES){
     if(sub){const val=w.vals['·'+how]||0;if(!val&&how!=='sExport')continue;
@@ -327,8 +363,9 @@ function fileForm(k,from,to,filing){
       entryId=uid();writes.push({op:'set',collection:'entries',id:entryId,data:payEntry(k,kind,amt,$('#fBank',f).value,$('#fDate',f).value||today(),from,to)});
     }
     let qmEntryId='';
+    if(filing&&w.quick&&w.quick.rate==null)return f.err('Enter the Quick Method remittance rate first (Sales tax → Quick Method).');
     if(filing&&w.quick){const adj=qmAdjustment(k,from,to,w);if(adj){writes.push(...adj.writes);qmEntryId=adj.id}}
-    if(filing)writes.push({op:'set',collection:'filings',id:uid(),data:{tax:k,from,to,lines:w.vals,filedOn:$('#fOn',f).value||today(),entryId,qmEntryId,created:Date.now()}});
+    if(filing)writes.push({op:'set',collection:'filings',id:uid(),data:{tax:k,from,to,lines:w.vals,filedOn:$('#fOn',f).value||today(),entryId,qmEntryId,...(w.quick?{method:'quick',qmRate:w.quick.rate}:{}),created:Date.now()}});
     else writes.push({op:'set',collection:'filings',id:w.filed.id,data:{...w.filed,entryId}});
     if(await batch(writes)){closeModal();toast(filing?'Return marked as filed':`${kind==='refund'?'Refund':'Payment'} recorded`)}
   };
@@ -378,7 +415,8 @@ function qmOverLimit(){
   for(const k of ['gst']){
     const ps=filingPeriods().filter(p=>p.to<today()&&qmOn(k,p.from));if(!ps.length)return null;
     const to=ps[0].to,from=addDays(to,-365);
-    const total=r2(ps.filter(p=>p.from>from).reduce((t,p)=>t+(worksheet(k,p.from,p.to).live['101']||0),0));
+    // CRA's test counts all taxable supplies, zero-rated ones too, with the tax.
+    const total=r2(ps.filter(p=>p.from>from).reduce((t,p)=>{const x=scan(k,p.from,p.to).v;return t+x.s90+x.sExport+x.collected},0));
     if(total>QM_LIMIT)return{total,to};
   }
   return null;
@@ -392,7 +430,7 @@ function qmBox(k,w,filed){
     <div class="flabel" style="margin-bottom:6px">Quick Method</div>
     ${Q.rate==null?`<div class="banner err" style="margin:0 0 10px"><span>There’s no remittance rate for this sales tax rate. Enter one in Quick Method settings.</span></div>`:`<div class="muted" style="font-size:13px;margin-bottom:8px"><span>${q.type==='goods'?'Buying goods to resell':'Services and other businesses'}:</span> <span>${Q.rate}% of sales including ${esc(name)}.</span>${q.credit!==false?` <span>Credit used earlier this fiscal year on ${money(Q.used)} of sales.</span>`:''}</div>`}
     <table class="ws" style="max-width:520px"><tbody>
-      ${row(`${name} charged to customers`,Q.collected)}${row('Remitted under the Quick Method',-Q.tax)}${row('1% credit',Q.credit)}
+      ${row(`${name} charged to customers`,Q.collected)}${Q.capSaleTax?row('On sales of capital assets, remitted in full',-Q.capSaleTax):''}${row('Remitted under the Quick Method',-Q.tax)}${row('1% credit',Q.credit)}
       ${row('Kept as income',Q.gain,true)}
       ${row(`${name} paid on expenses, not claimed (becomes part of expenses)`,Q.itcOps)}
       ${row(`${name} paid on capital purchases, still claimed (line ${k==='qst'?'206':'106'})`,Q.itcCap)}
@@ -421,7 +459,7 @@ function quickForm(){
   const type=q.type||'services';
   const fy=fyStartOf(today());
   const capCands=sortAccts(S.accounts.filter(a=>a.type==='Asset'&&!['bank','ar'].includes(a.detail)&&a.active!==false));
-  const looksCap=a=>a.detail==='capital'||/equip|vehic|truck|car\b|furnit|computer|building|machin|tool|leasehold|fixture|immobil|matériel|véhicule|mobilier|ordinateur|bâtiment|outillage/i.test(a.name);
+  const looksCap=a=>a.detail==='capital'||(!S.accounts.some(x=>x.detail==='capital')&&/equipment|vehicle|furniture|computer|building|machinery|leasehold|immobilis|matériel|véhicule|mobilier|bâtiment/i.test(a.name));
   const f=openModal('Quick Method',`
     <div class="muted" style="font-size:13px">With the Quick Method you still charge customers the full ${qc?'GST and QST':esc(S.company.taxName||'GST/HST')}, but you remit a set percentage of your sales including tax instead of tax collected minus credits. You keep the difference as income, and you don’t claim tax paid on everyday expenses, only on capital purchases.</div>
     <div class="banner" style="margin:0"><span>It’s for businesses with sales of $400,000 or less a year, tax included. Bookkeepers, accountants, lawyers, tax preparers and financial consultants can’t use it. Elect with ${qc?'Revenu Québec':'form GST74 (CRA)'} by the due date of the first return you file with it.</span></div>
@@ -448,7 +486,7 @@ function quickForm(){
     const num=id=>{const el=$(id,f);if(!el||el.value==='')return '';return Math.max(0,Math.min(20,+el.value||0))};
     const next={...q,on,from,type:$('#qmType',f).value,gstRate:num('#qmGst'),qstRate:num('#qmQst'),credit:$('#qmCredit',f).checked};
     if(on&&qmRateFor(next,'gst')==null)return f.err('Enter the remittance rate.');
-    const done=S.filings.some(x=>x.to>=from&&qmOn(x.tax,x.from)!==(on&&x.from>=from));
+    const done=S.filings.some(x=>x.to>=(from||'')&&(x.method==='quick')!==(on&&x.from>=from));
     if(done&&!await confirmBox('Returns already filed','Some returns from that date were filed the other way. Their filed figures stay as they are. Undo and refile them if they should change.','Save anyway'))return;
     const writes=[];
     for(const box of $$('[data-cap]',f)){const a=acct(box.dataset.cap);if(!a)continue;const want=box.checked?'capital':(a.detail==='capital'?'':a.detail);

@@ -186,6 +186,11 @@ function validateFiling(data, store) {
   if (!isDate(data.filedOn)) throw new ValidationError('Enter the date the return was filed.');
   if (!isObj(data.lines)) throw new ValidationError('A filing must include its return lines.');
   if (data.entryId && !store.get('entries', data.entryId)) throw new ValidationError('The payment or refund for this filing doesn’t exist.');
+  if (data.qmEntryId) {
+    const adj = store.get('entries', data.qmEntryId);
+    if (!adj || adj.type !== 'qmadjust' || adj.tax !== data.tax) throw new ValidationError('The Quick Method adjustment for this filing doesn’t exist.');
+  }
+  if (data.method !== undefined && !['quick', 'regular'].includes(data.method)) throw new ValidationError('Unknown filing method.');
   const clash = store.list('filings').find(f => f.tax === data.tax && f.from <= data.to && data.from <= f.to && f.id !== data.id);
   if (clash) throw new ValidationError(`That period overlaps a return already filed (${clash.from} to ${clash.to}).`, 409);
   return data;
@@ -438,15 +443,20 @@ function validateCompany(data) {
     invoiceNote: str(data.invoiceNote, 1000).trim(),
     logoFile: /^[A-Za-z0-9-]{0,64}$/.test(String(data.logoFile || '')) ? String(data.logoFile || '') : '',
     payroll: validatePayrollSettings(data.payroll),
-    quickMethod: validateQuickMethod(data.quickMethod),
+    quickMethod: validateQuickMethod(data.quickMethod, fy >= 1 && fy <= 12 ? Math.floor(fy) : 1, data.filingFreq),
   };
 }
 /** Quick Method of accounting for GST/HST and QST. Rates blank = the published rate for the business type. */
-function validateQuickMethod(q) {
+function validateQuickMethod(q, fy, freq) {
   if (!isObj(q)) return { on: false };
   const rate = v => (v === '' || v === null || v === undefined ? '' : Math.max(0, Math.min(20, Number(v) || 0)));
   const from = isDate(q.from) ? q.from : '';
   if (q.on && !from) throw new ValidationError('Choose the date you start using the Quick Method.');
+  if (q.on && fy) {
+    // It starts on the first day of a reporting period.
+    const step = { monthly: 1, quarterly: 3, annual: 12 }[freq] || 3, m = Number(from.slice(5, 7));
+    if (from.slice(8) !== '01' || ((m - fy + 12) % 12) % step) throw new ValidationError('Start the Quick Method on the first day of a reporting period.');
+  }
   return { on: !!q.on, from, type: q.type === 'goods' ? 'goods' : 'services', gstRate: rate(q.gstRate), qstRate: rate(q.qstRate), credit: q.credit !== false };
 }
 

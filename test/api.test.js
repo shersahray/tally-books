@@ -516,7 +516,12 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   assert.deepEqual((await call('GET', '/api/state')).json.company.quickMethod, { on: true, from: '2026-01-01', type: 'goods', gstRate: 20, qstRate: '', credit: false });
   // Capital asset accounts, and the adjustment the Quick Method posts when a return is filed.
   assert.equal((await call('PUT', '/api/records/accounts/a1500', { code: '1500', name: 'Equipment', type: 'Asset', detail: 'capital' })).status, 200);
-  assert.equal((await call('PUT', '/api/records/entries/qm1', { type: 'qmadjust', date: '2026-09-30', lines: [{ account: 'a1500', debit: 10, credit: 0 }, { account: 'a1000', debit: 0, credit: 10 }] })).status, 200);
+  assert.equal((await call('PUT', '/api/settings', { ...s, quickMethod: { on: true, from: '2026-02-01' } })).status, 400, 'mid-quarter start');
+  assert.equal((await call('PUT', '/api/records/entries/qm1', { type: 'qmadjust', tax: 'gst', date: '2026-09-30', lines: [{ account: 'a1500', debit: 10, credit: 0 }, { account: 'a1000', debit: 0, credit: 10 }] })).status, 200);
+  const filing = { tax: 'gst', from: '2026-07-01', to: '2026-09-30', filedOn: '2026-10-01', lines: { 109: 0 }, method: 'quick' };
+  assert.equal((await call('PUT', '/api/records/filings/f1', { ...filing, qmEntryId: 'nope' })).status, 400);
+  assert.equal((await call('PUT', '/api/records/filings/f1', { ...filing, qmEntryId: 'qm1', method: 'weird' })).status, 400);
+  assert.equal((await call('PUT', '/api/records/filings/f1', { ...filing, qmEntryId: 'qm1' })).status, 200);
 });
 
 // A fresh server for one test; returns helpers bound to it.

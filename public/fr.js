@@ -1255,4 +1255,10 @@ addFr({
   'Quick Method adjustment':'Redressement – méthode rapide','Capital asset (equipment, vehicles, buildings)':'Immobilisation (matériel, véhicules, bâtiments)',
   'Mark as filed and record payment':'Marquer comme produite et inscrire le paiement','Mark as filed and record refund':'Marquer comme produite et inscrire le remboursement',
   'Tax kept under the Quick Method':'Taxe gardée selon la méthode rapide','Quick Method gain':'Gain – méthode rapide','Tax paid on expenses, not claimed':'Taxe payée sur les dépenses, non demandée',
+  'Adjustments to be added to net tax (including tax on sales of capital assets)':'Redressements à ajouter à la taxe nette (y compris la taxe sur les ventes d’immobilisations)',
+  'Adjustments to be added (including tax on sales of capital assets)':'Redressements à ajouter (y compris la taxe sur les ventes d’immobilisations)',
+  'On sales of capital assets, remitted in full':'Sur les ventes d’immobilisations, versée au complet','Collected or to remit':'Perçue ou à verser','Credits (ITCs) claimed':'Crédits (CTI) demandés',
+  'Enter the Quick Method remittance rate first (Sales tax → Quick Method).':'Saisissez d’abord le taux de versement de la méthode rapide (Taxes de vente → Méthode rapide).',
+  'Start the Quick Method on the first day of a reporting period.':'Commencez la méthode rapide le premier jour d’une période de déclaration.',
+  'The Quick Method adjustment for this filing doesn’t exist.':'Le redressement de la méthode rapide pour cette déclaration n’existe pas.','Unknown filing method.':'Méthode de production inconnue.',
 });
