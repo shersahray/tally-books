@@ -504,7 +504,7 @@ function lineEditor(el,cols,rows,onChange){
     case 'check':return `<input type="checkbox" data-k="${c.key}" ${v?'checked':''} aria-label="${c.label}">`;
     case 'sel':return `<select data-k="${c.key}" aria-label="${c.label}">${c.options(v)}</select>`;
     case 'calc':return `<span data-calc="${c.key}"></span>`;}};
-  const rowHTML=r=>`<tr>${cols.map(c=>`<td class="c-${c.type}">${cell(c,r)}</td>`).join('')}<td class="c-x"><button type="button" class="icon-btn" data-rm aria-label="Remove line">×</button></td></tr>`;
+  const rowHTML=r=>`<tr>${cols.map(c=>`<td class="c-${c.type}" data-label="${esc(c.label)}">${cell(c,r)}</td>`).join('')}<td class="c-x"><button type="button" class="icon-btn" data-rm aria-label="Remove line">×</button></td></tr>`;
   el.innerHTML=`<div class="tbl-wrap"><table class="lines"><thead><tr>${cols.map(c=>`<th class="c-${c.type}">${c.label}</th>`).join('')}<th></th></tr></thead><tbody>${rows.map(rowHTML).join('')}</tbody></table></div><button type="button" class="btn ghost sm" data-add style="margin-top:6px">+ Add line</button>`;
   const tb=el.querySelector('tbody');
   const readRow=tr=>{const o={};tr.querySelectorAll('[data-k]').forEach(i=>o[i.dataset.k]=i.type==='checkbox'?i.checked:i.type==='number'?(i.value===''?'':+i.value):i.value);return o};

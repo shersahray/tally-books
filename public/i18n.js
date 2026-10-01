@@ -89,7 +89,7 @@ function translateText(node){
   if(out!=null&&out!==norm(raw))node.data=lead+out+trail;
   done.set(node,node.data);
 }
-const ATTRS=['placeholder','title','aria-label','alt'];
+const ATTRS=['placeholder','title','aria-label','alt','data-label'];
 function translateAttrs(el){
   if(skip(el))return;
   for(const a of ATTRS){const v=el.getAttribute(a);if(v){const out=tr(v);if(out!=null&&out!==v)el.setAttribute(a,out)}}
