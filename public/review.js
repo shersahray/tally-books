@@ -31,12 +31,13 @@ function addExtras(target,id){
   };
   const inp=$('[data-attfile]',box);
   if(inp)inp.onchange=async()=>{
-    const files=[...inp.files];inp.value='';
+    const files=[...inp.files];inp.value='';let ok=0,bad=false;
     for(const file of files){
-      if(file.size>10*1024*1024){toast(`${file.name} is over 10 MB.`,true);continue}
-      try{await api('POST','/api/attachments',{target,targetId:id,fileName:file.name,data:await fileB64(file)})}catch(err){toast(err.message,true);break}
+      if(file.size>10*1024*1024){toast(`${file.name} is over 10 MB.`,true);bad=true;continue}
+      try{await api('POST','/api/attachments',{target,targetId:id,fileName:file.name,data:await fileB64(file)});ok++}catch(err){toast(err.message,true);bad=true;break}
     }
-    await load();addExtras(target,id);toast(files.length===1?'File attached':'Files attached');
+    if(!ok)return;
+    await load();addExtras(target,id);if(!bad)toast(ok===1?'File attached':'Files attached');
   };
 }
 
@@ -119,18 +120,34 @@ function reclassForm(){
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const from=$('#rcFrom',f).value,to=$('#rcTo',f).value;if(!from||!to||from===to)return f.err('Choose two different accounts.');
     const ids=new Set($$('[data-rcpick]',f).filter(x=>x.checked).map(x=>x.dataset.rcpick));
-    const swap=l=>l.account===from?{...l,account:to}:l;
-    const writes=[];
-    for(const en of S.entries.filter(x=>ids.has(x.id))){
+    if(ids.size>RECLASS_MAX)return f.err(`Reclassify at most ${RECLASS_MAX} transactions at a time. Narrow the dates or untick some.`);
+    const swap=l=>l.account===from?{...l,account:to}:l,target=acct(to);
+    const writes=[],done=new Set();let moved=0,skipped=0;
+    const write=en=>{if(!en||done.has(en.id))return;done.add(en.id);
       const data={...strip(en),lines:en.lines.map(swap)};
       if(en.form&&Array.isArray(en.form.lines))data.form={...en.form,lines:en.form.lines.map(swap)};
       writes.push({op:'set',collection:'entries',id:en.id,data});
-      if(en.docId){const d=S.docs.find(x=>x.id===en.docId);if(d)writes.push({op:'set',collection:'docs',id:d.id,data:{...strip(d),lines:(d.lines||[]).map(swap)}})}
+      if(en.docId){const d=S.docs.find(x=>x.id===en.docId);if(d)writes.push({op:'set',collection:'docs',id:d.id,data:{...strip(d),lines:(d.lines||[]).map(swap)}})}};
+    for(const en of S.entries.filter(x=>ids.has(x.id))){
+      if(!reclassFits(en,target)){skipped++;continue}
+      write(en);moved++;
+      // Keep an entry and its automatic reversal in step.
+      const pair=en.reversalOf?S.entries.find(x=>x.id===en.reversalOf):S.entries.find(x=>x.reversalOf===en.id);
+      if(pair&&(pair.lines||[]).some(l=>l.account===from))write(pair);
     }
-    const fw=typeof filedWarning==='function'?filedWarning(S.entries.filter(x=>ids.has(x.id))):null;
-    if(fw&&acct(from)&&acct(to)&&(isPL(acct(from).type)!==isPL(acct(to).type))&&!await confirmBox('Change a filed period?','Some of these transactions are in a period whose sales tax return was filed. Reclassifying doesn’t change the tax, but check the return if the accounts are on it.','Reclassify'))return;
-    if(await batch(writes)){closeModal();toast(`Reclassified ${ids.size} transaction${ids.size===1?'':'s'} to ${acctName(to)}`)}
+    if(!moved)return f.err(`${acctName(to)} can’t be used on these transactions (for example an income account on an expense). Choose another account.`);
+    if(await batch(writes)){closeModal();toast(`Reclassified ${moved} transaction${moved===1?'':'s'} to ${acctName(to)}`+(skipped?`. ${skipped} skipped: the account doesn’t fit them.`:''))}
   };
+}
+const RECLASS_MAX=190;
+/** Would the transaction's own form accept this account? (An income account can't go on an expense, and so on.) */
+function reclassFits(en,a){
+  if(!reclassOk(a))return false;
+  if(en.docId){const d=S.docs.find(x=>x.id===en.docId);if(d)return DOC_ACCT_FILTER(saleKind(d.kind))(a)}
+  const sys=a.detail==='bank'||a.detail==='card'||a.detail==='ar'||a.detail==='ap';
+  if(en.type==='expense')return !sys&&a.type!=='Income';
+  if(en.type==='deposit')return !sys&&a.type!=='Expense'&&a.type!=='Cost of Goods Sold';
+  return true;
 }
 
 /* ---------- the Review page ----------

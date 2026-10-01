@@ -85,7 +85,7 @@ function colReport({title,sub,C,rows,name}){
   }).join('');
   const csv=[['Account',...head]];
   for(const r of full)if(r.cls!=='spacer')csv.push([r.label,...(r.cells?r.cells.map(v=>v===null?'':v):[])]);
-  return{html:`<div class="report${many?' wide':''}" ${many?'style="max-width:none"':''}>${rh(title,sub)}<div class="tbl-wrap"><table class="${many?'cmp':''}">${many?`<thead><tr><th></th>${head.map(h=>`<th class="n">${esc(h)}</th>`).join('')}</tr></thead>`:''}${body}</table></div></div>`,
+  return{html:`<div class="report${many?' wide':''}" ${many?'style="max-width:none"':''}>${rh(esc(title),esc(sub))}<div class="tbl-wrap"><table class="${many?'cmp':''}">${many?`<thead><tr><th></th>${head.map(h=>`<th class="n">${esc(h)}</th>`).join('')}</tr></thead>`:''}${body}</table></div></div>`,
     csv,name,title,sub,head,rows:full,pctCol};
 }
 const errReport=(title,msg)=>({html:`<div class="banner err">${esc(msg)}</div>`,csv:[[title],[msg]],name:'report',title,sub:'',head:[],rows:[]});
@@ -185,21 +185,43 @@ async function saveReport(){
     <div class="muted" style="font-size:13px">Saves the report, its period and comparison so you can open it again in one click. The dates move with the period: “This fiscal year” is always the current one.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`);
   f.onsubmit=async e=>{e.preventDefault();const name=$('#srName',f).value.trim();if(!name)return f.err('Give it a name.');
-    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||''};
-    if(await putCompany({...strip(S.company),savedReports:[...savedReports().filter(x=>x.name!==name),item].slice(-30)})){closeModal();toast('Report saved')}};
+    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:!!R.tbAdj};
+    if(await putCompany({...strip(S.company),savedReports:[...savedReports().filter(x=>x.name!==name),item].slice(-30)})){S.rep.savedId=item.id;closeModal();toast('Report saved')}};
 }
-function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||''});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
-async function deleteSaved(id){const x=savedReports().find(r=>r.id===id);if(!x||!await confirmBox('Delete this saved report?',x.name,'Delete'))return;if(await putCompany({...strip(S.company),savedReports:savedReports().filter(r=>r.id!==id)}))toast('Saved report deleted')}
+function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:!!x.tbAdj});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
+/** Is the report on screen still the saved one (same report, period and options)? */
+const savedMatches=x=>{const R=S.rep;return x.tab===R.tab&&x.period===R.period&&(x.compare||'')===(R.compare||'')&&(x.acct||'')===(R.acct||'')&&!!x.tbAdj===!!R.tbAdj&&(x.period!=='custom'||(x.from===R.from&&x.to===R.to))};
+async function deleteSaved(id){const x=savedReports().find(r=>r.id===id);if(!x||!await confirmBox('Delete this saved report?',x.name,'Delete'))return;if(await putCompany({...strip(S.company),savedReports:savedReports().filter(r=>r.id!==id)})){S.rep.savedId='';toast('Saved report deleted');renderMain()}}
 
 /* ---------- PDFs ---------- */
 const tl=s=>(typeof T==='function'?T(s):s);
+/** PDF rows for the reports that only come as a table (trial balance, general ledger, aging). */
+function pdfRows(r){
+  const csv=r.csv||[],h=csv[0]||[],body=csv.slice(1),num=v=>v===''||v===null||v===undefined?'':+v;
+  if(h[0]==='Code'&&h[1]==='Account'){ // trial balance
+    return{head:['Debit','Credit'],rows:body.map(c=>c[1]==='Total'&&!c[0]?{cls:'grand',label:'Total',cells:[num(c[3]),num(c[4])]}:{cls:'item',data:true,label:`${c[0]?c[0]+'  ':''}${c[1]}`,cells:[num(c[3])||'',num(c[4])||'']})};
+  }
+  if(h[0]==='Account'&&h.length===9){ // general ledger, grouped by account
+    const rows=[];let cur=null;
+    for(const c of body){
+      if(c[0]==='Total'&&!c[1]){rows.push({cls:'spacer'},{cls:'grand',label:'Total',cells:[num(c[6]),num(c[7]),'']});continue}
+      if(/^Total /.test(c[0])&&!c[1]){rows.push({cls:'tot',label:`${tl('Total')} ${c[0].slice(6)}`,data:true,cells:[num(c[6]),num(c[7]),num(c[8])]},{cls:'spacer'});cur=null;continue}
+      if(c[0]!==cur){cur=c[0];rows.push({cls:'sec',label:c[0],data:true})}
+      if(c[2]==='Opening balance'){rows.push({cls:'item',label:`${fmtDate(c[1])}  ${tl('Opening balance')}`,data:true,cells:['','',num(c[8])]});continue}
+      rows.push({cls:'item',data:true,label:`${fmtDate(c[1])}  ${tl(c[2])}${c[3]?' #'+c[3]:''}  ${c[4]||c[5]||''}`,cells:[num(c[6]),num(c[7]),num(c[8])]});
+    }
+    return{head:['Debit','Credit','Balance'],rows};
+  }
+  // aging and anything else: a name, then numbers
+  return{head:h.slice(1),rows:body.map((c,i)=>{const last=i===body.length-1&&/^total$/i.test(String(c[0]));return{cls:last?'grand':'item',label:String(c[0]||(last?'Total':tl('No contact'))),data:!last,cells:c.slice(1).map(v=>typeof v==='number'?v:v===''?'':isNaN(+v)?v:+v)}})};
+}
 /** Draw reports into a PDF. Each report starts on a new page; long ones continue with the column heads repeated. */
 function reportsPdf(reports,{cover}={}){
-  const wide=reports.some(r=>(r.head||[]).length>4);
+  const wide=reports.some(r=>(r.head||[]).length>4||(r.csv&&r.csv[0]&&r.csv[0][0]==='Account'&&r.csv[0].length===9));
   const doc=TallyPDF.create({landscape:wide}),W0=doc.width,H0=doc.height,M=40;
   // The PDF starts with one blank page: use it for the first page drawn.
   let fresh=doc.pageCount()===1;const page=()=>{if(fresh)fresh=false;else doc.addPage()};
-  const fmt=(v,i,r)=>v===null||v===undefined||v===''?'':typeof v==='number'?(i===r.pctCol?`${v>0?'+':''}${v.toLocaleString(LOC(),{maximumFractionDigits:1})}%`:money(v)):String(v);
+  const fmt=(v,i,r)=>v===null||v===undefined||v===''?'':v===0&&(r.head||[]).length>6&&i!==r.pctCol?'—':typeof v==='number'?(i===r.pctCol?`${v>0?'+':''}${v.toLocaleString(LOC(),{maximumFractionDigits:1})}%`:money(v)):String(v);
   if(cover){
     page();let y=150;
     doc.text(W0/2,y,S.company.name,{size:22,bold:true,align:'center'});y+=34;
@@ -209,27 +231,33 @@ function reportsPdf(reports,{cover}={}){
     if(cover.note){y+=24;for(const line of doc.wrap(cover.note,W0-2*M-80,10)){doc.text(M+40,y,line,{size:10});y+=14}}
     doc.text(W0/2,H0-60,`${tl('Prepared')} ${fmtDate(today())}`,{size:9,align:'center',color:'#777777'});
   }
+  const avail=W0-2*M,LABEL_MIN=130,COL_MIN=48;
   for(const r of reports){
-    const head=r.head&&r.head.length?r.head:(r.csv[0]||[]).slice(1);
-    let rows=r.rows&&r.rows.length?r.rows:r.csv.slice(1).map((c,i,all)=>({cls:i===all.length-1&&/^total$/i.test(String(c[0]))?'grand':'item',label:String(c[0]),cells:c.slice(1).map(v=>typeof v==='number'?v:v===''?'':isNaN(+v)?v:+v)}));
-    const n=head.length,colW=Math.max(52,Math.min(90,(W0-2*M-200)/Math.max(1,n))),labelW=W0-2*M-colW*n;
-    const size=n>8?7.5:9;
-    let y=0;
-    const top=()=>{page();y=M+6;
-      doc.text(M,y,S.company.name,{size:13,bold:true});y+=17;doc.text(M,y,tl(r.title),{size:11,bold:true});y+=14;
-      if(r.sub){doc.text(M,y,r.sub,{size:9,color:'#555555'});y+=12}
-      y+=8;if(n>1||r.head===undefined){head.forEach((h,i)=>doc.text(M+labelW+colW*(i+1)-4,y,tl(String(h)),{size:size-0.5,bold:true,align:'right'}));y+=6;doc.line(M,y,W0-M,y,{color:'#999999'});y+=12}};
-    top();
-    for(const row of rows){
-      if(y>H0-M-20)top();
-      if(row.cls==='spacer'){y+=6;continue}
-      const bold=['sec','tot','grand'].includes(row.cls),indent=row.cls==='item'?12:row.cls==='note'?6:0;
-      if(row.cls==='tot'||row.cls==='grand')doc.line(M+labelW,y-9,W0-M,y-9,{color:'#bbbbbb'});
-      const lbl=row.acct||row.data?row.label:tl(row.label),lines=doc.wrap(lbl,labelW-indent-6,size,bold);
-      doc.text(M+indent,y,lines[0]+(lines.length>1?'…':''),{size,bold,color:row.cls==='note'?'#555555':'#1a1a1a'});
-      (row.cells||[]).forEach((v,i)=>doc.text(M+labelW+colW*(i+1)-4,y,fmt(v,i,r),{size,bold,align:'right'}));
-      if(row.cls==='grand'){doc.line(M+labelW,y+4,W0-M,y+4,{color:'#555555'});doc.line(M+labelW,y+6,W0-M,y+6,{color:'#555555'})}
-      y+=row.cls==='sec'?15:13;
+    const shaped=r.rows&&r.rows.length?{head:r.head||[],rows:r.rows}:pdfRows(r);
+    const head=shaped.head,rows=shaped.rows,n=head.length;
+    // Too many columns for one page width: print them in groups, each group starting a new page.
+    const per=Math.max(1,Math.min(n,Math.floor((avail-LABEL_MIN)/COL_MIN))),groups=[];
+    for(let i=0;i<Math.max(1,n);i+=per)groups.push([i,Math.min(n,i+per)]);
+    for(const [g0,g1] of groups){
+      const k=Math.max(1,g1-g0),colW=Math.max(COL_MIN,Math.min(90,(avail-200)/k)),labelW=Math.max(LABEL_MIN,avail-colW*k);
+      const size=k>8?7.5:9,gsub=groups.length>1?`${r.sub?r.sub+' · ':''}${tl('Columns')} ${g0+1}–${g1} / ${n}`:r.sub;
+      let y=0;
+      const top=()=>{page();y=M+6;
+        doc.text(M,y,S.company.name,{size:13,bold:true});y+=17;doc.text(M,y,tl(r.title),{size:11,bold:true});y+=14;
+        if(gsub){doc.text(M,y,gsub,{size:9,color:'#555555'});y+=12}
+        y+=8;if(n>1||!r.head){head.slice(g0,g1).forEach((h,i)=>doc.text(M+labelW+colW*(i+1)-4,y,tl(String(h)),{size:size-0.5,bold:true,align:'right'}));y+=6;doc.line(M,y,W0-M,y,{color:'#999999'});y+=12}};
+      top();
+      for(const row of rows){
+        if(y>H0-M-20)top();
+        if(row.cls==='spacer'){y+=6;continue}
+        const bold=['sec','tot','grand'].includes(row.cls),indent=row.cls==='item'?12:row.cls==='note'?6:0;
+        if(row.cls==='tot'||row.cls==='grand')doc.line(M+labelW,y-9,W0-M,y-9,{color:'#bbbbbb'});
+        const lbl=row.acct||row.data?row.label:tl(row.label),lines=doc.wrap(lbl,labelW-indent-6,size,bold);
+        doc.text(M+indent,y,lines[0]+(lines.length>1?'…':''),{size,bold,color:row.cls==='note'?'#555555':'#1a1a1a'});
+        (row.cells||[]).slice(g0,g1).forEach((v,i)=>doc.text(M+labelW+colW*(i+1)-4,y,fmt(v,i+g0,r),{size,bold,align:'right'}));
+        if(row.cls==='grand'){doc.line(M+labelW,y+4,W0-M,y+4,{color:'#555555'});doc.line(M+labelW,y+6,W0-M,y+6,{color:'#555555'})}
+        y+=row.cls==='sec'?15:13;
+      }
     }
   }
   const pages=doc.pageCount();
@@ -266,7 +294,7 @@ function packageForm(){
 /* ---------- bank reconciliation report ---------- */
 function reconReport(r){
   const a=acct(r.account);if(!a)return;
-  const card=a.detail==='card',ids=new Set(r.entryIds);
+  const card=a.detail==='card',ids=new Set(r.entryIds),N=v=>natural(a,v); // card amounts as the amount owed, so the rows add up
   // Reconciled before this one: on statements dated earlier.
   const earlier=new Set(S.recons.filter(x=>x.account===r.account&&x.id!==r.id&&(x.statementDate<r.statementDate||(x.statementDate===r.statementDate&&(x.completedAt||0)<(r.completedAt||0)))).flatMap(x=>x.entryIds));
   let ins=0,outs=0,missing=0;
@@ -279,13 +307,13 @@ function reconReport(r){
   const rows=[
     {cls:'sec',label:'Statement'},
     {cls:'item',label:'Beginning balance',vals:[+r.beginningBalance]},
-    {cls:'item',label:`${L.in} cleared`,vals:[r2(ins)]},{cls:'item',label:`${L.out} cleared`,vals:[r2(-outs)]},
+    {cls:'item',label:`${L.in} cleared`,vals:[N(ins)]},{cls:'item',label:`${L.out} cleared`,vals:[N(-outs)]},
     {cls:'tot',label:'Statement ending balance',vals:[+r.endingBalance]},
     {cls:'spacer'},{cls:'sec',label:'Not yet on the statement'},
-    {cls:'note',label:L.dit},...dit.map(x=>({cls:'item',label:`${fmtDate(x.e.date)}  ${tl(TLABEL[x.e.type]||x.e.type)}${x.e.ref?' #'+x.e.ref:''}  ${contactName(x.e.contactId)||x.e.memo||''}`,data:true,vals:[x.amt],entry:x.e.id})),
-    {cls:'tot',label:`Total ${L.dit.toLowerCase()}`,vals:[ditT]},
-    {cls:'note',label:L.oc},...oc.map(x=>({cls:'item',label:`${fmtDate(x.e.date)}  ${tl(TLABEL[x.e.type]||x.e.type)}${x.e.ref?' #'+x.e.ref:''}  ${contactName(x.e.contactId)||x.e.memo||''}`,data:true,vals:[x.amt],entry:x.e.id})),
-    {cls:'tot',label:`Total ${L.oc.toLowerCase()}`,vals:[r2(-ocT)]},
+    {cls:'note',label:L.dit},...dit.map(x=>({cls:'item',label:`${fmtDate(x.e.date)}  ${tl(TLABEL[x.e.type]||x.e.type)}${x.e.ref?' #'+x.e.ref:''}  ${contactName(x.e.contactId)||x.e.memo||''}`,data:true,vals:[N(x.amt)],entry:x.e.id})),
+    {cls:'tot',label:`Total ${L.dit.toLowerCase()}`,vals:[N(ditT)]},
+    {cls:'note',label:L.oc},...oc.map(x=>({cls:'item',label:`${fmtDate(x.e.date)}  ${tl(TLABEL[x.e.type]||x.e.type)}${x.e.ref?' #'+x.e.ref:''}  ${contactName(x.e.contactId)||x.e.memo||''}`,data:true,vals:[N(x.amt)],entry:x.e.id})),
+    {cls:'tot',label:`Total ${L.oc.toLowerCase()}`,vals:[N(-ocT)]},
     {cls:'spacer'},{cls:'tot',label:'Adjusted statement balance',vals:[adjusted]},{cls:'grand',label:`Balance in the books on ${fmtDate(r.statementDate)}`,vals:[book]},
   ];
   if(Math.abs(diff)>=0.005)rows.push({cls:'item',label:'Difference (transactions changed after this reconciliation)',vals:[diff]});
@@ -298,7 +326,7 @@ function reconReport(r){
 
 /* ---------- working trial balance: before adjustments, adjusting entries, after ---------- */
 function rTBAdj(){
-  const to=S.rep.to,fy=fyStartOf(to),adjIds=new Set(S.entries.filter(e=>e.adjusting).map(e=>e.id));
+  const to=S.rep.to,fy=fyStartOf(to),isAdj=e=>e.adjusting&&!e.reversalOf&&e.date>=fy&&e.date<=to,adjIds=new Set(S.entries.filter(isAdj).map(e=>e.id));
   const sums=new Map();
   for(const p of postings()){
     const a=acct(p.account);if(!a)continue;
@@ -313,7 +341,7 @@ function rTBAdj(){
   const re=-fNet(null,addDays(fy,-1));
   if(Math.abs(re)>=0.005){rows.push({cls:'item',label:W('Retained earnings'),vals:[r2(re),0,r2(re)]});tot[0]+=re;tot[2]+=re}
   rows.push({cls:'grand',label:'Total (debits less credits)',vals:tot.map(r2)});
-  const n=S.entries.filter(e=>e.adjusting&&e.date<=to).length;
+  const n=adjIds.size;
   const r=colReport({title:'Working trial balance',sub:`As of ${fmtDate(to)} · income and expenses from ${fmtDate(fy)} · debits positive, credits negative`,C:{cols:[{label:'Before adjustments'},{label:'Adjustments'},{label:'Adjusted balance'}]},rows,name:`working-trial-balance_${to}`});
   r.html=r.html.replace(/<\/div>$/,`<div class="muted" style="font-size:12.5px;padding:8px 16px 14px">${n} adjusting entr${n===1?'y':'ies'}. Mark a journal entry as adjusting when you enter it.</div></div>`);
   return r;

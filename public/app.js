@@ -296,8 +296,8 @@ function vReports(){
   const R=S.rep;const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']];
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
   const pointInTime=R.tab!=='pl'&&R.tab!=='gl';
-  const saved=savedReports(),staff=ME&&ME.role!=='client';
-  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>`:''}${staff?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
+  const saved=savedReports(),staff=ME&&ME.role!=='client',cur=saved.find(x=>x.id===S.rep.savedId&&savedMatches(x));
+  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
     ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
@@ -450,6 +450,7 @@ function bindMain(m){
     if(d.act==='reclass')return reclassForm();
     if(d.act==='reppdf')return reportPdfNow();
     if(d.act==='repsave')return saveReport();
+    if(d.act==='repunsave')return deleteSaved(S.rep.savedId);
     if(d.act==='reppkg')return packageForm();
     if(d.act==='retry')return load();
     if(d.act==='activity')return showActivity();
@@ -593,7 +594,7 @@ async function restoreBackup(file){
   if(body.format!=='tally-books-backup'){toast('That file isn’t a Tally Books backup.',true);return}
   const n=COLS.reduce((s,c)=>s+(body[c]||[]).length,0);
   if(!await confirmBox('Restore this backup?',`Everything currently in your books will be replaced with the ${n} records in ${file.name} (saved ${body.exportedAt?fmtDate(body.exportedAt.slice(0,10)):'on an unknown date'}). Download a backup first if you might need the current data.`,'Replace and restore'))return;
-  let r=null;if(await write(async()=>{r=await api('POST','/api/restore',body)}))toast(r&&r.skippedReceipts?`Backup restored. ${r.skippedReceipts} receipt${r.skippedReceipts===1?' was':'s were'} left out because ${r.skippedReceipts===1?'its photo isn’t':'their photos aren’t'} in this company.`:'Backup restored');
+  let r=null;if(await write(async()=>{r=await api('POST','/api/restore',body)}))toast(r&&r.skippedReceipts?`Backup restored. ${r.skippedReceipts} receipt${r.skippedReceipts===1?' or attachment was':'s or attachments were'} left out because the file isn’t in this company.`:'Backup restored');
 }
 async function clearExamples(){
   if(!await confirmBox('Clear example data?','This removes every customer, vendor, employee, invoice, bill and transaction marked “Example”, and any pay runs for example employees. Your chart of accounts and anything you entered yourself stay.','Clear examples'))return;
@@ -664,7 +665,7 @@ let tt;function toast(m,err){const r=$('#toastRoot');r.innerHTML=`<div class="to
 
 const fld=(id,label,input,span)=>`<div class="field"${span?' style="grid-column:1/-1"':''}><label for="${id}">${label}</label>${input}</div>`;
 function acctOptions(sel,filter=()=>true){
-  const list=sortAccts(S.accounts.filter(a=>(a.active!==false||a.id===sel)&&filter(a)));let h='',cur='';
+  const list=sortAccts(S.accounts.filter(a=>(a.active!==false||a.id===sel)&&(filter(a)||a.id===sel)));let h='',cur='';
   for(const a of list){if(a.type!==cur){if(cur)h+='</optgroup>';cur=a.type;h+=`<optgroup label="${cur}">`}h+=`<option value="${a.id}" ${a.id===sel?'selected':''}>${esc((a.code?a.code+' · ':'')+a.name)}</option>`}
   return h+(cur?'</optgroup>':'');
 }
@@ -752,11 +753,13 @@ function nextNum(kind){
   if(kind==='credit'){const n=Math.max(1000,...S.docs.filter(d=>d.kind==='credit').map(d=>parseInt(String(d.number).replace(/^CN-/i,''))||0));return 'CN-'+(n+1)}
   return'';
 }
+// Accounts a document's lines can use: income on sales; expenses, cost of goods sold and other or capital assets on purchases.
+const DOC_ACCT_FILTER=sale=>sale?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&(!a.detail||a.detail==='capital'));
 function docForm(kind,doc,preset){
   if(doc&&doc.carried)return carriedDocForm(kind,doc);
   const sale=saleKind(kind),cred=isCreditKind(kind),L=DOCL[kind],ck=sale?'customer':'vendor',t=today();
   const target=cred?(sale?'invoice':'bill'):null;
-  const filter=sale?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&!a.detail);
+  const filter=DOC_ACCT_FILTER(sale);
   const defA=(sortAccts(S.accounts.filter(a=>filter(a)&&a.active!==false))[0]||{}).id||'';
   const d=doc?{...doc,lines:doc.lines.map(l=>({...l,taxCode:taxCodeOf(l)}))}:{number:nextNum(kind),date:t,due:cred?'':addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:'std'}],memo:'',...(preset||{})};
   const paid=doc?paidOn(doc.id):0;
@@ -954,12 +957,13 @@ function journalForm(entry){
     const d=r2(lines.reduce((s,l)=>s+l.debit,0)),c=r2(lines.reduce((s,l)=>s+l.credit,0));
     if(lines.length<2||!d)return f.err('A journal entry needs at least one debit and one credit.');if(Math.abs(d-c)>0.004)return f.err(`Debits and credits are out by ${money(r2(d-c))}.`);
     const id=entry?.id||uid(),date=$('#jDate',f).value||today(),ref=$('#jRef',f).value.trim(),memo=$('#jMemo',f).value.trim();
-    const adjusting=!!($('#jAdj',f)||{}).checked,reverseOn=($('#jRev',f)||{}).value||'';
+    // People who don't see these controls (clients) keep what the bookkeeper set.
+    const adjusting=$('#jAdj',f)?$('#jAdj',f).checked:!!entry?.adjusting,reverseOn=$('#jRev',f)?$('#jRev',f).value:(entry?.reverseOn||'');
     if(reverseOn&&reverseOn<=date)return f.err('The reversing date has to be after the entry’s date.');
     const data={...(entry?strip(entry):{}),type:'journal',date,ref,memo,contactId:entry?.contactId||'',lines,created:entry?.created||Date.now(),adjusting,reverseOn,...(entry?.example?{example:true}:{})};
     const w=[{op:'set',collection:'entries',id,data}],rid='rv_'+id;
     // The reversing entry: the same lines with debits and credits swapped.
-    if(reverseOn)w.push({op:'set',collection:'entries',id:rid,data:{type:'journal',date:reverseOn,ref:ref?ref+'-R':'',memo:`Reversal of ${memo||'journal entry'} (${fmtDate(date)})`,contactId:'',adjusting,reversalOf:id,
+    if(reverseOn)w.push({op:'set',collection:'entries',id:rid,data:{type:'journal',date:reverseOn,ref:ref?ref+'-R':'',memo:`Reversal of ${memo||'journal entry'} (${fmtDate(date)})`,contactId:'',reversalOf:id,...(entry?.example?{example:true}:{}),
       lines:lines.map(l=>({account:l.account,debit:l.credit,credit:l.debit,memo:l.memo})),created:(S.entries.find(x=>x.id===rid)||{}).created||Date.now()+1}});
     else if(S.entries.some(x=>x.id===rid))w.push({op:'delete',collection:'entries',id:rid});
     if(await batch(w)){closeModal();toast(reverseOn?`Journal entry saved, reversing on ${fmtDate(reverseOn)}`:'Journal entry saved')}};

@@ -461,7 +461,7 @@ function validateCompany(data) {
     savedReports: (Array.isArray(data.savedReports) ? data.savedReports : []).slice(0, 30).filter(isObj).map(r => ({
       id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap'].includes(r.tab) ? r.tab : 'pl',
       period: ['month', 'lastmonth', 'quarter', 'ytd', 'fy', 'lastfy', 'all', 'custom'].includes(r.period) ? r.period : 'fy',
-      from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40),
+      from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: true } : {}),
     })).filter(r => r.id && r.name),
   };
   // Registered charities and qualifying non-profits can't use the Quick Method.

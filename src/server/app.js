@@ -349,6 +349,7 @@ function createApp(opts) {
         for (const r of store.list('receipts').filter(x => x[key] === id)) store.put('receipts', r.id, { ...r, [key]: '', status: 'inbox' });
       }
       if (before) store.audit(user, 'delete', { collection, id, summary: auditSummary(collection, before), before });
+      if (collection === 'bankTxns') for (const q of store.list('questions').filter(q => q.target === 'bankTxns' && q.targetId === id)) store.delete('questions', q.id);
       // A deleted transaction sends any bank lines linked to it back to "For review".
       if (collection === 'entries') {
         for (const b of store.bankTxnsForEntry(id)) store.put('bankTxns', b.id, { ...b, status: 'new', entryId: '' });
@@ -896,6 +897,7 @@ function createApp(opts) {
       for (const c of COLLECTIONS) snap[c] = ctx.store.list(c);
       fs.writeFileSync(path.join(snapDir, `${ctx.id}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), JSON.stringify(snap), { mode: 0o600 });
       let skippedReceipts = 0;
+      const usedFiles = new Set();
       ctx.store.transaction(() => {
         ctx.store.clearAll();
         ctx.store.putMeta('seeded', new Date().toISOString());
@@ -906,6 +908,8 @@ function createApp(opts) {
             const { id, ...data } = r;
             if ((c === 'receipts' || c === 'attachments') && !(data.fileId && ctx.store.hasFile(String(data.fileId)))) { skippedReceipts++; continue; } // file isn't in this company's files
             if (c === 'attachments' && !ctx.store.get(data.target, String(data.targetId || ''))) continue;
+            // Each file belongs to one record: a crafted backup can't make two records share (and later delete) one file.
+            if (c === 'receipts' || c === 'attachments') { const k = String(data.fileId); if (usedFiles.has(k)) { skippedReceipts++; continue; } usedFiles.add(k); }
             ctx.store.put(c, id, validateRecord(c, id, data, ctx.store));
           }
         }
