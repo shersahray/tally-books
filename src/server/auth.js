@@ -163,7 +163,7 @@ class Auth {
     if (!u) return u;
     const twoStep = !!(u.totp && u.totp.enabled);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
-      mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
+      lang: u.lang || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '' };
   }
   list() { return this.data.users.map(u => this.publicUser(u)); }
@@ -459,6 +459,14 @@ class Auth {
     if (user.role === 'owner') return true;
     if (user.role === 'client') return user.companies.includes(companyId);
     return !user.companies.length || user.companies.includes(companyId);
+  }
+
+  /** The user's own preferences (just the language for now). */
+  setPrefs(user, { lang }) {
+    const u = this.byId(user.id);
+    if (lang !== undefined) u.lang = lang === 'fr' ? 'fr' : 'en';
+    this.save();
+    return this.publicUser(u);
   }
 
   setRequire2fa(v) {

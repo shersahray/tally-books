@@ -12,8 +12,8 @@ const pd=s=>new Date(s+'T12:00:00');
 const addDays=(s,n)=>{const d=pd(s);d.setDate(d.getDate()+n);return iso(d)};
 const daysBetween=(a,b)=>Math.round((pd(b)-pd(a))/864e5);
 const monthEnd=(y,m)=>iso(new Date(y,m,0)); // m is 1-12
-const fmtDate=s=>s?pd(s).toLocaleDateString('en-CA',{year:'numeric',month:'short',day:'numeric'}):'';
-function money(n,o={}){n=r2(n);const s=Math.abs(n).toLocaleString('en-CA',{minimumFractionDigits:2,maximumFractionDigits:2});const v=(o.sym===false?'':(S.company.currency||'$'))+s;return n<0?`(${v})`:v}
+const fmtDate=s=>s?pd(s).toLocaleDateString(LOC(),{year:'numeric',month:'short',day:'numeric'}):'';
+function money(n,o={}){n=r2(n);const s=Math.abs(n).toLocaleString(LOC(),{minimumFractionDigits:2,maximumFractionDigits:2});const sym=o.sym===false?'':(S.company.currency||'$');const v=isFr()?(sym?s+'\u00a0'+sym:s):sym+s;return n<0?`(${v})`:v}
 const mcell=n=>`<span class="${r2(n)<0?'neg':''}">${money(n)}</span>`;
 
 const TYPES=['Asset','Liability','Equity','Income','Cost of Goods Sold','Expense'];
@@ -164,32 +164,32 @@ function vDashboard(){
   const recent=S.entries.slice().sort((a,b)=>b.date.localeCompare(a.date)||(b.created||0)-(a.created||0)).slice(0,8);
   return head('Dashboard',`${esc(S.company.name)} · Fiscal year from ${fmtDate(fy)}`,`<button class="btn" data-new="expense">Record expense</button><button class="btn primary" data-new="invoice">New invoice</button>`)+
   `<div class="tiles">
-    <div class="tile"><span class="lbl">Cash on hand</span><span class="val">${mcell(cash)}</span><span class="note">${S.accounts.filter(a=>a.detail==='bank').length} bank accounts</span></div>
+    <div class="tile"><span class="lbl">Cash on hand</span><span class="val">${mcell(cash)}</span><span class="note">${(n=>`${n} bank account${n===1?'':'s'}`)(S.accounts.filter(a=>a.detail==='bank').length)}</span></div>
     <div class="tile"><span class="lbl">Customers owe you</span><span class="val">${money(ar)}</span><span class="note">${od.length?`<span class="neg">${od.length} overdue · ${money(od.reduce((s,x)=>s+x.st.bal,0))}</span>`:'Nothing overdue'}</span></div>
-    <div class="tile"><span class="lbl">You owe vendors</span><span class="val">${money(ap)}</span><span class="note">${bills.filter(x=>x.st.bal>0).length} unpaid bills</span></div>
+    <div class="tile"><span class="lbl">You owe vendors</span><span class="val">${money(ap)}</span><span class="note">${(n=>`${n} unpaid bill${n===1?'':'s'}`)(bills.filter(x=>x.st.bal>0).length)}</span></div>
     <div class="tile"><span class="lbl">Net income, this fiscal year</span><span class="val">${mcell(ni)}</span><span class="note">${fmtDate(fy)} – today</span></div>
   </div>
   <div class="grid2">
     <div class="stack">
       <div class="panel"><h3>Income and expenses, last 6 months<span class="legend"><span><i style="background:var(--bar-in)"></i>Income</span><span><i style="background:var(--bar-out)"></i>Expenses</span></span></h3><div class="pad">${chart6()}</div></div>
       <div class="panel"><h3>Recent transactions<button class="btn ghost sm" data-go="transactions">View all</button></h3>
-        <div class="tbl-wrap"><table><tbody>${recent.length?recent.map(e=>`<tr class="click" data-entry="${e.id}"><td class="muted" style="white-space:nowrap">${fmtDate(e.date)}</td><td>${TLABEL[e.type]||e.type}${e.ref?` <span class="mono muted">#${esc(e.ref)}</span>`:''}</td><td class="trunc">${esc(contactName(e.contactId)||e.memo||'')}</td><td class="n">${money(entryTotal(e))}</td></tr>`).join(''):emptyRow(4,'No transactions yet','Use + New to record an invoice, expense or deposit.')}</tbody></table></div></div>
+        <div class="tbl-wrap"><table><tbody>${recent.length?recent.map(e=>`<tr class="click" data-entry="${e.id}"><td class="muted" style="white-space:nowrap">${fmtDate(e.date)}</td><td>${TLABEL[e.type]||e.type}${e.ref?` <span class="mono muted">#${esc(e.ref)}</span>`:''}</td><td class="trunc" translate="no">${esc(contactName(e.contactId)||e.memo||'')}</td><td class="n">${money(entryTotal(e))}</td></tr>`).join(''):emptyRow(4,'No transactions yet','Use + New to record an invoice, expense or deposit.')}</tbody></table></div></div>
     </div>
     <div class="stack">
       <div class="panel"><h3>Needs attention</h3>${attention.length?`<div class="tbl-wrap"><table><tbody>${attention.map(x=>`<tr class="click" data-doc="${x.d.id}"><td><div>${x.d.kind==='invoice'?'Invoice':'Bill'} ${x.d.number?`<span class="mono">#${esc(x.d.number)}</span>`:''}</div><div class="muted" style="font-size:12.5px">${esc(contactName(x.d.contactId))} · <span class="${x.st.k==='overdue'?'neg':''}">${x.why}</span></div></td><td class="n">${money(x.st.bal)}</td></tr>`).join('')}</tbody></table></div>`:`<div class="empty"><b>All caught up</b>No overdue invoices or bills due this week.</div>`}</div>
-      <div class="panel"><h3>Bank and card accounts</h3><div class="tbl-wrap"><table><tbody>${banks.length?banks.map(a=>`<tr class="click" data-acct="${a.id}"><td>${esc(a.name)}<div class="muted" style="font-size:12px">${detailLabel(a)}</div></td><td class="n">${mcell(bal(a.id))}</td></tr>`).join(''):emptyRow(2,'No bank accounts','Add one under Chart of accounts.')}</tbody></table></div></div>
+      <div class="panel"><h3>Bank and card accounts</h3><div class="tbl-wrap"><table><tbody>${banks.length?banks.map(a=>`<tr class="click" data-acct="${a.id}"><td><span translate="no">${esc(a.name)}</span><div class="muted" style="font-size:12px">${detailLabel(a)}</div></td><td class="n">${mcell(bal(a.id))}</td></tr>`).join(''):emptyRow(2,'No bank accounts','Add one under Chart of accounts.')}</tbody></table></div></div>
     </div>
   </div>`;
 }
 function chart6(){
   const now=pd(today());const months=[];
-  for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const y=d.getFullYear(),m=d.getMonth()+1;months.push({lbl:d.toLocaleDateString('en-CA',{month:'short'}),from:`${y}-${pad(m)}-01`,to:monthEnd(y,m)})}
+  for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const y=d.getFullYear(),m=d.getMonth()+1;months.push({lbl:d.toLocaleDateString(LOC(),{month:'short'}),from:`${y}-${pad(m)}-01`,to:monthEnd(y,m)})}
   months.forEach(m=>{m.inc=0;m.exp=0;for(const a of S.accounts){if(a.type==='Income')m.inc+=bal(a.id,m.from,m.to);else if(isPL(a.type))m.exp+=bal(a.id,m.from,m.to)}m.inc=Math.max(0,r2(m.inc));m.exp=Math.max(0,r2(m.exp))});
   const max=Math.max(1,...months.map(m=>Math.max(m.inc,m.exp)));
   const mag=Math.pow(10,Math.floor(Math.log10(max)));const stepC=[1,2,2.5,5,10].map(s=>s*mag).find(s=>max/s<=4)||mag*10;const top=Math.ceil(max/stepC)*stepC;
   const W=600,H=220,L=56,R=8,T=10,B=26,ch=H-T-B,cw=(W-L-R)/6,bw=Math.min(28,cw*.3);
   const y=v=>T+ch-(v/top)*ch;
-  let g='';for(let v=0;v<=top+1e-9;v+=stepC){g+=`<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end">${v>=1000?(v/1000).toLocaleString('en-CA')+'k':v}</text>`}
+  let g='';for(let v=0;v<=top+1e-9;v+=stepC){g+=`<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end">${v>=1000?(v/1000).toLocaleString(LOC())+'k':v}</text>`}
   const bars=months.map((m,i)=>{const cx=L+cw*i+cw/2;return `<g><title>${m.lbl}: income ${money(m.inc)}, expenses ${money(m.exp)}</title><rect x="${cx-bw-2}" y="${y(m.inc)}" width="${bw}" height="${Math.max(0,T+ch-y(m.inc))}" rx="2" fill="var(--bar-in)"/><rect x="${cx+2}" y="${y(m.exp)}" width="${bw}" height="${Math.max(0,T+ch-y(m.exp))}" rx="2" fill="var(--bar-out)"/><text x="${cx}" y="${H-8}" text-anchor="middle">${m.lbl}</text></g>`}).join('');
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly income and expenses">${g}<line class="base" x1="${L}" x2="${W-R}" y1="${T+ch}" y2="${T+ch}"/>${bars}</svg>`;
 }
@@ -210,7 +210,7 @@ function vDocs(kind){
   const chips=`<div class="chips"><div class="chip"><div class="lbl">Open</div><div class="val">${money(sum(x=>x.s.bal>0))}</div></div><div class="chip"><div class="lbl">Overdue</div><div class="val ${sum(x=>x.s.k==='overdue')?'neg':''}">${money(sum(x=>x.s.k==='overdue'))}</div></div><div class="chip"><div class="lbl">${inv?'Received':'Paid'}, last 30 days</div><div class="val">${money(paid30)}</div></div></div>`;
   const list=docs.filter(x=>st.status==='all'||(st.status==='unpaid'?x.s.bal>0:x.s.k===st.status)).sort((a,b)=>b.d.date.localeCompare(a.d.date)||String(b.d.number).localeCompare(String(a.d.number),undefined,{numeric:true}));
   return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option></select><span class="grow"></span></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(x=>`<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${fmtDate(x.d.due)}</td><td class="n">${money(x.d.total)}</td><td class="n">${money(x.s.bal)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`).join(''):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
+  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(x=>`<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${fmtDate(x.d.due)}</td><td class="n">${money(x.d.total)}</td><td class="n">${money(x.s.bal)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`).join(''):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
 }
 
 function vTx(){
@@ -227,7 +227,7 @@ function txTable(){
   const rows=S.entries.filter(e=>(!f.type||e.type===f.type)&&(!f.from||e.date>=f.from)&&(!f.to||e.date<=f.to)&&(!q||[e.ref,e.memo,contactName(e.contactId),money(entryTotal(e)),String(entryTotal(e)),...(e.lines||[]).map(l=>acctName(l.account)+' '+(l.memo||''))].join(' ').toLowerCase().includes(q)))
     .sort((a,b)=>b.date.localeCompare(a.date)||(b.created||0)-(a.created||0));
   const tot=r2(rows.reduce((s,e)=>s+entryTotal(e),0));
-  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee / customer</th><th>Accounts</th><th>Memo</th><th class="n">Amount</th></tr></thead><tbody>${rows.length?rows.map(e=>{const ac=[...new Set((e.lines||[]).map(l=>acctName(l.account)))];return `<tr class="click" data-entry="${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td style="white-space:nowrap">${TLABEL[e.type]||e.type}${e.example?' <span class="pill ex">Example</span>':''}</td><td class="mono">${esc(e.ref||'')}</td><td class="trunc">${esc(contactName(e.contactId))}</td><td class="trunc muted" title="${esc(ac.join(', '))}">${esc(ac.length>2?ac.slice(0,2).join(', ')+` +${ac.length-2}`:ac.join(', '))}</td><td class="trunc muted">${esc(e.memo||'')}</td><td class="n">${money(entryTotal(e))}</td></tr>`}).join(''):emptyRow(7,S.entries.length?'No matching transactions':'No transactions yet',S.entries.length?'Clear the search or widen the dates.':'Use + New to record your first one.')}</tbody>${rows.length?`<tfoot><tr><td colspan="6" class="muted">${rows.length} transaction${rows.length===1?'':'s'}</td><td class="n"><b>${money(tot)}</b></td></tr></tfoot>`:''}</table></div>`;
+  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee / customer</th><th>Accounts</th><th>Memo</th><th class="n">Amount</th></tr></thead><tbody>${rows.length?rows.map(e=>{const ac=[...new Set((e.lines||[]).map(l=>acctName(l.account)))];return `<tr class="click" data-entry="${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td style="white-space:nowrap">${TLABEL[e.type]||e.type}${e.example?' <span class="pill ex">Example</span>':''}</td><td class="mono">${esc(e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(e.contactId))}</td><td class="trunc muted" translate="no" title="${esc(ac.join(', '))}">${esc(ac.length>2?ac.slice(0,2).join(', ')+` +${ac.length-2}`:ac.join(', '))}</td><td class="trunc muted" translate="no">${esc(e.memo||'')}</td><td class="n">${money(entryTotal(e))}</td></tr>`}).join(''):emptyRow(7,S.entries.length?'No matching transactions':'No transactions yet',S.entries.length?'Clear the search or widen the dates.':'Use + New to record your first one.')}</tbody>${rows.length?`<tfoot><tr><td colspan="6" class="muted">${rows.length} transaction${rows.length===1?'':'s'}</td><td class="n"><b>${money(tot)}</b></td></tr></tfoot>`:''}</table></div>`;
 }
 
 function vAccounts(){
@@ -236,7 +236,7 @@ function vAccounts(){
   for(const a of list){
     if(a.type!==cur){cur=a.type;rows+=`<tr><td colspan="4" style="background:var(--surface-2);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">${cur}</td></tr>`}
     const b=isPL(a.type)?bal(a.id,fyStartOf(today()),today()):bal(a.id);
-    rows+=`<tr class="click" data-acct="${a.id}"><td class="mono">${esc(a.code||'')}</td><td>${esc(a.name)} ${a.active===false?'<span class="pill quiet">Inactive</span>':''}</td><td class="muted">${detailLabel(a)}</td><td class="n">${mcell(b)}</td></tr>`;
+    rows+=`<tr class="click" data-acct="${a.id}"><td class="mono">${esc(a.code||'')}</td><td><span translate="no">${esc(a.name)}</span> ${a.active===false?'<span class="pill quiet">Inactive</span>':''}</td><td class="muted">${detailLabel(a)}</td><td class="n">${mcell(b)}</td></tr>`;
   }
   return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`<button class="btn primary" data-new="account">+ Add account</button>`)+
   `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th>Detail</th><th class="n">Balance</th></tr></thead><tbody>${rows||emptyRow(4,'No accounts yet','Add accounts to start recording transactions.')}</tbody></table></div></div>`;
@@ -250,11 +250,11 @@ function vRegister(){
   const shown=[];for(const p of ps){const amt=dn?p.debit-p.credit:p.credit-p.debit;if(f.from&&p.date<f.from)continue;if(f.to&&p.date>f.to)continue;run=r2(run+amt);shown.push({p,run})}
   const bank=a.detail==='bank'||a.detail==='card';
   const cIn=bank?(a.detail==='card'?'Charge':'Deposit'):'Debit',cOut=bank?(a.detail==='card'?'Payment':'Withdrawal'):'Credit';
-  return `<button class="btn ghost sm" data-go="accounts" style="margin-bottom:8px">← Chart of accounts</button>`+head(a.name,`${a.code?`<span class="mono">${esc(a.code)}</span> · `:''}${a.type}${detailLabel(a)&&a.detail?' · '+detailLabel(a):''} · Balance ${mcell(bal(a.id))}`,`<button class="btn" data-editacct="${a.id}">Edit account</button>`)+
+  return `<button class="btn ghost sm" data-go="accounts" style="margin-bottom:8px">← Chart of accounts</button>`+head('\u2060'+a.name,`${a.code?`<span class="mono">${esc(a.code)}</span> · `:''}${a.type}${detailLabel(a)&&a.detail?' · '+detailLabel(a):''} · Balance ${mcell(bal(a.id))}`,`<button class="btn" data-editacct="${a.id}">Edit account</button>`)+
   `<div class="panel"><div class="toolbar"><span class="flabel">Dates</span><input type="date" id="regFrom" value="${f.from}" aria-label="From date"><span class="muted">to</span><input type="date" id="regTo" value="${f.to}" aria-label="To date"><span class="grow"></span></div>
   <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee</th><th>Memo</th><th class="n">${dn?cIn:cOut}</th><th class="n">${dn?cOut:cIn}</th><th class="n">Balance</th>${bank?'<th title="C = cleared, R = reconciled">✓</th>':''}</tr></thead><tbody>
   ${f.from?`<tr><td colspan="7" class="muted">Opening balance</td><td class="n">${mcell(bal(a.id,null,addDays(f.from,-1)))}</td></tr>`:''}
-  ${shown.length?shown.slice().reverse().map(({p,run})=>`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc">${esc(contactName(p.e.contactId))}</td><td class="trunc muted">${esc(p.memo||p.e.memo||'')}</td><td class="n">${(dn?p.debit:p.credit)?money(dn?p.debit:p.credit):''}</td><td class="n">${(dn?p.credit:p.debit)?money(dn?p.credit:p.debit):''}</td><td class="n">${mcell(run)}</td>${bank?`<td class="mono muted">${({c:'C',r:'R'})[p.e.clear?.[a.id]]||''}</td>`:''}</tr>`).join(''):emptyRow(8,'No activity','Nothing has been posted to this account in this date range.')}
+  ${shown.length?shown.slice().reverse().map(({p,run})=>`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(p.e.contactId))}</td><td class="trunc muted" translate="no">${esc(p.memo||p.e.memo||'')}</td><td class="n">${(dn?p.debit:p.credit)?money(dn?p.debit:p.credit):''}</td><td class="n">${(dn?p.credit:p.debit)?money(dn?p.credit:p.debit):''}</td><td class="n">${mcell(run)}</td>${bank?`<td class="mono muted">${({c:'C',r:'R'})[p.e.clear?.[a.id]]||''}</td>`:''}</tr>`).join(''):emptyRow(8,'No activity','Nothing has been posted to this account in this date range.')}
   </tbody></table></div></div>`;
 }
 
@@ -285,7 +285,7 @@ function vReports(){
 }
 function reportBody(){return({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
 const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font-weight:600;margin-top:2px">${t}</div><span>${sub}</span></div>`;
-const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
+const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}" translate="no">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
 function rPL(){
   const{from,to}=S.rep;const csv=[['Account','Amount']];let h='';
   const sec=(type,title)=>{const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({a,v:bal(a.id,from,to)})).filter(x=>x.v);const tot=r2(as.reduce((s,x)=>s+x.v,0));if(!as.length&&type==='Cost of Goods Sold')return 0;h+=rrow('sec',title,null);as.forEach(x=>{h+=rrow('item',(x.a.code?x.a.code+' ':'')+x.a.name,x.v,x.a.id);csv.push([(x.a.code?x.a.code+' ':'')+x.a.name,x.v])});h+=rrow('tot','Total '+title.toLowerCase(),tot);csv.push(['Total '+title.toLowerCase(),tot]);return tot};
@@ -308,7 +308,7 @@ function rBS(){
 }
 function rTB(){
   const to=S.rep.to,fy=fyStartOf(to);const csv=[['Code','Account','Type','Debit','Credit']];let h='',td=0,tc=0;
-  const add=(code,name,type,raw,id)=>{if(Math.abs(raw)<0.005)return;const d=raw>0?raw:0,c=raw<0?-raw:0;td+=d;tc+=c;h+=`<tr><td class="mono">${esc(code)}</td><td>${id?`<button class="link" data-acct="${id}">${esc(name)}</button>`:esc(name)}</td><td class="n">${d?money(d):''}</td><td class="n">${c?money(c):''}</td></tr>`;csv.push([code,name,type,r2(d),r2(c)])};
+  const add=(code,name,type,raw,id)=>{if(Math.abs(raw)<0.005)return;const d=raw>0?raw:0,c=raw<0?-raw:0;td+=d;tc+=c;h+=`<tr><td class="mono">${esc(code)}</td><td>${id?`<button class="link" data-acct="${id}" translate="no">${esc(name)}</button>`:esc(name)}</td><td class="n">${d?money(d):''}</td><td class="n">${c?money(c):''}</td></tr>`;csv.push([code,name,type,r2(d),r2(c)])};
   for(const a of sortAccts(S.accounts))add(a.code||'',a.name,a.type,isPL(a.type)?rawBal(a.id,fy,to):rawBal(a.id,null,to),a.id);
   add('','Retained earnings','Equity',-netIncome(null,addDays(fy,-1)));
   csv.push(['','Total','',r2(td),r2(tc)]);
@@ -335,7 +335,7 @@ function rGL(){
     for(const p of ps){
       run=r2(run+sign*(p.debit-p.credit));ad+=p.debit;ac+=p.credit;n++;
       const name=contactName(p.e.contactId)||(p.e.type==='payrun'?'Payroll':'');
-      h+=`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc">${esc(name)}</td><td class="trunc muted">${esc(p.memo||p.e.memo||'')}</td><td class="n">${p.debit?money(p.debit):''}</td><td class="n">${p.credit?money(p.credit):''}</td><td class="n">${mcell(run)}</td></tr>`;
+      h+=`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc" translate="no">${esc(name)}</td><td class="trunc muted" translate="no">${esc(p.memo||p.e.memo||'')}</td><td class="n">${p.debit?money(p.debit):''}</td><td class="n">${p.credit?money(p.credit):''}</td><td class="n">${mcell(run)}</td></tr>`;
       csv.push([label,p.date,TLABEL[p.e.type]||p.e.type,p.e.ref||'',name,p.memo||p.e.memo||'',r2(p.debit)||'',r2(p.credit)||'',run]);
     }
     td+=ad;tc+=ac;
@@ -433,6 +433,9 @@ function bindMain(m){
 }
 function exportCSV(){
   const R=S.rep;const r=({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
+  // Column headings and report totals follow the screen language; account names stay as they are.
+  const LBL=new Set(['Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
+  if(isFr())r.csv=r.csv.map((row,i)=>row.map(v=>typeof v==='string'&&(i===0||LBL.has(v))?T(v):v));
   const text=r.csv.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
   saveFile(r.name+'.csv',new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'}));
 }

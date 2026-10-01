@@ -122,6 +122,7 @@ function createApp(opts) {
       qstRate: body.province ? preset.qstRate || 0 : 0,
       filingFreq: body.filingFreq,
       fyStart: body.fyStart || 1,
+      lang: body.lang,
     });
     let accounts = null;
     if (body.copyFrom) {
@@ -254,6 +255,7 @@ function createApp(opts) {
       const body = await readJson(req);
       return signIn(req, res, async meta => auth.login(auth.acceptLink(body.token, body.password).username, body.password, meta));
     }],
+    ['PUT', /^\/api\/auth\/prefs$/, async (req, m, res, user) => ({ ok: true, user: auth.setPrefs(user, await readJson(req)) })],
     ['POST', /^\/api\/auth\/2fa\/start$/, async (req, m, res, user) => auth.start2fa(user, (await readJson(req)).password)],
     ['POST', /^\/api\/auth\/2fa\/confirm$/, async (req, m, res, user) => ({ ok: true, ...auth.confirm2fa(user, (await readJson(req)).code) })],
     ['POST', /^\/api\/auth\/2fa\/disable$/, async (req, m, res, user) => { auth.disable2fa(user, (await readJson(req)).password); return { ok: true }; }],
@@ -457,8 +459,8 @@ function createApp(opts) {
         if (!/^\/api\/(health|auth\/(me|setup|login|login\/code|logout|link|link\/accept))$/.test(url.pathname)) {
           user = auth.userFor(req);
           if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup() });
-          if (user.mustChange && url.pathname !== '/api/auth/password' && url.pathname !== '/api/events') throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
-          if (user.mustEnroll && !/^\/api\/(auth\/(password|2fa\/start|2fa\/confirm)|events)$/.test(url.pathname)) throw new AuthError('Set up two-step sign-in before continuing.', 403, { mustEnroll: true });
+          if (user.mustChange && !['/api/auth/password', '/api/auth/prefs', '/api/events'].includes(url.pathname)) throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
+          if (user.mustEnroll && !/^\/api\/(auth\/(password|prefs|2fa\/start|2fa\/confirm)|events)$/.test(url.pathname)) throw new AuthError('Set up two-step sign-in before continuing.', 403, { mustEnroll: true });
         }
         const cm = url.pathname.match(/^\/api\/c\/([^/]+)(\/.*)$/);
         if (cm) {
@@ -512,7 +514,7 @@ function createApp(opts) {
 function loadExamples(store) {
   const company = store.getSetting('company') || DEFAULT_COMPANY;
   const split = Number(company.qstRate) > 0 && store.get('accounts', 'a2210');
-  const recs = exampleRecords(Number(company.taxRate) || 0, new Date(), split ? Number(company.qstRate) : 0, company.province);
+  const recs = exampleRecords(Number(company.taxRate) || 0, new Date(), split ? Number(company.qstRate) : 0, company.province, company.lang);
   const order = ['contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns'];
   recs.sort((a, b) => order.indexOf(a.collection) - order.indexOf(b.collection));
   try {

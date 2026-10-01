@@ -24,6 +24,8 @@ function unlocked(user,idle){
 /** After a password or code is accepted: finish anything the account still needs, then unlock. */
 async function afterSignIn(){
   const me=await api('GET','/api/auth/me');REQ2FA=me.require2fa||'off';
+  if(me.user.lang&&me.user.lang!==I18N.lang)return setLang(me.user.lang,{save:false});
+  if(!me.user.lang)api('PUT','/api/auth/prefs',{lang:I18N.lang}).catch(()=>{});
   if(me.user.mustChange){ME=me.user;return renderLock('password')}
   if(me.user.mustEnroll){ME=me.user;return renderLock('enroll')}
   unlocked(me.user,me.idleMinutes);
@@ -35,6 +37,7 @@ const lockCard=(title,sub,body,submit,extra='')=>`<div class="lock"><form class=
     <div class="fields" style="grid-template-columns:1fr">${body}</div>
     <div class="err-msg" data-lockerr></div>
     ${submit?`<button type="submit" class="btn primary block">${submit}</button>`:''}${extra}
+    <div style="display:flex;justify-content:center;margin-top:4px">${langSwitch()}</div>
   </form></div>`;
 
 function renderLock(mode,opt=''){
@@ -177,6 +180,7 @@ async function authStart(){
   try{me=await api('GET','/api/auth/me')}
   catch(e){if(e.status===401)return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode}):requireSignIn('signin');throw e}
   REQ2FA=me.require2fa||'off';ME=me.user;IDLE_MIN=me.idleMinutes;
+  if(me.user.lang&&me.user.lang!==I18N.lang){await setLang(me.user.lang,{save:false});return new Promise(()=>{})}
   if(me.user.mustChange)return requireSignIn('password');
   if(me.user.mustEnroll)return requireSignIn('enroll');
   unlocked(me.user,me.idleMinutes);
@@ -198,7 +202,8 @@ function renderUserBox(){
   const box=$('#userBox');if(!box)return;
   if(!ME){box.innerHTML='';return}
   box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span>${roleLabel(ME)}</span></div>
-    <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}<button class="link" data-signout>Sign out</button></div>`;
+    <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}<button class="link" data-signout>Sign out</button></div>
+    <div style="margin-top:8px">${langSwitch()}</div>`;
   box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))accountForm();if(b.hasAttribute('data-users'))showUsers()};
 }
 function passwordPrompt(title,msg,ok){
@@ -210,7 +215,9 @@ function passwordPrompt(title,msg,ok){
 }
 function accountForm(){
   const two=ME.twoStep,required=ME.mustEnroll||(REQ2FA==='everyone'||(REQ2FA==='owners'&&ME.role==='owner'));
-  const f=openModal('Your account',`<div class="muted">${esc(ME.name)} · ${esc(ME.username)} · ${roleLabel(ME)}</div>
+  const f=openModal('Your account',`<div class="muted"><span translate="no">${esc(ME.name)} · ${esc(ME.username)}</span> <span>· ${roleLabel(ME)}</span></div>
+    <h3 class="fsec">Language</h3>
+    <div>${langSwitch()}</div>
     <h3 class="fsec">Two-step sign-in</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${two?`<span class="pill paid">On</span><span class="muted" style="font-size:13px">${ME.recoveryLeft} recovery code${ME.recoveryLeft===1?'':'s'} left</span>`:'<span class="pill quiet">Off</span><span class="muted" style="font-size:13px">Recommended: a code from your phone as well as your password.</span>'}</div>
     <div class="actions" style="justify-content:flex-start">${two?`<button type="button" class="btn sm" data-2fanew>New recovery codes</button>${required?'':'<button type="button" class="btn sm danger" data-2faoff>Turn off</button>'}`:'<button type="button" class="btn sm primary" data-2faon>Set up two-step sign-in</button>'}</div>
@@ -264,11 +271,11 @@ function bindUsers(m){
 function showLink(u,token,kind){
   const url=`${location.origin}${location.pathname}#link=${encodeURIComponent(token)}`;
   const invite=kind==='invite';
-  const mail=`Hi ${u.name.split(' ')[0]},\n\n${invite?`I've set up your Tally Books account so you can see your company's books online. Open this link to choose your password (it works once, for 7 days)`:`Here's a link to choose a new Tally Books password (it works once, for 24 hours)`}:\n\n${url}\n\nYour username is ${u.username}.${REQ2FA!=='off'||invite?' You’ll also set up a code app on your phone for two-step sign-in.':''}\n`;
+  const mail=isFr()?`Bonjour ${u.name.split(' ')[0]},\n\n${invite?`J’ai créé votre compte Tally Books pour que vous puissiez consulter les livres de votre entreprise en ligne. Ouvrez ce lien pour choisir votre mot de passe (il fonctionne une fois, pendant 7 jours)`:`Voici un lien pour choisir un nouveau mot de passe Tally Books (il fonctionne une fois, pendant 24 heures)`} :\n\n${url}\n\nVotre nom d’utilisateur est ${u.username}.${REQ2FA!=='off'||invite?' Vous configurerez aussi une application de codes sur votre téléphone pour la connexion en deux étapes.':''}\n`:`Hi ${u.name.split(' ')[0]},\n\n${invite?`I've set up your Tally Books account so you can see your company's books online. Open this link to choose your password (it works once, for 7 days)`:`Here's a link to choose a new Tally Books password (it works once, for 24 hours)`}:\n\n${url}\n\nYour username is ${u.username}.${REQ2FA!=='off'||invite?' You’ll also set up a code app on your phone for two-step sign-in.':''}\n`;
   const f=openModal(invite?'Invitation link':'Password reset link',`
     <div class="muted">Send this link to <b>${esc(u.name)}</b> yourself, for example by email. Anyone with the link can set the password, so send it only to them. It works once and expires in ${invite?'7 days':'24 hours'}.</div>
     <div class="linkbox mono">${esc(url)}</div>
-    <div class="actions" style="justify-content:flex-start"><button type="button" class="btn sm" data-lcopy>Copy link</button><button type="button" class="btn sm" data-mcopy>Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(u.username.includes('@')?u.username:'')}?subject=${encodeURIComponent(invite?'Your Tally Books account':'Reset your Tally Books password')}&body=${encodeURIComponent(mail)}">Open in email</a></div>`,
+    <div class="actions" style="justify-content:flex-start"><button type="button" class="btn sm" data-lcopy>Copy link</button><button type="button" class="btn sm" data-mcopy>Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(u.username.includes('@')?u.username:'')}?subject=${encodeURIComponent(T(invite?'Your Tally Books account':'Reset your Tally Books password'))}&body=${encodeURIComponent(mail)}">Open in email</a></div>`,
     `<button type="button" class="btn primary" data-close>Done</button>`);
   $('[data-lcopy]',f).onclick=async()=>{try{await navigator.clipboard.writeText(url);toast('Link copied')}catch(e){toast('Select the link and copy it instead.',true)}};
   $('[data-mcopy]',f).onclick=async()=>{try{await navigator.clipboard.writeText(mail);toast('Email text copied')}catch(e){toast('Select the text and copy it instead.',true)}};

@@ -9,7 +9,7 @@ const LAST_KEY='tally.lastCompany';
 const lsGet=()=>{try{return localStorage.getItem(LAST_KEY)}catch(e){return null}};
 const lsSet=v=>{try{localStorage.setItem(LAST_KEY,v)}catch(e){}};
 const UI_DEFAULTS=JSON.stringify({sales:S.sales,exp:S.exp,tx:S.tx,rep:S.rep,reg:S.reg,company:S.company});
-const monthName=m=>new Date(2026,m-1,1).toLocaleDateString('en-CA',{month:'long'});
+const monthName=m=>new Date(2026,m-1,1).toLocaleDateString(LOC(),{month:'long'});
 
 function fyOptions(start){
   // A fiscal year starting in month m ends on the last day of month m-1.
@@ -96,6 +96,7 @@ function companyForm(){
     ${fld('nName','Company name',`<input type="text" id="nName" placeholder="e.g. Harbour Yoga Studio Inc.">`,true)}
     ${fld('nProv','Province or territory',`<select id="nProv">${provinceOptions('ON')}</select>`)}
     ${fld('nFy','Fiscal year-end',`<select id="nFy">${fyOptions(1)}</select>`)}
+    ${fld('nLang','Language of the books',`<select id="nLang"><option value="en" ${isFr()?'':'selected'}>English</option><option value="fr" ${isFr()?'selected':''}>Français</option></select><span class="hint">Account names and example data. Each person still chooses the language of the screens.</span>`)}
     ${fld('nCopy','Chart of accounts',`<select id="nCopy"><option value="">Standard small-business chart</option>${active.map(c=>`<option value="${c.id}">Copy from ${esc(c.name)}</option>`).join('')}</select>`,true)}
     </div>
     <div class="fields" data-custom hidden>${fld('nTaxName','Sales tax name',`<input type="text" id="nTaxName" value="VAT">`)}${fld('nTaxRate','Sales tax rate (%)',`<input type="number" id="nTaxRate" min="0" step="0.001" value="0">`)}</div>
@@ -108,7 +109,7 @@ function companyForm(){
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const name=$('#nName',f).value.trim();if(!name)return f.err('Give the company a name.');
     if(CO_LIST.some(c=>c.name.toLowerCase()===name.toLowerCase())&&!await confirmBox('A company with this name exists','Create another company with the same name anyway?','Create'))return;
-    const body={name,province:prov.value,fyStart:+$('#nFy',f).value,copyFrom:$('#nCopy',f).value,examples:$('#nEx',f).checked};
+    const body={name,province:prov.value,fyStart:+$('#nFy',f).value,copyFrom:$('#nCopy',f).value,examples:$('#nEx',f).checked,lang:$('#nLang',f).value};
     if(!prov.value){body.taxName=$('#nTaxName',f).value.trim()||'Sales tax';body.taxRate=Math.max(0,+$('#nTaxRate',f).value||0)}
     const btn=f.querySelector('button[type=submit]');btn.disabled=true;btn.textContent='Creating…';
     try{const r=await api('POST','/api/companies',body);await loadCompanies();await openCompany(r.company.id);toast(`${name} is ready`)}

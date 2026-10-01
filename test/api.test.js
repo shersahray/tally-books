@@ -709,3 +709,22 @@ test('a flood of simultaneous sign-ins from one address is turned away', async (
   assert.ok(results.filter(r => r.status === 429).length >= 9, results.map(r => r.status).join());
   await done();
 });
+
+test('language: each user keeps their own, and French books get French account names', async () => {
+  const { j, done } = await freshServer();
+  const ck = (await j('POST', '/api/auth/setup', OWNER)).cookie;
+  assert.equal((await j('PUT', '/api/auth/prefs', { lang: 'fr' }, ck)).json.user.lang, 'fr');
+  assert.equal((await j('GET', '/api/auth/me', null, ck)).json.user.lang, 'fr');
+  const co = (await j('POST', '/api/companies', { name: 'Bistro', province: 'QC', lang: 'fr', examples: true }, ck)).json.company.id;
+  const st = (await j('GET', `/api/c/${co}/state`, null, ck)).json;
+  assert.equal(st.company.lang, 'fr');
+  const name = id => st.accounts.find(a => a.id === id).name;
+  assert.equal(name('a1000'), 'Compte chèques');
+  assert.equal(name('a2200'), 'TPS à payer');
+  assert.equal(name('a2210'), 'TVQ à payer');
+  assert.ok(st.contacts.some(c => c.name === 'Clinique dentaire Maple'));
+  assert.ok(st.entries.some(e => e.memo === 'Frais mensuels du compte'));
+  const en = (await j('POST', '/api/companies', { name: 'Maple', province: 'ON' }, ck)).json.company.id;
+  assert.equal((await j('GET', `/api/c/${en}/state`, null, ck)).json.accounts.find(a => a.id === 'a1000').name, 'Chequing');
+  await done();
+});

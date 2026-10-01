@@ -35,6 +35,17 @@ const DEFAULT_ACCOUNTS = [
   ['7200', 'Utilities', 'Expense', ''],
 ];
 
+// The same chart in French, for companies whose books are kept in French.
+const ACCOUNT_NAMES_FR = {
+  1000: 'Compte chèques', 1010: 'Compte d’épargne', 1200: 'Comptes clients', 1300: 'Charges payées d’avance', 1500: 'Matériel',
+  2000: 'Comptes fournisseurs', 2100: 'Carte de crédit', 2400: 'Emprunt à payer', 3000: 'Capital du propriétaire', 3100: 'Retraits du propriétaire',
+  3900: 'Capitaux propres d’ouverture', 4000: 'Ventes', 4100: 'Revenus de services', 4900: 'Autres revenus', 5000: 'Coût des marchandises vendues',
+  6000: 'Publicité et marketing', 6100: 'Frais bancaires', 6200: 'Assurances', 6300: 'Repas et représentation', 6400: 'Fournitures de bureau',
+  6500: 'Honoraires professionnels', 6600: 'Loyer', 6700: 'Logiciels et abonnements', 6800: 'Téléphone et Internet', 6900: 'Frais de déplacement',
+  7000: 'Frais de véhicule', 7100: 'Salaires', 7200: 'Services publics',
+};
+const TAX_NAME_FR = { HST: 'TVH', GST: 'TPS', 'GST/QST': 'TPS/TVQ', QST: 'TVQ' };
+
 // Sales tax by province or territory. Rates are the combined recoverable tax a business charges.
 const PROVINCES = {
   ON: { name: 'Ontario', taxName: 'HST', taxRate: 13 },
@@ -71,12 +82,15 @@ function seedDefaults(store, init = {}) {
           store.put('accounts', id, data);
         }
       } else {
-        const split = Number(company.qstRate) > 0;
+        const split = Number(company.qstRate) > 0, fr = company.lang === 'fr';
         for (const [code, name, type, detail] of DEFAULT_ACCOUNTS) {
-          const label = detail === 'tax' ? (split ? 'GST payable' : `${company.taxName || 'Sales tax'} payable`) : name;
+          const tn = company.taxName || 'Sales tax';
+          const label = detail === 'tax'
+            ? (fr ? (split ? 'TPS à payer' : `${TAX_NAME_FR[tn] || tn} à payer`) : (split ? 'GST payable' : `${tn} payable`))
+            : (fr ? ACCOUNT_NAMES_FR[code] || name : name);
           store.put('accounts', 'a' + code, { code, name: label, type, detail, desc: '', active: true });
         }
-        if (split) store.put('accounts', 'a2210', { code: '2210', name: 'QST payable', type: 'Liability', detail: 'qst', desc: '', active: true });
+        if (split) store.put('accounts', 'a2210', { code: '2210', name: fr ? 'TVQ à payer' : 'QST payable', type: 'Liability', detail: 'qst', desc: '', active: true });
       }
     }
     store.putMeta('seeded', new Date().toISOString());
@@ -94,7 +108,20 @@ function daysAgo(n, now = new Date()) { const d = new Date(now); d.setHours(12, 
  * Builds the example records. Returns a list of {collection, id, data}.
  * Account ids refer to the default chart; call only when those accounts exist.
  */
-function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0, province = '') {
+// Example data in French, for companies whose books are kept in French.
+const EXAMPLE_FR = {
+  'Maple Street Dental': 'Clinique dentaire Maple', 'Harbour Yoga Studio': 'Studio de yoga Harbour', 'Northline Office Supply': 'Fournitures de bureau Northline',
+  'Cityview Property Management': 'Gestion immobilière Cityview', 'Opening balance': 'Solde d’ouverture', 'Monthly bookkeeping': 'Tenue de livres mensuelle',
+  'Website refresh': 'Refonte du site Web', 'Hosting setup': 'Configuration de l’hébergement', 'Bookkeeping for Canadian subsidiary (export, no tax)': 'Tenue de livres pour la filiale canadienne (exportation, sans taxe)',
+  'Office rent': 'Loyer du bureau', 'Printer paper and toner': 'Papier et encre d’imprimante', 'E-transfer': 'Virement Interac', 'Online': 'En ligne',
+  'Monthly account fee': 'Frais mensuels du compte', 'Account fee': 'Frais de compte', 'Accounting software': 'Logiciel comptable', 'Monthly subscription': 'Abonnement mensuel',
+  'Internet and phone': 'Internet et téléphone', 'Fibre internet and mobile': 'Internet fibre et cellulaire', 'Local ads': 'Publicité locale',
+  'Community newsletter ad': 'Annonce dans le bulletin communautaire', 'Workshop fee': 'Frais d’atelier', 'Half-day bookkeeping workshop': 'Atelier de tenue de livres d’une demi-journée',
+  'Credit card payment': 'Paiement de la carte de crédit', 'GST': 'TPS', 'QST': 'TVQ', 'Sales tax': 'Taxe de vente', 'collected': 'perçue', 'paid': 'payée', 'Chq 2214': 'Chèque 2214',
+};
+
+function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0, province = '', lang = 'en') {
+  const L = s => (lang === 'fr' && EXAMPLE_FR[s]) || s;
   const out = [];
   let created = now.getTime() - 90 * 864e5;
   const cr = () => (created += 60000);
@@ -102,17 +129,17 @@ function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0, province = 
   // Tax lines for a taxable amount: one GST/HST line, or GST + QST for Quebec companies.
   const taxLines = (base, side, memo) => {
     const parts = qstRate > 0 ? [['a2200', (taxRate - qstRate) / 100, 'GST'], ['a2210', qstRate / 100, 'QST']] : [['a2200', rate, 'Sales tax']];
-    return parts.map(([account, r, name]) => ({ account, debit: side === 'debit' ? r2(base * r) : 0, credit: side === 'credit' ? r2(base * r) : 0, memo: `${name} ${memo}` })).filter(l => l.debit || l.credit);
+    return parts.map(([account, r, name]) => ({ account, debit: side === 'debit' ? r2(base * r) : 0, credit: side === 'credit' ? r2(base * r) : 0, memo: `${L(name)} ${L(memo)}`.trim() })).filter(l => l.debit || l.credit);
   };
   const taxOn = base => taxLines(base, 'credit', '').reduce((s, l) => s + l.credit, 0);
-  const add = (collection, id, data) => out.push({ collection, id, data: { example: true, created: cr(), contactId: '', ref: '', memo: '', ...data } });
+  const add = (collection, id, data) => out.push({ collection, id, data: { example: true, created: cr(), contactId: '', ref: '', memo: '', ...data, ...(data.memo ? { memo: L(data.memo) } : {}), ...(data.ref ? { ref: L(data.ref) } : {}) } });
 
   [['c_maple', 'Maple Street Dental', 'customer', 'accounts@maplestreetdental.example'],
    ['c_harbour', 'Harbour Yoga Studio', 'customer', 'hello@harbouryoga.example'],
    ['c_north', 'Northline Office Supply', 'vendor', 'billing@northline.example'],
    ['c_city', 'Cityview Property Management', 'vendor', 'rent@cityviewpm.example'],
    ['c_cascade', 'Cascade Outfitters LLC (Seattle, WA)', 'customer', 'ap@cascadeoutfitters.example', 'export'],
-  ].forEach(([id, name, kind, email, taxCode]) => out.push({ collection: 'contacts', id, data: { name, kind, email, phone: '', address: '', notes: '', taxCode: taxCode || '', example: true, created: cr() } }));
+  ].forEach(([id, name, kind, email, taxCode]) => out.push({ collection: 'contacts', id, data: { name: L(name), kind, email, phone: '', address: '', notes: '', taxCode: taxCode || '', example: true, created: cr() } }));
 
   add('entries', 'x_ob', { type: 'journal', date: daysAgo(89, now), memo: 'Opening balance',
     lines: [{ account: 'a1000', debit: 12000, credit: 0 }, { account: 'a3900', debit: 0, credit: 12000 }] });
@@ -121,7 +148,7 @@ function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0, province = 
     // tax: true = standard rate, false = no tax, or a tax code such as 'export'
     const ls = lines.map(([desc, account, qty, rate_, tax]) => {
       const taxCode = typeof tax === 'string' ? tax : tax ? 'std' : 'none';
-      return { desc, account, qty, rate: rate_, taxCode, tax: taxCode === 'std' };
+      return { desc: L(desc), account, qty, rate: rate_, taxCode, tax: taxCode === 'std' };
     });
     const sub = r2(ls.reduce((s, l) => s + l.qty * l.rate, 0));
     const taxable = ls.filter(l => l.tax).reduce((s, l) => s + l.qty * l.rate, 0);
@@ -147,12 +174,12 @@ function exampleRecords(taxRate = 13, now = new Date(), qstRate = 0, province = 
   function pay(id, kind, d, date, amount, bank, ref) {
     const recv = kind === 'payment';
     add('entries', id, { type: kind, date, ref, contactId: d.contactId, applyTo: d.id, amount, bank,
-      memo: `${recv ? 'Payment for invoice' : 'Payment of bill'} #${d.number}`,
+      memo: lang === 'fr' ? `${recv ? 'Paiement de la facture' : 'Paiement de la facture fournisseur'} no ${d.number}` : `${recv ? 'Payment for invoice' : 'Payment of bill'} #${d.number}`,
       lines: recv ? [{ account: bank, debit: amount, credit: 0 }, { account: 'a1200', debit: 0, credit: amount }]
                   : [{ account: 'a2000', debit: amount, credit: 0 }, { account: bank, debit: 0, credit: amount }] });
   }
   function money(id, kind, date, bank, memo, lines) {
-    const ls = lines.map(([account, desc, amount, tax]) => ({ account, desc, amount, tax }));
+    const ls = lines.map(([account, desc, amount, tax]) => ({ account, desc: L(desc), amount, tax }));
     const sub = r2(ls.reduce((s, l) => s + l.amount, 0));
     const taxable = ls.filter(l => l.tax).reduce((s, l) => s + l.amount, 0);
     const tax = r2(taxOn(taxable));

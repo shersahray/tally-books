@@ -49,7 +49,8 @@ const TAX_LINES={
   ],
 };
 const BAL_LINE={gst:'113C',qst:'213'};
-const AGENCY={gst:'CRA',qst:'Revenu Québec'};
+// In Quebec, Revenu Québec administers the GST as well as the QST for most businesses.
+const AGENCY={get gst(){return S.company.province==='QC'?'Revenu Québec':'CRA'},qst:'Revenu Québec'};
 const SALE_TYPES=new Set(['invoice','deposit','payment']),BUY_TYPES=new Set(['bill','expense','billpayment']);
 
 const taxesInUse=()=>byDetail('qst')&&+S.company.qstRate>0?['gst','qst']:['gst'];
@@ -134,7 +135,7 @@ function vSalesTax(){
     `<button class="btn" data-stact="instalment">Record instalment</button>`);
   if(S.company.province==='QC'&&!byDetail('qst'))h+=`<div class="banner"><span><b>Track GST and QST separately?</b> This Quebec company records both taxes in one account. Split them to get a separate QST return worksheet.</span><button class="btn sm" data-stact="split-qst">Set up QST account</button></div>`;
   if(!taxAcctFor('gst'))return h+`<div class="panel"><div class="empty"><b>No sales tax account</b>Add a Liability account with the detail “Sales tax payable” in Chart of accounts.</div></div>`;
-  if(taxes.length>1)h+=`<div class="tabs" role="tablist">${taxes.map(k=>`<button role="tab" data-sttax="${k}" aria-selected="${T.tax===k}">${k==='qst'?'QST (Revenu Québec)':'GST (CRA)'}</button>`).join('')}</div>`;
+  if(taxes.length>1)h+=`<div class="tabs" role="tablist">${taxes.map(k=>`<button role="tab" data-sttax="${k}" aria-selected="${T.tax===k}">${k==='qst'?'QST (Revenu Québec)':`GST (${AGENCY.gst})`}</button>`).join('')}</div>`;
   if(T.period){const[from,to]=T.period.split('|');return h+vWorksheet(T.tax,from,to)}
   const k=T.tax,periods=filingPeriods();
   const bal=r2(-rawBal(taxAcctFor(k).id));
@@ -144,7 +145,7 @@ function vSalesTax(){
     const w=worksheet(k,p.from,p.to),st=periodStatus(k,p),net=w.vals[k==='qst'?'209':'109'];
     const ln=k==='qst'?['203','206']:['103','106'];
     return `<tr class="click" data-stperiod="${p.from}|${p.to}"><td style="white-space:nowrap"><b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b></td><td style="white-space:nowrap" class="${st.k==='overdue'?'neg':'muted'}">${fmtDate(p.due)}</td><td class="n">${money(w.vals[ln[0]])}</td><td class="n">${money(w.vals[ln[1]])}</td><td class="n"><b>${mcell(net)}</b></td><td><span class="pill ${st.k}">${st.label}</span></td><td class="n"><button class="btn sm" data-stperiod="${p.from}|${p.to}">${w.filed?'View':'Open worksheet'}</button></td></tr>`}).join(''):emptyRow(7,'No periods yet','Periods appear once there are transactions with sales tax.')}</tbody></table></div></div>
-    <div class="muted" style="font-size:13px;margin-top:12px">Periods follow your fiscal year-end and filing frequency. A return is due one month after the period ends (three months for annual filers). These figures help you file; submit the return on ${k==='qst'?'Revenu Québec’s My Account for businesses':'CRA My Business Account or GST/HST NETFILE'}.</div>`;
+    <div class="muted" style="font-size:13px;margin-top:12px">Periods follow your fiscal year-end and filing frequency. A return is due one month after the period ends (three months for annual filers). These figures help you file; submit the return on ${k==='qst'||AGENCY.gst!=='CRA'?'Revenu Québec’s My Account for businesses':'CRA My Business Account or GST/HST NETFILE'}.</div>`;
 }
 
 function vWorksheet(k,from,to){

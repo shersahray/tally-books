@@ -43,6 +43,7 @@ It runs two ways from the same code:
   - **Pay stubs** with this-pay and year-to-date amounts, printed one at a time or all together.
   - **Remittances:** what's owed to each agency per month (or quarter), the due date (the 15th of the following month), the figures for the PD7A voucher and for Revenu Québec, and payments that clear the liability.
   - Rates are loaded for pay dates from July 1 to December 31, 2026. Quebec income tax follows Revenu Québec's TP-1015.F method but hasn't been checked line by line against WebRAS yet, so compare a first pay run with WebRAS. Always check unusual cases against CRA's PDOC.
+- **English and French:** every screen, form, message, report and pay stub is available in Canadian French, with Quebec terms (TPS/TVQ, RRQ, RQAP, AE, état des résultats, grand livre…) and French number and date formats (1 234,56 $ · 18 sept. 2026). Each person picks their language from the sidebar, the sign-in screen or Account, and it's saved with their account. New companies can keep their books in French, with a French chart of accounts. Names and other data you type stay exactly as entered.
 - **Sign-in security:** nobody sees any data without signing in.
   - The first start asks you to create an **owner** account. On an online server this also needs the setup code chosen when the server was installed.
   - **Roles:** owners manage everything; **staff** work in the companies they're given; **clients** see only their own company. Staff and clients can be **view only**.
@@ -165,6 +166,8 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   activity.js      Activity log screen
   auth.js          Sign-in, two-step codes, invitations, users and security
   qr.js            QR code generator for the two-step setup screen
+  i18n.js          Language switch and on-screen translation; fr-CA number and date formats
+  fr.js            French (Canada) translations
 src/server/
   app.js           HTTP server: JSON API, static files, live updates
   db.js            SQLite storage (Node's built-in node:sqlite)

@@ -23,7 +23,7 @@ const pub = f => fs.readFileSync(path.join(root, 'public', f), 'utf8');
   const cookie = setup.headers.get('set-cookie').split(';')[0];
   const _fetch = fetch; const fetchA = (u, init = {}) => _fetch(u, { ...init, headers: { ...(init.headers || {}), cookie } });
   const post = (url, body) => fetchA(base + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  await post('/api/companies', { name: 'Bistro Montréal Inc.', province: 'QC', fyStart: 1, examples: true });
+  await post('/api/companies', { name: 'Bistro Montréal inc.', province: 'QC', fyStart: 1, examples: true, lang: 'fr' });
   const list = await (await fetchA(base + '/api/companies')).json();
   const data = { provinces: list.provinces, defaultAccounts: DEFAULT_ACCOUNTS, companies: [] };
   for (const c of list.companies) {
@@ -49,7 +49,7 @@ ${body}
 <div class="demo-ribbon">Demo · example data · changes aren’t saved</div>
 <script>window.__TALLY_DEMO__=${safe(JSON.stringify(data))};</script>
 <script>${safe(fs.readFileSync(path.join(__dirname, 'demo-shim.js'), 'utf8'))}</script>
-${['bankparse.js', 'app.js', 'banking.js', 'salestax.js', 'payroll-calc.js', 'payroll.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
+${['i18n.js', 'fr.js', 'bankparse.js', 'app.js', 'banking.js', 'salestax.js', 'payroll-calc.js', 'payroll.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
 `;
   fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'dist', 'demo.html'), html);

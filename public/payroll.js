@@ -6,9 +6,9 @@
      Cr Payroll liabilities – CRA  Cr Payroll liabilities – Revenu Québec  Cr Other payroll deductions  Cr Bank (net pay) */
 const PR=TallyPayroll;
 S.pay={tab:'runs'};
-const PAY_ACCTS=[['wages','Expense','7100','Wages and salaries'],['payroll_tax','Expense','7110','Employer payroll taxes'],
-  ['payroll_cra','Liability','2300','Payroll liabilities – CRA'],['payroll_rq','Liability','2310','Payroll liabilities – Revenu Québec'],
-  ['payroll_other','Liability','2320','Other payroll deductions payable']];
+const PAY_ACCTS=[['wages','Expense','7100','Wages and salaries','Salaires'],['payroll_tax','Expense','7110','Employer payroll taxes','Cotisations de l’employeur'],
+  ['payroll_cra','Liability','2300','Payroll liabilities – CRA','Retenues à la source à payer – ARC'],['payroll_rq','Liability','2310','Payroll liabilities – Revenu Québec','Retenues à la source à payer – Revenu Québec'],
+  ['payroll_other','Liability','2320','Other payroll deductions payable','Autres retenues salariales à payer']];
 DETAILS.Liability.push(['payroll_cra','Payroll liabilities – CRA'],['payroll_rq','Payroll liabilities – Revenu Québec'],['payroll_other','Other payroll deductions']);
 DETAILS.Expense.push(['wages','Wages and salaries'],['payroll_tax','Employer payroll taxes']);
 Object.assign(TLABEL,{payrun:'Payroll',payremit:'Payroll remittance'});
@@ -59,7 +59,8 @@ function runTotals(r){
 /* Payroll accounts are added the first time they're needed. An existing "7100 Wages" account is reused. */
 function payAccounts(needRq){
   const writes=[],ids={};
-  for(const[detail,type,code,name]of PAY_ACCTS){
+  for(const[detail,type,code,nameEn,nameFr]of PAY_ACCTS){
+    const name=S.company.lang==='fr'?nameFr:nameEn;
     if(detail==='payroll_rq'&&!needRq){ids[detail]=byDetail(detail)?.id;continue}
     let a=byDetail(detail);
     if(!a){
@@ -77,7 +78,7 @@ function payAccounts(needRq){
 function remitPeriod(date){
   const y=date.slice(0,4),m=+date.slice(5,7);
   if(payCfg().remitFreq==='quarterly'){const q=Math.ceil(m/3);return{key:`${y}-Q${q}`,label:`Q${q} ${y}`,due:PR.remittanceDue(`${y}-${pad(q*3)}-01`)}}
-  return{key:date.slice(0,7),label:pd(date.slice(0,7)+'-01').toLocaleDateString('en-CA',{month:'long',year:'numeric'}),due:PR.remittanceDue(date)};
+  return{key:date.slice(0,7),label:pd(date.slice(0,7)+'-01').toLocaleDateString(LOC(),{month:'long',year:'numeric'}),due:PR.remittanceDue(date)};
 }
 function remittances(){
   const m={};

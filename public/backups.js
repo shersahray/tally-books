@@ -2,7 +2,7 @@
 /* ---------- Automatic backups panel (shared by the company list and Settings) ---------- */
 let BK=null,bkEditing=false,bkBusy=false,bkTried=0;
 async function loadBackups(){try{BK=await api('GET','/api/backups');BK._t=Date.now()}catch(e){BK=null}}
-const fmtWhen=ms=>new Date(ms).toLocaleString('en-CA',{dateStyle:'medium',timeStyle:'short'});
+const fmtWhen=ms=>new Date(ms).toLocaleString(LOC(),{dateStyle:'medium',timeStyle:'short'});
 
 function backupStatusLine(){
   if(!BK)return '';

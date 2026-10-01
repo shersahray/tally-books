@@ -266,6 +266,7 @@ function validateCompany(data) {
     province: /^[A-Z]{2}$/.test(data.province || '') ? data.province : '',
     qstRate: Math.max(0, Math.min(100, Number(data.qstRate) || 0)),
     filingFreq: ['monthly', 'quarterly', 'annual'].includes(data.filingFreq) ? data.filingFreq : 'quarterly',
+    lang: data.lang === 'fr' ? 'fr' : 'en',
     payroll: validatePayrollSettings(data.payroll),
   };
 }
