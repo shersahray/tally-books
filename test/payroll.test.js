@@ -227,3 +227,57 @@ test('A difference of $2 or less is neither owed nor refunded', () => {
   assert.equal(s2[86], 3);
   assert.equal(P.sinProblem('000000000'), 'none');
 });
+
+/* ---------- stage 3: holidays, vacation pay, ROE ---------- */
+test('Public holidays by province, with Easter and Monday rules', () => {
+  const on = P.holidays('ON', 2026).map(h => h.date + ' ' + h.key);
+  assert.deepEqual(on, ['2026-01-01 newyear', '2026-02-16 family', '2026-04-03 goodfriday', '2026-05-18 victoria', '2026-07-01 canada',
+    '2026-09-07 labour', '2026-10-12 thanksgiving', '2026-12-25 christmas', '2026-12-26 boxing']);
+  const qc = P.holidays('QC', 2027).map(h => h.date);
+  assert.deepEqual(qc, ['2027-01-01', '2027-03-26', '2027-05-24', '2027-06-24', '2027-07-01', '2027-09-06', '2027-10-11', '2027-12-25']);
+  assert.equal(P.holidays('QC', 2029).find(h => h.key === 'canadaQc').date, '2029-07-02', 'July 1 on a Sunday moves to the 2nd in Quebec');
+  assert.equal(P.holidays('BC', 2026).length, 11);
+  assert.ok(P.holidays('BC', 2026).some(h => h.date === '2026-09-30'));
+  assert.ok(!P.holidays('ON', 2026).some(h => h.date === '2026-09-30'));
+  assert.equal(P.holidays('ON', 2025).find(h => h.key === 'goodfriday').date, '2025-04-18');
+  assert.deepEqual(P.holidaysBetween('ON', '2026-12-20', '2027-01-02').map(h => h.date), ['2026-12-25', '2026-12-26', '2027-01-01']);
+});
+
+test('Holiday pay is 1/20 of the 4 weeks before the holiday’s week, spread across pay periods', () => {
+  // Thanksgiving, Monday Oct 12 2026: its week starts Sunday Oct 11, so the window is Sep 13 – Oct 10.
+  assert.deepEqual(P.holidayWindow('2026-10-12'), { from: '2026-09-13', to: '2026-10-10' });
+  const r = P.holidayPay('2026-10-12', [
+    { from: '2026-08-30', to: '2026-09-12', amount: 1400 }, // before the window
+    { from: '2026-09-13', to: '2026-09-26', amount: 1400 },
+    { from: '2026-09-27', to: '2026-10-10', amount: 1200 },
+    { from: '2026-10-04', to: '2026-10-17', amount: 1400 }, // overlaps: 7 of 14 days
+  ]);
+  assert.equal(r.base, 1400 + 1200 + 700);
+  assert.equal(r.pay, 165);
+});
+
+test('Vacation pay minimums follow years of service', () => {
+  assert.equal(P.vacationRate('ON', '2022-03-01', '2027-02-28').rate, 4);
+  assert.equal(P.vacationRate('ON', '2022-03-01', '2027-03-01').rate, 6);
+  assert.equal(P.vacationRate('QC', '2023-06-01', '2026-06-01').rate, 6, 'Quebec: 6% after 3 years');
+  assert.equal(P.vacationRate('SK', '', '2026-06-01').rate, 5.77);
+  const ns = P.vacationRate('NS', '2010-01-01', '2026-06-01');
+  assert.equal(ns.rate, 4); assert.equal(ns.known, false);
+  assert.equal(P.serviceYears('2020-02-29', '2021-02-28'), 0);
+});
+
+test('ROE: insurable earnings and hours by pay period, newest first, vacation pay on leaving in 17A', () => {
+  const lines = [
+    { from: '2026-08-02', to: '2026-08-15', payDate: '2026-08-21', insurable: 2000, hours: 80 },
+    // nothing paid for Aug 16 – 29
+    { from: '2026-08-30', to: '2026-09-12', payDate: '2026-09-18', insurable: 2100, hours: 84 },
+    { from: '2026-09-13', to: '2026-09-26', payDate: '2026-10-02', insurable: 2500, hours: 80, separationVac: 400 },
+  ];
+  const r = P.roe({ freq: 'biweekly', finalPeriodEnd: '2026-09-26', lines });
+  assert.equal(r.type, 'B'); assert.equal(r.count, 27); assert.equal(r.periods.length, 27);
+  assert.deepEqual(r.periods.slice(0, 4).map(p => [p.n, p.to, p.amount]), [[1, '2026-09-26', 2100], [2, '2026-09-12', 2100], [3, '2026-08-29', 0], [4, '2026-08-15', 2000]]);
+  assert.equal(r.totalEarnings, 6200); assert.equal(r.hours, 244); assert.equal(r.vacation, 400);
+  assert.equal(r.due, '2026-10-01');
+  assert.equal(P.roe({ freq: 'monthly', finalPeriodEnd: '2026-08-31', lines }).outside, 2);
+  assert.equal(P.roe({ freq: 'semimonthly', finalPeriodEnd: '2026-09-30', lines: [] }).count, 25);
+});

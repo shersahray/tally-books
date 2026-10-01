@@ -4,7 +4,7 @@
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
   Asset: ['', 'bank', 'ar'],
-  Liability: ['', 'card', 'ap', 'tax', 'qst', 'payroll_cra', 'payroll_rq', 'payroll_other'],
+  Liability: ['', 'card', 'ap', 'tax', 'qst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
@@ -230,6 +230,15 @@ function validateEmployee(data) {
     }
     out.paByYear = pa;
   }
+  if (data.vacMode !== undefined && data.vacMode !== '' && !['accrue', 'each', 'salary'].includes(data.vacMode)) throw new ValidationError('Choose how vacation pay is paid.');
+  out.vacRate = optAmount(data.vacRate, 'Vacation pay rate');
+  if (out.vacRate !== '' && out.vacRate > 100) throw new ValidationError('The vacation pay rate is a percentage, 100 or less.');
+  out.vacOpening = optAmount(data.vacOpening, 'Vacation pay owed');
+  if (data.occupation !== undefined) out.occupation = str(data.occupation, 100).trim();
+  if (data.termDate !== undefined && data.termDate !== '' && !isDate(data.termDate)) throw new ValidationError('The last day worked must be YYYY-MM-DD.');
+  if (data.roes !== undefined) {
+    if (!Array.isArray(data.roes) || data.roes.length > 50 || data.roes.some(r => !isObj(r) || JSON.stringify(r).length > 30000)) throw new ValidationError('The records of employment aren’t valid.');
+  }
   if (data.openingYtd !== undefined) {
     if (!isObj(data.openingYtd)) throw new ValidationError('Opening year-to-date amounts must be an object.');
     const o = { year: parseInt(data.openingYtd.year, 10) || 0 };
@@ -268,7 +277,26 @@ function validatePayrun(data, store) {
     if (n < 0) throw new ValidationError(`${emp.name}: deductions are more than gross pay.`);
     if (cents(l.net) !== n) throw new ValidationError(`${emp.name}: net pay doesn’t equal gross pay minus deductions.`);
     net += n;
-    return { ...l, gross: gross / 100, rrsp: cents(numOr0(l.rrsp)) / 100, union: cents(numOr0(l.union)) / 100, ded, er, net: n / 100 };
+    // Earnings broken down (regular, holiday, other, bonus, vacation pay): they have to add up to gross pay.
+    const parts = {};
+    for (const k of ['regular', 'holiday', 'other', 'bonus', 'vacPay', 'vacAccrued', 'holHours', 'hours', 'vacRate']) {
+      if (l[k] === undefined || l[k] === '') continue;
+      parts[k] = amt(l[k], { regular: 'regular pay', holiday: 'holiday pay', other: 'other pay', bonus: 'bonus', vacPay: 'vacation pay', vacAccrued: 'vacation pay set aside', holHours: 'holiday hours', hours: 'hours', vacRate: 'vacation pay rate' }[k]) / 100;
+    }
+    if (parts.regular !== undefined && ['holiday', 'bonus', 'vacPay'].some(k => parts[k] !== undefined)) {
+      const sum = ['regular', 'holiday', 'other', 'bonus', 'vacPay'].reduce((t, k) => t + cents(parts[k] || 0), 0);
+      if (sum !== gross) throw new ValidationError(`${emp.name}: regular, holiday, other, bonus and vacation pay don’t add up to gross pay.`);
+    }
+    if (parts.vacRate !== undefined && parts.vacRate > 100) throw new ValidationError(`${emp.name}: the vacation pay rate is a percentage, 100 or less.`);
+    const extra = { ...parts };
+    if (l.vacMode !== undefined) { if (!['accrue', 'each'].includes(l.vacMode)) throw new ValidationError(`${emp.name}: unknown vacation pay method.`); extra.vacMode = l.vacMode; }
+    if (extra.vacAccrued && l.vacMode !== 'accrue') throw new ValidationError(`${emp.name}: vacation pay is only set aside for employees whose vacation pay is set aside.`);
+    if (l.holidays !== undefined) {
+      if (!Array.isArray(l.holidays) || l.holidays.length > 12) throw new ValidationError(`${emp.name}: the holidays aren’t valid.`);
+      extra.holidays = l.holidays.map(h => ({ date: isDate(h && h.date) ? h.date : '', name: str(h && h.name, 80) })).filter(h => h.date);
+    }
+    if (l.final !== undefined) extra.final = !!l.final;
+    return { ...l, ...extra, gross: gross / 100, rrsp: cents(numOr0(l.rrsp)) / 100, union: cents(numOr0(l.union)) / 100, ded, er, net: n / 100 };
   });
   if (data.entryId && !store.get('entries', data.entryId)) throw new ValidationError('The journal entry for this pay run doesn’t exist.');
   return { ...data, lines, totalNet: net / 100 };

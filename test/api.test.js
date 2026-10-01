@@ -475,10 +475,24 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
     { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, net: line.net + 1 }] } }] });
   assert.equal(bad.status, 400);
   assert.match(bad.json.error, /net pay/);
+  // Earnings broken down have to add up to gross; vacation pay is only set aside for "accrue" employees.
+  const entry = { op: 'set', collection: 'entries', id: 'pr_1', data: { type: 'payrun', date: '2026-09-18', lines } };
+  const parts = await call('POST', '/api/batch', { writes: [entry,
+    { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, regular: 1800, holiday: 100, vacPay: 50 }] } }] });
+  assert.equal(parts.status, 400); assert.match(parts.json.error, /add up to gross/);
+  const acc = await call('POST', '/api/batch', { writes: [entry,
+    { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, regular: 1900, holiday: 100, vacMode: 'each', vacAccrued: 80 }] } }] });
+  assert.equal(acc.status, 400); assert.match(acc.json.error, /set aside/);
+  assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, vacRate: 150 })).status, 400);
+  assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, vacMode: 'sometimes' })).status, 400);
+  assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, roes: 'x' })).status, 400);
   const ok = await call('POST', '/api/batch', { writes: [
     { op: 'set', collection: 'entries', id: 'pr_1', data: { type: 'payrun', date: '2026-09-18', lines } },
-    { op: 'set', collection: 'payruns', id: 'run1', data: run }] });
+    { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, regular: 1900, holiday: 100, holidays: [{ date: '2026-09-07', name: 'Labour Day' }, { date: 'bad' }], vacMode: 'accrue', vacAccrued: 80, vacPay: 0 }] } }] });
   assert.equal(ok.status, 200, ok.text);
+  const saved = (await call('GET', '/api/state')).json.payruns.find(x => x.id === 'run1').lines[0];
+  assert.deepEqual(saved.holidays, [{ date: '2026-09-07', name: 'Labour Day' }]);
+  assert.equal(saved.vacAccrued, 80);
   // The employee and the entry are protected while the pay run exists.
   assert.equal((await call('DELETE', '/api/records/employees/e1')).status, 409);
   assert.equal((await call('DELETE', '/api/records/entries/pr_1')).status, 409);

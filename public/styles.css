@@ -372,3 +372,11 @@ label.btn.disabled{opacity:.6;pointer-events:none}
 .apply table input{text-align:right}
 .code-in{letter-spacing:.4em;font-variant-numeric:tabular-nums;max-width:9em}
 .code-in::placeholder{letter-spacing:normal}
+.stub-vac{font-size:12px;border:1px solid #999;padding:6px 10px;margin:-4px 0 12px}
+.roe-tbl td{vertical-align:top}
+.roe-tbl td:first-child{width:3.5em}
+.roe-tbl td:nth-child(2){width:38%}
+.roe-pps{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:2px 12px;margin-top:6px;font-size:12.5px;font-variant-numeric:tabular-nums}
+.roe-pp{display:flex;justify-content:space-between;gap:8px;border-bottom:1px dotted var(--line)}
+.roe-print .roe-tbl{width:100%;border-collapse:collapse}
+.roe-print .roe-tbl td{border-bottom:1px solid #ccc;padding:4px 6px}

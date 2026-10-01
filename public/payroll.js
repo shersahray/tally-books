@@ -8,8 +8,9 @@ const PR=TallyPayroll;
 S.pay={tab:'runs'};
 const PAY_ACCTS=[['wages','Expense','7100','Wages and salaries','Salaires'],['payroll_tax','Expense','7110','Employer payroll taxes','Cotisations de l’employeur'],
   ['payroll_cra','Liability','2300','Payroll liabilities – CRA','Retenues à la source à payer – ARC'],['payroll_rq','Liability','2310','Payroll liabilities – Revenu Québec','Retenues à la source à payer – Revenu Québec'],
-  ['payroll_other','Liability','2320','Other payroll deductions payable','Autres retenues salariales à payer']];
-DETAILS.Liability.push(['payroll_cra','Payroll liabilities – CRA'],['payroll_rq','Payroll liabilities – Revenu Québec'],['payroll_other','Other payroll deductions']);
+  ['payroll_other','Liability','2320','Other payroll deductions payable','Autres retenues salariales à payer'],
+  ['vacation_payable','Liability','2330','Vacation pay payable','Indemnités de vacances à payer']];
+DETAILS.Liability.push(['payroll_cra','Payroll liabilities – CRA'],['payroll_rq','Payroll liabilities – Revenu Québec'],['payroll_other','Other payroll deductions'],['vacation_payable','Vacation pay payable']);
 DETAILS.Expense.push(['wages','Wages and salaries'],['payroll_tax','Employer payroll taxes']);
 Object.assign(TLABEL,{payrun:'Payroll',payremit:'Payroll remittance'});
 const AGENCY_NAME={cra:'CRA',rq:'Revenu Québec'};
@@ -21,6 +22,39 @@ const provName=k=>(typeof PROVS!=='undefined'&&PROVS[k]?PROVS[k].name:k);
 const payOf=e=>e.payType==='hourly'?`${money(e.rate)}/hour`:`${money(e.rate)}/year`;
 const sumObj=(a,b)=>{for(const[k,v]of Object.entries(b||{}))a[k]=r2((a[k]||0)+(+v||0));return a};
 const runOrder=(a,b)=>a.payDate.localeCompare(b.payDate)||(a.created||0)-(b.created||0);
+
+/* ---------- vacation pay and holiday pay ----------
+   Vacation pay is worked out on regular pay, holiday pay and other pay (not on bonuses marked as such).
+   "accrue": set aside each pay (a liability) and paid out when the employee takes vacation or leaves.
+   "each": added to every pay. "salary": the salary simply continues while they're on vacation. */
+const VAC_MODES=[['accrue','Set it aside, and pay it when they take vacation or leave'],['each','Add it to every pay'],['salary','None: their salary continues while they’re on vacation']];
+const vacMode=e=>['accrue','each','salary'].includes(e.vacMode)?e.vacMode:(e.payType==='hourly'?'accrue':'salary');
+function vacRateFor(e,date){
+  if(e.vacRate!==''&&e.vacRate!=null&&!isNaN(+e.vacRate))return{rate:+e.vacRate,custom:true};
+  return PR.vacationRate(e.prov,e.hireDate,date);
+}
+/** Vacation pay owed to an employee: the opening amount plus what was set aside, minus what was paid out of it. */
+function vacBalance(empId,until,inclusive){
+  const e=employee(empId)||{};let bal=+e.vacOpening||0;
+  for(const r of S.payruns)for(const l of r.lines){
+    if(l.employeeId!==empId)continue;
+    if(until){const c=runOrder(r,until);if(c>0||(c===0&&!inclusive)||(until.id&&r.id===until.id&&!inclusive))continue}
+    bal+=(+l.vacAccrued||0)-(l.vacMode==='accrue'?+l.vacPay||0:0);
+  }
+  return r2(bal);
+}
+const runPeriod=r=>r.from&&r.to?[r.from,r.to]:defaultPeriod(r.freq||'biweekly',r.payDate);
+/** Earnings that count toward holiday pay, pay period by pay period. Ontario adds vacation pay paid. */
+function holidayEarnings(empId,prov){
+  const out=[];
+  for(const r of S.payruns)for(const l of r.lines){
+    if(l.employeeId!==empId)continue;
+    const[from,to]=runPeriod(r);
+    out.push({from,to,amount:r2((l.regular??l.gross)+(prov==='ON'?(+l.vacPay||0):0))});
+  }
+  return out;
+}
+const WORKDAYS={weekly:5,biweekly:10,semimonthly:10.83,monthly:21.67};
 
 /* Year-to-date for one employee: opening amounts entered on the employee, plus every pay run in that calendar year
    that comes before `until` (a pay run, or {payDate} for a new one). */
@@ -39,6 +73,7 @@ function ytdFor(empId,until,inclusive){
     for(const l of r.lines)if(l.employeeId===empId){
       y.gross=r2(y.gross+l.gross);y.pensionable=r2(y.pensionable+(l.cppExempt?0:(l.pensionable??l.gross)));y.insurable=r2(y.insurable+(l.insurable??l.gross));
       y.rrsp=r2(y.rrsp+(+l.rrsp||0));y.union=r2(y.union+(+l.union||0));y.net=r2(y.net+l.net);sumObj(y.ded,l.ded);sumObj(y.er,l.er);
+      y.vac=r2((y.vac||0)+(+l.vacPay||0));y.hol=r2((y.hol||0)+(+l.holiday||0));
     }
   }
   return y;
@@ -51,17 +86,20 @@ function calcFor(e,payDate,P,gross,ytd){
 const lineDed=l=>r2(DED_KEYS.reduce((s,k)=>s+(+l.ded?.[k]||0),0)+(+l.rrsp||0)+(+l.union||0));
 const lineEr=l=>r2(ER_KEYS.reduce((s,k)=>s+(+l.er?.[k]||0),0));
 function runTotals(r){
-  const t={gross:0,ded:0,net:0,er:0,cra:0,rq:0,other:0};
-  for(const l of r.lines){const sp=PR.remitSplit(l.ded,l.er);t.gross+=l.gross;t.ded+=lineDed(l);t.net+=l.net;t.er+=lineEr(l);t.cra+=sp.cra;t.rq+=sp.rq;t.other+=(+l.rrsp||0)+(+l.union||0)}
-  for(const k in t)t[k]=r2(t[k]);return t;
+  const t={gross:0,ded:0,net:0,er:0,cra:0,rq:0,other:0,vacAcc:0,vacOut:0};
+  for(const l of r.lines){const sp=PR.remitSplit(l.ded,l.er);t.gross+=l.gross;t.ded+=lineDed(l);t.net+=l.net;t.er+=lineEr(l);t.cra+=sp.cra;t.rq+=sp.rq;t.other+=(+l.rrsp||0)+(+l.union||0);
+    t.vacAcc+=+l.vacAccrued||0;if(l.vacMode==='accrue')t.vacOut+=+l.vacPay||0}
+  for(const k in t)t[k]=r2(t[k]);
+  t.cost=r2(t.gross-t.vacOut+t.vacAcc+t.er); // what the pay run costs the business: vacation pay counts when it's earned
+  return t;
 }
 
 /* Payroll accounts are added the first time they're needed. An existing "7100 Wages" account is reused. */
-function payAccounts(needRq){
+function payAccounts(needRq,needVac){
   const writes=[],ids={};
   for(const[detail,type,code,nameEn,nameFr]of PAY_ACCTS){
     const name=S.company.lang==='fr'?nameFr:nameEn;
-    if(detail==='payroll_rq'&&!needRq){ids[detail]=byDetail(detail)?.id;continue}
+    if((detail==='payroll_rq'&&!needRq)||(detail==='vacation_payable'&&!needVac)){ids[detail]=byDetail(detail)?.id;continue}
     let a=byDetail(detail);
     if(!a){
       const ex=S.accounts.find(x=>x.code===code&&x.type===type&&!x.detail);
@@ -116,7 +154,8 @@ function vPayroll(){
   if(P.tab==='yearend')return h+vYearEnd();
   if(P.tab==='employees'){
     const list=S.employees.slice().sort((a,b)=>(a.active===false)-(b.active===false)||a.name.localeCompare(b.name));
-    return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Province</th><th>Pay schedule</th><th class="n">Pay</th><th class="n">Gross, ${yr}</th><th>Status</th></tr></thead><tbody>${list.length?list.map(e=>`<tr class="click" data-pay-emp="${e.id}"><td>${esc(e.name)} ${e.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(provName(e.prov))}</td><td>${PR.FREQ_LABEL[e.freq]||''}</td><td class="n">${payOf(e)}</td><td class="n">${money(ytdFor(e.id,{payDate:t+'~'},false).gross)}</td><td>${e.active===false?'<span class="pill quiet">Inactive</span>':'<span class="pill paid">Active</span>'}</td></tr>`).join(''):emptyRow(6,'No employees yet','Add an employee with their TD1 amounts, then run payroll.')}</tbody></table></div></div>`;
+    const vac=list.some(e=>vacMode(e)==='accrue'||vacBalance(e.id));
+    return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Province</th><th>Pay schedule</th><th class="n">Pay</th><th class="n">Gross, ${yr}</th>${vac?'<th class="n" title="Vacation pay set aside and not yet paid">Vacation pay owed</th>':''}<th>Status</th></tr></thead><tbody>${list.length?list.map(e=>`<tr class="click" data-pay-emp="${e.id}"><td>${esc(e.name)} ${e.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(provName(e.prov))}</td><td>${PR.FREQ_LABEL[e.freq]||''}</td><td class="n">${payOf(e)}</td><td class="n">${money(ytdFor(e.id,{payDate:t+'~'},false).gross)}</td>${vac?`<td class="n">${vacMode(e)==='accrue'||vacBalance(e.id)?money(vacBalance(e.id)):'<span class="muted">—</span>'}</td>`:''}<td>${e.active===false?`<span class="pill quiet">Inactive</span>${(e.roes||[]).length?' <span class="pill quiet">ROE</span>':''}`:'<span class="pill paid">Active</span>'}</td></tr>`).join(''):emptyRow(vac?7:6,'No employees yet','Add an employee with their TD1 amounts, then run payroll.')}</tbody></table></div></div>`;
   }
   if(P.tab==='remit'){
     const rs=remittances();
@@ -148,18 +187,25 @@ function employeeForm(emp){
   const v=x=>x===undefined||x===null?'':esc(x);
   const num=(id,label,val,hint,span)=>fld(id,label,`<input type="number" id="${id}" step="0.01" min="0" inputmode="decimal" value="${v(val)}">${hint?`<span class="hint">${hint}</span>`:''}`,span);
   const ytdF=(k,label,hint)=>num('eo_'+k,label,o[k]===undefined||o[k]===null||(o[k]===0&&!['pensionable','insurable','erEi'].includes(k))?'':o[k],hint);
+  const vr=PR.vacationRate(e.prov||'ON',e.hireDate,today());
   const f=openModal(emp?emp.name:'New employee',`
+    ${paid?`<div class="actions" style="justify-content:flex-end;margin-top:-4px"><button type="button" class="btn sm" data-roe="${emp.id}">Record of employment (ROE)</button></div>`:''}
     <div class="fields">${fld('eName','Name',`<input type="text" id="eName" value="${v(e.name)}" required>`)}${fld('eEmail','Email',`<input type="email" id="eEmail" value="${v(e.email)}">`)}
       ${fld('eProv','Province of employment',`<select id="eProv">${PR.PROVINCES.map(k=>`<option value="${k}" ${e.prov===k?'selected':''}>${esc(provName(k))}</option>`).join('')}</select>`)}
       ${fld('eHire','Hire date',`<input type="date" id="eHire" value="${v(e.hireDate)}">`)}
       ${fld('eSin','Social insurance number',`<input type="text" id="eSin" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789" value="${v(e.sin?String(e.sin).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3'):'')}" translate="no"><span class="hint">For the T4 and RL-1 (box 12). Kept only in this company’s books.</span>`)}
       ${fld('eDental','Dental benefits offered (T4 box 45)',`<select id="eDental">${e.dental?'':'<option value="" selected>Choose…</option>'}${[[1,'1 · Not eligible for any dental care insurance'],[2,'2 · Employee only'],[3,'3 · Employee, spouse and dependent children'],[4,'4 · Employee and spouse'],[5,'5 · Employee and dependent children']].map(([k,l])=>`<option value="${k}" ${e.dental===k?'selected':''}>${l}</option>`).join('')}</select>`)}
+      ${fld('eOcc','Occupation',`<input type="text" id="eOcc" maxlength="100" value="${v(e.occupation)}"><span class="hint">For the record of employment</span>`)}
       ${fld('eAddr','Address',`<textarea id="eAddr">${esc(e.address||'')}</textarea>`,true)}</div>
     <h3 class="fsec">Pay</h3>
     <div class="fields">${fld('eFreq','Pay schedule',`<select id="eFreq">${Object.keys(PR.FREQUENCIES).map(k=>`<option value="${k}" ${e.freq===k?'selected':''}>${PR.FREQ_LABEL[k]}</option>`).join('')}</select>`)}
       ${fld('eType','Paid by',`<select id="eType"><option value="salary" ${e.payType==='salary'?'selected':''}>Salary</option><option value="hourly" ${e.payType==='hourly'?'selected':''}>The hour</option></select>`)}
       ${num('eRate',e.payType==='hourly'?'Hourly rate':'Annual salary',e.rate)}
       ${num('eHours','Usual hours per pay',e.hours,'Filled in on each pay run')}</div>
+    <h3 class="fsec">Vacation pay</h3>
+    <div class="fields">${fld('eVacMode','Vacation pay',`<select id="eVacMode">${VAC_MODES.map(([k,l])=>`<option value="${k}" ${vacMode(e)===k?'selected':''}>${l}</option>`).join('')}</select>`,true)}
+      <div data-vac style="display:contents">${fld('eVacRate','Vacation pay rate (%)',`<input type="number" id="eVacRate" step="0.01" min="0" max="100" inputmode="decimal" value="${v(e.vacRate)}" placeholder="${vr.rate}"><span class="hint" data-vachint></span>`)}</div>
+      <div data-vacacc style="display:contents">${num('eVacOpen','Vacation pay owed before Tally Books',e.vacOpening,'Set aside and not yet paid, from your previous payroll')}</div></div>
     <h3 class="fsec">Tax claims (TD1)</h3>
     <div class="fields">${num('eTd1','Federal TD1 total claim',e.td1Fed,'Blank = basic personal amount (claim code 1). 0 = claim code 0.')}
       <div data-notqc style="display:contents">${num('eTd1p','Provincial TD1 total claim',e.td1Prov,'Blank = basic personal amount')}</div>
@@ -180,8 +226,14 @@ function employeeForm(emp){
     </details>`,saveFoot(!!emp&&!paid),'wide');
   const sync=()=>{const p=$('#eProv',f).value,qc=p==='QC';$$('[data-qc]',f).forEach(x=>x.style.display=qc?(x.classList.contains('check')?'':'contents'):'none');$$('[data-notqc]',f).forEach(x=>x.style.display=qc?'none':'contents');$$('[data-on]',f).forEach(x=>x.style.display=p==='ON'?'contents':'none');$('[data-cpplbl]',f).textContent=qc?'QPP':'CPP';
     $$('[data-rpp]',f).forEach(x=>x.style.display=$('#ePen',f).value==='rpp'?'contents':'none');
+    const vm=$('#eVacMode',f).value;$$('[data-vac]',f).forEach(x=>x.style.display=vm==='salary'?'none':'contents');$$('[data-vacacc]',f).forEach(x=>x.style.display=vm==='accrue'?'contents':'none');
+    const r=PR.vacationRate(p,$('#eHire',f).value,today());$('#eVacRate',f).placeholder=r.rate;
+    const hire=$('#eHire',f).value;
+    $('[data-vachint]',f).innerHTML=!r.known?'<span>Blank = 4%. Check when your province’s minimum goes up with years of service.</span>':r.next&&hire?`<span>Blank = the minimum: ${r.rate}% now, ${r.next[1]}% after ${r.next[0]} years of service.</span>`:`<span>Blank = the minimum, ${r.rate}% now.</span>${hire||!r.next?'':' <span>Enter the hire date so it goes up with years of service.</span>'}`;
     const h=$('#eType',f).value==='hourly';$('label[for=eRate]',f).textContent=h?'Hourly rate':'Annual salary'};
-  $('#eProv',f).onchange=$('#eType',f).onchange=$('#ePen',f).onchange=sync;sync();
+  $('#eProv',f).onchange=$('#eType',f).onchange=$('#ePen',f).onchange=$('#eVacMode',f).onchange=$('#eHire',f).onchange=sync;sync();
+  if(!emp)$('#eType',f).addEventListener('change',()=>{$('#eVacMode',f).value=$('#eType',f).value==='hourly'?'accrue':'salary';sync()});
+  const rb=$('[data-roe]',f);if(rb)rb.onclick=()=>roeForm(emp);
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this employee?',`${emp.name} will be removed.`))return;if(await del('employees',emp.id)){closeModal();toast('Employee deleted')}};
   f.onsubmit=async ev=>{ev.preventDefault();f.err('');
     const name=$('#eName',f).value.trim();if(!name)return f.err('Enter the employee’s name.');
@@ -194,7 +246,9 @@ function employeeForm(emp){
       freq:$('#eFreq',f).value,payType:$('#eType',f).value,rate:val('eRate'),hours:val('eHours'),
       td1Fed:val('eTd1'),td1Prov:qc?'':val('eTd1p'),td1Qc:qc?val('eTd1q'):'',extraTax:val('eExtra'),extraQcTax:qc?val('eExtraQ'):'',dependants:prov==='ON'?val('eDep'):'',
       rrsp:val('eRrsp'),union:val('eUnion'),sin:$('#eSin',f).value.replace(/\D/g,''),dental:+$('#eDental',f).value||0,rppNo:$('#ePen',f).value==='rpp'?$('#eRppNo',f).value.replace(/\D/g,''):'',pensionType:$('#ePen',f).value,cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
-      active:emp?!$('#eInactive',f).checked:true,openingYtd:oy};
+      active:emp?!$('#eInactive',f).checked:true,openingYtd:oy,
+      occupation:$('#eOcc',f).value.trim(),vacMode:$('#eVacMode',f).value,vacRate:$('#eVacMode',f).value==='salary'?'':val('eVacRate'),vacOpening:$('#eVacMode',f).value==='accrue'?val('eVacOpen'):(emp?.vacOpening||'')};
+    if(data.vacRate!==''&&data.vacRate>100)return f.err('The vacation pay rate is a percentage, 100 or less.');
     if(await put('employees',emp?.id||uid(),data)){closeModal();toast('Employee saved')}
   };
 }
@@ -229,10 +283,17 @@ function payRunForm(){
       <div class="prl-top"><label class="check prl-name"><input type="checkbox" data-inc checked> <span><b>${esc(e.name)}</b><span class="muted"> · ${esc(e.prov)} · ${payOf(e)}</span></span></label>
         ${e.payType==='hourly'?`<div class="field"><label>Hours</label><input type="number" step="0.01" min="0" data-hours value="${v0(e.hours)}"></div>`:''}
         <div class="field"><label>Regular pay</label><input type="number" step="0.01" min="0" data-reg value="${reg||''}"></div>
-        <div class="field"><label>Other pay</label><input type="number" step="0.01" min="0" data-other placeholder="Bonus, overtime" title="Bonus, overtime or other taxable pay"></div>
+        ${e.payType==='hourly'?`<div class="field" data-holf hidden><label title="Statutory holiday pay">Holiday pay</label><input type="number" step="0.01" min="0" data-hol></div>`:''}
+        <div class="field"><label>Other pay</label><input type="number" step="0.01" min="0" data-other placeholder="Overtime" title="Overtime, commissions or other pay that earns vacation pay"></div>
+        ${vacMode(e)!=='salary'?`<div class="field"><label>Vacation pay</label><input type="number" step="0.01" min="0" data-vac title="${vacMode(e)==='accrue'?'Paid now out of the vacation pay set aside':'Added to this pay'}"></div>`:''}
         <div class="prl-sum"><span class="muted">Deductions</span><b data-s="ded">0.00</b></div><div class="prl-sum"><span class="muted">Net pay</span><b data-s="net">0.00</b></div>
         <button type="button" class="btn ghost sm" data-more aria-expanded="false">Details</button></div>
       <div class="prl-more" hidden>
+        <div class="fields" style="margin-bottom:10px"><div class="field"><label for="p_${e.id}_bonus">Bonus</label><input type="number" step="0.01" min="0" id="p_${e.id}_bonus" data-bonus><span class="hint">A bonus that doesn’t earn vacation pay</span></div>
+          ${vacMode(e)==='accrue'?`<div class="field"><label for="p_${e.id}_vacacc">Vacation pay set aside</label><input type="number" step="0.01" min="0" id="p_${e.id}_vacacc" data-vacacc><span class="hint" data-vachint></span></div>`:''}
+          ${e.payType==='hourly'?`<div class="field" data-holhf hidden><label for="p_${e.id}_holhrs">Holiday hours</label><input type="number" step="0.01" min="0" id="p_${e.id}_holhrs" data-holhrs><span class="hint">Insurable hours for the record of employment</span></div>`:''}</div>
+        <div data-holnote class="muted" style="font-size:12.5px;margin-bottom:10px" hidden></div>
+        <label class="check" style="margin-bottom:10px"><input type="checkbox" data-final> <span>${vacMode(e)==='accrue'?'Final pay: this employee is leaving. All the vacation pay owed is paid out.':'Final pay: this employee is leaving.'}</span></label>
         <div class="flabel" style="margin-bottom:6px">Employee deductions</div>
         <div class="fields">${PR.EMPLOYEE_ITEMS.filter(([k])=>qc?!['cpp','cpp2','provTax'].includes(k):!['qpp','qpp2','qpip','qcTax'].includes(k)).map(([k,l])=>inp(k,l,'ded')).join('')}${inp('rrsp','RRSP / pension','x')}${inp('union','Union dues','x')}</div>
         <div class="flabel" style="margin:10px 0 6px">Employer contributions</div>
@@ -244,10 +305,37 @@ function payRunForm(){
   const render=()=>{$('[data-emps]',f).innerHTML=act.filter(e=>e.freq===freq).sort((a,b)=>a.name.localeCompare(b.name)).map(rowHTML).join('')||'<div class="muted">No active employees on this schedule.</div>';recalcAll()};
   // Recalculate one employee. Fields the user typed into (data-ov) keep their value.
   const recalc=box=>{
-    const e=employee(box.dataset.emp),date=$('#rDate',f).value;
-    if(e.payType==='hourly'&&!box.querySelector('[data-reg]').dataset.ov)box.querySelector('[data-reg]').value=r2((+box.querySelector('[data-hours]').value||0)*(+e.rate||0))||'';
-    const gross=r2((+box.querySelector('[data-reg]').value||0)+(+box.querySelector('[data-other]').value||0));
-    const note=box.querySelector('[data-note]');let res=null;
+    const e=employee(box.dataset.emp),date=$('#rDate',f).value,q=k=>box.querySelector(k),val=k=>+(q(k)?.value)||0;
+    const auto=(k,v)=>{const el=q(k);if(el&&!el.dataset.ov)el.value=v?r2(v).toFixed(2):''};
+    if(e.payType==='hourly'&&!q('[data-reg]').dataset.ov)q('[data-reg]').value=r2(val('[data-hours]')*(+e.rate||0))||'';
+    // Statutory holidays in this pay period (hourly employees; a salary already covers them).
+    const from=$('#rFrom',f).value,to=$('#rTo',f).value;
+    const hols=e.payType==='hourly'&&from&&to&&from<=to?PR.holidaysBetween(e.prov,from,to):[];
+    if(q('[data-holf]')){q('[data-holf]').hidden=!hols.length;q('[data-holhf]').hidden=!hols.length}
+    const hn=q('[data-holnote]');hn.hidden=!hols.length;
+    if(hols.length){
+      const earn=[...holidayEarnings(e.id,e.prov),{from,to,amount:val('[data-reg]')}];
+      const parts=hols.map(h=>({h,...PR.holidayPay(h.date,earn)}));
+      const firstPay=earn.reduce((m,x)=>x.from<m?x.from:m,from);
+      const short=parts.some(x=>x.window.from<firstPay);
+      auto('[data-hol]',parts.reduce((t,x)=>t+x.pay,0));
+      auto('[data-holhrs]',hols.length*(+e.hours||0)/(WORKDAYS[freq]||10));
+      hn.innerHTML=parts.map(x=>`<div><b>${esc(x.h.name)}</b> · <span>${fmtDate(x.h.date)}: ${money(x.pay)}, which is 1/20 of ${money(x.base)} earned from ${fmtDate(x.window.from)} to ${fmtDate(x.window.to)}</span></div>`).join('')+
+        (short?`<div class="neg">Tally Books has ${esc(e.name)}’s pay only from ${fmtDate(firstPay)}, so pay before that isn’t counted. Check the holiday pay against your earlier payroll.</div>`:'')+
+        `<div>${['ON','QC'].includes(e.prov)?'':'<span>This is the Ontario and Quebec formula. Check your province’s rule.</span> '}<span>If ${esc(e.name)} worked on the holiday, add the premium pay under Other pay.</span>${e.prov==='ON'?' <span>Ontario counts vacation pay paid in those weeks too.</span>':''}</div>`;
+    }else{auto('[data-hol]',0);auto('[data-holhrs]',0)}
+    // Vacation pay on regular, holiday and other pay.
+    const vm=vacMode(e),vr=vacRateFor(e,date).rate,base=val('[data-reg]')+val('[data-hol]')+val('[data-other]');
+    const fin=q('[data-final]').checked;
+    if(vm==='each')auto('[data-vac]',base*vr/100);
+    if(vm==='accrue'){
+      auto('[data-vacacc]',base*vr/100);
+      const owed=vacBalance(e.id,{payDate:date+'~'},false);
+      auto('[data-vac]',fin?owed+val('[data-vacacc]'):0);
+      q('[data-vachint]').textContent=`${vr}% · owed before this pay: ${money(owed)}`;
+    }
+    const gross=r2(val('[data-reg]')+val('[data-hol]')+val('[data-other]')+val('[data-bonus]')+val('[data-vac]'));
+    const note=q('[data-note]');let res=null;
     try{res=calcFor(e,date,P(),gross,ytdFor(e.id,{payDate:date+'~'},false));note.textContent=res.notes.join(' ')}
     catch(err){note.innerHTML=`<span class="neg">${esc(err.message)}</span> Enter the deductions yourself.`}
     const set=(el,v)=>{if(!el.dataset.ov)el.value=v?v.toFixed(2):''};
@@ -260,26 +348,33 @@ function payRunForm(){
   const readLine=box=>{const e=employee(box.dataset.emp);const g=k=>r2(+box.querySelector(k)?.value||0);
     const ded={},er={};box.querySelectorAll('[data-ded]').forEach(x=>ded[x.dataset.ded]=r2(+x.value||0));box.querySelectorAll('[data-er]').forEach(x=>er[x.dataset.er]=r2(+x.value||0));
     DED_KEYS.forEach(k=>ded[k]=ded[k]||0);ER_KEYS.forEach(k=>er[k]=er[k]||0);
-    const regular=g('[data-reg]'),other=g('[data-other]'),gross=r2(regular+other);
-    const l={employeeId:e.id,name:e.name,prov:e.prov,payType:e.payType,rate:+e.rate||0,hours:e.payType==='hourly'?g('[data-hours]'):'',regular,other,gross,pensionable:gross,insurable:gross,cppExempt:!!e.cppExempt,eiExempt:!!e.eiExempt,qpipExempt:e.prov==='QC'&&!!e.qpipExempt,
-      rrsp:g('[data-x=rrsp]'),union:g('[data-x=union]'),ded,er,overridden:[...box.querySelectorAll('[data-ov]')].map(x=>x.dataset.ded||x.dataset.er||x.dataset.x||'').filter(Boolean)};
+    const regular=g('[data-reg]'),holiday=g('[data-hol]'),other=g('[data-other]'),bonus=g('[data-bonus]'),vacPay=g('[data-vac]'),gross=r2(regular+holiday+other+bonus+vacPay);
+    const vm=vacMode(e),from=$('#rFrom',f).value,to=$('#rTo',f).value;
+    const l={employeeId:e.id,name:e.name,prov:e.prov,payType:e.payType,rate:+e.rate||0,hours:e.payType==='hourly'?g('[data-hours]'):(+e.hours||''),regular,other,gross,pensionable:gross,insurable:gross,cppExempt:!!e.cppExempt,eiExempt:!!e.eiExempt,qpipExempt:e.prov==='QC'&&!!e.qpipExempt,
+      rrsp:g('[data-x=rrsp]'),union:g('[data-x=union]'),ded,er,overridden:[...box.querySelectorAll('[data-ov]')].map(x=>x.dataset.ded||x.dataset.er||x.dataset.x||x.dataset.ovk||'').filter(Boolean)};
+    if(holiday){l.holiday=holiday;l.holHours=g('[data-holhrs]');l.holidays=(e.payType==='hourly'&&from&&to?PR.holidaysBetween(e.prov,from,to):[]).map(h=>({date:h.date,name:h.name}))}
+    if(bonus)l.bonus=bonus;
+    if(vm!=='salary'){l.vacMode=vm;l.vacRate=vacRateFor(e,$('#rDate',f).value).rate;l.vacPay=vacPay;if(vm==='accrue')l.vacAccrued=g('[data-vacacc]')}
+    if(box.querySelector('[data-final]').checked)l.final=true;
     l.net=r2(gross-lineDed(l));return l};
   const recalcAll=()=>{$$('.prl',f).forEach(recalc);totals()};
   const included=()=>$$('.prl',f).filter(b=>b.querySelector('[data-inc]').checked);
   const totals=()=>{const r={lines:included().map(readLine)};const t=runTotals(r);
-    $('[data-rtot]',f).innerHTML=`<div>Gross pay</div><div>${money(t.gross)}</div><div>Employee deductions</div><div>${money(t.ded)}</div><div>Employer contributions</div><div>${money(t.er)}</div><div>To CRA</div><div>${money(t.cra)}</div>${t.rq?`<div>To Revenu Québec</div><div>${money(t.rq)}</div>`:''}<div class="big">Net pay from bank</div><div class="big">${money(t.net)}</div>`;
+    $('[data-rtot]',f).innerHTML=`<div>Gross pay</div><div>${money(t.gross)}</div><div>Employee deductions</div><div>${money(t.ded)}</div><div>Employer contributions</div><div>${money(t.er)}</div><div>To CRA</div><div>${money(t.cra)}</div>${t.rq?`<div>To Revenu Québec</div><div>${money(t.rq)}</div>`:''}${t.vacAcc||t.vacOut?`<div>Vacation pay set aside</div><div>${money(r2(t.vacAcc-t.vacOut))}</div>`:''}<div class="big">Net pay from bank</div><div class="big">${money(t.net)}</div>`;
     const tb=PR.tableFor($('#rDate',f).value);$('[data-rates]',f).textContent=tb?`Rates: ${tb.label} (CRA T4127, 123rd edition).`:'';};
   const emps=$('[data-emps]',f);
   emps.addEventListener('input',ev=>{const box=ev.target.closest('.prl');if(!box)return;const el=ev.target;
     if(el.matches('[data-ded],[data-er],[data-x]')||(el.matches('[data-reg]')&&employee(box.dataset.emp).payType==='hourly'))el.dataset.ov='1';
+    if(el.matches('[data-hol],[data-vac],[data-vacacc],[data-holhrs]')){el.dataset.ov='1';el.dataset.ovk=[...Object.keys(el.dataset)].find(k=>['hol','vac','vacacc','holhrs'].includes(k))}
     if(el.matches('[data-ded],[data-er],[data-x]')){const l=readLine(box);box.querySelector('[data-s=ded]').textContent=money(lineDed(l));box.querySelector('[data-s=net]').textContent=money(l.net)}
     else recalc(box);totals()});
-  emps.addEventListener('change',ev=>{if(ev.target.matches('[data-inc]')){recalc(ev.target.closest('.prl'));totals()}});
+  emps.addEventListener('change',ev=>{if(ev.target.matches('[data-inc],[data-final]')){const b=ev.target.closest('.prl');if(ev.target.matches('[data-final]')){const v=b.querySelector('[data-vac]');if(v)delete v.dataset.ov}recalc(b);totals()}});
   emps.addEventListener('click',ev=>{const box=ev.target.closest('.prl');if(!box)return;
     if(ev.target.closest('[data-more]')){const m=box.querySelector('.prl-more'),b=ev.target.closest('[data-more]');m.hidden=!m.hidden;b.setAttribute('aria-expanded',String(!m.hidden))}
     if(ev.target.closest('[data-reset]')){box.querySelectorAll('[data-ov]').forEach(x=>delete x.dataset.ov);recalc(box);totals()}});
   $('#rFreq',f).onchange=()=>{freq=$('#rFreq',f).value;setDates();render()};
   $('#rDate',f).onchange=()=>{const[a,b]=defaultPeriod(freq,$('#rDate',f).value);$('#rFrom',f).value=a;$('#rTo',f).value=b;recalcAll()};
+  $('#rFrom',f).onchange=$('#rTo',f).onchange=recalcAll;
   setDates();render();
   f.onsubmit=async ev=>{ev.preventDefault();f.err('');
     const payDate=$('#rDate',f).value,bank=$('#rBank',f).value;
@@ -287,12 +382,16 @@ function payRunForm(){
     const lines=included().map(readLine).filter(l=>l.gross>0);
     if(!lines.length)return f.err('Include at least one employee with pay.');
     const bad=lines.find(l=>l.net<0);if(bad)return f.err(`${bad.name}: deductions are more than gross pay.`);
+    const over=lines.find(l=>l.vacMode==='accrue'&&l.vacPay>r2(vacBalance(l.employeeId,{payDate:payDate+'~'},false)+(l.vacAccrued||0))+0.004);
+    if(over&&!await confirmBox('Pay more vacation pay than is owed?',`${over.name} is owed ${money(r2(vacBalance(over.employeeId,{payDate:payDate+'~'},false)+(over.vacAccrued||0)))} of vacation pay, and this pays ${money(over.vacPay)}. Pay it anyway?`,'Pay anyway'))return;
     const dup=lines.find(l=>S.payruns.some(r=>r.payDate===payDate&&r.lines.some(x=>x.employeeId===l.employeeId)));
     if(dup&&!await confirmBox('Pay this employee twice?',`${dup.name} already has a pay run dated ${fmtDate(payDate)}. Post another one anyway?`,'Post anyway'))return;
     const id=uid(),run={payDate,from:$('#rFrom',f).value,to:$('#rTo',f).value,freq,bank,lines,created:Date.now(),entryId:'pr_'+id};
     const t=runTotals(run);
-    const{writes,ids}=payAccounts(t.rq>0);
-    const L=[{account:ids.wages,debit:t.gross,credit:0,memo:'Gross pay'}];
+    const{writes,ids}=payAccounts(t.rq>0,!!(t.vacAcc||t.vacOut));
+    const L=[{account:ids.wages,debit:r2(t.gross-t.vacOut+t.vacAcc),credit:0,memo:t.vacAcc||t.vacOut?'Gross pay, with vacation pay as it’s earned':'Gross pay'}];
+    if(t.vacAcc)L.push({account:ids.vacation_payable,debit:0,credit:t.vacAcc,memo:'Vacation pay set aside'});
+    if(t.vacOut)L.push({account:ids.vacation_payable,debit:t.vacOut,credit:0,memo:'Vacation pay paid out'});
     if(t.er)L.push({account:ids.payroll_tax,debit:t.er,credit:0,memo:'Employer contributions'});
     if(t.cra)L.push({account:ids.payroll_cra,debit:0,credit:t.cra,memo:'Source deductions – CRA'});
     if(t.rq)L.push({account:ids.payroll_rq,debit:0,credit:t.rq,memo:'Source deductions – Revenu Québec'});
@@ -315,7 +414,7 @@ function payRunView(run){
     <div class="tbl-wrap"><table><thead><tr><th>Employee</th><th class="n">Gross</th><th class="n">${qc?'CPP/QPP':'CPP'}</th><th class="n">EI${qc?'/QPIP':''}</th><th class="n">Income tax</th><th class="n">Other</th><th class="n">Net pay</th><th></th></tr></thead><tbody>
     ${run.lines.map((l,i)=>`<tr><td>${esc(l.name)}${l.overridden&&l.overridden.length?' <span class="pill quiet" title="Amounts changed by hand">Edited</span>':''}</td><td class="n">${money(l.gross)}</td><td class="n">${money(l.ded.cpp+l.ded.cpp2+l.ded.qpp+l.ded.qpp2)}</td><td class="n">${money(l.ded.ei+l.ded.qpip)}</td><td class="n">${money(l.ded.fedTax+l.ded.provTax+l.ded.qcTax)}</td><td class="n">${money((+l.rrsp||0)+(+l.union||0))}</td><td class="n"><b>${money(l.net)}</b></td><td class="n"><button type="button" class="btn sm" data-stub="${i}">Pay stub</button></td></tr>`).join('')}
     </tbody><tfoot><tr><td><b>Total</b></td><td class="n">${money(t.gross)}</td><td colspan="4"></td><td class="n"><b>${money(t.net)}</b></td><td></td></tr></tfoot></table></div>
-    <div class="totals" style="min-width:280px"><div>Employer contributions</div><div>${money(t.er)}</div><div>Owed to CRA</div><div>${money(t.cra)}</div>${t.rq?`<div>Owed to Revenu Québec</div><div>${money(t.rq)}</div>`:''}<div class="big">Total cost</div><div class="big">${money(r2(t.gross+t.er))}</div></div>`,
+    <div class="totals" style="min-width:280px"><div>Employer contributions</div><div>${money(t.er)}</div><div>Owed to CRA</div><div>${money(t.cra)}</div>${t.rq?`<div>Owed to Revenu Québec</div><div>${money(t.rq)}</div>`:''}${t.vacAcc||t.vacOut?`<div>Vacation pay set aside</div><div>${money(r2(t.vacAcc-t.vacOut))}</div>`:''}<div class="big">Total cost</div><div class="big">${money(t.cost)}</div></div>`,
     `<button type="button" class="btn danger left" data-del>Delete pay run</button><button type="button" class="btn" data-stub="all">Print all pay stubs</button><button type="button" class="btn primary" data-close>Done</button>`,'wide');
   f.addEventListener('click',ev=>{const b=ev.target.closest('[data-stub]');if(b)printStubs(run,b.dataset.stub==='all'?run.lines:[run.lines[+b.dataset.stub]])});
   $('[data-del]',f).onclick=async()=>{
@@ -335,11 +434,14 @@ function stubHTML(run,l){
     <div class="stub-emp"><b>${esc(l.name)}</b>${e.address?`<div class="muted" style="white-space:pre-line">${esc(e.address)}</div>`:''}</div>
     <table><thead><tr><th>Earnings</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>
       ${l.payType==='hourly'&&l.hours?row(`Regular, ${l.hours} h × ${money(l.rate)}`,l.regular,null):row('Regular pay',l.regular??l.gross,null)}
-      ${l.other?row('Other pay',l.other,null):''}</tbody>
+      ${l.holiday?row(`Holiday pay${(l.holidays||[]).length?` (${l.holidays.map(h=>(typeof tr==='function'&&tr(h.name))||h.name).join(', ')})`:''}`,l.holiday,y.hol||0):''}
+      ${l.other?row('Other pay',l.other,null):''}${l.bonus?row('Bonus',l.bonus,null):''}
+      ${l.vacPay||y.vac?row(l.vacMode==='accrue'?'Vacation pay paid out':`Vacation pay (${l.vacRate}%)`,l.vacPay||0,y.vac||0):''}</tbody>
       <tfoot><tr><td><b>Gross pay</b></td><td class="n"><b>${money(l.gross)}</b></td><td class="n"><b>${money(y.gross)}</b></td></tr></tfoot></table>
     <table><thead><tr><th>Deductions</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${ded||'<tr><td colspan="3" class="muted">None</td></tr>'}</tbody>
       <tfoot><tr><td><b>Total deductions</b></td><td class="n"><b>${money(lineDed(l))}</b></td><td class="n"><b>${money(r2(y.gross-y.net))}</b></td></tr></tfoot></table>
     <div class="stub-net"><span>Net pay</span><b>${money(l.net)}</b></div>
+    ${l.vacMode==='accrue'?`<div class="stub-vac"><span>Vacation pay owed to you after this pay:</span> <b>${money(vacBalance(l.employeeId,run,true))}</b> · <span>Set aside this pay: ${money(l.vacAccrued||0)}, at ${l.vacRate}%</span></div>`:''}
     ${er?`<table class="stub-er"><thead><tr><th>Paid by your employer</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${er}</tbody></table>`:''}
   </section>`;
 }

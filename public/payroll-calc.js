@@ -461,6 +461,168 @@
     return { year, slips, t4sum, rl1sum, due: slipsDue(year), limits: L };
   }
 
+
+  /* ---------- dates ---------- */
+  const D = s => new Date(s + 'T00:00:00Z');
+  const iso = d => d.toISOString().slice(0, 10);
+  const addD = (s, n) => { const d = D(s); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+  const daysBetween = (a, b) => Math.round((D(b) - D(a)) / 864e5); // b − a
+  const ymd = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  /** The nth weekday (0 = Sunday) of a month; n = -1 for the last. */
+  function nthWeekday(y, m, wd, n) {
+    if (n > 0) { const first = new Date(Date.UTC(y, m - 1, 1)).getUTCDay(); return ymd(y, m, 1 + ((wd - first + 7) % 7) + (n - 1) * 7); }
+    const lastDay = new Date(Date.UTC(y, m, 0)), back = (lastDay.getUTCDay() - wd + 7) % 7;
+    return ymd(y, m, lastDay.getUTCDate() - back);
+  }
+  function easter(y) { // Anonymous Gregorian algorithm
+    const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+    return ymd(y, Math.floor((h + l - 7 * m + 114) / 31), ((h + l - 7 * m + 114) % 31) + 1);
+  }
+
+  /* ---------- public (statutory) holidays ----------
+     The general holidays in each province's employment standards law, for employees under provincial law.
+     Some provinces have more holidays for some workplaces, and some holidays move when they fall on a weekend;
+     the pay-run screen shows each holiday so it can be left out. */
+  const HOLIDAY_SETS = {
+    ON: ['newyear', 'family', 'goodfriday', 'victoria', 'canada', 'labour', 'thanksgiving', 'christmas', 'boxing'],
+    QC: ['newyear', 'goodfriday', 'patriots', 'stjean', 'canadaQc', 'labour', 'thanksgiving', 'christmas'],
+    AB: ['newyear', 'family', 'goodfriday', 'victoria', 'canada', 'labour', 'thanksgiving', 'remembrance', 'christmas'],
+    BC: ['newyear', 'family', 'goodfriday', 'victoria', 'canada', 'bcday', 'labour', 'truth', 'thanksgiving', 'remembrance', 'christmas'],
+    MB: ['newyear', 'louisriel', 'goodfriday', 'victoria', 'canada', 'labour', 'truth', 'thanksgiving', 'christmas'],
+    SK: ['newyear', 'family', 'goodfriday', 'victoria', 'canada', 'skday', 'labour', 'thanksgiving', 'remembrance', 'christmas'],
+    NS: ['newyear', 'heritage', 'goodfriday', 'canada', 'labour', 'christmas'],
+    NB: ['newyear', 'family', 'goodfriday', 'canada', 'nbday', 'labour', 'remembrance', 'christmas'],
+    NL: ['newyear', 'goodfriday', 'canada', 'labour', 'remembrance', 'christmas'],
+    PE: ['newyear', 'islander', 'goodfriday', 'canada', 'labour', 'truth', 'remembrance', 'christmas'],
+    NT: ['newyear', 'goodfriday', 'victoria', 'indigenous', 'canada', 'civic', 'labour', 'truth', 'thanksgiving', 'remembrance', 'christmas'],
+    NU: ['newyear', 'goodfriday', 'victoria', 'canada', 'nunavut', 'civic', 'labour', 'truth', 'thanksgiving', 'remembrance', 'christmas'],
+    YT: ['newyear', 'goodfriday', 'victoria', 'indigenous', 'canada', 'discovery', 'labour', 'truth', 'thanksgiving', 'remembrance', 'christmas'],
+  };
+  const HOLIDAY_RULES = {
+    newyear: ['New Year’s Day', y => ymd(y, 1, 1)],
+    family: ['Family Day', y => nthWeekday(y, 2, 1, 3)],
+    louisriel: ['Louis Riel Day', y => nthWeekday(y, 2, 1, 3)],
+    heritage: ['Heritage Day', y => nthWeekday(y, 2, 1, 3)],
+    islander: ['Islander Day', y => nthWeekday(y, 2, 1, 3)],
+    goodfriday: ['Good Friday', y => addD(easter(y), -2)],
+    victoria: ['Victoria Day', y => addD(ymd(y, 5, 25), -(((D(ymd(y, 5, 25)).getUTCDay() + 6) % 7) || 7))],
+    patriots: ['National Patriots’ Day', y => addD(ymd(y, 5, 25), -(((D(ymd(y, 5, 25)).getUTCDay() + 6) % 7) || 7))],
+    stjean: ['Fête nationale du Québec', y => ymd(y, 6, 24)],
+    indigenous: ['National Indigenous Peoples Day', y => ymd(y, 6, 21)],
+    canada: ['Canada Day', y => ymd(y, 7, 1)],
+    canadaQc: ['Canada Day', y => (D(ymd(y, 7, 1)).getUTCDay() === 0 ? ymd(y, 7, 2) : ymd(y, 7, 1))], // Quebec: July 2 when July 1 is a Sunday
+    nunavut: ['Nunavut Day', y => ymd(y, 7, 9)],
+    civic: ['Civic Holiday', y => nthWeekday(y, 8, 1, 1)],
+    bcday: ['British Columbia Day', y => nthWeekday(y, 8, 1, 1)],
+    skday: ['Saskatchewan Day', y => nthWeekday(y, 8, 1, 1)],
+    nbday: ['New Brunswick Day', y => nthWeekday(y, 8, 1, 1)],
+    discovery: ['Discovery Day', y => nthWeekday(y, 8, 1, 3)],
+    labour: ['Labour Day', y => nthWeekday(y, 9, 1, 1)],
+    truth: ['National Day for Truth and Reconciliation', y => ymd(y, 9, 30)],
+    thanksgiving: ['Thanksgiving', y => nthWeekday(y, 10, 1, 2)],
+    remembrance: ['Remembrance Day', y => ymd(y, 11, 11)],
+    christmas: ['Christmas Day', y => ymd(y, 12, 25)],
+    boxing: ['Boxing Day', y => ymd(y, 12, 26)],
+  };
+  /** Public holidays for a province in a year: [{ date, name, key }] in date order. */
+  function holidays(prov, year) {
+    return (HOLIDAY_SETS[prov] || HOLIDAY_SETS.ON).map(k => ({ key: k, name: HOLIDAY_RULES[k][0], date: HOLIDAY_RULES[k][1](year) })).sort((a, b) => a.date.localeCompare(b.date));
+  }
+  /** Holidays between two dates (inclusive). */
+  function holidaysBetween(prov, from, to) {
+    const out = [];
+    for (let y = +from.slice(0, 4); y <= +to.slice(0, 4); y++) for (const h of holidays(prov, y)) if (h.date >= from && h.date <= to) out.push(h);
+    return out;
+  }
+  /** The 4 complete weeks (Sunday to Saturday) before the week a holiday falls in. */
+  function holidayWindow(date) {
+    const sunday = addD(date, -D(date).getUTCDay());
+    return { from: addD(sunday, -28), to: addD(sunday, -1) };
+  }
+  /** Holiday pay: 1/20 of the wages earned in the 4 weeks before the holiday's week (Ontario and Quebec).
+      `earnings`: [{ from, to, amount }] (pay periods, amounts counted for the holiday); each is spread evenly over its days. */
+  function holidayPay(date, earnings) {
+    const w = holidayWindow(date);
+    let base = 0;
+    for (const e of earnings) {
+      if (!e.from || !e.to || e.to < w.from || e.from > w.to) continue;
+      const days = daysBetween(e.from, e.to) + 1;
+      const lo = e.from > w.from ? e.from : w.from, hi = e.to < w.to ? e.to : w.to;
+      base += num(e.amount) * (daysBetween(lo, hi) + 1) / days;
+    }
+    return { base: r2(base), pay: r2(base / 20), window: w };
+  }
+
+  /* ---------- vacation pay ----------
+     Suggested minimum by years of service. Where Tally Books doesn't know when the rate goes up, it suggests 4%
+     and says to check. Always the minimum: an employer can pay more. */
+  const VACATION = {
+    ON: [[0, 4], [5, 6]], QC: [[0, 4], [3, 6]], BC: [[0, 4], [5, 6]], AB: [[0, 4], [5, 6]], MB: [[0, 4], [5, 6]],
+    SK: [[0, 5.77], [10, 7.69]],
+  };
+  function serviceYears(hireDate, onDate) {
+    if (!hireDate || !onDate || hireDate > onDate) return 0;
+    const [hy, hm, hd] = hireDate.split('-').map(Number), [y, m, d] = onDate.split('-').map(Number);
+    return y - hy - (m < hm || (m === hm && d < hd) ? 1 : 0);
+  }
+  function vacationRate(prov, hireDate, onDate) {
+    const steps = VACATION[prov], years = serviceYears(hireDate, onDate);
+    if (!steps) return { rate: 4, years, known: false };
+    let rate = steps[0][1];
+    for (const [y, r] of steps) if (years >= y) rate = r;
+    return { rate, years, known: true, next: (steps.find(([y]) => y > years) || null) };
+  }
+
+  /* ---------- Record of Employment (ROE) ----------
+     Service Canada's ROE: insurable earnings for the last pay periods (block 15C) and the insurable hours in them
+     (block 15A). How many pay periods depends on how often the employee was paid. */
+  const ROE_PERIODS = { weekly: 53, biweekly: 27, semimonthly: 25, monthly: 13 };
+  const ROE_TYPE = { weekly: 'W', biweekly: 'B', semimonthly: 'S', monthly: 'M' };
+  /** The pay periods ending on `end`, going back: [{ n, from, to }] with n = 1 for the final period. */
+  function roePeriods(freq, end, count) {
+    const out = [];
+    let to = end;
+    for (let n = 1; n <= count; n++) {
+      let from;
+      if (freq === 'weekly' || freq === 'biweekly') from = addD(to, freq === 'weekly' ? -6 : -13);
+      else if (freq === 'monthly') from = to.slice(0, 8) + '01';
+      else from = +to.slice(8) <= 15 ? to.slice(0, 8) + '01' : to.slice(0, 8) + '16';
+      out.push({ n, from, to });
+      to = addD(from, -1);
+    }
+    return out;
+  }
+  /*
+   * roe({ freq, finalPeriodEnd, lines }) — lines: one per pay for this employee:
+   *   { from, to, payDate, insurable, hours, separationVac }   (separationVac: vacation pay paid because they left; it goes in block 17A)
+   * Returns { type, count, periods: [{ n, from, to, amount }], totalEarnings, hours, vacation, outside }.
+   */
+  function roe({ freq, finalPeriodEnd, lines }) {
+    const count = ROE_PERIODS[freq] || 27;
+    const periods = roePeriods(freq, finalPeriodEnd, count).map(p => ({ ...p, amount: 0, hours: 0 }));
+    let vacation = 0, outside = 0;
+    for (const l of lines) {
+      const day = l.to || l.payDate;
+      const p = periods.find(x => day >= x.from && day <= x.to);
+      vacation = r2(vacation + num(l.separationVac));
+      if (!p) { if (day > finalPeriodEnd) outside++; continue; }
+      p.amount = r2(p.amount + num(l.insurable) - num(l.separationVac));
+      p.hours = r2(p.hours + num(l.hours));
+    }
+    return {
+      type: ROE_TYPE[freq] || 'B', count, periods,
+      totalEarnings: r2(periods.reduce((t, p) => t + p.amount, 0)), hours: Math.round(periods.reduce((t, p) => t + p.hours, 0)),
+      vacation, outside, due: addD(finalPeriodEnd, 5),
+    };
+  }
+  const ROE_REASONS = [
+    ['A', 'Shortage of work / end of contract or season'], ['B', 'Strike or lockout'], ['D', 'Illness or injury'], ['E', 'Quit'],
+    ['F', 'Maternity'], ['G', 'Retirement'], ['H', 'Work-sharing'], ['J', 'Apprentice training'], ['K', 'Other'],
+    ['M', 'Dismissal or suspension'], ['N', 'Leave of absence'], ['P', 'Parental'], ['Z', 'Compassionate care / family caregiver'],
+  ];
+
   return { calc, remitSplit, remittanceDue, tableFor, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
-    yearEnd, sinProblem, slipsDue, hsfRateFor, YEAR_LIMITS };
+    yearEnd, sinProblem, slipsDue, hsfRateFor, YEAR_LIMITS,
+    holidays, holidaysBetween, holidayWindow, holidayPay, vacationRate, serviceYears, roe, roePeriods, ROE_PERIODS, ROE_REASONS, addDays: addD, daysBetween };
 });

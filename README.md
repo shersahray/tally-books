@@ -39,9 +39,12 @@ It runs two ways from the same code:
   - **Employees:** province of employment, pay schedule (weekly, every 2 weeks, twice a month, monthly), salary or hourly rate, TD1 and TP-1015.3 claim amounts, extra tax, RRSP and union dues at source, CPP/QPP, EI and QPIP exemptions, and amounts paid earlier in the year outside Tally Books.
   - **Pay runs** calculate CPP, CPP2, EI and federal and provincial income tax for every province and territory, and QPP, QPP2, QPIP, Quebec EI and Quebec income tax for Quebec, using CRA's *Payroll Deductions Formulas* (T4127, 123rd edition, July 2026). Employer CPP/QPP, EI (1.4×), QPIP and the Quebec Health Services Fund are included. Yearly maximums are tracked from year-to-date amounts.
   - Every amount can be changed before posting. Changed amounts are marked "Edited" on the pay run.
-  - Posting a pay run records one journal entry: wages and employer contributions as expenses, source deductions as liabilities to CRA and Revenu Québec, and net pay out of the bank. Payroll accounts (2300, 2310, 2320, 7110) are added the first time they're needed.
+  - Posting a pay run records one journal entry: wages and employer contributions as expenses, source deductions as liabilities to CRA and Revenu Québec, and net pay out of the bank. Payroll accounts (2300, 2310, 2320, 2330, 7110) are added the first time they're needed.
   - **Pay stubs** with this-pay and year-to-date amounts, printed one at a time or all together.
   - **Remittances:** what's owed to each agency per month (or quarter), the due date (the 15th of the following month), the figures for the PD7A voucher and for Revenu Québec, and payments that clear the liability.
+  - **Vacation pay:** for each employee, set it aside each pay (posted to *Vacation pay payable*, 2330) and pay it out when they take vacation or leave, add it to every pay, or let a salary continue during vacation. The rate defaults to the provincial minimum for the employee's years of service (for example Ontario 4%, then 6% after 5 years; Quebec 6% after 3 years) and can be set by hand. It's worked out on regular, holiday and other pay, not on bonuses marked as such. Pay stubs show what's owed, and the employee list shows each balance.
+  - **Statutory holiday pay:** each province's public holidays are built in. When one falls in an hourly employee's pay period, the pay run suggests holiday pay at 1/20 of what they earned in the 4 weeks before the holiday's week (the Ontario and Quebec rule; Ontario adds vacation pay paid). Salaried pay already covers holidays. Every amount can be changed.
+  - **Records of employment (ROE):** mark an employee's final pay (it pays out the vacation pay owed), then open **Record of employment** on their page. Tally Books fills in every block: pay period type, dates, insurable hours (15A), insurable earnings for each of the last 27 pay periods (15C, for every 2 weeks), the reason code, vacation pay on leaving (17A), statutory holiday pay and other money. It shows the due date (5 days after the final pay period) and prints a worksheet to enter in Service Canada's ROE Web. Saving it keeps the ROE and its serial number with the employee.
   - **Year-end (T4 and RL-1):** a T4 for every employee (one per province they worked in), an RL-1 for Quebec employees, the T4 Summary and the RL-1 Summary, built from the year's pay runs, amounts paid earlier outside Tally Books, and recorded remittances. It covers boxes 14 to 56 (including CPP2/QPP2 in 16A/17A, RPP box 20 with registration number 50 and pension adjustment 52, exemptions in 28, and dental benefits in 45) and RL-1 boxes A to I. Yearly maximums for insurable and pensionable earnings are shared across an employee's slips in date order. The Health Services Fund rate is set from total payroll (all provinces, plus associated employers) and applied to Quebec payroll, and the labour standards contribution is worked out too. Checks flag a missing or invalid SIN, a missing dental code or pension adjustment, and deductions that don't match what CRA's year-end review expects. Export the figures to CSV or print worksheets.
   - Tally Books prepares the figures; you file them with CRA's T4 Web Forms and Revenu Québec's My Account for businesses. Revenu Québec accepts printed RL-1 slips only from certified software, so the printouts are worksheets, not slips.
   - Rates are loaded for pay dates from July 1 to December 31, 2026. Quebec income tax follows Revenu Québec's TP-1015.F method but hasn't been checked line by line against WebRAS yet, so compare a first pay run with WebRAS. Always check unusual cases against CRA's PDOC.
@@ -184,9 +187,10 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   convert.js       The Bring over from QuickBooks or Sage wizard
   companies.js     Client list, company switcher, new company
   salestax.js      GST/HST and QST return worksheets, filing, payments
-  payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas, and year-end slip figures
+  payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas, year-end slip figures, public holidays, vacation pay rates and ROE figures
   payroll.js       Employees, pay runs, pay stubs, remittances
   payroll-yearend.js  T4 and RL-1 slips and summaries
+  payroll-roe.js   Records of employment (ROE)
   activity.js      Activity log screen
   auth.js          Sign-in, two-step codes, invitations, users and security
   qr.js            QR code generator for the two-step setup screen
@@ -275,7 +279,7 @@ The tests start a real server against a temporary database. They cover the bookk
 
 ## Not built yet
 
-Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, filing T4 and RL-1 slips electronically (XML), records of employment (ROE), vacation and statutory holiday pay, multiple currencies, and emailing invitations directly (for now you send the link yourself).
+Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, filing T4 and RL-1 slips and records of employment electronically (XML), multiple currencies, and emailing invitations directly (for now you send the link yourself).
 
 ## License
 
