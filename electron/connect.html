@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'">
+<title>Tally Books</title>
+<style>
+  :root{--bg:#eef2f0;--panel:#fff;--ink:#17231e;--muted:#5d6b65;--line:#d5ddd9;--accent:#0f5a45;--accent-soft:#e2efe9;--neg:#b42318}
+  @media (prefers-color-scheme: dark){:root{--bg:#121816;--panel:#1b2420;--ink:#e7eeea;--muted:#9aa8a1;--line:#2d3a34;--accent:#4fb08f;--accent-soft:#1f3a30;--neg:#f28b82}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+  main{width:100%;max-width:760px}
+  h1{font:600 26px/1.2 Georgia,serif;margin:0 0 6px}
+  .lead{color:var(--muted);margin:0 0 22px}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:640px){.cards{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:12px}
+  .card.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+  .card h2{font-size:17px;margin:0}
+  .card p{margin:0;color:var(--muted);font-size:14px}
+  .grow{flex:1}
+  label{font-size:13px;font-weight:600}
+  input{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
+  input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  button{font:inherit;font-weight:600;border-radius:8px;padding:9px 16px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.6;cursor:default}
+  .err{color:var(--neg);font-size:14px;min-height:1em}
+  .hint{font-size:13px;color:var(--muted)}
+  .pill{display:inline-block;font-size:11.5px;font-weight:600;border-radius:10px;padding:1px 9px;background:var(--accent-soft);color:var(--accent);margin-left:6px;vertical-align:2px}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <section id="setup" hidden>
+    <h1 data-t>Where are your books?</h1>
+    <p class="lead" data-t>You can change this later from File → Where the books are.</p>
+    <div class="cards">
+      <div class="card" id="cardServer">
+        <h2><span data-t>On our office server</span><span class="pill" id="nowServer" hidden data-t>Now</span></h2>
+        <p data-t>Everyone in your offices works in the same books, saved on your firm’s server. Nothing is kept on this computer.</p>
+        <form id="srvForm" class="grow" style="display:flex;flex-direction:column;gap:8px">
+          <label for="srv" data-t>Server address</label>
+          <input id="srv" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://books.yourfirm.ca">
+          <div class="hint" data-t>Ask whoever set up the server. It starts with https://.</div>
+          <div class="err" id="srvErr" role="alert"></div>
+          <div><button class="primary" type="submit" id="srvBtn" data-t>Connect</button></div>
+        </form>
+      </div>
+      <div class="card" id="cardLocal">
+        <h2><span data-t>On this computer</span><span class="pill" id="nowLocal" hidden data-t>Now</span></h2>
+        <p data-t>Just you, on this computer. The books are saved here and backed up every day. Nobody else can open them.</p>
+        <p id="localHas" hidden data-t>This computer already has books in Tally Books. They stay here whichever you choose.</p>
+        <div class="grow"></div>
+        <div><button type="button" id="localBtn" data-t>Use this computer</button></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:18px" id="backRow" hidden><button type="button" id="backBtn" data-t>Back to my books</button></div>
+  </section>
+
+  <section id="offline" hidden>
+    <h1 data-t>Can’t reach your office server</h1>
+    <p class="lead"><span data-t>Tally Books tried</span> <b id="offUrl" translate="no"></b></p>
+    <div class="card">
+      <div class="err" id="offErr" role="alert"></div>
+      <p data-t>Your books are safe on the server. Once this computer can reach it again, everything is where you left it.</p>
+      <div class="row"><button class="primary" type="button" id="retryBtn" data-t>Try again</button><button type="button" id="changeBtn" data-t>Change server</button></div>
+    </div>
+  </section>
+</main>
+<script src="connect.js"></script>
+</body>
+</html>
