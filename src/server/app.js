@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
+const { AI } = require('./ai');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
@@ -30,6 +31,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {string} [opts.require2fa]  Least two-step sign-in allowed: 'owners' or 'everyone' (use 'everyone' online).
  * @param {boolean} [opts.trustProxy] Behind a reverse proxy (Caddy): take the client's address from X-Forwarded-For.
  * @param {string} [opts.backupBlobUrl] Azure Blob Storage container URL with a SAS token, for off-site backups.
+ * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
  * @param {string} [opts.setupCode]   If set, creating the first owner account needs this code (so a stranger can't claim a new server).
  */
 function createApp(opts) {
@@ -38,6 +40,7 @@ function createApp(opts) {
   const ownerOnly = u => { if (u.role !== 'owner') throw new ValidationError('Only an owner can do that.', 403); };
   const notClient = u => { if (u.role === 'client') throw new ValidationError('Only your bookkeeper can do that.', 403); };
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
+  const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
   if (opts.backupFolder) backups.update({ folder: opts.backupFolder });
   if (opts.autoBackup !== false) backups.start();
   const publicDir = opts.publicDir || PUBLIC_DIR;
@@ -342,6 +345,14 @@ function createApp(opts) {
       try { spawn(cmd, args, { stdio: 'ignore', detached: true }).unref(); } catch { /* shown in the UI instead */ }
       return { ok: true, path: dir };
     }],
+    ['GET', /^\/api\/ai$/, (req, m, res, user) => (user.role === 'owner' ? ai.status(true) : { configured: ai.status().configured })],
+    ['PUT', /^\/api\/ai$/, async (req, m, res, user) => {
+      ownerOnly(user);
+      const body = await readJson(req);
+      const st = ai.update(body);
+      auth.log('ai-settings', { username: user.username, ip: clientIp(req), change: body.apiKey !== undefined ? (body.apiKey ? 'API key changed' : 'API key removed') : 'settings changed' });
+      return st;
+    }],
     ['GET', /^\/api\/events$/, (req, m, res, user) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
       res.user = user;
@@ -391,6 +402,31 @@ function createApp(opts) {
         return r;
       });
       return { ok: true, rev: result.added ? ctx.bump() : ctx.rev, ...result };
+    }],
+    // AI suggestions for bank lines waiting for review. Suggestions are saved on each line; nothing is added to the books.
+    ['POST', /^\/ai\/suggest$/, async (ctx, req) => {
+      const body = await readJson(req);
+      if (!Array.isArray(body.ids) || !body.ids.length) throw new ValidationError('Choose the bank lines to suggest categories for.');
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      const { suggestions, usd } = await ai.suggest(ctx.store, company, body.ids.map(String));
+      const n = Object.keys(suggestions).length;
+      if (!n) return { ok: true, count: 0, usd, rev: ctx.rev };
+      ctx.store.transaction(() => {
+        for (const [id, sug] of Object.entries(suggestions)) {
+          const b = ctx.store.get('bankTxns', id);
+          if (b && b.status === 'new') ctx.store.put('bankTxns', id, { ...b, ai: sug });
+        }
+        ctx.store.audit(ctx.user, 'ai', { collection: 'bankTxns', summary: `AI suggested categories for ${n} bank line(s)` });
+      });
+      return { ok: true, count: n, usd, rev: ctx.bump() };
+    }],
+    // Read a receipt or bill with AI and return a draft. Nothing is saved; the file isn't kept.
+    ['POST', /^\/ai\/read$/, async (ctx, req) => {
+      const body = await readJson(req, 15 * 1024 * 1024);
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      const out = await ai.read(ctx.store, company, body || {});
+      ctx.store.audit(ctx.user, 'ai', { collection: 'entries', summary: `AI read ${String(body.fileName || 'a document').slice(0, 80)}` });
+      return { ok: true, ...out };
     }],
     ['POST', /^\/examples$/, ctx => {
       notClient(ctx.user);

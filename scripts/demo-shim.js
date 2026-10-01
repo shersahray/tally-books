@@ -11,7 +11,7 @@
   const clone = o => JSON.parse(JSON.stringify(o));
   const cos = DATA.companies.map(c => ({ ...c.entry }));
   const books = {};
-  DATA.companies.forEach(c => { books[c.entry.id] = clone(c.state); books[c.entry.id].rev = 1; });
+  DATA.companies.forEach(c => { books[c.entry.id] = clone(c.state); books[c.entry.id].rev = 1; books[c.entry.id].company.ai = true; });
   const templates = Object.fromEntries(DATA.companies.map(c => [c.state.company.province, c.state]));
 
   class ApiError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -96,6 +96,11 @@
       if (method === 'GET') return { enabled: true, folder: 'Demo', target: 'Not available in the demo: nothing is saved', keepDays: 30, lastRun: Date.now(), lastCount: cos.length, lastError: '', suggestions: [] };
       throw new ApiError(400, 'Backups aren’t available in the demo, because nothing in it is saved.');
     }
+    // AI suggestions: the demo can't call Claude, so it makes simple keyword guesses to show how the screen works.
+    if (path === '/api/ai') {
+      if (method === 'GET') return { configured: true, demo: true, model: 'claude-haiku-4-5', capUsd: 20, spentUsd: 0, linesThisMonth: 0, source: 'env', keyHint: '(demo)', models: [{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (lowest cost)' }, { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (more accurate)' }] };
+      throw new ApiError(400, 'AI settings aren’t available in the demo.');
+    }
     if (path === '/api/companies' && method === 'GET') return { companies: cos.map(summary), provinces: PROVS };
     if (path === '/api/companies' && method === 'POST') return { ok: true, company: summary(createCompany(body)) };
     let m = path.match(/^\/api\/companies\/([^/]+)$/);
@@ -134,6 +139,26 @@
         }
       });
       return { ...out, added, skipped };
+    }
+    if (rest === '/ai/read') throw new ApiError(400, 'Reading receipts needs a Claude API key, so it isn’t available in the demo. Try “Suggest with AI” under Banking instead.');
+    if (rest === '/ai/suggest') {
+      if (!b.company.ai) throw new ApiError(409, 'AI suggestions are turned off for this company. Turn them on in Settings.');
+      const fr = b.company.lang === 'fr';
+      const guess = [[/TIM HORTONS|STARBUCKS|RESTAURANT|CAFE/i, 'a6300', fr ? 'Café ou restaurant : repas (démo)' : 'Coffee shop or restaurant: meals (demo)'],
+        [/STAPLES|BUREAU EN GROS|AMAZON/i, 'a6400', fr ? 'Fournitures de bureau (démo)' : 'Office supplies store (demo)'],
+        [/BELL|ROGERS|TELUS|VIDEOTRON/i, 'a6800', fr ? 'Fournisseur de téléphone (démo)' : 'Phone provider (demo)'],
+        [/FEE|FRAIS|INTEREST|INTÉRÊT/i, 'a6100', fr ? 'Frais bancaires (démo)' : 'Bank charge (demo)']];
+      let count = 0;
+      const out = transact(id, w => {
+        for (const bid of body.ids) {
+          const t = w.bankTxns.find(x => x.id === bid); if (!t || t.status !== 'new') continue;
+          const g = guess.find(([re]) => re.test(t.desc)) || [null, t.amount > 0 ? 'a4000' : 'a6400', fr ? 'Supposition de la démo, à vérifier' : 'Demo guess: check this one'];
+          if (!w.accounts.some(a => a.id === g[1])) continue;
+          t.ai = { account: g[1], contactId: '', tax: g[1] !== 'a6100' && !!(+w.company.taxRate), confidence: g[0] ? 'medium' : 'low', reason: g[2], model: 'demo', at: Date.now() };
+          count++;
+        }
+      });
+      return { ...out, count, usd: 0 };
     }
     if (rest === '/examples') throw new ApiError(400, 'The demo companies already include example data. Create a new Ontario or Quebec company with “Add example data” ticked to get another copy.');
     if (rest === '/backup') return { format: 'tally-books-backup', version: 1, exportedAt: new Date().toISOString(), ...clone(b) };

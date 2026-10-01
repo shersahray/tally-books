@@ -36,6 +36,7 @@ const server = createApp({
   setupCode: setupCode || undefined,
   backupFolder: process.env.BACKUP_FOLDER || undefined,
   backupBlobUrl: process.env.BACKUP_BLOB_URL || undefined,
+  aiKey: process.env.ANTHROPIC_API_KEY || undefined,
 });
 server.on('error', err => {
   if (err.code === 'EADDRINUSE') {

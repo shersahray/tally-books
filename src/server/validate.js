@@ -295,6 +295,7 @@ function validateCompany(data) {
     qstRate: Math.max(0, Math.min(100, Number(data.qstRate) || 0)),
     filingFreq: ['monthly', 'quarterly', 'annual'].includes(data.filingFreq) ? data.filingFreq : 'quarterly',
     lang: data.lang === 'fr' ? 'fr' : 'en',
+    ai: !!data.ai,
     payroll: validatePayrollSettings(data.payroll),
   };
 }

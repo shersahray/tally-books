@@ -34,7 +34,7 @@ COLS.forEach(c=>{if(!S[c])S[c]=[]});
 let CO=null; // id of the company whose books are open
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|ai$)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -197,7 +197,7 @@ function chart6(){
 function vDocs(kind){
   const inv=kind==='invoice',st=inv?S.sales:S.exp,ck=inv?'customer':'vendor';
   const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button></div>`;
-  const actions=inv?`<button class="btn" data-new="payment">Receive payment</button><button class="btn primary" data-new="invoice">New invoice</button>`:`<button class="btn" data-new="billpayment">Pay bill</button><button class="btn" data-new="expense">Expense</button><button class="btn primary" data-new="bill">New bill</button>`;
+  const actions=inv?`<button class="btn" data-new="payment">Receive payment</button><button class="btn primary" data-new="invoice">New invoice</button>`:`${typeof aiReceiptButton==='function'?aiReceiptButton():''}<button class="btn" data-new="billpayment">Pay bill</button><button class="btn" data-new="expense">Expense</button><button class="btn primary" data-new="bill">New bill</button>`;
   const h=head(inv?'Sales':'Expenses',inv?'Invoices you send and the customers who owe you':'Bills you receive and the vendors you pay',actions)+tabs;
   const docs=S.docs.filter(d=>d.kind===kind).map(d=>({d,s:docStatus(d)}));
   if(st.tab==='contacts'){
@@ -374,6 +374,7 @@ function vSettings(){
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
+  ${aiPanel()}
   ${payrollSettingsPanel()}
   ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
@@ -394,6 +395,7 @@ function bindMain(m){
     if(S.view==='payroll'&&await payClick(e,t,d))return;
     if(S.view==='activity'&&await actClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
+    if(d.aiact)return aiAction(d.aiact);
     if(d.new)return openNew(d.new);
     if(d.go)return go(d.go);
     if(d.pay){e.stopPropagation();const doc=S.docs.find(x=>x.id===d.pay);return payForm(doc.kind==='invoice'?'payment':'billpayment',null,doc.id)}
@@ -424,6 +426,7 @@ function bindMain(m){
   if(S.view==='banking')bindBanking(m);
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
+  bindAI(m);bindAIRead(m);
   if(S.view==='users'||S.view==='signins')bindUsers(m);
   if(S.view==='activity')bindActivity(m);
   if(S.view==='salestax')bindSalesTax(m);
@@ -494,6 +497,8 @@ function contactSelect(id,sel,kind,allowNone){
   return `<select id="${id}">${allowNone?'<option value="">None</option>':`<option value="">Choose ${kind||'contact'}…</option>`}${cs.map(c=>`<option value="${c.id}" ${c.id===sel?'selected':''}>${esc(c.name)}${!kind?` (${c.kind})`:''}</option>`).join('')}<option value="__new">+ Add new ${kind||'contact'}…</option></select><input type="text" id="${id}New" placeholder="New ${kind||'contact'} name" hidden style="margin-top:6px">`;
 }
 function wireContactSelect(f,id){const s=$('#'+id,f),n=$('#'+id+'New',f);s.addEventListener('change',()=>{n.hidden=s.value!=='__new';if(!n.hidden)n.focus()})}
+// A draft from AI may name a vendor that isn't a contact yet: offer it as a new one.
+function presetContact(f,id,preset){if(!preset||!preset.newContact)return;const s=$('#'+id,f),n=$('#'+id+'New',f);s.value='__new';n.hidden=false;n.value=preset.newContact}
 async function resolveContact(f,id,kind){const s=$('#'+id,f);if(s.value!=='__new')return s.value;const name=$('#'+id+'New',f).value.trim();if(!name)return null;const cid=uid();if(!await put('contacts',cid,{name,kind:kind||'vendor',created:Date.now()}))return null;return cid}
 
 /* line editor */
@@ -556,19 +561,19 @@ async function openEntry(e){if(!e)return;
   const fn={payment:()=>payForm('payment',e),billpayment:()=>payForm('billpayment',e),expense:()=>moneyForm('expense',e),deposit:()=>moneyForm('deposit',e),transfer:()=>transferForm(e)}[e.type];fn?fn():journalForm(e)}
 
 function nextNum(kind){if(kind!=='invoice')return'';const n=Math.max(1000,...S.docs.filter(d=>d.kind==='invoice').map(d=>parseInt(d.number)||0));return String(n+1)}
-function docForm(kind,doc){
+function docForm(kind,doc,preset){
   const inv=kind==='invoice',ck=inv?'customer':'vendor',t=today();
   const filter=inv?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&!a.detail);
   const defA=(sortAccts(S.accounts.filter(a=>filter(a)&&a.active!==false))[0]||{}).id||'';
-  const d=doc?{...doc,lines:doc.lines.map(l=>({...l,taxCode:taxCodeOf(l)}))}:{number:nextNum(kind),date:t,due:addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:'std'}],memo:''};
+  const d=doc?{...doc,lines:doc.lines.map(l=>({...l,taxCode:taxCodeOf(l)}))}:{number:nextNum(kind),date:t,due:addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:'std'}],memo:'',...(preset||{})};
   const paid=doc?paidOn(doc.id):0;
   const f=openModal(doc?`${inv?'Invoice':'Bill'} ${d.number?'#'+d.number:''}`:(inv?'New invoice':'New bill'),
-    `<div class="fields">${fld('dC',inv?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',inv?'Invoice no.':'Bill no.',`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',inv?'Invoice date':'Bill date',`<input type="date" id="dD" value="${d.date}">`)}${fld('dDue','Due date',`<input type="date" id="dDue" value="${d.due||''}">`)}</div>
+    `${preset&&preset.note||''}<div class="fields">${fld('dC',inv?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',inv?'Invoice no.':'Bill no.',`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',inv?'Invoice date':'Bill date',`<input type="date" id="dD" value="${d.date}">`)}${fld('dDue','Due date',`<input type="date" id="dDue" value="${d.due||''}">`)}</div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${inv?'Message on invoice':'Memo'}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
     ${doc&&paid?`<div class="banner" style="margin:0"><span>${money(paid)} has been ${inv?'received':'paid'} on this ${kind}. Balance due ${money(r2(d.total-paid))}.</span></div>`:''}`,
     `${delBtn(!!doc)}<button type="button" class="btn" data-close>Cancel</button>${doc&&docStatus(doc).bal>0?`<button type="button" class="btn" data-paynow>${inv?'Receive payment':'Pay bill'}</button>`:''}<button type="submit" class="btn primary">Save</button>`,'wide');
-  wireContactSelect(f,'dC');
+  wireContactSelect(f,'dC');presetContact(f,'dC',preset);
   let rows=[];const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:inv?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:inv?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
   const contactCode=()=>contact($('#dC',f).value)?.taxCode||'';
   cols.defaults=()=>({qty:1,taxCode:contactCode()||'std',account:defA});
@@ -627,21 +632,22 @@ function payForm(kind,entry,presetDoc){
   };
 }
 
-function moneyForm(kind,entry){
+function moneyForm(kind,entry,preset){
   const out=kind==='expense';
-  const fm=entry?.form||{};
+  const src=entry||preset;
+  const fm=src?.form||{};
   const filter=out?a=>!(a.detail==='bank'||a.detail==='card'||a.detail==='ar'||a.detail==='ap'||a.type==='Income'):a=>!(a.detail==='bank'||a.detail==='card'||a.detail==='ar'||a.detail==='ap'||a.type==='Expense'||a.type==='Cost of Goods Sold');
   const defA=out?'':(sortAccts(S.accounts.filter(a=>a.type==='Income'&&a.active!==false))[0]||{}).id;
   const defBank=fm.bank||(sortAccts(S.accounts.filter(a=>a.detail==='bank'))[0]||{}).id;
   const f=openModal(out?(entry?'Expense':'Record expense'):(entry?'Deposit':'Record deposit'),
-    `<div class="fields">${fld('mBank',out?'Paid from':'Deposit to',`<select id="mBank">${acctOptions(defBank,a=>a.detail==='bank'||a.detail==='card')}</select>`)}
-    ${fld('mC',out?'Payee':'Received from',contactSelect('mC',entry?.contactId||'',out?'vendor':'customer',true))}
-    ${fld('mDate','Date',`<input type="date" id="mDate" value="${entry?.date||today()}">`)}
-    ${fld('mRef',out?'Ref / receipt no.':'Reference',`<input type="text" id="mRef" value="${esc(entry?.ref||'')}">`)}</div>
+    `${preset&&preset.note||''}<div class="fields">${fld('mBank',out?'Paid from':'Deposit to',`<select id="mBank">${acctOptions(defBank,a=>a.detail==='bank'||a.detail==='card')}</select>`)}
+    ${fld('mC',out?'Payee':'Received from',contactSelect('mC',src?.contactId||'',out?'vendor':'customer',true))}
+    ${fld('mDate','Date',`<input type="date" id="mDate" value="${src?.date||today()}">`)}
+    ${fld('mRef',out?'Ref / receipt no.':'Reference',`<input type="text" id="mRef" value="${esc(src?.ref||'')}">`)}</div>
     <div data-le></div>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="mMemo">Memo</label><textarea id="mMemo">${esc(entry?.memo||'')}</textarea></div>${totalsHTML()}</div>`,
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="mMemo">Memo</label><textarea id="mMemo">${esc(src?.memo||'')}</textarea></div>${totalsHTML()}</div>`,
     saveFoot(!!entry),'wide');
-  wireContactSelect(f,'mC');
+  wireContactSelect(f,'mC');presetContact(f,'mC',preset);
   const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions}];
   const mCode=()=>contact($('#mC',f).value)?.taxCode||(out?'std':'none');
   cols.defaults=()=>({taxCode:mCode(),account:defA});

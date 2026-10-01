@@ -45,6 +45,7 @@ It runs two ways from the same code:
   - **Year-end (T4 and RL-1):** a T4 for every employee (one per province they worked in), an RL-1 for Quebec employees, the T4 Summary and the RL-1 Summary, built from the year's pay runs, amounts paid earlier outside Tally Books, and recorded remittances. It covers boxes 14 to 56 (including CPP2/QPP2 in 16A/17A, RPP box 20 with registration number 50 and pension adjustment 52, exemptions in 28, and dental benefits in 45) and RL-1 boxes A to I. Yearly maximums for insurable and pensionable earnings are shared across an employee's slips in date order. The Health Services Fund rate is set from total payroll (all provinces, plus associated employers) and applied to Quebec payroll, and the labour standards contribution is worked out too. Checks flag a missing or invalid SIN, a missing dental code or pension adjustment, and deductions that don't match what CRA's year-end review expects. Export the figures to CSV or print worksheets.
   - Tally Books prepares the figures; you file them with CRA's T4 Web Forms and Revenu Québec's My Account for businesses. Revenu Québec accepts printed RL-1 slips only from certified software, so the printouts are worksheets, not slips.
   - Rates are loaded for pay dates from July 1 to December 31, 2026. Quebec income tax follows Revenu Québec's TP-1015.F method but hasn't been checked line by line against WebRAS yet, so compare a first pay run with WebRAS. Always check unusual cases against CRA's PDOC.
+- **AI suggestions (optional, suggestions only):** with a Claude API key, AI suggests a category, payee and sales tax for bank lines that rules and past choices don't cover, and reads a receipt or supplier invoice (photo or PDF) into a draft expense or bill. Nothing is added to the books until someone reviews it and clicks Add or Save. It's switched on per company; an owner sets the key, the model (Claude Haiku 4.5 or Sonnet 5.5) and a monthly spending limit in Settings. The key stays on the server and is never sent to the browser; it can also be set with the `ANTHROPIC_API_KEY` environment variable. What's sent to Anthropic: each bank line's date, description and amount (or the receipt), the company's chart of accounts and payee names. Typical cost is well under a cent per bank line and about a cent per receipt.
 - **English and French:** every screen, form, message, report and pay stub is available in Canadian French, with Quebec terms (TPS/TVQ, RRQ, RQAP, AE, état des résultats, grand livre…) and French number and date formats (1 234,56 $ · 18 sept. 2026). Each person picks their language from the sidebar, the sign-in screen or Account, and it's saved with their account. New companies can keep their books in French, with a French chart of accounts. Names and other data you type stay exactly as entered.
 - **Sign-in security:** nobody sees any data without signing in.
   - The first start asks you to create an **owner** account. On an online server this also needs the setup code chosen when the server was installed.
@@ -101,6 +102,7 @@ If you're upgrading from the single-company version, your existing `data/tally-b
 | `SETUP_CODE` | *(none)* | If set, creating the first owner account needs this code, so a stranger can't claim a new server. |
 | `TRUST_PROXY` | *(off)* | `1` when running behind an HTTPS proxy such as Caddy, so sign-in limits use the visitor's real address. |
 | `BACKUP_FOLDER` | OneDrive, if found | Folder for the daily backups. |
+| `ANTHROPIC_API_KEY` | *(none)* | A Claude API key for AI suggestions. Without it, an owner can enter one in Settings. |
 | `BACKUP_BLOB_URL` | *(none)* | An Azure Blob Storage container URL with a SAS token. Each day's backup is also copied there. A write-only token (Create, Write) is safest, with an Azure lifecycle rule removing old days. If the token can also list and delete, Tally Books removes old days itself. |
 
 To put it on the internet for clients, follow [deploy/azure/README.md](deploy/azure/README.md) rather than opening a port: it adds HTTPS, two-step sign-in and off-site backups.
@@ -161,6 +163,7 @@ The Mac and Linux builds stay unsigned. Signing the Mac version needs Apple's se
 public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   bankparse.js     Bank file parsers (CSV column detection, OFX/QFX/QBO)
   banking.js       Banking screens: import, review, rules, reconcile
+  ai.js            AI suggestions for bank lines, reading receipts, AI settings
   companies.js     Client list, company switcher, new company
   salestax.js      GST/HST and QST return worksheets, filing, payments
   payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas, and year-end slip figures
@@ -176,6 +179,7 @@ src/server/
   db.js            SQLite storage (Node's built-in node:sqlite)
   companies.js     Company list; one database file per company
   backups.js       Daily automatic backups to a folder of your choice
+  ai.js            AI suggestions through the Claude API (key, spending limit, prompts)
   auth.js          User accounts, password hashing, sessions, lockout, roles
   validate.js      Bookkeeping rules enforced on every write
   seed.js          Default chart of accounts and example data

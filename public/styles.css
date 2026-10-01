@@ -218,6 +218,11 @@ svg.chart .base{stroke:var(--line-strong);stroke-width:1}
 .review .hint{font-size:12px;color:var(--muted)}
 .review .hint.match{color:var(--pos);font-weight:600}
 .review .hint.rule{color:var(--info)}
+.review .hint.ai{display:block;color:var(--info);font-weight:600}
+.review .hint.ai.low{color:var(--warn)}
+.review .hint.ai-why{display:block;font-weight:400}
+.meter{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin:6px 0 4px;max-width:360px}
+.meter span{display:block;height:100%;background:var(--accent)}
 .review tr.picked td{background:var(--accent-soft)}
 .map-grid select{min-width:120px}
 .map-grid td,.map-grid th{white-space:nowrap;font-size:13px;padding:6px 8px}

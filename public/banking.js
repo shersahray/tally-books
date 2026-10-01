@@ -45,6 +45,7 @@ function suggest(b){
   const m=matchesFor(b);if(m.length)return{choice:m[0].value,contactId:'',tax:false,why:'match'};
   const r=ruleFor(b);if(r)return{choice:'a:'+r.account,contactId:r.contactId||'',tax:!!r.tax,why:'rule',rule:r};
   const h=historyFor(b);if(h)return{choice:'a:'+h.account,contactId:h.contactId||'',tax:!!h.tax,why:'history'};
+  const x=typeof aiSuggestion==='function'&&aiSuggestion(b);if(x)return x;
   return{choice:'',contactId:'',tax:false,why:''};
 }
 function selFor(b){const s=S.bank.sel[b.id];return s&&s.user?s:suggest(b)}
@@ -68,7 +69,7 @@ function vReview(a){
   const show=B.show;
   const rows=mine.filter(b=>show==='added'?(b.status==='added'||b.status==='matched'):b.status===show).sort((x,y)=>y.date.localeCompare(x.date)||String(x.desc).localeCompare(String(y.desc)));
   [...B.checked].forEach(id=>{if(!rows.some(b=>b.id===id))B.checked.delete(id)});
-  const seg=`<div class="toolbar"><div class="actions">${[['new','For review'],['added','Added'],['excluded','Excluded']].map(([k,v])=>`<button class="btn sm ${show===k?'primary':''}" data-bshow="${k}">${v} (${counts[k]})</button>`).join('')}</div><span class="grow"></span>${show==='new'&&rows.length?`<button class="btn sm" data-bact="add-checked" ${B.checked.size?'':'disabled'}>Add selected${B.checked.size?` (${B.checked.size})`:''}</button>`:''}</div>`;
+  const seg=`<div class="toolbar"><div class="actions">${[['new','For review'],['added','Added'],['excluded','Excluded']].map(([k,v])=>`<button class="btn sm ${show===k?'primary':''}" data-bshow="${k}">${v} (${counts[k]})</button>`).join('')}</div><span class="grow"></span>${typeof aiButton==='function'?aiButton(a):''}${show==='new'&&rows.length?`<button class="btn sm" data-bact="add-checked" ${B.checked.size?'':'disabled'}>Add selected${B.checked.size?` (${B.checked.size})`:''}</button>`:''}</div>`;
   if(show==='new')return `<div class="panel">${seg}<div class="tbl-wrap"><table class="review"><thead><tr><th><input type="checkbox" data-checkall aria-label="Select all" ${rows.length&&B.checked.size===rows.length?'checked':''}></th><th>Date</th><th>Description</th><th class="n">${outLabel(a)}</th><th class="n">${inLabel(a)}</th><th>Category or match</th><th>Payee</th><th>${esc(S.company.taxName||'Tax')}</th><th></th></tr></thead><tbody>${rows.length?rows.map(b=>reviewRow(b,a)).join(''):emptyRow(9,'All caught up','Every imported line has been added, matched or excluded.')}</tbody></table></div></div>`;
   if(show==='added')return `<div class="panel">${seg}<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Description</th><th class="n">${outLabel(a)}</th><th class="n">${inLabel(a)}</th><th>Added as</th><th></th></tr></thead><tbody>${rows.length?rows.map(b=>{const e=S.entries.find(x=>x.id===b.entryId);const other=e?[...new Set(e.lines.filter(l=>l.account!==a.id).map(l=>acctName(l.account)))].join(', '):'';
     return `<tr class="click" data-entry="${b.entryId}"><td style="white-space:nowrap">${fmtDate(b.date)}</td><td class="trunc" translate="no">${esc(b.desc)}</td><td class="n">${b.amount<0?money(-b.amount):''}</td><td class="n">${b.amount>0?money(b.amount):''}</td><td class="trunc">${e?`${b.status==='matched'&&!b.made?'<span class="pill paid">Matched</span> ':''}${TLABEL[e.type]||e.type}${other?` · <span class="muted">${esc(other)}</span>`:''}`:'<span class="muted">—</span>'}</td><td class="n"><button class="btn sm" data-bundo="${b.id}">Undo</button></td></tr>`}).join(''):emptyRow(6,'Nothing added yet','Lines you add or match appear here.')}</tbody></table></div></div>`;
@@ -77,7 +78,7 @@ function vReview(a){
 
 function reviewRow(b){
   const sel=selFor(b),isMatch=sel.choice.startsWith('m:'),catId=sel.choice.startsWith('a:')?sel.choice.slice(2):'',transfer=!!catId&&isBankAcct(acct(catId));
-  const hint=sel.why==='match'?'<span class="hint match">Match found</span>':sel.why==='rule'?`<span class="hint rule">Rule: “${esc(sel.rule.text)}”</span>`:sel.why==='history'?'<span class="hint">Same as last time</span>':'';
+  const hint=sel.why==='match'?'<span class="hint match">Match found</span>':sel.why==='rule'?`<span class="hint rule">Rule: “${esc(sel.rule.text)}”</span>`:sel.why==='history'?'<span class="hint">Same as last time</span>':sel.why==='ai'?aiHint(sel):'';
   const m=matchesFor(b);
   const cat=`<select data-bcat="${b.id}" aria-label="Category or match"><option value="">Choose category…</option>${m.length?`<optgroup label="Matches">${m.map(x=>`<option value="${x.value}" ${sel.choice===x.value?'selected':''}>${esc(x.label)}</option>`).join('')}</optgroup>`:''}${acctOptions(catId,x=>x.id!==b.account&&catFilter(x)).replace(/value="/g,'value="a:')}</select>`;
   const payee=isMatch||transfer?'<span class="muted">—</span>':`<select data-bpayee="${b.id}" aria-label="Payee"><option value="">None</option>${S.contacts.slice().sort((x,y)=>x.name.localeCompare(y.name)).map(c=>`<option value="${c.id}" ${c.id===sel.contactId?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`;
@@ -230,6 +231,7 @@ async function bankClick(ev,t,d){
     case 'import':importForm();return true;
     case 'new-rule':ruleForm(null);return true;
     case 'add-checked':await addLines([...B.checked]);return true;
+    case 'ai-suggest':await aiSuggest(a);return true;
     case 'rec-start':{
       const date=$('#rDate').value,ending=$('#rEnd').value;
       if(!date||ending===''||!Number.isFinite(+ending)){toast('Enter the statement ending date and balance.',true);return true}
