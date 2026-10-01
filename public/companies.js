@@ -30,7 +30,10 @@ function resetBooks(){
   S.stax={tax:'gst',period:null,drill:'',manual:{}};
   PC=null;
 }
-async function openCompany(id,view='dashboard'){
+// A client on a phone mostly sends receipts, so that's where they start.
+const startView=()=>typeof ME!=='undefined'&&ME&&ME.role==='client'&&window.matchMedia&&matchMedia('(max-width: 760px)').matches?'receipts':'dashboard';
+async function openCompany(id,view){
+  view=view||startView();
   if(!CO_LIST.some(c=>c.id===id))return;
   closeModal();
   CO=id;resetBooks();lsSet(id);

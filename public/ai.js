@@ -93,7 +93,7 @@ async function aiReadFile(file){
     aiBusy=false;renderMain();loadAI();aiOpenDraft(r.draft,file.name);
   }catch(e){aiBusy=false;renderMain();toast(e.message,true)}
 }
-function aiOpenDraft(x,name){
+function aiOpenDraft(x,name,o={}){
   const recoverable=/^(gst|hst|qst|tps|tvh|tvq)\b/i;
   // Taxes the business can't claim back (PST, RST) become part of the cost of the taxable lines.
   const other=r2(x.taxes.filter(t=>!recoverable.test(t.name)).reduce((s,t)=>s+t.amount,0));
@@ -104,18 +104,20 @@ function aiOpenDraft(x,name){
   const recov=r2(x.taxes.filter(t=>recoverable.test(t.name)).reduce((s,t)=>s+t.amount,0));
   const calc=r2(lines.filter(l=>l.taxable).reduce((s,l)=>s+l.amount,0)*(+S.company.taxRate||0)/100);
   const conf={high:'High',medium:'Medium',low:'Low'}[x.confidence]||'Low';
-  const rows=[`<b>Draft read by AI · ${conf} confidence</b>`,'Check every field before you save.'];
+  const rows=o.noAI?[]:[`<b>Draft read by AI · ${conf} confidence</b>`,'Check every field before you save.'];
   if(x.total)rows.push(`The document’s total is ${money(x.total)}: make sure the total below matches.`);
   if(x.taxes.length)rows.push(`<span>Taxes on the document:</span> <span translate="no">${x.taxes.map(t=>`${esc(t.name)} ${money(t.amount)}`).join(', ')}</span>`);
   if(Math.abs(recov-calc)>0.05)rows.push(`The sales tax on the document (${money(recov)}) doesn’t match what this form calculates (${money(calc)}). Check the tax on each line.`);
   if(other)rows.push('Tax that can’t be claimed back (such as PST) was added to the cost of the lines.');
   if(x.currency&&x.currency!=='CAD')rows.push(`<b>This document isn’t in Canadian dollars.</b> <span>Enter the amounts as charged by the bank or card.</span>`);
   if(x.reason)rows.push(`<span translate="no">${esc(x.reason)}</span>`);
-  const note=`<div class="banner" style="margin:0;display:block">${rows.map(r=>`<div>${r}</div>`).join('')}</div>`;
-  const base={contactId:x.vendorId||'',newContact:x.vendorId?'':x.vendorName,date:x.date||today(),note};
+  const r=o.receiptId&&S.receipts.find(y=>y.id===o.receiptId);
+  if(r)rows.push(`<span>The receipt is attached when you save.</span> <a href="${rcUrl(r)}" target="_blank" rel="noopener">View receipt</a>`);
+  const note=rows.length?`<div class="banner" style="margin:0;display:block">${rows.map(r=>`<div>${r}</div>`).join('')}</div>`:'';
+  const base={contactId:x.vendorId||'',newContact:x.vendorId?'':x.vendorName,date:x.date||today(),note,receiptId:o.receiptId||'',onSaved:o.onSaved};
   const code=l=>l.taxable&&+S.company.taxRate?'std':'none';
-  if(x.paid)moneyForm('expense',null,{...base,ref:x.number,memo:x.vendorName&&!x.vendorId?x.vendorName:'',form:{lines:lines.map(l=>({account:l.account,desc:l.description,amount:l.amount,taxCode:code(l)}))}});
-  else docForm('bill',null,{...base,number:x.number,due:x.dueDate||addDays(x.date||today(),+S.company.terms||0),lines:lines.map(l=>({desc:l.description,account:l.account,qty:1,rate:l.amount,taxCode:code(l)}))});
+  if(x.paid)moneyForm('expense',null,{...base,ref:x.number,memo:x.vendorName&&!x.vendorId?x.vendorName:'',form:{bank:o.bank||undefined,lines:lines.length?lines.map(l=>({account:l.account,desc:l.description,amount:l.amount,taxCode:code(l)})):undefined}});
+  else docForm('bill',null,{...base,number:x.number,due:x.dueDate||addDays(x.date||today(),+S.company.terms||0),...(lines.length?{lines:lines.map(l=>({desc:l.description,account:l.account,qty:1,rate:l.amount,taxCode:code(l)}))}:{})});
 }
 function bindAIRead(m){
   const b=$('[data-airead]',m),inp=$('#aiFile',m);if(!b||!inp)return;

@@ -140,6 +140,7 @@
       });
       return { ...out, added, skipped };
     }
+    if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Tally Books, receipts go to this screen from a phone or a computer.');
     if (rest === '/ai/read') throw new ApiError(400, 'Reading receipts needs a Claude API key, so it isn’t available in the demo. Try “Suggest with AI” under Banking instead.');
     if (rest === '/ai/suggest') {
       if (!b.company.ai) throw new ApiError(409, 'AI suggestions are turned off for this company. Turn them on in Settings.');

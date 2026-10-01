@@ -14,7 +14,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
-const { ValidationError } = require('./validate');
+const { ValidationError, sanitizeDraft } = require('./validate');
 
 // USD per million tokens (input, output). https://platform.claude.com/docs/en/about-claude/pricing
 const MODELS = {
@@ -26,6 +26,8 @@ const PER_CALL = 40;          // bank lines per API request
 const MAX_LINES = 200;        // bank lines per click
 const MAX_INFLIGHT = 2;     // AI calls at once, for the whole server
 const API_URL = 'https://api.anthropic.com/v1/messages';
+
+function busyError() { const e = new ValidationError('AI is busy with another request. Try again in a moment.', 429); e.code = 'AI_BUSY'; return e; }
 
 class AI {
   /**
@@ -48,13 +50,13 @@ class AI {
     if (!this.key()) throw new ValidationError('AI suggestions aren’t set up yet. An owner adds the API key in Settings.', 409);
     if (!company.ai) throw new ValidationError('AI suggestions are turned off for this company. Turn them on in Settings.', 409);
     if (this.spent() + this.reserved >= this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} has been reached. An owner can raise it in Settings.`, 429);
-    if (this.inflight >= MAX_INFLIGHT) throw new ValidationError('AI is busy with another request. Try again in a moment.', 429);
+    if (this.inflight >= MAX_INFLIGHT) throw busyError();
   }
   /** Hold back an estimate of a call's cost so parallel requests can't run past the monthly limit. */
   async reserve(model, inTokens, outTokens, fn) {
     const p = MODELS[model], est = (inTokens * p.in + outTokens * p.out) / 1e6;
     if (this.spent() + this.reserved + est > this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} would be passed. An owner can raise it in Settings.`, 429);
-    if (this.inflight >= MAX_INFLIGHT) throw new ValidationError('AI is busy with another request. Try again in a moment.', 429);
+    if (this.inflight >= MAX_INFLIGHT) throw busyError();
     this.inflight++; this.reserved += est;
     try { return await fn(); } finally { this.inflight--; this.reserved = Math.max(0, this.reserved - est); }
   }
@@ -271,20 +273,7 @@ class AI {
     const usd = this.record(r.usage || {}, 0, body.model);
     const use = (r.content || []).find(c => c.type === 'tool_use');
     const x = (use && use.input) || {};
-    const amt = v => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
-    const date = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '');
-    const draft = {
-      paid: x.paid !== false,
-      vendorName: String(x.vendorName || '').slice(0, 120),
-      vendorId: x.vendorId && vIds.has(x.vendorId) ? x.vendorId : '',
-      date: date(x.date), dueDate: date(x.dueDate), number: String(x.number || '').slice(0, 40),
-      currency: /^[A-Z]{3}$/.test(String(x.currency || '')) ? x.currency : '',
-      lines: (Array.isArray(x.lines) ? x.lines : []).slice(0, 30).map(l => ({ description: String(l.description || '').slice(0, 200), amount: amt(l.amount), account: byId.has(l.account) ? l.account : '', taxable: !!l.taxable })).filter(l => l.amount),
-      taxes: (Array.isArray(x.taxes) ? x.taxes : []).slice(0, 6).map(t => ({ name: String(t.name || '').slice(0, 20), amount: amt(t.amount) })).filter(t => t.amount),
-      total: amt(x.total),
-      confidence: ['high', 'medium', 'low'].includes(x.confidence) ? x.confidence : 'low',
-      reason: String(x.reason || '').slice(0, 300),
-    };
+    const draft = sanitizeDraft(x, { accounts: new Set(byId.keys()), vendors: vIds });
     return { draft, usd };
   }
 

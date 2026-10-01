@@ -7,6 +7,12 @@
 <title>Tally Books</title>
 <meta name="description" content="Double-entry bookkeeping for small businesses.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-512.png">
+<meta name="theme-color" content="#0d6a55">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Tally Books">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
@@ -46,6 +52,7 @@
       <button data-view="dashboard">Dashboard</button>
       <button data-view="sales">Sales <span class="count" id="odCount" hidden></span></button>
       <button data-view="expenses">Expenses</button>
+      <button data-view="receipts">Receipts <span class="count info" id="rcCount" hidden></span></button>
       <button data-view="banking">Banking <span class="count info" id="bankCount" hidden></span></button>
       <button data-view="salestax">Sales tax <span class="count" id="taxCount" hidden></span></button>
       <button data-view="payroll">Payroll <span class="count" id="payCount" hidden></span></button>
@@ -68,6 +75,7 @@
 <script src="app.js"></script>
 <script src="banking.js"></script>
 <script src="ai.js"></script>
+<script src="receipts.js"></script>
 <script src="salestax.js"></script>
 <script src="payroll-calc.js"></script>
 <script src="payroll.js"></script>

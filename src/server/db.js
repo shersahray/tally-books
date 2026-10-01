@@ -16,7 +16,7 @@ const { DatabaseSync } = require('node:sqlite');
 process.emitWarning = origEmit;
 
 // Order matters for restore: later collections are validated against earlier ones.
-const COLLECTIONS = ['accounts', 'contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns', 'recons', 'filings', 'payruns'];
+const COLLECTIONS = ['accounts', 'contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts'];
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS records (
@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS audit (
   after      TEXT
 );
 CREATE INDEX IF NOT EXISTS audit_by_time ON audit (at);
+-- Receipt photos and PDFs. The receipt's details live in the 'receipts' collection.
+CREATE TABLE IF NOT EXISTS files (
+  id         TEXT PRIMARY KEY,
+  media_type TEXT NOT NULL,
+  name       TEXT NOT NULL DEFAULT '',
+  size       INTEGER NOT NULL,
+  data       BLOB NOT NULL,
+  created    INTEGER NOT NULL
+);
 `;
 
 class Store {
@@ -90,6 +99,11 @@ class Store {
                                     AND json_extract(data, '$.entryId') = ?`),
       addAudit: this.db.prepare(`INSERT INTO audit (at, username, name, action, collection, record_id, summary, before, after)
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      putFile: this.db.prepare('INSERT INTO files (id, media_type, name, size, data, created) VALUES (?, ?, ?, ?, ?, ?)'),
+      getFile: this.db.prepare('SELECT id, media_type, name, size, data, created FROM files WHERE id = ?'),
+      hasFile: this.db.prepare('SELECT 1 FROM files WHERE id = ?'),
+      delFile: this.db.prepare('DELETE FROM files WHERE id = ?'),
+      fileList: this.db.prepare('SELECT id, media_type, size, created FROM files ORDER BY created'),
       paymentsFor: this.db.prepare(`SELECT 1 FROM records WHERE collection = 'entries'
                                     AND json_extract(data, '$.applyTo') = ? LIMIT 1`),
     };
@@ -129,6 +143,11 @@ class Store {
   hasPayments(docId) { return !!this.stmt.paymentsFor.get(docId); }
   bankTxnsForEntry(entryId) { return this.stmt.bankTxnsForEntry.all(entryId).map(r => ({ ...JSON.parse(r.data), id: r.id })); }
   clearAll() { this.stmt.delAll.run(); }
+  putFile(id, { mediaType, name = '', data }) { this.stmt.putFile.run(id, mediaType, String(name).slice(0, 200), data.length, data, Date.now()); }
+  getFile(id) { const r = this.stmt.getFile.get(id); return r ? { id: r.id, mediaType: r.media_type, name: r.name, size: r.size, data: Buffer.from(r.data), created: r.created } : null; }
+  hasFile(id) { return !!this.stmt.hasFile.get(id); }
+  deleteFile(id) { this.stmt.delFile.run(id); }
+  fileList() { return this.stmt.fileList.all().map(r => ({ id: r.id, mediaType: r.media_type, size: r.size, created: r.created })); }
 
   /** Record a change in the audit log. `before`/`after` are the record's data (or null). */
   audit(user, action, { collection = '', id = '', summary = '', before = null, after = null } = {}) {

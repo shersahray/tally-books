@@ -232,6 +232,50 @@ function validatePayrun(data, store) {
   return { ...data, lines, totalNet: net / 100 };
 }
 
+/* Receipts: the file and what AI read are set by the server (upload and reading routes).
+   An edit can change only the status, the note and which transaction or bill it's attached to. */
+const RECEIPT_STATUS = ['inbox', 'done', 'discarded'];
+/** What AI read from a receipt, cleaned: only known shapes, lengths and real ids. Used for AI answers and restores. */
+function sanitizeDraft(x, { accounts, vendors } = {}) {
+  x = isObj(x) ? x : {};
+  const amt = v => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
+  const date = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '');
+  const ok = (set, v) => (v && (!set || set.has(String(v))) ? String(v) : '');
+  return {
+    paid: x.paid !== false,
+    vendorName: str(x.vendorName, 120), vendorId: ok(vendors, x.vendorId),
+    date: date(x.date), dueDate: date(x.dueDate), number: str(x.number, 40),
+    currency: /^[A-Z]{3}$/.test(String(x.currency || '')) ? String(x.currency) : '',
+    lines: (Array.isArray(x.lines) ? x.lines : []).slice(0, 30).filter(isObj).map(l => ({ description: str(l.description, 200), amount: amt(l.amount), account: ok(accounts, l.account), taxable: !!l.taxable })).filter(l => l.amount),
+    taxes: (Array.isArray(x.taxes) ? x.taxes : []).slice(0, 6).filter(isObj).map(t => ({ name: str(t.name, 20), amount: amt(t.amount) })).filter(t => t.amount),
+    total: amt(x.total),
+    confidence: ['high', 'medium', 'low'].includes(x.confidence) ? x.confidence : 'low',
+    reason: str(x.reason, 300),
+  };
+}
+const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'draft', 'readAt', 'wasAttached'];
+function validateReceipt(data, store, id) {
+  const prev = store.get('receipts', id);
+  if (!prev && !(data.fileId && store.hasFile(String(data.fileId)))) throw new ValidationError('Add receipts from the Receipts screen.');
+  // A restored receipt can't share a photo with another one (deleting either would remove it).
+  if (!prev && store.list('receipts').some(r => r.fileId === String(data.fileId))) throw new ValidationError('That photo already belongs to another receipt.');
+  const base = {};
+  if (prev) { for (const k of RECEIPT_SERVER) if (prev[k] !== undefined) base[k] = prev[k]; }
+  else {
+    Object.assign(base, { fileId: String(data.fileId), fileName: str(data.fileName, 120), mediaType: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(data.mediaType) ? data.mediaType : 'image/jpeg',
+      size: Number(data.size) || 0, uploadedBy: str(data.uploadedBy, 200), uploadedByName: str(data.uploadedByName, 200), uploadedAt: Number(data.uploadedAt) || Date.now(),
+      readStatus: data.draft ? 'read' : 'off', readError: '', wasAttached: !!data.wasAttached });
+    if (data.draft) base.draft = sanitizeDraft(data.draft);
+  }
+  const status = RECEIPT_STATUS.includes(data.status) ? data.status : 'inbox';
+  const entryId = data.entryId ? String(data.entryId) : '', docId = data.docId ? String(data.docId) : '';
+  if (entryId && !store.get('entries', entryId)) throw new ValidationError('The transaction for this receipt doesn’t exist.');
+  if (docId && !store.get('docs', docId)) throw new ValidationError('The bill for this receipt doesn’t exist.');
+  // Once a bookkeeper has attached it, a receipt stays proof: the client who sent it can't remove it any more.
+  if (entryId || docId) base.wasAttached = true;
+  return { ...base, status, note: str(data.note, 500), entryId, docId };
+}
+
 function validateRecord(collection, id, data, store) {
   checkId(id);
   if (!isObj(data)) throw new ValidationError('Record body must be a JSON object.');
@@ -246,12 +290,17 @@ function validateRecord(collection, id, data, store) {
     case 'filings': return validateFiling({ ...data, id }, store);
     case 'employees': return validateEmployee(data);
     case 'payruns': return validatePayrun(data, store);
+    case 'receipts': return validateReceipt(data, store, id);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
 
 function checkDelete(collection, id, store) {
   checkId(id);
+  if (collection === 'receipts') {
+    const r = store.get('receipts', id);
+    if (r && (r.entryId || r.docId)) throw new ValidationError('This receipt is attached to a transaction, so it’s kept as proof. Delete the transaction first if it’s wrong.', 409);
+  }
   if (collection === 'accounts' && store.accountUsed(id)) {
     throw new ValidationError('This account has transactions, so it can’t be deleted. Mark it inactive instead.', 409);
   }
@@ -305,4 +354,4 @@ function validateCompany(data) {
   };
 }
 
-module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate };
+module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate, str, sanitizeDraft };

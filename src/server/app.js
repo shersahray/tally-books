@@ -41,6 +41,55 @@ function createApp(opts) {
   const notClient = u => { if (u.role === 'client') throw new ValidationError('Only your bookkeeper can do that.', 403); };
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
+  // Receipts sent in are read by AI one at a time, in the order they arrive.
+  const readQueue = [];
+  let readBusy = false;
+  function queueRead(cid, rid, manual) { if (!readQueue.some(q => q.cid === cid && q.rid === rid)) readQueue.push({ cid, rid, tries: 0, manual: !!manual }); setImmediate(nextRead); }
+  // After a restart, receipts that were waiting or half-read go back in the queue.
+  setImmediate(() => {
+    for (const c of reg.list()) {
+      try {
+        const store = reg.store(c.id);
+        for (const r of store.list('receipts')) if (r.status === 'inbox' && (r.readStatus === 'waiting' || r.readStatus === 'reading')) queueRead(c.id, r.id);
+      } catch { /* a damaged company is reported when it's opened */ }
+    }
+  });
+  async function nextRead() {
+    if (readBusy || closing) return;
+    const q = readQueue.shift(); if (!q) return;
+    readBusy = true;
+    let ctx = null, again = false;
+    try {
+      ctx = ctxFor(q.cid);
+      const r = ctx.store.get('receipts', q.rid);
+      if (!r) return;
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      const save = patch => { const cur = ctx.store.get('receipts', q.rid); if (cur) { ctx.store.put('receipts', q.rid, { ...cur, ...patch }); ctx.bump(); } };
+      if (r.status !== 'inbox') { if (r.readStatus === 'waiting' || r.readStatus === 'reading') save({ readStatus: 'off' }); return; }
+      // Each company gets up to 100 automatic reads a day, so one busy client can't use up everyone's AI budget.
+      const aiKey = 'receipts-read:' + new Date().toISOString().slice(0, 10), readsToday = Number(ctx.store.getMeta(aiKey) || 0);
+      if (!q.manual && readsToday >= 100) { save({ readStatus: 'off', readError: 'This company has had 100 receipts read today. The rest can be read from here.' }); return; }
+      ctx.store.putMeta(aiKey, readsToday + 1);
+      save({ readStatus: 'reading', readError: '' });
+      try {
+        const f = ctx.store.getFile(r.fileId);
+        if (!f) throw new ValidationError('The photo for this receipt is missing.');
+        const { draft } = await ai.read(ctx.store, company, { fileName: r.fileName, mediaType: f.mediaType, data: f.data.toString('base64') });
+        save({ readStatus: 'read', draft, readAt: Date.now() });
+      } catch (e) {
+        // Busy with another AI request: try again shortly.
+        if (e.code === 'AI_BUSY' && q.tries < 20) { q.tries++; again = true; save({ readStatus: 'waiting' }); }
+        else save({ readStatus: e.status === 409 || e.status === 429 ? 'off' : 'failed', readError: e.status && e.status < 500 || e.status === 502 || e.status === 503 ? e.message : 'Reading failed.' });
+      }
+    } catch (e) {
+      if (e.status !== 404) console.error(e);
+    } finally {
+      readBusy = false;
+      if (again) setTimeout(() => { readQueue.push(q); nextRead(); }, 3000).unref();
+      else setImmediate(nextRead);
+    }
+  }
+  let closing = false;
   if (opts.backupFolder) backups.update({ folder: opts.backupFolder });
   if (opts.autoBackup !== false) backups.start();
   const publicDir = opts.publicDir || PUBLIC_DIR;
@@ -182,6 +231,15 @@ function createApp(opts) {
   function applyWrite(store, w, user) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
+    // Receipts are created only by the upload route (or a restore), never by a plain write.
+    if (collection === 'receipts' && op === 'set' && !store.get('receipts', id)) throw new ValidationError('Add receipts from the Receipts screen.');
+    if (collection === 'receipts' && user && user.role === 'client') {
+      // Clients can add a note to, or remove, a receipt they sent that hasn't been dealt with yet.
+      const r = store.get('receipts', id);
+      const own = r && r.uploadedBy === user.username && r.status === 'inbox' && !r.entryId && !r.docId && !r.wasAttached;
+      const noteOnly = op === 'set' && own && w.data && (w.data.status || 'inbox') === 'inbox' && !w.data.entryId && !w.data.docId;
+      if (!(op === 'delete' ? own : noteOnly)) throw new ValidationError('Your bookkeeper takes care of receipts once they’re sent.', 403);
+    }
     // Social insurance numbers never go into the activity log in full.
     const hideSin = r => (r && r.sin ? { ...r, sin: '•••••' + String(r.sin).slice(-3) } : r);
     const before = collection === 'employees' ? hideSin(store.get(collection, id)) : store.get(collection, id);
@@ -193,6 +251,12 @@ function createApp(opts) {
     } else if (op === 'delete') {
       checkDelete(collection, id, store);
       store.delete(collection, id);
+      if (collection === 'receipts' && before && before.fileId) store.deleteFile(before.fileId);
+      // A receipt attached to a deleted transaction or bill goes back to the inbox.
+      if (collection === 'entries' || collection === 'docs') {
+        const key = collection === 'entries' ? 'entryId' : 'docId';
+        for (const r of store.list('receipts').filter(x => x[key] === id)) store.put('receipts', r.id, { ...r, [key]: '', status: 'inbox' });
+      }
       if (before) store.audit(user, 'delete', { collection, id, summary: auditSummary(collection, before), before });
       // A deleted transaction sends any bank lines linked to it back to "For review".
       if (collection === 'entries') {
@@ -421,6 +485,54 @@ function createApp(opts) {
       });
       return { ok: true, count: n, usd, rev: ctx.bump() };
     }],
+    // Receipts: a photo or PDF sent from the Receipts screen (often a client's phone).
+    ['POST', /^\/receipts$/, async (ctx, req) => {
+      // Count every upload today (deleted ones too), so the daily limit can't be dodged.
+      const dayKey = 'receipts-sent:' + new Date().toISOString().slice(0, 10);
+      const sentToday = Number(ctx.store.getMeta(dayKey) || 0);
+      if (sentToday >= 300) throw new ValidationError('That’s 300 receipts today for this company. Send the rest tomorrow.', 429);
+      const body = (await readJson(req, 15 * 1024 * 1024)) || {};
+      const data = Buffer.from(String(body.data || ''), 'base64');
+      if (!data.length) throw new ValidationError('That file is empty.');
+      if (data.length > 10 * 1024 * 1024) throw new ValidationError('That file is over 10 MB. Try a smaller photo or a shorter PDF.', 413);
+      const mediaType = sniffType(data);
+      if (!mediaType) throw new ValidationError('Choose a PDF or a photo (JPEG, PNG or WebP).');
+      const id = crypto.randomUUID(), fileId = crypto.randomUUID();
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      const canRead = ai.status().configured && company.ai;
+      const fileName = String(body.fileName || 'receipt').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').slice(0, 120);
+      const rec = { fileId, fileName, mediaType, size: data.length, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now(),
+        readStatus: canRead ? 'waiting' : 'off', readError: '', status: 'inbox', note: String(body.note || '').slice(0, 500), entryId: '', docId: '' };
+      ctx.store.transaction(() => {
+        ctx.store.putMeta(dayKey, sentToday + 1);
+        ctx.store.putFile(fileId, { mediaType, name: fileName, data });
+        ctx.store.put('receipts', id, rec);
+        ctx.store.audit(ctx.user, 'add', { collection: 'receipts', id, summary: `receipt ${fileName}`, after: rec });
+      });
+      if (canRead) queueRead(ctx.id, id);
+      return { ok: true, id, rev: ctx.bump() };
+    }],
+    ['GET', /^\/files\/([A-Za-z0-9-]+)$/, (ctx, req, m, res) => {
+      const f = ctx.store.getFile(m[1]);
+      if (!f) throw new ValidationError('That file isn’t here any more.', 404);
+      const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[f.mediaType] || 'bin';
+      const safe = (f.name || 'receipt').replace(/[^A-Za-z0-9 ._-]+/g, '').replace(/\.[A-Za-z0-9]+$/, '').slice(0, 60) || 'receipt';
+      res.writeHead(200, { 'Content-Type': f.mediaType, 'Content-Length': f.data.length, 'Content-Disposition': `inline; filename="${safe}.${ext}"`,
+        'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin',
+        // Photos open with nothing allowed to run. (A sandbox would stop the browser's PDF viewer, so PDFs get only the type check.)
+        'Content-Security-Policy': f.mediaType === 'application/pdf' ? "frame-ancestors 'none'" : "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'" });
+      res.end(f.data);
+    }],
+    ['POST', /^\/receipts\/([A-Za-z0-9-]+)\/read$/, (ctx, req, m) => {
+      notClient(ctx.user);
+      const r = ctx.store.get('receipts', m[1]);
+      if (!r) throw new ValidationError('That receipt isn’t here any more.', 404);
+      if (r.status !== 'inbox') throw new ValidationError('Only receipts waiting for review are read.', 409);
+      ai.precheck({ ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) });
+      ctx.store.put('receipts', r.id, { ...r, readStatus: 'waiting', readError: '' });
+      queueRead(ctx.id, r.id, true);
+      return { ok: true, rev: ctx.bump() };
+    }],
     // Read a receipt or bill with AI and return a draft. Nothing is saved; the file isn't kept.
     ['POST', /^\/ai\/read$/, async (ctx, req) => {
       notClient(ctx.user);
@@ -456,6 +568,7 @@ function createApp(opts) {
       const snap = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: ctx.store.getSetting('company') };
       for (const c of COLLECTIONS) snap[c] = ctx.store.list(c);
       fs.writeFileSync(path.join(snapDir, `${ctx.id}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), JSON.stringify(snap), { mode: 0o600 });
+      let skippedReceipts = 0;
       ctx.store.transaction(() => {
         ctx.store.clearAll();
         ctx.store.putMeta('seeded', new Date().toISOString());
@@ -464,6 +577,7 @@ function createApp(opts) {
         for (const c of COLLECTIONS) {
           for (const r of body[c] || []) {
             const { id, ...data } = r;
+            if (c === 'receipts' && !(data.fileId && ctx.store.hasFile(String(data.fileId)))) { skippedReceipts++; continue; } // photo isn't in this company's files
             ctx.store.put(c, id, validateRecord(c, id, data, ctx.store));
           }
         }
@@ -471,7 +585,7 @@ function createApp(opts) {
       ctx.store.audit(ctx.user, 'restore', { summary: `restored a backup exported ${String(body.exportedAt || '').slice(0, 10) || 'on an unknown date'}` });
       reg.update(ctx.id, { name: company.name });
       broadcast({ companies: true });
-      return { ok: true, rev: ctx.bump() };
+      return { ok: true, rev: ctx.bump(), skippedReceipts };
     }],
     // Audit log for this company (owners and staff).
     ['GET', /^\/audit$/, (ctx, req) => {
@@ -538,7 +652,7 @@ function createApp(opts) {
     }
   });
 
-  server.on('close', () => { backups.stop(); reg.closeAll(); });
+  server.on('close', () => { closing = true; backups.stop(); reg.closeAll(); });
   /** Stop accepting requests, end live-update streams, and close the databases. */
   server.shutdown = () => new Promise(resolve => {
     for (const res of clients) res.end();
@@ -627,7 +741,7 @@ function readJson(req, limit = 5 * 1024 * 1024) {
 }
 
 // Content Security Policy: scripts only from this server; fonts from Google Fonts.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 function send(res, status, body, headers = {}) {
   const https = res.req && (res.req.headers['x-forwarded-proto'] === 'https' || res.req.socket.encrypted);
   res.writeHead(status, { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': CSP,
@@ -655,3 +769,12 @@ function serveStatic(dir, pathname, req, res) {
 }
 
 module.exports = { createApp };
+
+/** What a file really is, from its first bytes (not what the browser claims). Only receipt types. */
+function sniffType(b) {
+  if (b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'application/pdf'; // %PDF
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.length > 8 && b.readUInt32BE(0) === 0x89504e47 && b.readUInt32BE(4) === 0x0d0a1a0a) return 'image/png';
+  if (b.length > 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return '';
+}

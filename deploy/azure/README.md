@@ -118,7 +118,7 @@ The server gets **write-only** access to that storage. Even if someone broke int
 2. Open the storage account, then **Data storage → Containers → + Container**. Name: `tally-backups`. Access level: **Private**.
 3. Open **Data management → Lifecycle management → Add a rule**.
    - **Rule name:** `delete-old-backups`
-   - **Rule scope:** apply to all blobs.
+   - **Rule scope:** **Limit blobs with filters**. On the **Filter set** tab, add the prefix `tally-backups/20`. This matches the dated backup folders (2026-…, 2027-…) only, so clients' receipt photos under `receipts/` are never removed.
    - **Base blobs:** if last modified more than **30** days ago, then **Delete the blob**.
    - **Previous versions:** if older than **30** days, then **Delete**.
 4. Open the container, then **Settings → Shared access tokens**:

@@ -1,0 +1,14 @@
+{
+  "name": "Tally Books",
+  "short_name": "Tally Books",
+  "description": "Bookkeeping, and receipts straight from your phone.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#eef2f0",
+  "theme_color": "#0d6a55",
+  "icons": [
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

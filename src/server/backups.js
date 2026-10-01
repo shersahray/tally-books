@@ -11,6 +11,7 @@ const { COLLECTIONS } = require('./db');
 const { DEFAULT_COMPANY } = require('./seed');
 
 const BACKUP_DIR_NAME = 'Tally Books Backups';
+const EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const pad = n => String(n).padStart(2, '0');
 const localDay = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -108,8 +109,10 @@ class Backups {
         count++;
       }
       fs.writeFileSync(path.join(dir, 'companies.json'), JSON.stringify({ backedUpAt: new Date().toISOString(), companies: index }, null, 2));
+      let rcErr = '';
+      try { this.copyReceipts(); } catch (e) { rcErr = `Receipt photos weren’t copied: ${e.message}`; }
       const removed = this.prune();
-      Object.assign(this.settings, { lastRun: Date.now(), lastDay: day, lastError: '', lastCount: count, lastPath: dir });
+      Object.assign(this.settings, { lastRun: Date.now(), lastDay: day, lastError: rcErr, lastCount: count, lastPath: dir });
       this.save();
       const out = { ok: true, count, path: dir, removed };
       if (this.blob) out.upload = this.upload(dir, day);
@@ -121,13 +124,29 @@ class Backups {
     }
   }
 
+  /** Receipt photos aren't in the daily files (they'd repeat every day). Each is copied once, to
+      "Receipts/<company id>/" next to the dated folders, and kept: they're the proof behind expenses. */
+  copyReceipts() {
+    for (const c of this.reg.list()) {
+      const store = this.reg.store(c.id);
+      const files = store.fileList ? store.fileList() : [];
+      if (!files.length) continue;
+      const dir = path.join(this.target(), 'Receipts', c.id);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const f of files) {
+        const p = path.join(dir, f.id + '.' + (EXT[f.mediaType] || 'bin'));
+        if (!fs.existsSync(p)) fs.writeFileSync(p, store.getFile(f.id).data);
+      }
+    }
+  }
+
   /* ---------- off-site copy in Azure Blob Storage ---------- */
   blobUrl(name, query = '') {
     const p = name ? '/' + name.split('/').map(encodeURIComponent).join('/') : '';
     return `${this.blob.base}${p}?${query}${query && this.blob.sas ? '&' : ''}${this.blob.sas}`;
   }
-  async blobFetch(method, name, query, body) {
-    const r = await fetch(this.blobUrl(name, query), { method, body, headers: { 'x-ms-version': '2021-08-06', ...(method === 'PUT' ? { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'application/json' } : {}) } });
+  async blobFetch(method, name, query, body, type = 'application/json') {
+    const r = await fetch(this.blobUrl(name, query), { method, body, headers: { 'x-ms-version': '2021-08-06', ...(method === 'PUT' ? { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': type } : {}) } });
     if (!r.ok && !(method === 'DELETE' && r.status === 404)) {
       const text = await r.text().catch(() => '');
       const code = (text.match(/<Code>([^<]+)<\/Code>/) || [])[1] || r.status;
@@ -143,6 +162,20 @@ class Backups {
         await this.blobFetch('PUT', `${day}/${f}`, '', fs.readFileSync(path.join(dir, f)));
         st.lastCount++;
       }
+      // Receipt photos: each one once, under receipts/<company>/, never removed by Tally Books.
+      const doneFile = path.join(path.dirname(this.file), 'receipts-offsite.json');
+      let done = new Set(); try { done = new Set(JSON.parse(fs.readFileSync(doneFile, 'utf8'))); } catch { /* none yet */ }
+      try {
+        for (const c of this.reg.list()) {
+          const store = this.reg.store(c.id);
+          for (const f of (store.fileList ? store.fileList() : [])) {
+            const key = `${c.id}/${f.id}`;
+            if (done.has(key)) continue;
+            await this.blobFetch('PUT', `receipts/${key}.${EXT[f.mediaType] || 'bin'}`, '', store.getFile(f.id).data, f.mediaType);
+            done.add(key); st.receipts = (st.receipts || 0) + 1;
+          }
+        }
+      } finally { fs.writeFileSync(doneFile, JSON.stringify([...done])); }
       // With a write-only token (recommended), Azure removes old days itself (lifecycle rule).
       const perms = new URLSearchParams(this.blob.sas).get('sp') || '';
       if (perms.includes('l') && perms.includes('d')) st.removed = await this.pruneBlobs();
