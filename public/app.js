@@ -21,7 +21,7 @@ const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts
 const detailLabel=a=>(DETAILS[a.type]||[]).find(d=>d[0]===(a.detail||''))?.[1]||'';
 const debitNormal=t=>t==='Asset'||t==='Expense'||t==='Cost of Goods Sold';
 const isPL=t=>t==='Income'||t==='Expense'||t==='Cost of Goods Sold';
-const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment'};
+const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor'};
 
 /* ---------- state + server API ---------- */
 const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',fyStart:1,taxName:'HST',taxRate:13,terms:30,currency:'$'},
@@ -115,8 +115,14 @@ function bal(id,from,to){const a=acct(id);const r=rawBal(id,from,to);return a&&!
 function fyStartOf(s){const m=+S.company.fyStart||1;const d=pd(s);let y=d.getFullYear();if(d.getMonth()+1<m)y--;return `${y}-${pad(m)}-01`}
 function fyEndOf(s){const st=pd(fyStartOf(s));return iso(new Date(st.getFullYear()+1,st.getMonth(),0))}
 function netIncome(from,to){let n=0;for(const a of S.accounts){if(a.type==='Income')n+=bal(a.id,from,to);else if(a.type==='Expense'||a.type==='Cost of Goods Sold')n-=bal(a.id,from,to)}return r2(n)}
-function paidOn(docId,exceptEntry){return r2(S.entries.filter(e=>e.applyTo===docId&&e.id!==exceptEntry).reduce((s,e)=>s+(+e.amount||0),0))}
-function docStatus(d){const b=r2((+d.total||0)-paidOn(d.id));if(b<=0.004)return{k:'paid',label:'Paid',bal:0};if(d.due&&d.due<today())return{k:'overdue',label:'Overdue',bal:b};if(b<r2(d.total))return{k:'partial',label:'Partial',bal:b};return{k:'open',label:'Open',bal:b}}
+// Settled on a document: payments (or, for a credit, refunds) pointing at it, plus credits used on it
+// (or, for a credit, what it was used on).
+function paidOn(docId,exceptEntry){
+  let s=S.entries.filter(e=>e.applyTo===docId&&e.id!==exceptEntry).reduce((t,e)=>t+(+e.amount||0),0);
+  for(const c of S.docs){if(!c.applied)continue;for(const a of c.applied)if(c.id===docId||a.docId===docId)s+=+a.amount||0}
+  return r2(s);
+}
+function docStatus(d){const b=r2((+d.total||0)-paidOn(d.id));if(isCreditKind(d.kind))return b<=0.004?{k:'paid',label:'Used',bal:0}:{k:'open',label:'Available',bal:b};if(b<=0.004)return{k:'paid',label:'Paid',bal:0};if(d.due&&d.due<today())return{k:'overdue',label:'Overdue',bal:b};if(b<r2(d.total))return{k:'partial',label:'Partial',bal:b};return{k:'open',label:'Open',bal:b}}
 const entryTotal=e=>r2((e.lines||[]).reduce((s,l)=>s+(+l.debit||0),0));
 const hasExamples=()=>COLS.some(c=>S[c].some(x=>x.example));
 
@@ -205,20 +211,22 @@ function chart6(){
 function vDocs(kind){
   const inv=kind==='invoice',st=inv?S.sales:S.exp,ck=inv?'customer':'vendor';
   const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button></div>`;
-  const actions=inv?`<button class="btn" data-new="payment">Receive payment</button><button class="btn primary" data-new="invoice">New invoice</button>`:`${typeof aiReceiptButton==='function'?aiReceiptButton():''}<button class="btn" data-new="billpayment">Pay bill</button><button class="btn" data-new="expense">Expense</button><button class="btn primary" data-new="bill">New bill</button>`;
+  const actions=inv?`${typeof salesMailButtons==='function'?salesMailButtons():''}<button class="btn" data-new="credit">Credit note</button><button class="btn" data-new="payment">Receive payment</button><button class="btn primary" data-new="invoice">New invoice</button>`:`${typeof aiReceiptButton==='function'?aiReceiptButton():''}<button class="btn" data-new="vcredit">Vendor credit</button><button class="btn" data-new="billpayment">Pay bill</button><button class="btn" data-new="expense">Expense</button><button class="btn primary" data-new="bill">New bill</button>`;
   const h=head(inv?'Sales':'Expenses',inv?'Invoices you send and the customers who owe you':'Bills you receive and the vendors you pay',actions)+tabs;
+  const ckind=inv?'credit':'vcredit';
   const docs=S.docs.filter(d=>d.kind===kind).map(d=>({d,s:docStatus(d)}));
+  const credits=S.docs.filter(d=>d.kind===ckind).map(d=>({d,s:docStatus(d)}));
   if(st.tab==='contacts'){
     const cs=S.contacts.filter(c=>c.kind===ck).sort((a,b)=>a.name.localeCompare(b.name));
-    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span><button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${money(ob)}</td><td class="n ${ov?'neg':''}">${ov?money(ov):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
+    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span><button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0)-credits.filter(x=>x.d.contactId===c.id).reduce((s,x)=>s+x.s.bal,0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${money(ob)}</td><td class="n ${ov?'neg':''}">${ov?money(ov):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
   }
   const sum=k=>r2(docs.filter(x=>k(x)).reduce((s,x)=>s+x.s.bal,0));
   const t30=addDays(today(),-30);
   const paid30=r2(S.entries.filter(e=>e.type===(inv?'payment':'billpayment')&&e.date>=t30).reduce((s,e)=>s+(+e.amount||0),0));
   const chips=`<div class="chips"><div class="chip"><div class="lbl">Open</div><div class="val">${money(sum(x=>x.s.bal>0))}</div></div><div class="chip"><div class="lbl">Overdue</div><div class="val ${sum(x=>x.s.k==='overdue')?'neg':''}">${money(sum(x=>x.s.k==='overdue'))}</div></div><div class="chip"><div class="lbl">${inv?'Received':'Paid'}, last 30 days</div><div class="val">${money(paid30)}</div></div></div>`;
-  const list=docs.filter(x=>st.status==='all'||(st.status==='unpaid'?x.s.bal>0:x.s.k===st.status)).sort((a,b)=>b.d.date.localeCompare(a.d.date)||String(b.d.number).localeCompare(String(a.d.number),undefined,{numeric:true}));
-  return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option></select><span class="grow"></span></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(x=>`<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${fmtDate(x.d.due)}</td><td class="n">${money(x.d.total)}</td><td class="n">${money(x.s.bal)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`).join(''):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
+  const list=docs.concat(credits).filter(x=>st.status==='all'||(st.status==='credits'?isCreditKind(x.d.kind):isCreditKind(x.d.kind)?false:(st.status==='unpaid'?x.s.bal>0:x.s.k===st.status))).sort((a,b)=>b.d.date.localeCompare(a.d.date)||String(b.d.number).localeCompare(String(a.d.number),undefined,{numeric:true}));
+  return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option></select><span class="grow"></span></div>
+  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:fmtDate(x.d.due)}</td><td class="n">${money(cr?-x.d.total:x.d.total)}</td><td class="n">${money(cr?-x.s.bal:x.s.bal)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join(''):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
 }
 
 function vTx(){
@@ -360,6 +368,8 @@ function rGL(){
 function rAging(kind){
   const t=today(),B=['Current','1–30','31–60','61–90','Over 90'];const by={};
   for(const d of S.docs.filter(x=>x.kind===kind)){const s=docStatus(d);if(s.bal<=0)continue;const late=d.due?daysBetween(d.due,t):0;const i=late<=0?0:late<=30?1:late<=60?2:late<=90?3:4;const k=d.contactId||'?';(by[k]=by[k]||[0,0,0,0,0])[i]+=s.bal}
+  // Credits not used yet reduce what's owed (shown as current).
+  for(const d of S.docs.filter(x=>x.kind===(kind==='invoice'?'credit':'vcredit'))){const s=docStatus(d);if(s.bal<=0)continue;const k=d.contactId||'?';(by[k]=by[k]||[0,0,0,0,0])[0]-=s.bal}
   const csv=[[kind==='invoice'?'Customer':'Vendor',...B,'Total']];const tot=[0,0,0,0,0];
   const rows=Object.entries(by).sort((a,b)=>contactName(a[0]).localeCompare(contactName(b[0]))).map(([k,v])=>{v.forEach((x,i)=>tot[i]+=x);const s=v.reduce((a,b)=>a+b,0);csv.push([contactName(k),...v.map(r2),r2(s)]);return `<tr><td>${esc(contactName(k)||'No contact')}</td>${v.map((x,i)=>`<td class="n ${i>=2&&x?'neg':''}">${x?money(x):'—'}</td>`).join('')}<td class="n"><b>${money(s)}</b></td></tr>`}).join('');
   const all=tot.reduce((a,b)=>a+b,0);csv.push(['Total',...tot.map(r2),r2(all)]);
@@ -383,6 +393,8 @@ function vSettings(){
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
+  ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
+  ${typeof mailPanel==='function'?mailPanel():''}
   ${closingPanel()}
   ${aiPanel()}
   ${payrollSettingsPanel()}
@@ -409,6 +421,8 @@ function bindMain(m){
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
     if(d.clact)return closingAction(d.clact);
+    if(t.hasAttribute('data-mlstatements'))return statementsForm();
+    if(t.hasAttribute('data-mlreminders'))return remindersForm();
     if(d.new)return openNew(d.new);
     if(d.go)return go(d.go);
     if(d.pay){e.stopPropagation();const doc=S.docs.find(x=>x.id===d.pay);return payForm(doc.kind==='invoice'?'payment':'billpayment',null,doc.id)}
@@ -443,6 +457,7 @@ function bindMain(m){
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
   bindAI(m);bindAIRead(m);
+  if(typeof bindDocout==='function')bindDocout(m);
   if(S.view==='users'||S.view==='signins')bindUsers(m);
   if(S.view==='activity')bindActivity(m);
   if(S.view==='salestax')bindSalesTax(m);
@@ -648,57 +663,115 @@ function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${l
 
 /* ---------- forms ---------- */
 function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false');
-  ({invoice:()=>docForm('invoice'),bill:()=>docForm('bill'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
+  ({invoice:()=>docForm('invoice'),bill:()=>docForm('bill'),credit:()=>docForm('credit'),vcredit:()=>docForm('vcredit'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
 async function openEntry(e){if(!e)return;
   if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id);if(r)return payRunView(r)}
   if(e.type==='payremit')return remitForm(e.agency+'|'+e.period,e);
   if(e.type==='taxpayment'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast(e.taxKind==='instalment'?'Instalments are listed in the Sales tax worksheets. To remove one, delete it from the account register.':'Sales tax payments are managed from the return they belong to.');return}
   if(Object.values(e.clear||{}).includes('r')&&!await confirmBox('This transaction is reconciled','Changing its amount or bank account will change a balance you already reconciled. Open it anyway?','Open'))return;
-  if(e.type==='invoice'||e.type==='bill'){const d=S.docs.find(x=>x.id===e.docId);if(d)return docForm(d.kind,d)}
+  if(e.type==='invoice'||e.type==='bill'||e.type==='credit'||e.type==='vcredit'){const d=S.docs.find(x=>x.id===e.docId);if(d)return docForm(d.kind,d)}
+  if(e.type==='refund'||e.type==='vrefund'){const c=S.docs.find(x=>x.id===e.applyTo);if(c)return refundForm(c,e)}
   const fn={payment:()=>payForm('payment',e),billpayment:()=>payForm('billpayment',e),expense:()=>moneyForm('expense',e),deposit:()=>moneyForm('deposit',e),transfer:()=>transferForm(e)}[e.type];fn?fn():journalForm(e)}
 
-function nextNum(kind){if(kind!=='invoice')return'';const n=Math.max(1000,...S.docs.filter(d=>d.kind==='invoice').map(d=>parseInt(d.number)||0));return String(n+1)}
+const DOCL={
+  invoice:{t:'Invoice',n:'New invoice',num:'Invoice no.',date:'Invoice date',memo:'Message on invoice',saved:'Invoice saved',del:'Invoice deleted'},
+  bill:{t:'Bill',n:'New bill',num:'Bill no.',date:'Bill date',memo:'Memo',saved:'Bill saved',del:'Bill deleted'},
+  credit:{t:'Credit note',n:'New credit note',num:'Credit note no.',date:'Date',memo:'Message on credit note',saved:'Credit note saved',del:'Credit note deleted'},
+  vcredit:{t:'Vendor credit',n:'New vendor credit',num:'Credit no.',date:'Date',memo:'Memo',saved:'Vendor credit saved',del:'Vendor credit deleted'}};
+const isCreditKind=k=>k==='credit'||k==='vcredit';
+const saleKind=k=>k==='invoice'||k==='credit';
+function nextNum(kind){
+  if(kind==='invoice'){const n=Math.max(1000,...S.docs.filter(d=>d.kind==='invoice').map(d=>parseInt(d.number)||0));return String(n+1)}
+  if(kind==='credit'){const n=Math.max(1000,...S.docs.filter(d=>d.kind==='credit').map(d=>parseInt(String(d.number).replace(/^CN-/i,''))||0));return 'CN-'+(n+1)}
+  return'';
+}
 function docForm(kind,doc,preset){
   if(doc&&doc.carried)return carriedDocForm(kind,doc);
-  const inv=kind==='invoice',ck=inv?'customer':'vendor',t=today();
-  const filter=inv?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&!a.detail);
+  const sale=saleKind(kind),cred=isCreditKind(kind),L=DOCL[kind],ck=sale?'customer':'vendor',t=today();
+  const target=cred?(sale?'invoice':'bill'):null;
+  const filter=sale?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&!a.detail);
   const defA=(sortAccts(S.accounts.filter(a=>filter(a)&&a.active!==false))[0]||{}).id||'';
-  const d=doc?{...doc,lines:doc.lines.map(l=>({...l,taxCode:taxCodeOf(l)}))}:{number:nextNum(kind),date:t,due:addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:'std'}],memo:'',...(preset||{})};
+  const d=doc?{...doc,lines:doc.lines.map(l=>({...l,taxCode:taxCodeOf(l)}))}:{number:nextNum(kind),date:t,due:cred?'':addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:'std'}],memo:'',...(preset||{})};
   const paid=doc?paidOn(doc.id):0;
-  const f=openModal(doc?`${inv?'Invoice':'Bill'} ${d.number?'#'+d.number:''}`:(inv?'New invoice':'New bill'),
-    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',inv?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',inv?'Invoice no.':'Bill no.',`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',inv?'Invoice date':'Bill date',`<input type="date" id="dD" value="${esc(d.date)}">`)}${fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}</div>
+  const refunded=doc?r2(S.entries.filter(e=>e.applyTo===doc.id).reduce((s,e)=>s+(+e.amount||0),0)):0;
+  const settledNote=!doc||!paid?'':cred?`${money(paid)} of this credit has been used${refunded?`, including ${money(refunded)} refunded`:''}. ${money(r2(d.total-paid))} is still available.`:`${money(paid)} has been ${sale?'received':'paid'} on this ${kind==='invoice'?'invoice':'bill'}. Balance due ${money(r2(d.total-paid))}.`;
+  const f=openModal(doc?`${L.t} ${d.number?'#'+d.number:''}`:L.n,
+    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}</div>
     <div data-le></div>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${inv?'Message on invoice':'Memo'}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
-    ${doc&&paid?`<div class="banner" style="margin:0"><span>${money(paid)} has been ${inv?'received':'paid'} on this ${kind}. Balance due ${money(r2(d.total-paid))}.</span></div>`:''}`,
-    `${delBtn(!!doc)}<button type="button" class="btn" data-close>Cancel</button>${doc&&docStatus(doc).bal>0?`<button type="button" class="btn" data-paynow>${inv?'Receive payment':'Pay bill'}</button>`:''}<button type="submit" class="btn primary">Save</button>`,'wide');
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${L.memo}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
+    ${cred?`<div class="apply" data-apply></div>`:''}
+    ${settledNote?`<div class="banner" style="margin:0"><span>${settledNote}</span></div>`:''}`,
+    `${delBtn(!!doc)}${doc&&typeof docActions==='function'?docActions(doc):''}<button type="button" class="btn" data-close>Cancel</button>${doc&&!cred&&docStatus(doc).bal>0?`<button type="button" class="btn" data-paynow>${sale?'Receive payment':'Pay bill'}</button>`:''}${doc&&cred&&docStatus(doc).bal>0?'<button type="button" class="btn" data-refund>Refund</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'dC');presetContact(f,'dC',preset);
-  let rows=[];const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:inv?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:inv?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
+  let rows=[];const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:sale?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:sale?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
   const contactCode=()=>contact($('#dC',f).value)?.taxCode||'';
   cols.defaults=()=>({qty:1,taxCode:contactCode()||'std',account:defA});
+  const totalNow=()=>calcLines(rows,x=>(+x.qty||0)*(+x.rate||0)).total;
   const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{rows=r;setTotals(f,calcLines(r,x=>(+x.qty||0)*(+x.rate||0)))});
+  // Credits: which open invoices (or bills) of this customer (or vendor) the credit is used on.
+  const mine=a=>(d.applied||[]).find(x=>x.docId===a)?.amount||0;
+  const drawApply=()=>{
+    const box=$('[data-apply]',f);if(!box)return;
+    const cid=$('#dC',f).value;
+    const open=S.docs.filter(x=>x.kind===target&&x.contactId===cid&&cid).map(x=>({x,bal:r2(docStatus(x).bal+mine(x.id))})).filter(o=>o.bal>0.004||mine(o.x.id)).sort((a,b)=>a.x.date.localeCompare(b.x.date));
+    box.innerHTML=`<h3 class="fsec">Use this credit on ${sale?'open invoices':'open bills'}</h3>${open.length?`<div class="tbl-wrap"><table><thead><tr><th>${sale?'Invoice':'Bill'}</th><th>Date</th><th class="n">Balance</th><th class="n">Apply</th></tr></thead><tbody>${open.map(o=>`<tr><td class="mono">${esc(o.x.number||'—')}</td><td>${fmtDate(o.x.date)}</td><td class="n">${money(o.bal)}</td><td class="n"><input type="number" step="0.01" min="0" style="max-width:120px" data-apply-doc="${o.x.id}" data-max="${o.bal}" value="${mine(o.x.id)||''}"></td></tr>`).join('')}</tbody></table></div><div class="actions" style="margin-top:6px"><button type="button" class="btn sm ghost" data-autoapply>Apply to the oldest first</button></div>`:`<div class="muted" style="font-size:13px">${cid?(sale?'This customer has no open invoices. The credit stays available, or you can refund it.':'This vendor has no open bills. The credit stays available, or you can record a refund.'):(sale?'Choose a customer to see their open invoices.':'Choose a vendor to see their open bills.')}</div>`}`;
+    const auto=$('[data-autoapply]',box);if(auto)auto.onclick=()=>{let left=r2(totalNow()-refunded);$$('[data-apply-doc]',box).forEach(i=>{const a=Math.max(0,Math.min(+i.dataset.max,left));i.value=a?a.toFixed(2):'';left=r2(left-a)})};
+  };
+  drawApply();
   // A customer or vendor with a default tax code (e.g. a US customer: zero-rated export) sets it on every line.
-  $('#dC',f).addEventListener('change',()=>{const code=contactCode();if(!code)return;$$('[data-le] [data-k=taxCode]',f).forEach(s=>s.value=code);$('[data-le]',f).dispatchEvent(new Event('change'));toast(`Tax set to ${taxCodeLabel(code)} for ${contactName($('#dC',f).value)}`)});
-  let lastDate=d.date;$('#dD',f).onchange=()=>{const due=$('#dDue',f);if(due.value===addDays(lastDate,+S.company.terms||0))due.value=addDays($('#dD',f).value,+S.company.terms||0);lastDate=$('#dD',f).value};
-  const pn=$('[data-paynow]',f);if(pn)pn.onclick=()=>payForm(inv?'payment':'billpayment',null,doc.id);
-  const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(paid){f.err(`Delete the ${paid?'payments':''} on this ${kind} first.`);return}if(!await confirmBox(`Delete this ${kind}?`,`${inv?'Invoice':'Bill'} ${d.number?'#'+d.number+' ':''}and its posting to the ledger will be removed.`))return;if(!await batch([{op:'delete',collection:'entries',id:'d_'+doc.id},{op:'delete',collection:'docs',id:doc.id}]))return;closeModal();toast(`${inv?'Invoice':'Bill'} deleted`)};
+  $('#dC',f).addEventListener('change',()=>{drawApply();const code=contactCode();if(!code)return;$$('[data-le] [data-k=taxCode]',f).forEach(s=>s.value=code);$('[data-le]',f).dispatchEvent(new Event('change'));toast(`Tax set to ${taxCodeLabel(code)} for ${contactName($('#dC',f).value)}`)});
+  let lastDate=d.date;$('#dD',f).onchange=()=>{const due=$('#dDue',f);if(due&&due.value===addDays(lastDate,+S.company.terms||0))due.value=addDays($('#dD',f).value,+S.company.terms||0);lastDate=$('#dD',f).value};
+  const pn=$('[data-paynow]',f);if(pn)pn.onclick=()=>payForm(sale?'payment':'billpayment',null,doc.id);
+  const rf=$('[data-refund]',f);if(rf)rf.onclick=()=>refundForm(doc);
+  if(doc&&typeof bindDocActions==='function')bindDocActions(f,doc);
+  const lc=L.t.toLowerCase();
+  const db=$('[data-del]',f);if(db)db.onclick=async()=>{
+    if(cred?refunded:paid){f.err(cred?'Delete the refunds from this credit first.':`Delete the payments on this ${lc} first.`);return}
+    if(!await confirmBox(`Delete this ${lc}?`,cred&&paid?'Its posting to the ledger is removed too, and the invoices or bills it was used on show their balances again.':'Its posting to the ledger is removed too.'))return;
+    if(!await batch([{op:'delete',collection:'entries',id:'d_'+doc.id},{op:'delete',collection:'docs',id:doc.id}]))return;closeModal();toast(L.del)};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const c=calcLines(le.read(),x=>(+x.qty||0)*(+x.rate||0));
     if($('#dC',f).value===''||($('#dC',f).value==='__new'&&!$('#dCNew',f).value.trim()))return f.err(`Choose a ${ck}.`);
     if(!$('#dD',f).value)return f.err('Enter a date.');
     if(!c.ls.length)return f.err('Add at least one line with an account and an amount.');
-    if(doc&&c.total<paid-0.004)return f.err(`The total can't be less than the ${money(paid)} already ${inv?'received':'paid'}.`);
-    const ar=needAcct(inv?'ar':'ap',inv?'Accounts receivable':'Accounts payable');if(!ar)return;
+    let applied;
+    if(cred){
+      applied=$$('[data-apply-doc]',f).map(i=>({docId:i.dataset.applyDoc,amount:r2(+i.value||0),max:+i.dataset.max})).filter(a=>a.amount>0);
+      const over=applied.find(a=>a.amount>a.max+0.004);if(over)return f.err(`That’s more than the ${money(over.max)} still owing on one of them.`);
+      applied=applied.map(({docId,amount})=>({docId,amount}));
+      const used=r2(applied.reduce((s,a)=>s+a.amount,0)+refunded);
+      if(used>c.total+0.004)return f.err(`Only ${money(c.total)} of credit is available, but ${money(used)} is used.`);
+    }else if(doc&&c.total<paid-0.004)return f.err(`The total can't be less than the ${money(paid)} already ${sale?'received':'paid'}.`);
+    const ar=needAcct(sale?'ar':'ap',sale?'Accounts receivable':'Accounts payable');if(!ar)return;
     if(c.tax&&!taxReady(c.parts))return;
     const cid=await resolveContact(f,'dC',ck);if(!cid)return;
     const id=doc?doc.id:uid();const num=$('#dN',f).value.trim();
     const lines=[];const g=groupBy(c.ls);
-    if(inv){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
+    if(kind==='invoice'){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
+    else if(kind==='credit'){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' credited'}));lines.push({account:ar.id,debit:0,credit:c.total})}
+    else if(kind==='vcredit'){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' paid, credited'}))}
     else{Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ar.id,debit:0,credit:c.total})}
     const base={date:$('#dD',f).value,contactId:cid,memo:$('#dM',f).value.trim(),...(doc&&doc.example?{example:true}:{})};
     if(preset&&preset.receiptId)base.receiptId=preset.receiptId;
-    const dd={...base,kind,number:num,due:$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'})),sub:c.sub,tax:c.tax,total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
+    const dd={...(doc?strip(doc):{}),...base,kind,number:num,due:cred?'':$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'})),sub:c.sub,tax:c.tax,total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
+    if(cred)dd.applied=applied;
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:kind,ref:num,docId:id,lines,created:dd.created}}]))return;
-    closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${inv?'Invoice':'Bill'} saved`);
+    closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(L.saved);
+  };
+}
+// Paying out (to a customer) or receiving back (from a vendor) what's left on a credit.
+function refundForm(cr,entry){
+  const sale=cr.kind==='credit',left=r2(docStatus(cr).bal+(entry?+entry.amount||0:0));
+  const defBank=entry?.bank||(sortAccts(S.accounts.filter(a=>a.detail==='bank'))[0]||{}).id;
+  const f=openModal(sale?'Refund to customer':'Refund from vendor',`<div class="muted"><span>${sale?'Paid back to':'Received back from'}</span> <b translate="no">${esc(contactName(cr.contactId))}</b>. <span>${money(left)} of this credit is available.</span></div>
+    <div class="fields">${fld('rfDate','Date',`<input type="date" id="rfDate" value="${entry?.date||today()}">`)}${fld('rfAmt','Amount',`<input type="number" id="rfAmt" step="0.01" min="0" value="${entry?entry.amount:left}">`)}${fld('rfBank',sale?'Paid from':'Deposited to',`<select id="rfBank">${acctOptions(defBank,a=>a.detail==='bank'||a.detail==='card')}</select>`)}${fld('rfRef','Reference',`<input type="text" id="rfRef" value="${esc(entry?.ref||'')}">`)}</div>`,saveFoot(!!entry));
+  const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this refund?','The credit will show the amount as available again.'))return;await del('entries',entry.id);closeModal();toast('Refund deleted')};
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const amt=r2($('#rfAmt',f).value),bank=$('#rfBank',f).value;
+    if(!(amt>0))return f.err('Enter an amount above zero.');if(amt>left+0.004)return f.err(`Only ${money(left)} is available.`);if(!bank)return f.err('Choose a bank account.');
+    const ctl=needAcct(sale?'ar':'ap',sale?'Accounts receivable':'Accounts payable');if(!ctl)return;
+    const lines=sale?[{account:ctl.id,debit:amt,credit:0},{account:bank,debit:0,credit:amt}]:[{account:bank,debit:amt,credit:0},{account:ctl.id,debit:0,credit:amt}];
+    if(await put('entries',entry?.id||uid(),{type:sale?'refund':'vrefund',date:$('#rfDate',f).value||today(),ref:$('#rfRef',f).value.trim(),memo:`Refund of credit ${cr.number||''}`.trim(),contactId:cr.contactId,applyTo:cr.id,amount:amt,bank,lines,created:entry?.created||Date.now()})){closeModal();toast('Refund saved')}
   };
 }
 

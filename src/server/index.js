@@ -37,6 +37,7 @@ const server = createApp({
   backupFolder: process.env.BACKUP_FOLDER || undefined,
   backupBlobUrl: process.env.BACKUP_BLOB_URL || undefined,
   aiKey: process.env.ANTHROPIC_API_KEY || undefined,
+  mailAllowLocal: process.env.MAIL_ALLOW_LOCAL === '1', // testing only
 });
 server.on('error', err => {
   if (err.code === 'EADDRINUSE') {

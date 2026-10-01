@@ -50,6 +50,8 @@ It runs two ways from the same code:
 - **Bring a client over from QuickBooks Online or Sage:** a wizard (Companies → *Bring over from QuickBooks or Sage*, or Settings) reads the reports exported from QuickBooks Online, Sage 50 or Sage Accounting (Excel .xlsx, CSV, or a .zip of them): the chart of accounts, customer and vendor lists, the trial balance, open invoices and unpaid bills, and optionally the Journal report for this year's transactions. It recognises each report, works out each account's type (bank, credit card, A/R, A/P, sales tax…) for you to check, keeps the client's account numbers, and checks that the trial balance balances, that open invoices and bills agree with A/R and A/P, and that the history starts after the trial balance date. Opening balances come in as one journal entry; open invoices and bills come in as items you can receive and make payments against; everything is imported in one go or not at all, with a copy of the books kept on the server first.
 - **Close the books:** after a year-end or a filed return, an owner sets a closing date (with an optional closing password). Transactions, invoices, bills and pay runs on or before it can't be added, changed or deleted unless an owner or staff member unlocks the books for 15 minutes; clients never can. Reconciling and attaching receipts still work. Every closing change and unlock is in the activity log.
 - **Export for CaseWare:** Reports → Trial balance → *Export for CaseWare* gives a file for CaseWare Working Papers' Excel/ASCII import: account number, description, CaseWare map number (set on each account), type, and the year-end balance for the current and prior year (debits positive). Earnings of earlier years get their own retained earnings line.
+- **Credit notes and vendor credits:** for returns, refunds and corrections. A credit note reverses the income and the sales tax; it can be used on the customer's open invoices (it reduces what they owe without any money moving), or refunded. Vendor credits work the same way against bills. Credits show in Sales and Expenses, the aging reports and the GST/HST and QST worksheets.
+- **Invoices, statements and reminders as PDFs, and by email:** invoices and credit notes are laid out with the company's logo, address, contact details and tax number, and a note at the bottom (for payment instructions), in the language the books are kept in. Download them, or email them from the company's own mailbox (Gmail, Yahoo, iCloud, Zoho, Microsoft 365, or a web host's email, set up in Settings → Email with an app password). From Sales: customer statements (open invoices, unused credits and aging, as of any date) for every customer at once, and friendly reminders for overdue invoices. Each document keeps a record of when it was emailed and to whom.
 - **English and French:** every screen, form, message, report and pay stub is available in Canadian French, with Quebec terms (TPS/TVQ, RRQ, RQAP, AE, état des résultats, grand livre…) and French number and date formats (1 234,56 $ · 18 sept. 2026). Each person picks their language from the sidebar, the sign-in screen or Account, and it's saved with their account. New companies can keep their books in French, with a French chart of accounts. Names and other data you type stay exactly as entered.
 - **Sign-in security:** nobody sees any data without signing in.
   - The first start asks you to create an **owner** account. On an online server this also needs the setup code chosen when the server was installed.
@@ -169,6 +171,8 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   banking.js       Banking screens: import, review, rules, reconcile
   ai.js            AI suggestions for bank lines, reading receipts, AI settings
   receipts.js      Receipts inbox: sending from a phone, matching, attaching
+  pdf.js           A small PDF writer (Helvetica, French accents, JPEG logos)
+  docout.js        Invoice, credit note and statement PDFs; email; statements and reminders
   convert-parse.js Reading QuickBooks and Sage exports (CSV, .xlsx, .zip) into an import plan
   convert.js       The Bring over from QuickBooks or Sage wizard
   companies.js     Client list, company switcher, new company
@@ -187,6 +191,7 @@ src/server/
   companies.js     Company list; one database file per company
   backups.js       Daily automatic backups to a folder of your choice
   ai.js            AI suggestions through the Claude API (key, spending limit, prompts)
+  mail.js          Sending email over SMTP from each company's own mailbox
   auth.js          User accounts, password hashing, sessions, lockout, roles
   validate.js      Bookkeeping rules enforced on every write
   seed.js          Default chart of accounts and example data
@@ -263,7 +268,7 @@ The tests start a real server against a temporary database. They cover the bookk
 
 ## Not built yet
 
-Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, emailing invoices or saving them as PDFs, filing T4 and RL-1 slips electronically (XML), records of employment (ROE), vacation and statutory holiday pay, multiple currencies, and emailing invitations directly (for now you send the link yourself).
+Live bank feeds (statement import is covered above), the Quick Method of accounting for GST/HST, sending returns straight to CRA or Revenu Québec, filing T4 and RL-1 slips electronically (XML), records of employment (ROE), vacation and statutory holiday pay, multiple currencies, and emailing invitations directly (for now you send the link yourself).
 
 ## License
 

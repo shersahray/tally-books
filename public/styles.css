@@ -368,3 +368,5 @@ label.btn.disabled{opacity:.6;pointer-events:none}
   .side-foot .who-actions,.side-foot>div[style]{margin-top:0!important}
 }
 @media (max-width:520px){.side{position:static}}
+.doc-acts{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+.apply table input{text-align:right}

@@ -10,7 +10,7 @@ const DETAILS = {
   'Cost of Goods Sold': [''],
   Expense: ['', 'wages', 'payroll_tax'],
 };
-const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit'];
+const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund'];
 const PAY_PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
 const PAY_FREQ = ['weekly', 'biweekly', 'semimonthly', 'monthly'];
 const ID_RE = /^[A-Za-z0-9_.:@+~-]{1,120}$/;
@@ -54,8 +54,43 @@ function validateContact(data) {
   return { ...data, name: str(data.name, 160).trim() };
 }
 
-function validateDoc(data) {
-  if (!['invoice', 'bill'].includes(data.kind)) throw new ValidationError('Document kind must be invoice or bill.');
+const DOC_KINDS = ['invoice', 'bill', 'credit', 'vcredit'];
+// What a credit can be used against: a customer credit note against invoices, a vendor credit against bills.
+const CREDIT_FOR = { credit: 'invoice', vcredit: 'bill' };
+/** Amount already settled on a document: payments and refunds pointing at it, and credits used on it (or, for a credit, used from it). */
+function settledOn(store, docId, exceptCreditId, exceptEntryId) {
+  let s = 0;
+  for (const e of store.list('entries')) if (e.applyTo === docId && e.id !== exceptEntryId) s += Number(e.amount) || 0;
+  for (const c of store.list('docs')) {
+    if (!c.applied || c.id === exceptCreditId) continue;
+    for (const a of c.applied) if (a.docId === docId || c.id === docId) s += Number(a.amount) || 0;
+  }
+  return Math.round(s * 100) / 100;
+}
+function validateDoc(data, store, id) {
+  if (!DOC_KINDS.includes(data.kind)) throw new ValidationError('Document kind must be invoice, bill, credit note or vendor credit.');
+  if (data.applied !== undefined) {
+    const target = CREDIT_FOR[data.kind];
+    if (!target) throw new ValidationError('Only credit notes and vendor credits can be applied to other documents.');
+    if (!Array.isArray(data.applied)) throw new ValidationError('Applied credits must be a list.');
+    const seen = new Set();
+    let used = 0;
+    data.applied = data.applied.map(a => {
+      const amt = Math.round(Number(a && a.amount) * 100) / 100;
+      const doc = a && store.get('docs', String(a.docId));
+      if (!doc || doc.kind !== target) throw new ValidationError(`A credit can only be applied to ${target === 'invoice' ? 'invoices' : 'bills'}.`);
+      if (!(amt > 0)) throw new ValidationError('Applied amounts must be above zero.');
+      if (seen.has(doc.id)) throw new ValidationError('The same document is listed twice.');
+      seen.add(doc.id);
+      if (data.contactId && doc.contactId && doc.contactId !== data.contactId) throw new ValidationError('A credit can only be applied to the same customer’s or vendor’s documents.');
+      const left = Math.round(((Number(doc.total) || 0) - settledOn(store, doc.id, id)) * 100) / 100;
+      if (amt > left + 0.004) throw new ValidationError(`That’s more than the ${left.toFixed(2)} still owing on ${doc.number ? '#' + doc.number : 'that document'}.`);
+      used += amt;
+      return { docId: doc.id, amount: amt };
+    });
+    const refunds = store.list('entries').filter(e => e.applyTo === id).reduce((t, e) => t + (Number(e.amount) || 0), 0);
+    if (used + refunds > (Number(data.total) || 0) + 0.004) throw new ValidationError('More of this credit is used than it’s worth.');
+  }
   if (!isDate(data.date)) throw new ValidationError('Document date must be YYYY-MM-DD.');
   if (data.due && !isDate(data.due)) throw new ValidationError('Due date must be YYYY-MM-DD.');
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Document total must be a number.');
@@ -63,7 +98,7 @@ function validateDoc(data) {
   return data;
 }
 
-function validateEntry(data, store) {
+function validateEntry(data, store, id) {
   if (!ENTRY_TYPES.includes(data.type)) throw new ValidationError(`Unknown transaction type "${data.type}".`);
   if (!isDate(data.date)) throw new ValidationError('Transaction date must be YYYY-MM-DD.');
   if (!Array.isArray(data.lines) || data.lines.length < 2) throw new ValidationError('A transaction needs at least two lines.');
@@ -90,6 +125,13 @@ function validateEntry(data, store) {
   }
   if (data.applyTo) {
     const doc = store.get('docs', data.applyTo);
+    const wants = { payment: 'invoice', billpayment: 'bill', refund: 'credit', vrefund: 'vcredit' }[data.type];
+    if (doc && wants && doc.kind !== wants) throw new ValidationError(data.type === 'refund' || data.type === 'vrefund' ? 'A refund has to come from a credit.' : `A payment has to go to ${wants === 'invoice' ? 'an invoice' : 'a bill'}.`);
+    // Never more than what's left on it (after other payments, refunds and credits).
+    if (doc && wants) {
+      const left = Math.round(((Number(doc.total) || 0) - settledOn(store, doc.id, null, id)) * 100) / 100;
+      if (Number(data.amount) > left + 0.004) throw new ValidationError(`That’s more than the ${left.toFixed(2)} ${doc.kind === 'credit' || doc.kind === 'vcredit' ? 'left on the credit' : 'still owing'}.`);
+    }
     if (!doc) throw new ValidationError('The invoice or bill this payment applies to doesn’t exist.');
     if (!(Number(data.amount) > 0)) throw new ValidationError('Payment amount must be above zero.');
   }
@@ -282,8 +324,8 @@ function validateRecord(collection, id, data, store) {
   switch (collection) {
     case 'accounts': return validateAccount(data, store, id);
     case 'contacts': return validateContact(data);
-    case 'docs': return validateDoc(data);
-    case 'entries': return validateEntry(data, store);
+    case 'docs': return validateDoc(data, store, id);
+    case 'entries': return validateEntry(data, store, id);
     case 'bankTxns': return validateBankTxn(data, store, id);
     case 'rules': return validateRule(data, store);
     case 'recons': return validateRecon(data, store);
@@ -315,6 +357,9 @@ function checkDelete(collection, id, store) {
   }
   if (collection === 'entries' && store.list('payruns').some(r => r.entryId === id)) {
     throw new ValidationError('This transaction belongs to a pay run. Delete the pay run instead.', 409);
+  }
+  if (collection === 'docs' && store.list('docs').some(c => (c.applied || []).some(a => a.docId === id))) {
+    throw new ValidationError('A credit is applied to this document. Remove it from the credit first.', 409);
   }
   if (collection === 'docs' && store.hasPayments(id)) {
     throw new ValidationError('Delete the payments on this invoice or bill first.', 409);
@@ -350,6 +395,13 @@ function validateCompany(data) {
     filingFreq: ['monthly', 'quarterly', 'annual'].includes(data.filingFreq) ? data.filingFreq : 'quarterly',
     lang: data.lang === 'fr' ? 'fr' : 'en',
     ai: !!data.ai,
+    // Shown on invoices, credit notes and statements.
+    address: str(data.address, 300).trim(),
+    phone: str(data.phone, 40).trim(),
+    email: str(data.email, 120).trim(),
+    website: str(data.website, 120).trim(),
+    invoiceNote: str(data.invoiceNote, 1000).trim(),
+    logoFile: /^[A-Za-z0-9-]{0,64}$/.test(String(data.logoFile || '')) ? String(data.logoFile || '') : '',
     payroll: validatePayrollSettings(data.payroll),
   };
 }

@@ -51,7 +51,7 @@ const TAX_LINES={
 const BAL_LINE={gst:'113C',qst:'213'};
 // In Quebec, Revenu Québec administers the GST as well as the QST for most businesses.
 const AGENCY={get gst(){return S.company.province==='QC'?'Revenu Québec':'CRA'},qst:'Revenu Québec'};
-const SALE_TYPES=new Set(['invoice','deposit','payment']),BUY_TYPES=new Set(['bill','expense','billpayment']);
+const SALE_TYPES=new Set(['invoice','deposit','payment','credit']),BUY_TYPES=new Set(['bill','expense','billpayment','vcredit']);
 
 const taxesInUse=()=>byDetail('qst')&&+S.company.qstRate>0?['gst','qst']:['gst'];
 const taxLabel=k=>k==='qst'?'QST':(taxesInUse().length>1?'GST':(S.company.taxName||'GST/HST'));

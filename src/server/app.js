@@ -9,6 +9,7 @@ const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
+const mail = require('./mail');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
@@ -31,6 +32,8 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {string} [opts.require2fa]  Least two-step sign-in allowed: 'owners' or 'everyone' (use 'everyone' online).
  * @param {boolean} [opts.trustProxy] Behind a reverse proxy (Caddy): take the client's address from X-Forwarded-For.
  * @param {string} [opts.backupBlobUrl] Azure Blob Storage container URL with a SAS token, for off-site backups.
+ * @param {boolean} [opts.mailInsecureTls] Tests only: accept the test mail server's certificate.
+ * @param {boolean} [opts.mailAllowLocal]  Tests only: allow a mail server on this computer or the local network.
  * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
  * @param {string} [opts.setupCode]   If set, creating the first owner account needs this code (so a stranger can't claim a new server).
  */
@@ -200,13 +203,18 @@ function createApp(opts) {
     for (const e of entries) if (e.applyTo) paid[e.applyTo] = (paid[e.applyTo] || 0) + (Number(e.amount) || 0);
     const t = new Date(); const today = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
     let overdueCount = 0, overdue = 0, receivable = 0, payable = 0;
-    for (const d of store.list('docs')) {
+    const docs = store.list('docs');
+    // Credits count on both sides: used on an invoice or bill, and as used up on the credit itself.
+    for (const c of docs) for (const a of c.applied || []) { paid[a.docId] = (paid[a.docId] || 0) + (Number(a.amount) || 0); paid[c.id] = (paid[c.id] || 0) + (Number(a.amount) || 0); }
+    for (const d of docs) {
       const bal = Math.round(((Number(d.total) || 0) - (paid[d.id] || 0)) * 100) / 100;
       if (bal <= 0.004) continue;
       if (d.kind === 'invoice') {
         receivable += bal;
         if (d.due && d.due < today) { overdueCount++; overdue += bal; }
-      } else payable += bal;
+      } else if (d.kind === 'bill') payable += bal;
+      else if (d.kind === 'credit') receivable -= bal;
+      else if (d.kind === 'vcredit') payable -= bal;
     }
     const recons = store.list('recons').map(r => r.statementDate).sort();
     return {
@@ -239,7 +247,7 @@ function createApp(opts) {
   const isUnlocked = (user, store) => { const k = `${user && user.token}|${store.file}`, t = unlocks.get(k); if (t && t > Date.now()) return true; unlocks.delete(k); return false; };
   const DATED = { entries: 'date', docs: 'date', payruns: 'payDate' };
   const canon = x => JSON.stringify(x, (k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o, key) => { o[key] = v[key]; return o; }, {}) : v));
-  const sameBut = (a, b) => { const drop = o => { const { clear, receiptId, id, ...rest } = o || {}; return canon(rest); }; return drop(a) === drop(b); };
+  const sameBut = (a, b) => { const drop = o => { const { clear, receiptId, applied, sent, id, ...rest } = o || {}; return canon(rest); }; return drop(a) === drop(b); };
   function closedCheck(store, w, data, user) {
     const field = DATED[w.collection];
     if (!field) return;
@@ -479,14 +487,97 @@ function createApp(opts) {
     }],
     ['PUT', /^\/settings$/, async (ctx, req) => {
       notClient(ctx.user);
-      const company = validateCompany(await readJson(req));
       const before = ctx.store.getSetting('company');
+      const company = validateCompany(await readJson(req));
+      company.logoFile = (before && before.logoFile) || ''; // changed only through the logo route
       ctx.store.transaction(() => {
         ctx.store.putSetting('company', company);
         ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'company', summary: 'company settings', before, after: company });
       });
       reg.update(ctx.id, { name: company.name });
       broadcast({ companies: true });
+      return { ok: true, rev: ctx.bump() };
+    }],
+    // ---------- email from the company's own mailbox ----------
+    ['GET', /^\/mail$/, ctx => {
+      const m = ctx.store.getSetting('mail');
+      return { ...mail.publicMail(m), sentToday: Number(ctx.store.getMeta('mail-sent:' + new Date().toISOString().slice(0, 10)) || 0) };
+    }],
+    ['PUT', /^\/mail$/, async (ctx, req) => {
+      const body = (await readJson(req)) || {};
+      const before = ctx.store.getSetting('mail');
+      if (body.remove) {
+        ctx.store.transaction(() => { ctx.store.putSetting('mail', {}); ctx.store.audit(ctx.user, 'mail', { collection: 'settings', id: 'mail', summary: 'email sending turned off' }); });
+        return mail.publicMail(null);
+      }
+      const m = mail.validateMail(body, before || {}, { allowLocal: !!opts.mailAllowLocal });
+      ctx.store.transaction(() => { ctx.store.putSetting('mail', m); ctx.store.audit(ctx.user, 'mail', { collection: 'settings', id: 'mail', summary: `email sending set up for ${m.fromEmail}${body.pass ? ' (password changed)' : ''}` }); });
+      return mail.publicMail(m);
+    }],
+    ['POST', /^\/mail\/(test|send)$/, async (ctx, req, m) => {
+      const cfg = ctx.store.getSetting('mail');
+      if (!cfg || !cfg.host) throw new ValidationError('Set up email for this company first (Settings → Email).', 409);
+      const dayKey = 'mail-sent:' + new Date().toISOString().slice(0, 10);
+      const body = (await readJson(req, 12 * 1024 * 1024)) || {};
+      const list = v => (Array.isArray(v) ? v : String(v || '').split(/[,;]/)).map(x => String(x).trim()).filter(Boolean);
+      const to = m[1] === 'test' ? list(body.to || cfg.fromEmail) : list(body.to), cc = m[1] === 'test' ? [] : list(body.cc);
+      if (!to.length) throw new ValidationError('Enter who the email goes to.');
+      if (to.length + cc.length > 10) throw new ValidationError('Send to at most 10 addresses at a time.');
+      const bad = [...to, ...cc].find(x => !mail.EMAIL_RE.test(x));
+      if (bad) throw new ValidationError(`“${bad.slice(0, 80)}” isn’t an email address.`);
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      const subject = m[1] === 'test' ? `Test email from Tally Books (${company.name})` : String(body.subject || '').slice(0, 200);
+      const text = m[1] === 'test' ? `This is a test from Tally Books. Email for ${company.name} is working.` : String(body.text || '').slice(0, 20000);
+      if (!subject.trim()) throw new ValidationError('Enter a subject.');
+      const attachments = [];
+      let total = 0;
+      for (const a of (m[1] === 'send' && Array.isArray(body.attachments) ? body.attachments : []).slice(0, 5)) {
+        const data = Buffer.from(String(a.data || ''), 'base64');
+        if (data.slice(0, 4).toString('latin1') !== '%PDF') throw new ValidationError('Only PDF documents can be attached.');
+        total += data.length;
+        attachments.push({ name: String(a.name || 'document.pdf'), type: 'application/pdf', data });
+      }
+      if (total > 8 * 1024 * 1024) throw new ValidationError('The attachments are over 8 MB.', 413);
+      // Each address counts toward 200 a day, counted before sending (so parallel sends and failures count too).
+      const sentToday = Number(ctx.store.getMeta(dayKey) || 0);
+      if (sentToday + to.length + cc.length > 200) throw new ValidationError('That’s 200 emails today for this company. Send the rest tomorrow.', 429);
+      ctx.store.putMeta(dayKey, sentToday + to.length + cc.length);
+      await mail.send(cfg, { to, cc, subject, text, attachments }, { insecureTls: !!opts.mailInsecureTls, allowLocal: !!opts.mailAllowLocal });
+      const docIds = (Array.isArray(body.docIds) ? body.docIds : []).map(String).slice(0, 50);
+      ctx.store.transaction(() => {
+        for (const id of docIds) {
+          const d = ctx.store.get('docs', id);
+          if (d) ctx.store.put('docs', id, { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: to.join(', '), by: ctx.user.name || ctx.user.username, what: ['invoice', 'reminder', 'statement', 'credit'].includes(body.what) ? body.what : 'document' }] });
+        }
+        ctx.store.audit(ctx.user, 'email', { summary: `${m[1] === 'test' ? 'test email' : 'emailed'} “${subject.slice(0, 80)}” to ${to.join(', ').slice(0, 120)}` });
+      });
+      return { ok: true, rev: docIds.length ? ctx.bump() : ctx.rev };
+    }],
+    // ---------- logo on invoices ----------
+    ['PUT', /^\/logo$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const body = (await readJson(req, 3 * 1024 * 1024)) || {};
+      const data = Buffer.from(String(body.data || ''), 'base64');
+      if (!(data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)) throw new ValidationError('Choose a JPEG or PNG image for the logo.');
+      if (data.length > 1024 * 1024) throw new ValidationError('The logo is over 1 MB. Try a smaller image.', 413);
+      const company = ctx.store.getSetting('company') || {};
+      const fileId = crypto.randomUUID();
+      ctx.store.transaction(() => {
+        ctx.store.putFile(fileId, { mediaType: 'image/jpeg', name: 'logo.jpg', data });
+        if (company.logoFile) ctx.store.deleteFile(company.logoFile);
+        ctx.store.putSetting('company', { ...company, logoFile: fileId });
+        ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'company', summary: 'logo changed' });
+      });
+      return { ok: true, logoFile: fileId, rev: ctx.bump() };
+    }],
+    ['DELETE', /^\/logo$/, ctx => {
+      notClient(ctx.user);
+      const company = ctx.store.getSetting('company') || {};
+      ctx.store.transaction(() => {
+        if (company.logoFile) ctx.store.deleteFile(company.logoFile);
+        ctx.store.putSetting('company', { ...company, logoFile: '' });
+        ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'company', summary: 'logo removed' });
+      });
       return { ok: true, rev: ctx.bump() };
     }],
     ['PUT', /^\/closing$/, async (ctx, req) => {
