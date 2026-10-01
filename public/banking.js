@@ -121,7 +121,7 @@ function vReconcile(a){
       <div class="fields"><div class="field"><label>Beginning balance</label><div style="padding:6px 0;font-weight:600">${money(reconciledBalance(a))}</div><span class="hint">${last?`From the statement ending ${fmtDate(last.statementDate)}`:'Nothing reconciled yet'}</span></div>
       ${fld('rDate','Statement ending date',`<input type="date" id="rDate" value="${date}">`)}${fld('rEnd',a.detail==='card'?'Ending balance owed':'Ending balance',`<input type="number" id="rEnd" step="0.01" inputmode="decimal" value="${ending}">`)}</div>
       <div><button class="btn primary" data-bact="rec-start">Start reconciling</button></div></div></div>
-      ${hist.length?`<div class="panel" style="max-width:720px;margin-top:16px"><h3>Past reconciliations</h3><div class="tbl-wrap"><table><thead><tr><th>Statement date</th><th class="n">Ending balance</th><th class="n">Transactions</th><th>Reconciled on</th><th></th></tr></thead><tbody>${hist.map((r,i)=>`<tr><td>${fmtDate(r.statementDate)}</td><td class="n">${money(r.endingBalance)}</td><td class="n">${r.entryIds.length}</td><td class="muted">${r.completedAt?fmtDate(new Date(r.completedAt).toISOString().slice(0,10)):''}</td><td class="n">${i===0?`<button class="btn sm" data-recundo="${r.id}">Undo</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}`;
+      ${hist.length?`<div class="panel" style="max-width:720px;margin-top:16px"><h3>Past reconciliations</h3><div class="tbl-wrap"><table><thead><tr><th>Statement date</th><th class="n">Ending balance</th><th class="n">Transactions</th><th>Reconciled on</th><th></th></tr></thead><tbody>${hist.map((r,i)=>`<tr><td>${fmtDate(r.statementDate)}</td><td class="n">${money(r.endingBalance)}</td><td class="n">${r.entryIds.length}</td><td class="muted">${r.completedAt?fmtDate(new Date(r.completedAt).toISOString().slice(0,10)):''}</td><td class="n" style="white-space:nowrap"><button class="btn sm" data-recreport="${r.id}">Report</button>${i===0?` <button class="btn sm" data-recundo="${r.id}">Undo</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}`;
   }
   const lines=reconLines(a,R.date),n=reconNumbers(a),card=a.detail==='card';
   return reconBar(a)+`<div class="panel"><div class="toolbar"><span class="grow"><b>${esc(a.name)}</b> <span class="muted">· statement ending ${fmtDate(R.date)} · ${lines.length} uncleared transaction${lines.length===1?'':'s'} up to that date</span></span>
@@ -227,6 +227,7 @@ async function bankClick(ev,t,d){
   if(d.brule){const b=S.bankTxns.find(x=>x.id===d.brule);const sel=selFor(b);ruleForm(null,{text:keyWords(b.desc)||b.desc.slice(0,20),direction:b.amount>0?'in':'out',account:sel.choice.startsWith('a:')?sel.choice.slice(2):'',contactId:sel.contactId,tax:sel.tax});return true}
   if(d.editrule){ruleForm(S.rules.find(r=>r.id===d.editrule));return true}
   if(d.recundo){const r=S.recons.find(x=>x.id===d.recundo);if(r)await undoRecon(r);return true}
+  if(d.recreport){const r=S.recons.find(x=>x.id===d.recreport);if(r)reconReport(r);return true}
   switch(d.bact){
     case 'import':importForm();return true;
     case 'new-rule':ruleForm(null);return true;

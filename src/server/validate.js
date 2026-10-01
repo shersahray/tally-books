@@ -45,7 +45,8 @@ function validateAccount(data, store, id) {
   if (prev && prev.type !== data.type && store.accountUsed(id)) {
     throw new ValidationError('This account has transactions, so its type can’t change.', 409);
   }
-  return { ...data, name: str(data.name, 120).trim(), code, detail, desc: str(data.desc), active: data.active !== false };
+  const cf = ['operating', 'investing', 'financing'].includes(data.cf) ? data.cf : '';
+  return { ...data, name: str(data.name, 120).trim(), code, detail, desc: str(data.desc), cf, active: data.active !== false };
 }
 
 function validateContact(data) {
@@ -135,7 +136,14 @@ function validateEntry(data, store, id) {
     if (!doc) throw new ValidationError('The invoice or bill this payment applies to doesn’t exist.');
     if (!(Number(data.amount) > 0)) throw new ValidationError('Payment amount must be above zero.');
   }
-  return { ...data, lines };
+  // Adjusting entries are marked for the working trial balance; a reversing entry points at the one it undoes.
+  const out = { ...data, lines };
+  if (data.adjusting !== undefined) out.adjusting = !!data.adjusting;
+  if (data.reverseOn !== undefined && data.reverseOn !== '') {
+    if (!isDate(data.reverseOn) || data.reverseOn <= data.date) throw new ValidationError('The reversing date has to be after the entry’s date.');
+  }
+  if (data.reversalOf !== undefined) out.reversalOf = str(data.reversalOf, 60);
+  return out;
 }
 
 function bankAccount(store, id) {
@@ -373,6 +381,8 @@ function validateRecord(collection, id, data, store) {
     case 'employees': return validateEmployee(data);
     case 'payruns': return validatePayrun(data, store);
     case 'receipts': return validateReceipt(data, store, id);
+    case 'attachments': return validateAttachment(data, store);
+    case 'questions': return validateQuestion(data, store);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -447,6 +457,12 @@ function validateCompany(data) {
     // Business, non-profit organization or registered charity: changes report wording and how sales tax is worked out.
     orgType: ['npo', 'charity'].includes(data.orgType) ? data.orgType : 'business',
     nonprofit: validateNonprofit(data.nonprofit),
+    notDuplicates: (Array.isArray(data.notDuplicates) ? data.notDuplicates : []).slice(-500).map(x => str(x, 130)).filter(Boolean),
+    savedReports: (Array.isArray(data.savedReports) ? data.savedReports : []).slice(0, 30).filter(isObj).map(r => ({
+      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap'].includes(r.tab) ? r.tab : 'pl',
+      period: ['month', 'lastmonth', 'quarter', 'ytd', 'fy', 'lastfy', 'all', 'custom'].includes(r.period) ? r.period : 'fy',
+      from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40),
+    })).filter(r => r.id && r.name),
   };
   // Registered charities and qualifying non-profits can't use the Quick Method.
   if (out.quickMethod.on && (out.orgType === 'charity' || (out.orgType === 'npo' && out.nonprofit.qualifying))) out.quickMethod = { ...out.quickMethod, on: false };
@@ -470,6 +486,25 @@ function validateQuickMethod(q, fy, freq) {
     if (from.slice(8) !== '01' || ((m - fy + 12) % 12) % step) throw new ValidationError('Start the Quick Method on the first day of a reporting period.');
   }
   return { on: !!q.on, from, type: q.type === 'goods' ? 'goods' : 'services', gstRate: rate(q.gstRate), qstRate: rate(q.qstRate), credit: q.credit !== false };
+}
+
+/* Files attached to a transaction, invoice or bill. Created by the upload route; the file itself is in the files table. */
+function validateAttachment(data, store) {
+  if (!isObj(data)) throw new ValidationError('An attachment must be an object.');
+  if (!['entries', 'docs'].includes(data.target) || !store.get(data.target, String(data.targetId || ''))) throw new ValidationError('That attachment isn’t on a transaction that exists.');
+  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(data.mediaType)) throw new ValidationError('Attachments are PDFs or photos.');
+  return { target: data.target, targetId: String(data.targetId), fileId: str(data.fileId, 60), name: str(data.name, 120), mediaType: data.mediaType, size: Number(data.size) || 0,
+    uploadedBy: str(data.uploadedBy, 120), uploadedByName: str(data.uploadedByName, 120), uploadedAt: Number(data.uploadedAt) || 0 };
+}
+/* A question about a transaction, invoice or bill, answered in a thread by the client or the team. */
+function validateQuestion(data, store) {
+  if (!isObj(data)) throw new ValidationError('A question must be an object.');
+  if (!['entries', 'docs', 'bankTxns'].includes(data.target)) throw new ValidationError('A question has to be about a transaction.');
+  if (!Array.isArray(data.thread) || !data.thread.length || data.thread.length > 100) throw new ValidationError('A question needs a message.');
+  const thread = data.thread.filter(isObj).map(m => ({ by: str(m.by, 120), name: str(m.name, 120), role: ['owner', 'staff', 'client'].includes(m.role) ? m.role : 'staff', at: Number(m.at) || 0, text: str(m.text, 2000).trim() })).filter(m => m.text);
+  if (!thread.length) throw new ValidationError('A question needs a message.');
+  return { target: data.target, targetId: str(data.targetId, 60), status: ['open', 'answered', 'resolved'].includes(data.status) ? data.status : 'open', thread,
+    label: str(data.label, 200), created: Number(data.created) || 0 };
 }
 
 module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate, str, sanitizeDraft };

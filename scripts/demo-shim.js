@@ -142,6 +142,20 @@
       });
       return { ...out, added, skipped };
     }
+    if (rest === '/attachments') throw new ApiError(400, 'Attaching files isn’t available in the demo, because nothing in it is saved.');
+    if (rest === '/questions' && method === 'POST') {
+      const list = books[id].questions || [], rec = (books[id][body.target] || []).find(x => x.id === body.targetId);
+      if (!rec) throw new ApiError(404, 'That transaction isn’t here any more.');
+      const text = String(body.text || '').trim(); if (!text) throw new ApiError(400, 'Type your question.');
+      const q = { id: rid('q_'), target: body.target, targetId: body.targetId, status: 'open', created: Date.now(), label: `${rec.date || ''} · ${rec.type || rec.kind || ''}${rec.memo ? ' · ' + rec.memo : ''}`,
+        thread: [{ by: 'demo', name: 'Demo user', role: 'owner', at: Date.now(), text }] };
+      return transact(id, w => { w.questions = [...list, q]; });
+    }
+    m = rest.match(/^\/questions\/([^/]+)(?:\/(reply|resolve|reopen))?$/);
+    if (m) return transact(id, w => {
+      w.questions = (w.questions || []).map(q => q.id !== m[1] ? q : m[2] === 'reply' ? { ...q, status: 'open', thread: [...q.thread, { by: 'demo', name: 'Demo user', role: 'owner', at: Date.now(), text: String(body.text || '') }] } : { ...q, status: m[2] === 'resolve' ? 'resolved' : 'open' });
+      if (method === 'DELETE') w.questions = w.questions.filter(q => q.id !== m[1]);
+    });
     if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Tally Books, receipts go to this screen from a phone or a computer.');
     if (rest === '/closing') { const out = transact(id, w => { w.company = { ...w.company, closingDate: body.date || '', closingPassword: body.password !== undefined ? !!body.password : !!w.company.closingPassword }; }); return out; }
     if (rest === '/closing/unlock') return { ok: true, minutes: 15 };

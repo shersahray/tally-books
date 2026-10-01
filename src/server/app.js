@@ -314,6 +314,9 @@ function createApp(opts) {
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
     // Receipts are created only by the upload route (or a restore), never by a plain write.
     if (collection === 'receipts' && op === 'set' && !store.get('receipts', id)) throw new ValidationError('Add receipts from the Receipts screen.');
+    // Attachments and questions have their own routes; a plain write can only delete an attachment.
+    if (collection === 'attachments' && (op !== 'delete' || (user && user.role === 'client'))) throw new ValidationError('Attach files from the transaction.', 403);
+    if (collection === 'questions') throw new ValidationError('Use Questions to ask or answer.', 403);
     if (collection === 'receipts' && user && user.role === 'client') {
       // Clients can add a note to, or remove, a receipt they sent that hasn't been dealt with yet.
       const r = store.get('receipts', id);
@@ -334,7 +337,12 @@ function createApp(opts) {
       checkDelete(collection, id, store);
       closedCheck(store, w, null, user);
       store.delete(collection, id);
-      if (collection === 'receipts' && before && before.fileId) store.deleteFile(before.fileId);
+      if ((collection === 'receipts' || collection === 'attachments') && before && before.fileId) store.deleteFile(before.fileId);
+      // A deleted transaction, invoice or bill takes its attached files and questions with it.
+      if (collection === 'entries' || collection === 'docs') {
+        for (const x of store.list('attachments').filter(x => x.target === collection && x.targetId === id)) { store.delete('attachments', x.id); store.deleteFile(x.fileId); }
+        for (const q of store.list('questions').filter(q => q.target === collection && q.targetId === id)) store.delete('questions', q.id);
+      }
       // A receipt attached to a deleted transaction or bill goes back to the inbox.
       if (collection === 'entries' || collection === 'docs') {
         const key = collection === 'entries' ? 'entryId' : 'docId';
@@ -732,6 +740,70 @@ function createApp(opts) {
       if (canRead) queueRead(ctx.id, id);
       return { ok: true, id, rev: ctx.bump() };
     }],
+    /* Questions about a transaction: the team asks, the client answers (or the other way round), the team resolves.
+       A message from the client marks it answered; one from the team marks it waiting for the client. */
+    ['POST', /^\/questions$/, async (ctx, req) => {
+      const body = (await readJson(req)) || {};
+      const target = ['entries', 'docs', 'bankTxns'].includes(body.target) ? body.target : '';
+      const rec = target && ctx.store.get(target, String(body.targetId || ''));
+      if (!rec) throw new ValidationError('That transaction isn’t here any more.', 404);
+      const text = String(body.text || '').trim().slice(0, 2000);
+      if (!text) throw new ValidationError('Type your question.');
+      if (ctx.store.list('questions').filter(q => q.status !== 'resolved').length >= 500) throw new ValidationError('There are 500 open questions already. Resolve some first.', 409);
+      const amount = rec.lines ? rec.lines.reduce((s, l) => s + (Number(l.debit) || 0), 0) : Number(rec.total ?? rec.amount) || 0;
+      const label = `${rec.date || ''} · ${target === 'docs' ? rec.kind + (rec.number ? ' #' + rec.number : '') : target === 'bankTxns' ? String(rec.desc || '').slice(0, 60) : rec.type + (rec.ref ? ' #' + rec.ref : '')} · $${Math.abs(amount).toFixed(2)}${rec.memo ? ' · ' + String(rec.memo).slice(0, 60) : ''}`;
+      const client = ctx.user.role === 'client', id = crypto.randomUUID();
+      const q = validateRecord('questions', id, { target, targetId: rec.id || String(body.targetId), status: client ? 'answered' : 'open', label, created: Date.now(),
+        thread: [{ by: ctx.user.username, name: ctx.user.name || ctx.user.username, role: ctx.user.role, at: Date.now(), text }] }, ctx.store);
+      ctx.store.transaction(() => { ctx.store.put('questions', id, q); ctx.store.audit(ctx.user, 'add', { collection: 'questions', id, summary: `question on ${label}`, after: q }); });
+      return { ok: true, id, rev: ctx.bump() };
+    }],
+    ['POST', /^\/questions\/([A-Za-z0-9-]+)\/(reply|resolve|reopen)$/, async (ctx, req, m) => {
+      const q = ctx.store.get('questions', m[1]);
+      if (!q) throw new ValidationError('That question isn’t here any more.', 404);
+      const client = ctx.user.role === 'client';
+      let next;
+      if (m[2] === 'reply') {
+        const text = String(((await readJson(req)) || {}).text || '').trim().slice(0, 2000);
+        if (!text) throw new ValidationError('Type your answer.');
+        if (q.thread.length >= 100) throw new ValidationError('This conversation is long; start a new question.', 409);
+        next = { ...q, status: client ? 'answered' : 'open', thread: [...q.thread, { by: ctx.user.username, name: ctx.user.name || ctx.user.username, role: ctx.user.role, at: Date.now(), text }] };
+      } else {
+        notClient(ctx.user);
+        next = { ...q, status: m[2] === 'resolve' ? 'resolved' : 'open' };
+      }
+      ctx.store.transaction(() => { ctx.store.put('questions', q.id, validateRecord('questions', q.id, next, ctx.store)); ctx.store.audit(ctx.user, m[2], { collection: 'questions', id: q.id, summary: `${m[2]} question on ${q.label}` }); });
+      return { ok: true, rev: ctx.bump() };
+    }],
+    ['DELETE', /^\/questions\/([A-Za-z0-9-]+)$/, (ctx, req, m) => {
+      notClient(ctx.user);
+      const q = ctx.store.get('questions', m[1]);
+      if (q) ctx.store.transaction(() => { ctx.store.delete('questions', q.id); ctx.store.audit(ctx.user, 'delete', { collection: 'questions', id: q.id, summary: `question on ${q.label}`, before: q }); });
+      return { ok: true, rev: ctx.bump() };
+    }],
+    // Attach a PDF or photo to a transaction, invoice or bill.
+    ['POST', /^\/attachments$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const body = (await readJson(req, 15 * 1024 * 1024)) || {};
+      const target = body.target === 'docs' ? 'docs' : 'entries', targetId = String(body.targetId || '');
+      const rec0 = ctx.store.get(target, targetId);
+      if (!rec0) throw new ValidationError('Save the transaction first, then attach files to it.', 404);
+      if (ctx.store.list('attachments').filter(x => x.target === target && x.targetId === targetId).length >= 20) throw new ValidationError('That’s 20 files on this transaction already.', 409);
+      const data = Buffer.from(String(body.data || ''), 'base64');
+      if (!data.length) throw new ValidationError('That file is empty.');
+      if (data.length > 10 * 1024 * 1024) throw new ValidationError('That file is over 10 MB.', 413);
+      const mediaType = sniffType(data);
+      if (!mediaType) throw new ValidationError('Attach a PDF or a photo (JPEG, PNG or WebP).');
+      const id = crypto.randomUUID(), fileId = crypto.randomUUID();
+      const name = String(body.fileName || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').slice(0, 120);
+      const rec = validateRecord('attachments', id, { target, targetId, fileId, name, mediaType, size: data.length, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now() }, ctx.store);
+      ctx.store.transaction(() => {
+        ctx.store.putFile(fileId, { mediaType, name, data });
+        ctx.store.put('attachments', id, rec);
+        ctx.store.audit(ctx.user, 'add', { collection: 'attachments', id, summary: `attached ${name}`, after: rec });
+      });
+      return { ok: true, id, rev: ctx.bump() };
+    }],
     ['GET', /^\/files\/([A-Za-z0-9-]+)$/, (ctx, req, m, res) => {
       const f = ctx.store.getFile(m[1]);
       if (!f) throw new ValidationError('That file isn’t here any more.', 404);
@@ -832,7 +904,8 @@ function createApp(opts) {
         for (const c of COLLECTIONS) {
           for (const r of body[c] || []) {
             const { id, ...data } = r;
-            if (c === 'receipts' && !(data.fileId && ctx.store.hasFile(String(data.fileId)))) { skippedReceipts++; continue; } // photo isn't in this company's files
+            if ((c === 'receipts' || c === 'attachments') && !(data.fileId && ctx.store.hasFile(String(data.fileId)))) { skippedReceipts++; continue; } // file isn't in this company's files
+            if (c === 'attachments' && !ctx.store.get(data.target, String(data.targetId || ''))) continue;
             ctx.store.put(c, id, validateRecord(c, id, data, ctx.store));
           }
         }

@@ -16,7 +16,7 @@ const { DatabaseSync } = require('node:sqlite');
 process.emitWarning = origEmit;
 
 // Order matters for restore: later collections are validated against earlier ones.
-const COLLECTIONS = ['accounts', 'contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts'];
+const COLLECTIONS = ['accounts', 'contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts', 'attachments', 'questions'];
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS records (

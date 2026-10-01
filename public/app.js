@@ -28,7 +28,7 @@ const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons','filings','employees','payruns','receipts'];
+const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
@@ -146,7 +146,9 @@ function renderMain(){
   const nt=overdueReturns();const tc=$('#taxCount');tc.hidden=!nt;tc.textContent=nt;
   const np=overdueRemits();const pc=$('#payCount');pc.hidden=!np;pc.textContent=np;
   const nr=S.receipts.filter(r=>r.status==='inbox').length;const rc=$('#rcCount');if(rc){rc.hidden=!nr;rc.textContent=nr}
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
+    const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReview,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(noCo?'':banners())+V();
@@ -233,19 +235,20 @@ function vDocs(kind){
 
 function vTx(){
   const f=S.tx;
-  return head('Transactions','Every entry in your books, newest first',`<button class="btn" data-new="journal">Journal entry</button><button class="btn primary" data-new="expense">Expense</button>`)+
+  return head('Transactions','Every entry in your books, newest first',`${ME&&ME.role!=='client'?'<button class="btn" data-act="reclass">Reclassify</button>':''}<button class="btn" data-new="journal">Journal entry</button><button class="btn primary" data-new="expense">Expense</button>`)+
   `<div class="panel"><div class="toolbar">
     <input class="grow" type="search" id="txQ" placeholder="Search payee, memo, number, amount" value="${esc(f.q)}" aria-label="Search transactions">
-    <select id="txType" aria-label="Transaction type"><option value="">All types</option>${Object.entries(TLABEL).map(([k,v])=>`<option value="${k}" ${f.type===k?'selected':''}>${v}</option>`).join('')}</select>
+    <select id="txType" aria-label="Transaction type"><option value="">All types</option>${Object.entries(TLABEL).map(([k,v])=>`<option value="${k}" ${f.type===k?'selected':''}>${v}</option>`).join('')}<option value="adjusting" ${f.type==='adjusting'?'selected':''}>Adjusting entries</option><option value="attached" ${f.type==='attached'?'selected':''}>With attachments</option></select>
     <input type="date" id="txFrom" value="${f.from}" aria-label="From date"><span class="muted">to</span><input type="date" id="txTo" value="${f.to}" aria-label="To date">
   </div><div id="txBody">${txTable()}</div></div>`;
 }
 function txTable(){
   const f=S.tx,q=f.q.trim().toLowerCase();
-  const rows=S.entries.filter(e=>(!f.type||e.type===f.type)&&(!f.from||e.date>=f.from)&&(!f.to||e.date<=f.to)&&(!q||[e.ref,e.memo,contactName(e.contactId),money(entryTotal(e)),String(entryTotal(e)),...(e.lines||[]).map(l=>acctName(l.account)+' '+(l.memo||''))].join(' ').toLowerCase().includes(q)))
+  const att=f.type==='attached'?new Set(S.attachments.filter(a=>a.target==='entries').map(a=>a.targetId).concat(S.attachments.filter(a=>a.target==='docs').map(a=>'d_'+a.targetId))):null;
+  const rows=S.entries.filter(e=>(!f.type||(f.type==='adjusting'?e.adjusting:f.type==='attached'?att.has(e.id):e.type===f.type))&&(!f.from||e.date>=f.from)&&(!f.to||e.date<=f.to)&&(!q||[e.ref,e.memo,contactName(e.contactId),money(entryTotal(e)),String(entryTotal(e)),...(e.lines||[]).map(l=>acctName(l.account)+' '+(l.memo||''))].join(' ').toLowerCase().includes(q)))
     .sort((a,b)=>b.date.localeCompare(a.date)||(b.created||0)-(a.created||0));
   const tot=r2(rows.reduce((s,e)=>s+entryTotal(e),0));
-  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee / customer</th><th>Accounts</th><th>Memo</th><th class="n">Amount</th></tr></thead><tbody>${rows.length?rows.map(e=>{const ac=[...new Set((e.lines||[]).map(l=>acctName(l.account)))];return `<tr class="click" data-entry="${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td style="white-space:nowrap">${TLABEL[e.type]||e.type}${e.example?' <span class="pill ex">Example</span>':''}</td><td class="mono">${esc(e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(e.contactId))}</td><td class="trunc muted" translate="no" title="${esc(ac.join(', '))}">${esc(ac.length>2?ac.slice(0,2).join(', ')+` +${ac.length-2}`:ac.join(', '))}</td><td class="trunc muted" translate="no">${esc(e.memo||'')}</td><td class="n">${money(entryTotal(e))}</td></tr>`}).join(''):emptyRow(7,S.entries.length?'No matching transactions':'No transactions yet',S.entries.length?'Clear the search or widen the dates.':'Use + New to record your first one.')}</tbody>${rows.length?`<tfoot><tr><td colspan="6" class="muted">${rows.length} transaction${rows.length===1?'':'s'}</td><td class="n"><b>${money(tot)}</b></td></tr></tfoot>`:''}</table></div>`;
+  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee / customer</th><th>Accounts</th><th>Memo</th><th class="n">Amount</th></tr></thead><tbody>${rows.length?rows.map(e=>{const ac=[...new Set((e.lines||[]).map(l=>acctName(l.account)))];return `<tr class="click" data-entry="${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td style="white-space:nowrap">${TLABEL[e.type]||e.type}${e.adjusting?' <span class="pill quiet">Adjusting</span>':''}${e.reversalOf?' <span class="pill quiet">Reversal</span>':''}${e.example?' <span class="pill ex">Example</span>':''}</td><td class="mono">${esc(e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(e.contactId))}</td><td class="trunc muted" translate="no" title="${esc(ac.join(', '))}">${esc(ac.length>2?ac.slice(0,2).join(', ')+` +${ac.length-2}`:ac.join(', '))}</td><td class="trunc muted" translate="no">${esc(e.memo||'')}</td><td class="n">${money(entryTotal(e))}</td></tr>`}).join(''):emptyRow(7,S.entries.length?'No matching transactions':'No transactions yet',S.entries.length?'Clear the search or widen the dates.':'Use + New to record your first one.')}</tbody>${rows.length?`<tfoot><tr><td colspan="6" class="muted">${rows.length} transaction${rows.length===1?'':'s'}</td><td class="n"><b>${money(tot)}</b></td></tr></tfoot>`:''}</table></div>`;
 }
 
 function vAccounts(){
@@ -290,40 +293,23 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep;const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']];
+  const R=S.rep;const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']];
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
   const pointInTime=R.tab!=='pl'&&R.tab!=='gl';
-  return head('Reports','')+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
+  const saved=savedReports(),staff=ME&&ME.role!=='client';
+  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>`:''}${staff?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
     ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
     ${R.tab==='gl'?`<select id="repAcct" aria-label="Account"><option value="">All accounts</option>${acctOptions(R.acct||'')}</select>`:''}
-    <span class="grow"></span>${R.tab==='tb'&&ME&&ME.role!=='client'?'<button class="btn sm" data-act="caseware">Export for CaseWare</button>':''}<button class="btn sm" data-act="export">Export CSV</button>
+    ${R.tab==='tb'?`<label class="check"><input type="checkbox" id="repTbAdj" ${R.tbAdj?'checked':''}> Show adjusting entries</label>`:''}
+    ${['pl','bs','cf'].includes(R.tab)?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
+    <span class="grow"></span>${R.tab==='tb'&&ME&&ME.role!=='client'?'<button class="btn sm" data-act="caseware">Export for CaseWare</button>':''}<button class="btn sm" data-act="export">Export CSV</button><button class="btn sm" data-act="reppdf">PDF</button>
   </div><div id="repBody">${reportBody()}</div></div>`;
 }
-function reportBody(){return({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
+function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:()=>S.rep.tbAdj?rTBAdj():rTB(),gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
 const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font-weight:600;margin-top:2px">${t}</div><span>${sub}</span></div>`;
 const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}" translate="no">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
-function rPL(){
-  const{from,to}=S.rep;const csv=[['Account','Amount']];let h='';
-  const sec=(type,title)=>{const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({a,v:bal(a.id,from,to)})).filter(x=>x.v);const tot=r2(as.reduce((s,x)=>s+x.v,0));if(!as.length&&type==='Cost of Goods Sold')return 0;h+=rrow('sec',title,null);as.forEach(x=>{h+=rrow('item',(x.a.code?x.a.code+' ':'')+x.a.name,x.v,x.a.id);csv.push([(x.a.code?x.a.code+' ':'')+x.a.name,x.v])});h+=rrow('tot',W('Total '+title.toLowerCase()),tot);csv.push([W('Total '+title.toLowerCase()),tot]);return tot};
-  const inc=sec('Income',W('Income'));const cogs=sec('Cost of Goods Sold','Cost of goods sold');
-  if(cogs){h+=rrow('tot',W('Gross profit'),r2(inc-cogs));csv.push([W('Gross profit'),r2(inc-cogs)])}
-  const exp=sec('Expense','Expenses');const ni=r2(inc-cogs-exp);
-  h+=`<tr class="spacer"><td colspan="2"></td></tr>`+rrow('grand',W('Net income'),ni);csv.push([W('Net income'),ni]);
-  return{html:`<div class="report">${rh(W('Profit and loss'),`${fmtDate(from)} – ${fmtDate(to)}`)}<div class="tbl-wrap"><table>${h}</table></div></div>`,csv,name:`profit-and-loss_${from}_${to}`};
-}
-function rBS(){
-  const to=S.rep.to,fy=fyStartOf(to);const csv=[['Account','Amount']];let h='';
-  const re=netIncome(null,addDays(fy,-1)),cy=netIncome(fy,to);
-  const sec=(type,title,extra=[])=>{const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({l:(a.code?a.code+' ':'')+a.name,v:bal(a.id,null,to),id:a.id})).filter(x=>x.v).concat(extra.filter(x=>x.v));const tot=r2(as.reduce((s,x)=>s+x.v,0));h+=rrow('sec',title,null);as.forEach(x=>{h+=rrow('item',x.l,x.v,x.id);csv.push([x.l,x.v])});h+=rrow('tot','Total '+title.toLowerCase(),tot);csv.push(['Total '+title.toLowerCase(),tot]);return tot};
-  const A=sec('Asset','Assets');h+=`<tr class="spacer"><td colspan="2"></td></tr>`;
-  const L=sec('Liability','Liabilities');
-  const E=sec('Equity',W('Equity'),[{l:W('Retained earnings'),v:re},{l:W('Net income, current fiscal year'),v:cy}]);
-  h+=rrow('grand',W('Total liabilities and equity'),r2(L+E));csv.push([W('Total liabilities and equity'),r2(L+E)]);
-  const off=r2(A-L-E);
-  return{html:`<div class="report">${rh(W('Balance sheet'),`As of ${fmtDate(to)}`)}<div class="tbl-wrap"><table>${h}</table></div>${Math.abs(off)>0.004?`<div class="banner err" style="margin:12px 16px">Out of balance by ${money(off)}. Check for entries posted to deleted accounts.</div>`:''}</div>`,csv,name:`balance-sheet_${to}`};
-}
 function rTB(){
   const to=S.rep.to,fy=fyStartOf(to);const csv=[['Code','Account','Type','Debit','Credit']];let h='',td=0,tc=0;
   const add=(code,name,type,raw,id)=>{if(Math.abs(raw)<0.005)return;const d=raw>0?raw:0,c=raw<0?-raw:0;td+=d;tc+=c;h+=`<tr><td class="mono">${esc(code)}</td><td>${id?`<button class="link" data-acct="${id}" translate="no">${esc(name)}</button>`:esc(name)}</td><td class="n">${d?money(d):''}</td><td class="n">${c?money(c):''}</td></tr>`;csv.push([code,name,type,r2(d),r2(c)])};
@@ -438,6 +424,7 @@ function bindMain(m){
     if(S.view==='companies'&&await coClick(e,t,d))return;
     if(S.view==='salestax'&&await stClick(e,t,d))return;
     if(S.view==='payroll'&&await payClick(e,t,d))return;
+    if(S.view==='review'&&await reviewClick(e,t,d))return;
     if(S.view==='activity'&&await actClick(e,t,d))return;
     if(S.view==='receipts'&&rcClick(e,t,d))return;
     if(S.view==='convert'&&cvClick(e,t,d))return;
@@ -453,13 +440,17 @@ function bindMain(m){
     if(d.editacct)return accountForm(acct(d.editacct));
     if(d.acct){S.reg={from:'',to:''};return go('register',d.acct)}
     if(d.entry)return openEntry(S.entries.find(x=>x.id===d.entry));
-    if(d.doc){const doc=S.docs.find(x=>x.id===d.doc);return doc&&docForm(doc.kind,doc)}
+    if(d.doc){const doc=S.docs.find(x=>x.id===d.doc);if(doc){docForm(doc.kind,doc);addExtras('docs',doc.id)}return}
     if(d.contact)return contactForm(contact(d.contact));
     if(d.newcontact)return contactForm(null,d.newcontact);
     if(d.dtab){(S.view==='sales'?S.sales:S.exp).tab=d.dtab;return renderMain()}
     if(d.rtab){S.rep.tab=d.rtab;return renderMain()}
     if(d.act==='clear-examples')return clearExamples();
     if(d.act==='export')return exportCSV();
+    if(d.act==='reclass')return reclassForm();
+    if(d.act==='reppdf')return reportPdfNow();
+    if(d.act==='repsave')return saveReport();
+    if(d.act==='reppkg')return packageForm();
     if(d.act==='retry')return load();
     if(d.act==='activity')return showActivity();
     if(d.act==='caseware')return casewareForm();
@@ -473,6 +464,9 @@ function bindMain(m){
   const rf=$('#regFrom',m),rt=$('#regTo',m);if(rf){rf.onchange=rt.onchange=()=>{S.reg={from:rf.value,to:rt.value};renderMain()}}
   const rp=$('#repPeriod',m);if(rp)rp.onchange=()=>{S.rep.period=rp.value;renderMain()};
   const ra=$('#repAcct',m);if(ra)ra.onchange=()=>{S.rep.acct=ra.value;renderMain()};
+  const rc=$('#repCmp',m);if(rc)rc.onchange=()=>{S.rep.compare=rc.value;renderMain()};
+  const rta=$('#repTbAdj',m);if(rta)rta.onchange=()=>{S.rep.tbAdj=rta.checked;renderMain()};
+  const rsv=$('#repSaved',m);if(rsv)rsv.onchange=()=>{if(rsv.value)openSaved(rsv.value)};
   ['repFrom','repTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.onchange=()=>{S.rep.period='custom';S.rep.from=($('#repFrom')||{}).value||S.rep.from;S.rep.to=$('#repTo').value;renderMain()}});
   const rf2=$('#restoreFile',m);if(rf2)rf2.onchange=()=>{const f=rf2.files[0];rf2.value='';if(f)restoreBackup(f)};
   if(S.view==='banking')bindBanking(m);
@@ -585,9 +579,9 @@ function casewareForm(){
   };
 }
 function exportCSV(){
-  const R=S.rep;const r=({pl:rPL,bs:rBS,tb:rTB,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
+  const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:()=>R.tbAdj?rTBAdj():rTB(),gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
   // Column headings and report totals follow the screen language; account names stay as they are.
-  const LBL=new Set([...Object.values(NPO_WORDS),'Total net assets','Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
+  const LBL=new Set([...Object.values(NPO_WORDS),'Total net assets','$ change','% change','Operating activities','Investing activities','Financing activities','Items not affecting cash','Changes in working capital','Cash from operating activities','Cash from investing activities','Cash from financing activities','Net change in cash','Cash at the beginning of the period','Cash at the end of the period','Assets','Liabilities','Expenses','Cost of goods sold','Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
   if(isFr())r.csv=r.csv.map((row,i)=>row.map(v=>typeof v==='string'&&(i===0||LBL.has(v))?T(v):v));
   const text=r.csv.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
   saveFile(r.name+'.csv',new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'}));
@@ -740,9 +734,11 @@ async function openEntry(e){if(!e)return;
   if(e.type==='qmadjust'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast('This adjustment was posted when the return was filed. To change it, undo the filing.');return}
   if(e.type==='taxpayment'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast(e.taxKind==='instalment'?'Instalments are listed in the Sales tax worksheets. To remove one, delete it from the account register.':'Sales tax payments are managed from the return they belong to.');return}
   if(Object.values(e.clear||{}).includes('r')&&!await confirmBox('This transaction is reconciled','Changing its amount or bank account will change a balance you already reconciled. Open it anyway?','Open'))return;
-  if(e.type==='invoice'||e.type==='bill'||e.type==='credit'||e.type==='vcredit'){const d=S.docs.find(x=>x.id===e.docId);if(d)return docForm(d.kind,d)}
-  if(e.type==='refund'||e.type==='vrefund'){const c=S.docs.find(x=>x.id===e.applyTo);if(c)return refundForm(c,e)}
-  const fn={payment:()=>payForm('payment',e),billpayment:()=>payForm('billpayment',e),expense:()=>moneyForm('expense',e),deposit:()=>moneyForm('deposit',e),transfer:()=>transferForm(e)}[e.type];fn?fn():journalForm(e)}
+  if(e.type==='invoice'||e.type==='bill'||e.type==='credit'||e.type==='vcredit'){const d=S.docs.find(x=>x.id===e.docId);if(d){docForm(d.kind,d);addExtras('docs',d.id);return}}
+  // A reversing entry is changed through the entry it reverses.
+  if(e.reversalOf){const o=S.entries.find(x=>x.id===e.reversalOf);if(o){toast(`This entry reverses the journal entry of ${fmtDate(o.date)}. Change it there.`);journalForm(o);addExtras('entries',o.id);return}}
+  if(e.type==='refund'||e.type==='vrefund'){const c=S.docs.find(x=>x.id===e.applyTo);if(c){refundForm(c,e);addExtras('entries',e.id);return}}
+  const fn={payment:()=>payForm('payment',e),billpayment:()=>payForm('billpayment',e),expense:()=>moneyForm('expense',e),deposit:()=>moneyForm('deposit',e),transfer:()=>transferForm(e)}[e.type];fn?fn():journalForm(e);addExtras('entries',e.id)}
 
 const DOCL={
   invoice:{t:'Invoice',n:'New invoice',num:'Invoice no.',date:'Invoice date',memo:'Message on invoice',saved:'Invoice saved',del:'Invoice deleted'},
@@ -943,32 +939,46 @@ function transferForm(entry){
 }
 
 function journalForm(entry){
-  const f=openModal(entry?'Journal entry':'New journal entry',`<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${entry?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(entry?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(entry?.memo||'')}">`,true)}</div><div data-le></div><div class="totals"><div>Total debits</div><div data-j="d">0.00</div><div>Total credits</div><div data-j="c">0.00</div><div class="big">Difference</div><div class="big" data-j="x">0.00</div></div>`,saveFoot(!!entry),'wide');
+  const f=openModal(entry?'Journal entry':'New journal entry',`<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${entry?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(entry?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(entry?.memo||'')}">`,true)}</div><div data-le></div>
+    ${ME&&ME.role!=='client'?`<div class="fields" style="align-items:end"><label class="check" style="align-self:center"><input type="checkbox" id="jAdj" ${entry?.adjusting?'checked':''}> Adjusting entry (shown in its own column on the working trial balance)</label>
+      ${fld('jRev','Reverse on (optional)',`<input type="date" id="jRev" value="${esc(entry?.reverseOn||'')}"><span class="hint">Posts the opposite entry on this date, for example the first day of the next period</span>`)}</div>`:''}<div class="totals"><div>Total debits</div><div data-j="d">0.00</div><div>Total credits</div><div data-j="c">0.00</div><div class="big">Difference</div><div class="big" data-j="x">0.00</div></div>`,saveFoot(!!entry),'wide');
   const rows=(entry?.lines||[{},{}]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||''}));
   const le=lineEditor($('[data-le]',f),[{key:'account',label:'Account',type:'acct'},{key:'memo',label:'Description',type:'text'},{key:'debit',label:'Debit',type:'num'},{key:'credit',label:'Credit',type:'num'}],rows,r=>{const d=r2(r.reduce((s,x)=>s+(+x.debit||0),0)),c=r2(r.reduce((s,x)=>s+(+x.credit||0),0));$('[data-j=d]',f).textContent=money(d);$('[data-j=c]',f).textContent=money(c);const x=$('[data-j=x]',f);x.textContent=money(r2(d-c));x.className='big '+(Math.abs(d-c)>0.004?'neg':'')});
-  const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this journal entry?','It will be removed from your books.'))return;await del('entries',entry.id);closeModal();toast('Journal entry deleted')};
+  const rvId=entry?'rv_'+entry.id:'',hasRev=!!(entry&&S.entries.some(x=>x.id===rvId));
+  const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this journal entry?',hasRev?'It and its reversing entry will be removed from your books.':'It will be removed from your books.'))return;
+    const w=[{op:'delete',collection:'entries',id:entry.id}];if(hasRev)w.push({op:'delete',collection:'entries',id:rvId});if(await batch(w)){closeModal();toast('Journal entry deleted')}};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const ls=le.read().filter(l=>l.account||+l.debit||+l.credit);
     for(const l of ls){if(!l.account)return f.err('Every line with an amount needs an account.');if(+l.debit&&+l.credit)return f.err('Put each line in either Debit or Credit, not both.');if(+l.debit<0||+l.credit<0)return f.err('Use positive amounts; switch columns instead of using negatives.')}
     const lines=ls.filter(l=>+l.debit||+l.credit).map(l=>({account:l.account,debit:r2(l.debit),credit:r2(l.credit),memo:l.memo||''}));
     const d=r2(lines.reduce((s,l)=>s+l.debit,0)),c=r2(lines.reduce((s,l)=>s+l.credit,0));
     if(lines.length<2||!d)return f.err('A journal entry needs at least one debit and one credit.');if(Math.abs(d-c)>0.004)return f.err(`Debits and credits are out by ${money(r2(d-c))}.`);
-    const id=entry?.id||uid();if(await put('entries',id,{type:'journal',date:$('#jDate',f).value||today(),ref:$('#jRef',f).value.trim(),memo:$('#jMemo',f).value.trim(),contactId:entry?.contactId||'',lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast('Journal entry saved')}};
+    const id=entry?.id||uid(),date=$('#jDate',f).value||today(),ref=$('#jRef',f).value.trim(),memo=$('#jMemo',f).value.trim();
+    const adjusting=!!($('#jAdj',f)||{}).checked,reverseOn=($('#jRev',f)||{}).value||'';
+    if(reverseOn&&reverseOn<=date)return f.err('The reversing date has to be after the entry’s date.');
+    const data={...(entry?strip(entry):{}),type:'journal',date,ref,memo,contactId:entry?.contactId||'',lines,created:entry?.created||Date.now(),adjusting,reverseOn,...(entry?.example?{example:true}:{})};
+    const w=[{op:'set',collection:'entries',id,data}],rid='rv_'+id;
+    // The reversing entry: the same lines with debits and credits swapped.
+    if(reverseOn)w.push({op:'set',collection:'entries',id:rid,data:{type:'journal',date:reverseOn,ref:ref?ref+'-R':'',memo:`Reversal of ${memo||'journal entry'} (${fmtDate(date)})`,contactId:'',adjusting,reversalOf:id,
+      lines:lines.map(l=>({account:l.account,debit:l.credit,credit:l.debit,memo:l.memo})),created:(S.entries.find(x=>x.id===rid)||{}).created||Date.now()+1}});
+    else if(S.entries.some(x=>x.id===rid))w.push({op:'delete',collection:'entries',id:rid});
+    if(await batch(w)){closeModal();toast(reverseOn?`Journal entry saved, reversing on ${fmtDate(reverseOn)}`:'Journal entry saved')}};
 }
 
 function accountForm(a){
   const used=a?postings().some(p=>p.account===a.id):false;
-  const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`)}${fld('aMap','CaseWare map no.',`<input type="text" id="aMap" value="${esc(a?.cwMap||'')}" maxlength="20" translate="no"><span class="hint">Optional. Goes with the account in the CaseWare export.</span>`)}</div>
+  const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`)}${fld('aMap','CaseWare map no.',`<input type="text" id="aMap" value="${esc(a?.cwMap||'')}" maxlength="20" translate="no"><span class="hint">Optional. Goes with the account in the CaseWare export.</span>`)}<div data-cf style="display:contents">${fld('aCf','Cash flow statement',`<select id="aCf">${[['','Automatic'],['operating','Operating activities'],['investing','Investing activities'],['financing','Financing activities']].map(([k,v])=>`<option value="${k}" ${(a?.cf||'')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Which section changes in this account go in</span>`)}</div></div>
   <div data-ob ${a?'hidden':''} class="fields">${fld('aOb','Opening balance',`<input type="number" id="aOb" step="0.01" inputmode="decimal" placeholder="0.00">`)}${fld('aObD','As of',`<input type="date" id="aObD" value="${today()}">`)}</div>
   ${a?`<label class="check"><input type="checkbox" id="aInactive" ${a.active===false?'checked':''}> Inactive (hide from new transactions)</label>`:''}
   ${used?`<div class="muted" style="font-size:13px">This account has transactions, so its type can't change. You can rename it or mark it inactive.</div>`:''}`,saveFoot(!!a&&!used));
   const ty=$('#aType',f),de=$('#aDet',f),ob=$('[data-ob]',f);
-  const fillDet=()=>{de.innerHTML=(DETAILS[ty.value]||[]).map(([k,v])=>`<option value="${k}" ${(a?.detail||'')===k?'selected':''}>${v}</option>`).join('');ob.hidden=!!a||!(ty.value==='Asset'||ty.value==='Liability')};
+  const fillDet=()=>{de.innerHTML=(DETAILS[ty.value]||[]).map(([k,v])=>`<option value="${k}" ${(a?.detail||'')===k?'selected':''}>${v}</option>`).join('');ob.hidden=!!a||!(ty.value==='Asset'||ty.value==='Liability');$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none'};
+  de.addEventListener('change',()=>{$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none'});
   ty.onchange=fillDet;fillDet();
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this account?',`${a.name} has no transactions and will be removed.`))return;await del('accounts',a.id);closeModal();toast('Account deleted');if(S.view==='register')go('accounts')};
   f.onsubmit=async e=>{e.preventDefault();f.err('');const name=$('#aName',f).value.trim();if(!name)return f.err('Give the account a name.');
     const code=$('#aCode',f).value.trim();if(code&&S.accounts.some(x=>x.code===code&&x.id!==a?.id))return f.err(`Code ${code} is already used.`);
-    const id=a?.id||uid();const data={...(a?strip(a):{}),type:ty.value,detail:de.value,code,name,desc:$('#aDesc',f).value.trim(),cwMap:$('#aMap',f).value.trim(),active:a?!$('#aInactive',f).checked:true};
+    const id=a?.id||uid();const data={...(a?strip(a):{}),type:ty.value,detail:de.value,code,name,desc:$('#aDesc',f).value.trim(),cwMap:$('#aMap',f).value.trim(),cf:['Asset','Liability','Equity'].includes(ty.value)?$('#aCf',f).value:'',active:a?!$('#aInactive',f).checked:true};
     const writes=[{op:'set',collection:'accounts',id,data}];
     const amt=r2($('#aOb',f)?.value);if(!a&&amt){const obA=needAcct('ob','Opening balance equity');if(!obA)return;const pos=amt>0;writes.push({op:'set',collection:'entries',id:uid(),data:{type:'journal',date:$('#aObD',f).value||today(),ref:'',memo:'Opening balance',lines:[{account:id,debit:pos===debitNormal(data.type)?Math.abs(amt):0,credit:pos===debitNormal(data.type)?0:Math.abs(amt)},{account:obA.id,debit:pos===debitNormal(data.type)?0:Math.abs(amt),credit:pos===debitNormal(data.type)?Math.abs(amt):0}],created:Date.now()}})}
     if(!await batch(writes))return;

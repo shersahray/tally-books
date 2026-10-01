@@ -54,8 +54,8 @@
     return null;
   }
 
-  function create() {
-    const PW = 612, PH = 792; // Letter, in points
+  function create(opts = {}) {
+    const PW = opts.landscape ? 792 : 612, PH = opts.landscape ? 612 : 792; // Letter, in points
     const pages = [];
     let cur = null;
     const images = [];
