@@ -1,0 +1,14 @@
+Maple Leaf Bakery Ltd.
+A/R Aging Detail
+As of February 28, 2026
+
+Date,Transaction Type,Num,Customer,Due Date,Amount,Open Balance
+Current,,,,,,
+12/15/2025,Invoice,1043,Corner Café,01/14/2026,"1,130.00","1,130.00"
+12/20/2025,Invoice,1044,Harbour Hotel,01/19/2026,"2,260.00","1,700.00"
+Total for Current,,,,,"3,390.00","2,830.00"
+1 - 30 days past due,,,,,,
+11/20/2025,Invoice,1039,St. Mary's School,12/20/2025,560.00,560.00
+12/28/2025,Payment,,Harbour Hotel,,-100.00,-100.00
+Total for 1 - 30 days past due,,,,,460.00,460.00
+TOTAL,,,,,"$3,850.00","$3,390.00"

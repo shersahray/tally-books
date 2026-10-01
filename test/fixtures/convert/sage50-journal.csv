@@ -1,0 +1,8 @@
+"All Journal Entries 01/01/2026 to 01/31/2026"
+"Date","Comment","Source","JE #","Account Number","Account Description","Debits","Credits"
+"01/03/2026","Sales","1001","J1","1200","Accounts Receivable","1,050.00",""
+"01/03/2026","Sales","1001","J1","4020","General Revenue","","1,000.00"
+"01/03/2026","Sales","1001","J1","2310","GST Charged on Sales","","50.00"
+"01/04/2026","Supplies","A-17","J2","5020","Purchases","400.00",""
+"01/04/2026","Supplies","A-17","J2","2315","GST Paid on Purchases","20.00",""
+"01/04/2026","Supplies","A-17","J2","2100","Accounts Payable","","420.00"

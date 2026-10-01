@@ -63,7 +63,8 @@ function filingPeriods(){
   const step={monthly:1,quarterly:3,annual:12}[S.company.filingFreq||'quarterly']||3;
   const ids=taxAcctIds();
   let first=today();
-  for(const e of S.entries)if(e.date<first&&(e.lines||[]).some(l=>ids.has(l.account)))first=e.date;
+  // Opening balances brought over from other software aren't sales tax activity in Tally Books.
+  for(const e of S.entries)if(!e.opening&&e.date<first&&(e.lines||[]).some(l=>ids.has(l.account)))first=e.date;
   for(const f of S.filings)if(f.from<first)first=f.from;
   const out=[];let d=pd(fyStartOf(first));const end=pd(today());
   while(d<=end&&out.length<400){
@@ -84,7 +85,7 @@ function worksheet(k,from,to){
   const push=(key,e,amt)=>{if(!amt)return;v[key]+=amt;src[key].push({e,amt})};
   const income=new Set(S.accounts.filter(x=>x.type==='Income').map(x=>x.id)),taxIds=taxAcctIds();
   for(const e of S.entries){
-    if(e.date<from||e.date>to)continue;
+    if(e.date<from||e.date>to||e.opening)continue;
     let inc=0;const byCode={};
     // Older transactions have no tax code on their lines: taxed if the transaction charged sales tax.
     const legacy=(e.lines||[]).some(l=>taxIds.has(l.account)&&(+l.credit||0)>0)?'std':'none';

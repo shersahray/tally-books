@@ -1,0 +1,26 @@
+Maple Leaf Bakery Ltd.
+Trial Balance
+As of December 31, 2025
+
+,Debit,Credit
+1000 Chequing,"15,230.40",
+1010 Savings,"5,000.00",
+1200 Accounts Receivable (A/R),"3,390.00",
+1300 Prepaid Expenses,600.00,
+1500 Equipment,"24,000.00",
+1510 Equipment:Accumulated Depreciation,,"4,800.00"
+2000 Accounts Payable (A/P),,"1,695.00"
+2100 Visa,,850.25
+2200 GST/HST Payable,,"1,240.00"
+2600 Shareholder Loan,,"10,000.00"
+3000 Share Capital,,100.00
+3100 Retained Earnings,,"8,500.00"
+4000 Bakery Sales,,"89,000.00"
+4100 Catering,,"12,000.00"
+5000 Cost of Goods Sold,"41,000.00",
+6000 Advertising,"2,400.00",
+6200 Rent,"30,000.00",
+6310 Utilities:Hydro,"3,600.00",
+6320 Utilities:Gas,"2,500.00",
+6900 Bank Charges,464.85,
+TOTAL,"$128,185.25","$128,185.25"

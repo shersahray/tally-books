@@ -136,7 +136,7 @@ function renderMain(){
   const nt=overdueReturns();const tc=$('#taxCount');tc.hidden=!nt;tc.textContent=nt;
   const np=overdueRemits();const pc=$('#payCount');pc.hidden=!np;pc.textContent=np;
   const nr=S.receipts.filter(r=>r.status==='inbox').length;const rc=$('#rcCount');if(rc){rc.hidden=!nr;rc.textContent=nr}
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,payroll:vPayroll,receipts:vReceipts,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(noCo?'':banners())+V();
@@ -147,7 +147,7 @@ function banners(){
   let h='';
   if(typeof ME!=='undefined'&&ME&&ME.readOnly)h+=`<div class="banner"><span><b>View only.</b> You can look at everything in these books, but changes are turned off for your account.</span></div>`;
   if(S.connErr)h+=`<div class="banner err"><span><b>Can't reach the server.</b> Showing the last data loaded. Changes won't save until the connection is back.</span><button class="btn sm" data-act="retry">Try again</button></div>`;
-  else if(!S.entries.length&&!S.docs.length&&!S.contacts.length)h+=`<div class="banner"><span><b>Your books are empty.</b> Start with + New, or load example data to see how everything fits together.</span><button class="btn sm" data-act="load-examples">Load example data</button></div>`;
+  else if(!S.entries.length&&!S.docs.length&&!S.contacts.length)h+=`<div class="banner"><span><b>Your books are empty.</b> Start with + New, bring a client over from QuickBooks or Sage, or load example data to see how everything fits together.</span><span class="actions">${ME&&ME.role!=='client'?'<button class="btn sm" data-go="convert">Bring over from QuickBooks or Sage</button>':''}<button class="btn sm" data-act="load-examples">Load example data</button></span></div>`;
   if(typeof BK!=='undefined'&&BK&&(!BK.enabled||BK.lastError))h+=`<div class="banner err"><span><b>${BK.enabled?'Backups aren’t working.':'Automatic backups are off.'}</b> ${BK.enabled?esc(BK.lastError):'Turn them on so your clients’ books are safe if this computer fails.'}</span><button class="btn sm" data-go="settings">Fix in Settings</button></div>`;
   if(hasExamples())h+=`<div class="banner"><span><b>Example data is loaded</b> so you can see how things work. Clear it when you're ready to enter your real books.</span><button class="btn sm" data-act="clear-examples">Clear example data</button></div>`;
   return h;
@@ -379,6 +379,7 @@ function vSettings(){
     <div class="field"><label for="sBn">Business / tax number</label><input type="text" id="sBn" value="${esc(c.bn||'')}"><span class="hint">Shown for your reference</span></div>
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
+  ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${aiPanel()}
   ${payrollSettingsPanel()}
@@ -401,6 +402,7 @@ function bindMain(m){
     if(S.view==='payroll'&&await payClick(e,t,d))return;
     if(S.view==='activity'&&await actClick(e,t,d))return;
     if(S.view==='receipts'&&rcClick(e,t,d))return;
+    if(S.view==='convert'&&cvClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
     if(d.new)return openNew(d.new);
@@ -432,6 +434,7 @@ function bindMain(m){
   const rf2=$('#restoreFile',m);if(rf2)rf2.onchange=()=>{const f=rf2.files[0];rf2.value='';if(f)restoreBackup(f)};
   if(S.view==='banking')bindBanking(m);
   if(S.view==='receipts')bindReceipts(m);
+  if(S.view==='convert')bindConvert(m);
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
   bindAI(m);bindAIRead(m);
@@ -570,6 +573,7 @@ async function openEntry(e){if(!e)return;
 
 function nextNum(kind){if(kind!=='invoice')return'';const n=Math.max(1000,...S.docs.filter(d=>d.kind==='invoice').map(d=>parseInt(d.number)||0));return String(n+1)}
 function docForm(kind,doc,preset){
+  if(doc&&doc.carried)return carriedDocForm(kind,doc);
   const inv=kind==='invoice',ck=inv?'customer':'vendor',t=today();
   const filter=inv?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&!a.detail);
   const defA=(sortAccts(S.accounts.filter(a=>filter(a)&&a.active!==false))[0]||{}).id||'';
@@ -609,6 +613,30 @@ function docForm(kind,doc,preset){
     const dd={...base,kind,number:num,due:$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'})),sub:c.sub,tax:c.tax,total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:kind,ref:num,docId:id,lines,created:dd.created}}]))return;
     closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${inv?'Invoice':'Bill'} saved`);
+  };
+}
+
+// An invoice or bill brought over from other software as an open balance: its amount was already
+// counted there, so only the customer or vendor, number and dates can change here.
+function carriedDocForm(kind,doc){
+  const inv=kind==='invoice',ck=inv?'customer':'vendor',paid=paidOn(doc.id);
+  const f=openModal(`${inv?'Invoice':'Bill'} ${doc.number?'#'+doc.number:''}`,
+    `<div class="banner" style="margin:0"><span>Brought over from other software with ${money(doc.total)} still owing. The amount can’t be changed here; to correct it, delete this ${kind} and record it again.</span></div>
+    <div class="fields">${fld('dC',inv?'Customer':'Vendor',contactSelect('dC',doc.contactId,ck))}${fld('dN',inv?'Invoice no.':'Bill no.',`<input type="text" id="dN" value="${esc(doc.number||'')}">`)}${fld('dD',inv?'Invoice date':'Bill date',`<input type="date" id="dD" value="${esc(doc.date)}">`)}${fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(doc.due||'')}">`)}</div>
+    <div class="field"><label for="dM">Memo</label><textarea id="dM">${esc(doc.memo||'')}</textarea></div>
+    ${paid?`<div class="muted">${money(paid)} has been ${inv?'received':'paid'}. Balance due ${money(r2(doc.total-paid))}.</div>`:''}`,
+    `${delBtn(true)}<button type="button" class="btn" data-close>Cancel</button>${docStatus(doc).bal>0?`<button type="button" class="btn" data-paynow>${inv?'Receive payment':'Pay bill'}</button>`:''}<button type="submit" class="btn primary">Save</button>`,'wide');
+  wireContactSelect(f,'dC');
+  const pn=$('[data-paynow]',f);if(pn)pn.onclick=()=>payForm(inv?'payment':'billpayment',null,doc.id);
+  $('[data-del]',f).onclick=async()=>{if(paid){f.err(`Delete the payments on this ${kind} first.`);return}if(!await confirmBox(`Delete this ${kind}?`,`${inv?'Invoice':'Bill'} ${doc.number?'#'+doc.number+' ':''}will be removed. Its balance stays in ${inv?'Accounts receivable':'Accounts payable'}, as it was brought over.`))return;if(!await batch([{op:'delete',collection:'entries',id:'d_'+doc.id},{op:'delete',collection:'docs',id:doc.id}]))return;closeModal();toast(`${inv?'Invoice':'Bill'} deleted`)};
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    if(!$('#dD',f).value)return f.err('Enter a date.');
+    const cid=$('#dC',f).value==='__new'?await resolveContact(f,'dC',ck):$('#dC',f).value;if(cid===null)return;
+    const num=$('#dN',f).value.trim(),date=$('#dD',f).value;
+    const en=S.entries.find(x=>x.id==='d_'+doc.id);
+    const w=[{op:'set',collection:'docs',id:doc.id,data:{...doc,contactId:cid,number:num,date,due:$('#dDue',f).value,memo:$('#dM',f).value.trim()}}];
+    if(en)w.push({op:'set',collection:'entries',id:en.id,data:{...en,contactId:cid,ref:num,date}});
+    if(await batch(w)){closeModal();toast(`${inv?'Invoice':'Bill'} saved`)}
   };
 }
 

@@ -1,0 +1,12 @@
+Maple Leaf Bakery Ltd.
+Unpaid Bills
+All Dates
+
+Date,Transaction Type,Num,Due Date,Past Due,Amount,Open Balance
+Ontario Flour Mills,,,,,,
+12/10/2025,Bill,INV-8812,01/09/2026,,"1,130.00","1,130.00"
+Total for Ontario Flour Mills,,,,,"1,130.00","1,130.00"
+Toronto Hydro,,,,,,
+12/05/2025,Bill,77-1205,12/26/2025,5,565.00,565.00
+Total for Toronto Hydro,,,,,565.00,565.00
+TOTAL,,,,,"$1,695.00","$1,695.00"

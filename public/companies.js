@@ -28,6 +28,7 @@ function resetBooks(){
   S.loaded=false;S.rev=-1;S.connErr=false;S.param=null;
   S.bank={tab:'review',acct:'',show:'new',sel:{},checked:new Set(),rec:null,draft:{}};
   S.stax={tax:'gst',period:null,drill:'',manual:{}};
+  S.cv=null;
   PC=null;
 }
 // A client on a phone mostly sends receipts, so that's where they start.
@@ -56,8 +57,8 @@ function vCompanies(){
   const active=all.filter(c=>!c.archived);
   const review=active.reduce((s,c)=>s+c.toReview,0),overdue=active.reduce((s,c)=>s+c.overdueCount,0);
   const h=head('Companies',all.length?`${active.length} active compan${active.length===1?'y':'ies'}${review?` · ${review} bank line${review===1?'':'s'} to review`:''}${overdue?` · ${overdue} overdue invoice${overdue===1?'':'s'}`:''}`:'',
-    `${ME&&ME.role==='owner'?'<button class="btn" data-coact="users">Users &amp; security</button><button class="btn primary" data-coact="new">+ New company</button>':''}`);
-  if(!all.length)return h+`<div class="panel" style="max-width:640px"><div class="empty"><b>Set up your first company</b>Each company keeps its own chart of accounts, customers, bank accounts and reports, in its own file.${ME&&ME.role==='owner'?'<div style="margin-top:14px"><button class="btn primary" data-coact="new">+ New company</button></div>':''}</div></div>`;
+    `${ME&&ME.role==='owner'?'<button class="btn" data-coact="users">Users &amp; security</button><button class="btn" data-coact="convert">Bring over from QuickBooks or Sage</button><button class="btn primary" data-coact="new">+ New company</button>':''}`);
+  if(!all.length)return h+`<div class="panel" style="max-width:640px"><div class="empty"><b>Set up your first company</b>Each company keeps its own chart of accounts, customers, bank accounts and reports, in its own file.${ME&&ME.role==='owner'?'<div style="margin-top:14px" class="actions"><button class="btn primary" data-coact="new">+ New company</button><button class="btn" data-coact="convert">Bring over from QuickBooks or Sage</button></div>':''}</div></div>`;
   const fyEnd=c=>{const end=+c.fyStart===1?12:(+c.fyStart||1)-1;return `${monthName(end).slice(0,3)} ${new Date(2026,end,0).getDate()} year-end`};
   return h+`<div class="panel"><div class="toolbar">
     <input class="grow" type="search" id="coQ" placeholder="Search companies" value="${esc(S.co.q)}" aria-label="Search companies">
@@ -85,6 +86,7 @@ async function coClick(ev,t,d){
   }
   if(d.coopen){await openCompany(d.coopen);return true}
   if(d.coact==='new'){companyForm();return true}
+  if(d.coact==='convert'){companyForm(true);return true}
   if(d.coact==='users'){showUsers();return true}
   return false;
 }
@@ -93,9 +95,9 @@ function bindCompanies(m){
   const a=$('#coArch',m);if(a)a.onchange=()=>{S.co.showArchived=a.checked;renderMain()};
 }
 
-function companyForm(){
+function companyForm(convert){
   const active=CO_LIST.filter(c=>!c.archived).sort((a,b)=>a.name.localeCompare(b.name));
-  const f=openModal('New company',`<div class="fields">
+  const f=openModal(convert?'Bring over a client':'New company',`${convert?'<div class="muted" style="font-size:13px">First, a new company for the client. Then choose the files exported from QuickBooks or Sage.</div>':''}<div class="fields">
     ${fld('nName','Company name',`<input type="text" id="nName" placeholder="e.g. Harbour Yoga Studio Inc.">`,true)}
     ${fld('nProv','Province or territory',`<select id="nProv">${provinceOptions('ON')}</select>`)}
     ${fld('nFy','Fiscal year-end',`<select id="nFy">${fyOptions(1)}</select>`)}
@@ -104,8 +106,8 @@ function companyForm(){
     </div>
     <div class="fields" data-custom hidden>${fld('nTaxName','Sales tax name',`<input type="text" id="nTaxName" value="VAT">`)}${fld('nTaxRate','Sales tax rate (%)',`<input type="number" id="nTaxRate" min="0" step="0.001" value="0">`)}</div>
     <div class="muted" data-qc hidden style="font-size:13px">GST and QST are tracked together in one “GST/QST payable” account at the combined 14.975%. If you file them separately, split the balance when you prepare the returns.</div>
-    <label class="check"><input type="checkbox" id="nEx"> Add example customers and transactions to explore (you can clear them later)</label>`,
-    `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Create company</button>`);
+    <label class="check" ${convert?'hidden':''}><input type="checkbox" id="nEx"> Add example customers and transactions to explore (you can clear them later)</label>`,
+    `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${convert?'Create and continue':'Create company'}</button>`);
   const prov=$('#nProv',f);
   const sync=()=>{$('[data-custom]',f).hidden=prov.value!=='';$('[data-qc]',f).hidden=prov.value!=='QC'};
   prov.onchange=sync;sync();
@@ -115,7 +117,7 @@ function companyForm(){
     const body={name,province:prov.value,fyStart:+$('#nFy',f).value,copyFrom:$('#nCopy',f).value,examples:$('#nEx',f).checked,lang:$('#nLang',f).value};
     if(!prov.value){body.taxName=$('#nTaxName',f).value.trim()||'Sales tax';body.taxRate=Math.max(0,+$('#nTaxRate',f).value||0)}
     const btn=f.querySelector('button[type=submit]');btn.disabled=true;btn.textContent='Creating…';
-    try{const r=await api('POST','/api/companies',body);await loadCompanies();await openCompany(r.company.id);toast(`${name} is ready`)}
+    try{const r=await api('POST','/api/companies',body);await loadCompanies();S.cv=null;await openCompany(r.company.id,convert?'convert':undefined);toast(`${name} is ready`)}
     catch(err){f.err(err.message);btn.disabled=false;btn.textContent='Create company'}
   };
 }

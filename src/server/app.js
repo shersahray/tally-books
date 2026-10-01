@@ -543,6 +543,40 @@ function createApp(opts) {
       ctx.store.audit(ctx.user, 'ai', { summary: `AI read ${String(body.fileName || 'a document').slice(0, 80)}` });
       return { ok: true, ...out };
     }],
+    // Bringing a client over from QuickBooks or Sage: everything in one go, or nothing. A copy of the
+    // books as they were is kept first (like a restore), in case the wrong files were used.
+    ['POST', /^\/import$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const body = await readJson(req, 60 * 1024 * 1024);
+      if (!body || !Array.isArray(body.writes) || !body.writes.length) throw new ValidationError('There’s nothing to import.');
+      if (body.writes.length > 100000) throw new ValidationError('That’s too much to import at once. Import the transaction history a year at a time.', 413);
+      for (const w of body.writes) {
+        if (!w || (w.collection !== 'accounts' && w.op === 'delete') || !['accounts', 'contacts', 'entries', 'docs'].includes(w.collection)) throw new ValidationError('An import can only add accounts, contacts, transactions and open invoices or bills.');
+        // Only new contacts, transactions and bills; existing ones are never overwritten.
+        if (w.collection !== 'accounts' && w.op === 'set' && ctx.store.get(w.collection, String(w.id))) throw new ValidationError('An import can only add new records, not change existing ones.');
+      }
+      const snapDir = path.join(opts.dataDir, 'before-restore');
+      fs.mkdirSync(snapDir, { recursive: true, mode: 0o700 });
+      const snap = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: ctx.store.getSetting('company') };
+      for (const c of COLLECTIONS) snap[c] = ctx.store.list(c);
+      fs.writeFileSync(path.join(snapDir, `${ctx.id}-before-import-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), JSON.stringify(snap), { mode: 0o600 });
+      // Keep the 10 most recent copies per company.
+      const mine = fs.readdirSync(snapDir).filter(f => f.startsWith(ctx.id + '-before-import-')).sort();
+      for (const f of mine.slice(0, -10)) fs.rmSync(path.join(snapDir, f), { force: true });
+      const counts = {};
+      ctx.store.transaction(() => {
+        body.writes.forEach((w, i) => {
+          try { applyWrite(ctx.store, w, ctx.user); } catch (e) {
+            if (e instanceof ValidationError) throw new ValidationError(`Item ${i + 1} (${w.collection}${w.data && (w.data.name || w.data.number || w.data.date) ? ': ' + String(w.data.name || w.data.number || w.data.date).slice(0, 60) : ''}): ${e.message}`, e.status);
+            throw e;
+          }
+          if (w.op === 'set') counts[w.collection] = (counts[w.collection] || 0) + 1;
+        });
+        ctx.store.audit(ctx.user, 'import', { summary: `imported from ${String(body.source || 'another program').slice(0, 60)}: ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')}` });
+      });
+      broadcast({ companies: true });
+      return { ok: true, rev: ctx.bump(), counts };
+    }],
     ['POST', /^\/examples$/, ctx => {
       notClient(ctx.user);
       loadExamples(ctx.store);

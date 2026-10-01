@@ -1,0 +1,22 @@
+Maple Leaf Bakery Ltd.
+Journal
+January 1 - February 28, 2026
+
+Date,Transaction Type,Num,Name,Memo/Description,Account,Debit,Credit
+01/05/2026,Invoice,1045,Corner Café,,Accounts Receivable (A/R),"1,130.00",
+,,,,Croissants,Bakery Sales,,"1,000.00"
+,,,,,GST/HST Payable,,130.00
+,,,,,,"$1,130.00","$1,130.00"
+
+01/14/2026,Payment,,Corner Café,,Chequing,"1,130.00",
+,,,,,Accounts Receivable (A/R),,"1,130.00"
+,,,,,,"$1,130.00","$1,130.00"
+
+01/31/2026,Expense,,Toronto Hydro,January hydro,Utilities:Hydro,300.00,
+,,,,,GST/HST Payable,39.00,
+,,,,,Chequing,,339.00
+,,,,,,$339.00,$339.00
+
+02/01/2026,Journal Entry,JE-7,,Depreciation,Equipment:Accumulated Depreciation,,400.00
+,,,,Depreciation,Depreciation Expense,400.00,
+,,,,,,$400.00,$400.00
