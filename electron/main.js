@@ -11,7 +11,7 @@ const path = require('node:path');
 const { app, BrowserWindow, Menu, shell, dialog, ipcMain, net, nativeTheme } = require('electron');
 const { serverOrigin, netMessage } = require('./connection');
 const folders = require('./datafolder');
-const { setupUpdates, updatesOn } = require('./updater');
+const { setupUpdates, updatesOn, buildInfo } = require('./updater');
 let updates = null;
 
 let server = null;    // the private server, in "this computer" mode only
@@ -58,7 +58,9 @@ async function checkServer(o) {
 async function startLocal() {
   if (server) return;
   const { createApp } = require('../src/server/app');
-  server = createApp({ dataDir: dataDir() });
+  // Licence codes: the installed app checks them with the seller's public key, written into the build (see licence.js).
+  const licenceKeys = app.isPackaged ? (buildInfo().licenceKeys || []) : [];
+  server = createApp({ dataDir: dataDir(), licenceDir: appDir(), licenceKeys });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve); // random free port, reachable only from this computer

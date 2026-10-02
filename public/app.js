@@ -36,7 +36,7 @@ let CO=null; // id of the company whose books are open
 const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|ai$|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|licences?(?:\/|$)|ai$|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -53,6 +53,8 @@ async function api(method,url,body,retried){
     const err=new Error((j&&j.error)||`The server answered ${r.status}.`);err.status=r.status;err.info=j||{};
     // Signed out (expired, locked, or another tab signed out): ask to sign in again, then carry on.
     if(r.status===401&&!url.startsWith('/api/auth/')&&typeof sessionEnded==='function')sessionEnded(j);
+    // The licence ended (desktop app): the books turn view only.
+    if(r.status===402&&j&&j.licence&&typeof licenceEnded==='function')licenceEnded();
     if(r.status===403&&j&&j.mustChange&&typeof renderLock==='function')renderLock('password');
     if(r.status===403&&j&&j.mustEnroll&&typeof renderLock==='function')renderLock('enroll');
     throw err;
@@ -140,7 +142,7 @@ function renderMain(){
   document.title=CO&&S.loaded?`${S.company.name} · Tally Books`:'Tally Books';
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
-  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms';
+  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences';
   if(!noCo&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
@@ -152,10 +154,10 @@ function renderMain(){
   if(S.view==='payroll'&&!feat('payroll'))S.view='dashboard';
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
-  main.innerHTML=(noCo?'':banners())+V();
+  main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
   bindMain(main);
   if(keepFocus){const el=document.getElementById(keepFocus);if(el){el.focus();if(el.setSelectionRange&&el.type==='search'){const n=el.value.length;el.setSelectionRange(n,n)}}}
 }
@@ -500,6 +502,7 @@ function bindMain(m){
   if(typeof bindDocout==='function')bindDocout(m);
   if(S.view==='users'||S.view==='signins')bindUsers(m);
   if(S.view==='firms')bindFirms(m);
+  if(S.view==='licences')bindLicences(m);
   if(S.view==='activity')bindActivity(m);
   if(S.view==='salestax')bindSalesTax(m);
   bindPayrollSettings(m);

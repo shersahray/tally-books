@@ -11,6 +11,7 @@ const { Backups } = require('./backups');
 const { AI } = require('./ai');
 const mail = require('./mail');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
+const { Licence, Issuer } = require('./licence');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 
@@ -35,15 +36,30 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {boolean} [opts.mailInsecureTls] Tests only: accept the test mail server's certificate.
  * @param {boolean} [opts.mailAllowLocal]  Tests only: allow a mail server on this computer or the local network.
  * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
+ * @param {string} [opts.licenceDir]  Where the licence is kept (the desktop app's own folder, so it stays with the computer, not the books).
+ * @param {string[]} [opts.licenceKeys] Public keys that sign licence codes (the installed desktop app): turns licensing on.
  * @param {string} [opts.setupCode]   If set, creating the first owner account needs this code (so a stranger can't claim a new server).
  */
 function createApp(opts) {
   const reg = new Registry(opts.dataDir);
   const auth = new Auth(opts.dataDir, { require2fa: opts.require2fa });
   reg.adoptFirm(auth.mainFirmId);
+  // Desktop licence codes (licence.js). With a licence, its plan is the plan for everything in this copy.
+  // The first day and latest day seen are also kept with the books (users.json), so deleting licence.json doesn't start a new trial.
+  const licence = new Licence(opts.licenceDir || opts.dataDir, { publicKeys: opts.licenceKeys || [], now: opts.now,
+    memo: { get: () => auth.data.settings.licenceDays, set: v => { const c = auth.data.settings.licenceDays || {}; if (c.firstDay !== v.firstDay || c.lastSeen !== v.lastSeen) { auth.data.settings.licenceDays = v; auth.save(); } } } });
+  const issuer = new Issuer(opts.licenceDir || opts.dataDir, { now: opts.now });
+  const licencePlan = () => (licence.on ? licence.status().plan : null);
+  auth.planOverride = licencePlan;
+  const licenceInfo = u => {
+    const admin = !!(u && u.role === 'owner' && u.platformAdmin);
+    return { ...licence.status(), canEnter: admin && licence.on, canIssue: admin && (!licence.on || licence.isIssuer()) };
+  };
   const ownerOnly = u => { if (u.role !== 'owner') throw new ValidationError('Only an owner can do that.', 403); };
   // Server-wide settings (backups, the AI key, firms) belong to the server's administrators, not to each firm.
   const adminOnly = u => { if (u.role !== 'owner' || !u.platformAdmin) throw new ValidationError('Only the server’s administrator can do that.', 403); };
+  /** Making licence codes: administrators, and in a licensed desktop copy only the seller's own (it holds the key). */
+  const canIssue = u => { adminOnly(u); if (licence.on && !licence.isIssuer()) throw new ValidationError('Licence codes are made in your own copy of Tally Books.', 403); };
   /** Can this person see this company? Only companies of their own firm, and then as their role allows. */
   const canSeeCo = (user, cid) => { const c = reg.get(cid); return !!(c && user && c.firmId === user.firmId && auth.canSee(user, cid)); };
   /** AI costs the server's owner money, so each firm uses it only when an administrator allows it. */
@@ -52,7 +68,7 @@ function createApp(opts) {
   const featureOn = (cid, key, store) => {
     const c = reg.get(cid), f = c && auth.firm(c.firmId);
     const settings = (store || reg.store(cid)).getSetting('company') || {};
-    return PLANS.featureOn(f ? f.plan : 'plus', settings.features, key);
+    return PLANS.featureOn(licencePlan() || (f ? f.plan : 'plus'), settings.features, key);
   };
   const needFeature = (cid, key, store) => {
     if (!featureOn(cid, key, store)) throw new ValidationError(`${PLANS.FEATURES[key].label} isn’t part of this company’s plan.`, 403);
@@ -423,7 +439,7 @@ function createApp(opts) {
       const user = auth.userFor(req);
       if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode, signups: auth.signups !== 'off' && !auth.needsSetup() ? auth.signups : '' });
       const { token, ...u } = user;
-      return { user: u, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.policy2fa };
+      return { user: u, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.policy2fa, licence: licenceInfo(u) };
     }],
     ['POST', /^\/api\/auth\/setup$/, async (req, m, res) => {
       const body = await readJson(req);
@@ -528,8 +544,46 @@ function createApp(opts) {
       // A firm sees its own people's sign-ins; the server's administrators see everything.
       if (user.platformAdmin) return { log: auth.readLog(1000) };
       const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
-      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings']);
+      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
+    }],
+    // Licence for this copy of the desktop app.
+    ['GET', /^\/api\/licence$/, (req, m, res, user) => licenceInfo(user)],
+    ['PUT', /^\/api\/licence$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const b = await readJson(req);
+      const lic = licence.enter(b.code);
+      auth.log('licence-entered', { by: user.username, licence: lic.id, name: lic.name, plan: lic.plan, until: lic.until });
+      return licenceInfo(user);
+    }],
+    // Making licence codes: the seller's own copy (or any server without licensing), administrators only.
+    ['GET', /^\/api\/licences$/, (req, m, res, user) => { canIssue(user); return { ...issuer.info(), inBuild: licence.on ? licence.isIssuer() : null, licensing: licence.on }; }],
+    ['POST', /^\/api\/licences\/key$/, (req, m, res, user) => {
+      canIssue(user);
+      if (licence.on) throw new ValidationError('Create your licence key in a copy of Tally Books that doesn’t ask for a licence code (your server, or the desktop app before licences were turned on). Here, bring back your key from a copy instead.', 409);
+      const out = issuer.createKey();
+      auth.log('licence-key-created', { by: user.username });
+      return out;
+    }],
+    ['GET', /^\/api\/licences\/key\/download$/, (req, m, res, user) => {
+      canIssue(user);
+      const body = issuer.exportKey();
+      auth.log('licence-key-copied', { by: user.username });
+      send(res, 200, JSON.stringify(body, null, 2), { 'Content-Type': MIME['.json'], 'Content-Disposition': 'attachment; filename="tally-books-licence-key.json"', 'Cache-Control': 'no-store' });
+    }],
+    ['POST', /^\/api\/licences\/key\/restore$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const body = await readJson(req, 4 * 1024 * 1024);
+      const out = issuer.importKey(body, { mustMatch: licence.on ? licence.keyTexts : null });
+      auth.log('licence-key-restored', { by: user.username });
+      return { ...out, inBuild: licence.on ? licence.isIssuer() : null, licensing: licence.on };
+    }],
+    ['POST', /^\/api\/licences$/, async (req, m, res, user) => {
+      canIssue(user);
+      const b = await readJson(req);
+      const rec = issuer.make({ name: b.name, email: b.email, plan: b.plan, until: b.until, note: b.note, renews: b.renews });
+      auth.log('licence-made', { by: user.username, licence: rec.id, name: rec.name, plan: rec.plan, until: rec.until });
+      return { licence: rec };
     }],
     // The signed-in person's firm: owners can rename it.
     ['GET', /^\/api\/firm$/, (req, m, res, user) => ({ firm: auth.firm(user.firmId) })],
@@ -1081,6 +1135,11 @@ function createApp(opts) {
           if (user.mustChange && !['/api/auth/password', '/api/auth/prefs', '/api/events'].includes(url.pathname)) throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
           if (user.mustEnroll && !/^\/api\/(auth\/(password|prefs|2fa\/start|2fa\/confirm)|events)$/.test(url.pathname)) throw new AuthError('Set up two-step sign-in before continuing.', 403, { mustEnroll: true });
         }
+        // Licence ended (desktop): the books stay open to read, print, export and back up, but not to change.
+        if (user && licence.on && req.method !== 'GET' && !/^\/api\/(auth\/.*|licence|licences\/key\/restore|backups\/(run|open)|c\/[^/]+\/(code\/check|mail\/send))$/.test(url.pathname)) {
+          const st = licence.status();
+          if (!st.canChange) throw Object.assign(new ValidationError(st.state === 'trial-ended' ? 'The free trial has ended, so the books are view only. Enter a licence code to make changes.' : `The licence ended on ${st.until}, so the books are view only. Enter a renewal code to make changes.`, 402), { licence: true });
+        }
         const cm = url.pathname.match(/^\/api\/c\/([^/]+)(\/.*)$/);
         if (cm) {
           const cid = decodeURIComponent(cm[1]);
@@ -1120,7 +1179,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}) });
     }
   });
 

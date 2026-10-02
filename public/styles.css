@@ -302,6 +302,7 @@ body.readonly #newBtn,body.readonly [data-new],body.readonly [data-pay],body.rea
 body.readonly [data-pay-run="new"],body.readonly [data-pay-emp="new"],body.readonly [data-remit-pay],body.readonly [data-go-pay],
 body.readonly [data-act="load-examples"],body.readonly [data-act="clear-examples"],body.readonly [data-act="restore"],
 body.readonly #setForm button[type=submit],body.readonly #paySetForm button[type=submit],
+body.readonly [data-coact="new"],body.readonly [data-coact="convert"],
 body.readonly .modal:not(.keep) .mfoot button[type=submit]{display:none!important}
 a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}
 /* clients don't change company settings or load examples; only owners restore backups */

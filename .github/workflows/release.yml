@@ -64,6 +64,7 @@ jobs:
           SIGN_PROFILE: ${{ vars.AZURE_CERT_PROFILE }}
           SIGN_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           SIGN_PUBLISHER: ${{ vars.AZURE_PUBLISHER_NAME }}
+          TALLY_LICENCE_KEY: ${{ vars.TALLY_LICENCE_KEY }}
         run: |
           missing=""
           if [ "$RUNNER_OS" = "Windows" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
@@ -83,7 +84,8 @@ jobs:
             echo "Signing the Windows installer as \"$SIGN_PUBLISHER\" with Azure Artifact Signing"
             echo "SIGNED=1" >> "$GITHUB_ENV"
             # Tells the app it's a signed build, so it may update itself (electron/updater.js).
-            node -e "require('fs').writeFileSync('electron/build-info.json', JSON.stringify({ signed: true, publisher: process.env.SIGN_PUBLISHER }))"
+            # Licence codes: your public key (from the Licences page in your own Tally Books), in the TALLY_LICENCE_KEY variable.
+            node -e "const k = String(process.env.TALLY_LICENCE_KEY || '').split(/[\s,]+/).filter(x => /^[A-Za-z0-9_-]{43}$/.test(x)); require('fs').writeFileSync('electron/build-info.json', JSON.stringify({ signed: true, publisher: process.env.SIGN_PUBLISHER, licenceKeys: k })); console.log(k.length ? 'Licence codes are on (' + k.length + ' key).' : 'Licence codes are off: no TALLY_LICENCE_KEY variable.')"
             # Keep the output so a signing problem shows up in the run's summary (secrets are masked by GitHub).
             set -o pipefail
             # Our own signing script (scripts/azure-sign.js) calls Azure's TrustedSigning module directly:

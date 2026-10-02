@@ -93,12 +93,26 @@
     { id: 'f_north', name: 'North Ledger Bookkeeping (example)', status: 'pending', ai: false, aiCapUsd: 10, plan: 'essentials', created: Date.now() - 2 * 3600e3, users: 1, companies: 0, owner: { name: 'Nora Example', username: 'nora@example.com' }, lastLogin: 0, aiSpentUsd: 0 },
     { id: 'f_coast', name: 'Coast Accounting (example)', status: 'active', ai: true, aiCapUsd: 25, plan: 'plus', created: Date.now() - 40 * day, users: 4, companies: 12, owner: { name: 'Cal Example', username: 'cal@example.com' }, lastLogin: Date.now() - 3 * day, aiSpentUsd: 6.4 },
   ];
+  // Licence codes: a made-up key and codes that don't turn anything on (the demo has no private key).
+  const demoLic = { key: { publicKey: 'DEMO-public-key-shown-here-in-your-own-copy', created: Date.now() - 30 * day }, issued: [
+    { id: 'd1', name: 'Harbour Yoga (example)', email: 'owner@example.com', plan: 'plus', until: new Date(Date.now() + 200 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 165 * day).toISOString().slice(0, 10), note: '', code: 'TB1-DEMO.example-code-not-real' },
+    { id: 'd2', name: 'Birch Cafe (example)', email: '', plan: 'essentials', until: new Date(Date.now() + 12 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 353 * day).toISOString().slice(0, 10), note: 'Paid by e-transfer', code: 'TB1-DEMO.example-code-not-real' },
+  ] };
   let auditSeq = 0;
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
     const demoUser = { id: 'u_demo', name: 'Demo user', username: 'demo', role: 'owner', companies: [], disabled: false, lastLogin: Date.now(), mustChange: false, platformAdmin: true, firmName: demoFirms[0].name, firmId: 'f_demo', firmPlan: demoFirms[0].plan };
-    if (path === '/api/auth/me') return { user: demoUser, idleMinutes: 480 };
+    if (path === '/api/auth/me') return { user: demoUser, idleMinutes: 480, licence: { on: false, state: 'off', canEnter: false, canIssue: true } };
+    if (path === '/api/licence') return { on: false, state: 'off', canEnter: false, canIssue: true };
+    if (path === '/api/licences' && method === 'GET') return { ...demoLic, issued: demoLic.issued.slice().reverse(), licensing: false, inBuild: null };
+    if (path === '/api/licences' && method === 'POST') {
+      if (!String(body.name || '').trim()) throw new ApiError(400, 'Enter who the licence is for (the client’s business name).');
+      const rec = { id: 'd' + (demoLic.issued.length + 1), name: String(body.name).trim(), email: body.email || '', plan: body.plan, until: body.until, issued: new Date().toISOString().slice(0, 10), note: body.note || '', code: 'TB1-DEMO.example-code-not-real-made-in-your-own-copy', ...(body.renews ? { renews: body.renews } : {}) };
+      demoLic.issued.push(rec);
+      return { licence: rec };
+    }
+    if (path.startsWith('/api/licences')) throw new ApiError(400, 'Your licence key is made in your own copy of Tally Books, not in the demo.');
     if (path === '/api/auth/logout') return { ok: true };
     if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480, firm: demoFirms[0] };
     if (path === '/api/security/log') return { log: [] };

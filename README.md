@@ -203,6 +203,27 @@ The signed Windows app updates itself from this repository's **Releases**:
 
 Installed Windows apps check for a new release when they start and every 4 hours, download it in the background, and ask to restart (or update the next time Tally Books is closed). They only install an update signed with the same certificate, and books kept on that computer are backed up first. **File → Check for updates…** checks right away, and the File menu shows the version. Copies connected to an office server get new features from the server itself; the Mac and Linux versions are updated by downloading the new installer from the release.
 
+### Selling the desktop app: licence codes
+
+For clients who keep their books on their own computer, you sell a licence for a period (a year, say) and send them a code. Pasting the code into Tally Books turns it on until the code's last day; a renewal code turns it back on for the next period.
+
+**Set up, once:**
+1. In your own Tally Books, click **Licence codes** (bottom left), then **Create licence key**. The key that signs codes stays on that computer; nobody else can make codes.
+2. Copy the **public key** shown there. On GitHub: **Settings → Secrets and variables → Actions → Variables → New repository variable**, name `TALLY_LICENCE_KEY`, paste the public key. (It only checks codes, so it's safe there.)
+3. Click **Download a copy of the key** and keep the file somewhere safe and private (a USB key or a password manager). It isn't in the daily backups. On a new computer, bring it back from the **Licence** window.
+4. Publish a new release. Windows installers built from then on ask for a licence code. Copies installed earlier keep working without one until they update, and then start a 30-day trial.
+
+**When a client buys or renews:** on **Licence codes**, enter the client's business name, the plan (Essentials or Plus) and the last day, and click **Make code** (or **Renew** on an existing row, which picks the next year). Copy the code or the ready-made email and send it. The client clicks **Licence** (bottom left, or the button in the yellow bar) and pastes it.
+
+**What the client sees:**
+- A new install has a 30-day free trial with everything included.
+- A licence shows "Licensed to …", and the plan in the code decides the features (Essentials or Plus).
+- In the last 30 days, a bar reminds them to renew. After the last day, they have 14 more days.
+- After that, or after the trial, the books are **view only**: they can still open, print, export, email and back up everything, but not change anything until they enter a new code. Nothing is ever deleted or locked away.
+- The newest code always wins, so if you make a mistake (a wrong year), send a corrected code and it replaces the first one.
+
+Codes are checked on the client's computer without the internet. The computer remembers the latest date it has seen, so turning its clock back doesn't bring an ended licence back. A code isn't tied to one computer: the client's name shows in the app, which discourages sharing. Someone determined enough to change the program itself could get around any offline licence; the codes stop ordinary copying, not that.
+
 ### Signing the Windows installer (Azure Artifact Signing)
 
 Without a signature, Windows warns "Windows protected your PC", and Smart App Control blocks the installer completely. Signing fixes both.

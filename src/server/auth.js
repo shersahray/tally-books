@@ -270,7 +270,7 @@ class Auth {
     const twoStep = !!(u.totp && u.totp.enabled);
     const f = this.firm(u.firmId);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
-      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: f ? PLANS.planOf(f.plan) : 'plus', platformAdmin: !!u.platformAdmin,
+      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: (this.planOverride && this.planOverride()) || (f ? PLANS.planOf(f.plan) : 'plus'), platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '' };
   }
