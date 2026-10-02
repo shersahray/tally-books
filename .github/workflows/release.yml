@@ -65,11 +65,12 @@ jobs:
             echo "SIGNED=1" >> "$GITHUB_ENV"
             # Keep the output so a signing problem shows up in the run's summary (secrets are masked by GitHub).
             set -o pipefail
+            # Our own signing script (scripts/azure-sign.js) calls Azure's TrustedSigning module directly:
+            # electron-builder's built-in azureSignOptions passes paths with extra quotes, which the module rejects.
+            pwsh -NoProfile -NonInteractive -Command "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null; Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser"
             if ! npx electron-builder --publish never \
-              "-c.win.azureSignOptions.publisherName=$SIGN_PUBLISHER" \
-              "-c.win.azureSignOptions.endpoint=$SIGN_ENDPOINT" \
-              "-c.win.azureSignOptions.certificateProfileName=$SIGN_PROFILE" \
-              "-c.win.azureSignOptions.codeSigningAccountName=$SIGN_ACCOUNT" 2>&1 | tee build.log; then
+              "-c.win.signtoolOptions.sign=scripts/azure-sign.js" \
+              "-c.win.signtoolOptions.publisherName=$SIGN_PUBLISHER" 2>&1 | tee build.log; then
               grep -iE "error|fail|denied|forbidden|unauthori|not found|exception|status" build.log | grep -v "^\s*$" | tail -n 25 | while IFS= read -r line; do
                 echo "::error title=Signing failed::$(echo "$line" | cut -c1-400)"
               done
