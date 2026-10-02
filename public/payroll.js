@@ -148,6 +148,7 @@ const overdueRemits=()=>S.payruns.length?remittances().filter(x=>x.st.k==='overd
 
 /* ---------- views ---------- */
 function vPayroll(){
+  if(typeof feat==='function'&&!feat('payroll'))return head('Payroll','')+'<div class="panel"><div class="empty"><b>Payroll is off for this company</b>Turn it on in Settings → Features (it’s part of the Plus plan).</div></div>';
   const P=S.pay,t=today(),yr=t.slice(0,4);
   const act=S.employees.filter(e=>e.active!==false);
   const h=head('Payroll','Pay employees, print pay stubs and track what you owe CRA and Revenu Québec',

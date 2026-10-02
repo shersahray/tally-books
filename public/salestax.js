@@ -140,6 +140,8 @@ function psbRebate(k,items,accId,provPct){
 /** How a period's return is worked out: as filed, or from the settings now. */
 function methodFor(k,from,filed){
   if(filed)return filed.method||'regular';
+  // The Quick Method and the charity/non-profit calculations are a plan feature (plans.js).
+  if(typeof feat==='function'&&!feat('specialTax'))return 'regular';
   if(qmOn(k,from))return 'quick';
   const n=npoCfg();if(!n)return 'regular';
   return n.type==='charity'&&n.netTax!=='regular'?'charity':'npo';
@@ -326,7 +328,7 @@ function vSalesTax(){
   const freq={monthly:'monthly',quarterly:'quarterly',annual:'annual'}[S.company.filingFreq||'quarterly'];
   const q=qmCfg();
   let h=head('Sales tax',`Files ${freq}${q?` · <span>Quick Method from ${fmtDate(q.from)}</span>`:''}${S.company.bn?` · BN ${esc(S.company.bn)}`:''} · <button class="link" data-go="settings">Change in Settings</button>`,
-    `<button class="btn" data-stact="quick">Quick Method</button><button class="btn" data-stact="instalment">Record instalment</button>`);
+    `${feat('specialTax')?'<button class="btn" data-stact="quick">Quick Method</button>':''}<button class="btn" data-stact="instalment">Record instalment</button>`);
   if(q){const big=qmOverLimit();if(big)h+=`<div class="banner err"><span>Sales including tax were ${money(big.total)} in the 12 months to ${fmtDate(big.to)}, over the $400,000 limit for the Quick Method. Check whether you can still use it.</span></div>`}
   if(S.company.province==='QC'&&!byDetail('qst'))h+=`<div class="banner"><span><b>Track GST and QST separately?</b> This Quebec company records both taxes in one account. Split them to get a separate QST return worksheet.</span><button class="btn sm" data-stact="split-qst">Set up QST account</button></div>`;
   if(!taxAcctFor('gst'))return h+`<div class="panel"><div class="empty"><b>No sales tax account</b>Add a Liability account with the detail “Sales tax payable” in Chart of accounts.</div></div>`;
@@ -401,7 +403,7 @@ async function stClick(ev,t,d){
     case 'file':fileForm(T.tax,from,to,true);return true;
     case 'pay-later':fileForm(T.tax,from,to,false);return true;
     case 'unfile':await unfile(T.tax,from,to);return true;
-    case 'quick':quickForm();return true;
+    case 'quick':if(feat('specialTax'))quickForm();return true;
     case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...w.lines.map(([no,label,how,sub])=>sub?['',`  of line 91: ${label}`,w.vals['·'+how]||0]:[no.startsWith('x')?'':no,label,w.vals[no]])];
       saveFile(`${T.tax==='qst'?'qst':'gst-hst'}-return_${from}_${to}.csv`,new Blob(['﻿'+rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:v).join(',')).join('\r\n')],{type:'text/csv'}));return true}
   }

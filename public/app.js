@@ -32,6 +32,8 @@ const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons','
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
+/** Is a plan feature on for the open company (in the firm's plan, and not switched off in its settings)? See plans.js. */
+const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
   if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|ai$|c\/)/.test(url))return url;
@@ -146,6 +148,8 @@ function renderMain(){
   const nt=overdueReturns();const tc=$('#taxCount');tc.hidden=!nt;tc.textContent=nt;
   const np=overdueRemits();const pc=$('#payCount');pc.hidden=!np;pc.textContent=np;
   const nr=S.receipts.filter(r=>r.status==='inbox').length;const rc=$('#rcCount');if(rc){rc.hidden=!nr;rc.textContent=nr}
+  const pnb=$('#nav [data-view=payroll]');if(pnb)pnb.hidden=!feat('payroll');
+  if(S.view==='payroll'&&!feat('payroll'))S.view='dashboard';
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
   const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
@@ -294,17 +298,19 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep;const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']];
+  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']].filter(([k])=>adv||k!=='cf');
+  // Without advanced reports (plan or company setting): no comparisons, cash flow, saved reports, packages or working trial balance.
+  if(!adv){if(R.tab==='cf')R.tab='pl';R.compare='';R.tbAdj=false;R.savedId=''}
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
   const pointInTime=R.tab!=='pl'&&R.tab!=='gl';
-  const saved=savedReports(),staff=ME&&ME.role!=='client',cur=saved.find(x=>x.id===S.rep.savedId&&savedMatches(x));
-  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
+  const saved=adv?savedReports():[],staff=ME&&ME.role!=='client',cur=saved.find(x=>x.id===S.rep.savedId&&savedMatches(x));
+  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff&&adv?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
     ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
     ${R.tab==='gl'?`<select id="repAcct" aria-label="Account"><option value="">All accounts</option>${acctOptions(R.acct||'')}</select>`:''}
-    ${R.tab==='tb'?`<label class="check"><input type="checkbox" id="repTbAdj" ${R.tbAdj?'checked':''}> Show adjusting entries</label>`:''}
-    ${['pl','bs','cf'].includes(R.tab)?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
+    ${R.tab==='tb'&&adv?`<label class="check"><input type="checkbox" id="repTbAdj" ${R.tbAdj?'checked':''}> Show adjusting entries</label>`:''}
+    ${['pl','bs','cf'].includes(R.tab)&&adv?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
     <span class="grow"></span>${R.tab==='tb'&&ME&&ME.role!=='client'?'<button class="btn sm" data-act="caseware">Export for CaseWare</button>':''}<button class="btn sm" data-act="export">Export CSV</button><button class="btn sm" data-act="reppdf">PDF</button>
   </div><div id="repBody">${reportBody()}</div></div>`;
 }
@@ -373,6 +379,18 @@ const NPO_WORDS={'Profit and loss':'Statement of operations','Balance sheet':'St
   'Net income, this fiscal year':'Excess of revenue over expenses, this fiscal year','Gross profit':'Revenue less cost of goods sold'};
 const W=s=>(isNpo()&&NPO_WORDS[s])||s;
 const ORG_TYPES=[['business','Business'],['npo','Non-profit organization'],['charity','Registered charity']];
+/* ---------- plan features for this company ----------
+   The firm's plan (Essentials or Plus, set by the server's administrator) decides what's available;
+   here the team switches off what this client doesn't use. Switching one off hides it and keeps its data. */
+function featuresPanel(){
+  if(!ME||ME.role==='client')return '';
+  const plan=TallyPlans.planOf(ME.firmPlan),P=TallyPlans.PLANS[plan],F=TallyPlans.FEATURES,off=(S.company.features)||{};
+  const rows=Object.entries(F).map(([k,f])=>{const inPlan=P.features.includes(k);
+    return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${inPlan&&off[k]!==false?'checked':''} ${inPlan&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${inPlan?'':` <span class="pill quiet">${esc(T('In the Plus plan'))}</span>`}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
+  return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Features</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
+    <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, banking, invoices and bills, GST/HST and QST returns and the standard reports are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>
+    ${rows}</div></div>`;
+}
 function vSettings(){
   const c=S.company,np=c.nonprofit||{};
   return head('Settings','Company details and defaults used on new transactions')+`<div class="panel" style="max-width:640px"><form class="pad" id="setForm" style="display:flex;flex-direction:column;gap:14px">
@@ -400,6 +418,7 @@ function vSettings(){
     <label class="check" data-rebate><input type="checkbox" id="sRebate" ${np.rebate!==false?'checked':''}> Claim the public service bodies’ rebate on the sales tax that can’t be claimed as credits</label>
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
+  ${featuresPanel()}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
@@ -407,7 +426,7 @@ function vSettings(){
   ${codePanel()}
   ${closingPanel()}
   ${aiPanel()}
-  ${payrollSettingsPanel()}
+  ${feat('payroll')?payrollSettingsPanel():''}
   ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
     <span class="muted">A backup is a single file with every account, contact, invoice, bill and transaction. Keep one somewhere safe, and restore it here or on another computer.</span>
@@ -491,6 +510,8 @@ function bindMain(m){
     $$('[data-rebate]',m).forEach(x=>x.style.display=t==='charity'||(t==='npo'&&$('#sQual',m).checked)?'':'none')};
     so.onchange=$('#sNetTax',m).onchange=$('#sQual',m).onchange=sync;sync()}
   const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
+  $$('[data-feat]',m).forEach(cb=>cb.onchange=async()=>{const k=cb.dataset.feat,features={...(S.company.features||{})};if(cb.checked)delete features[k];else features[k]=false;
+    if(await putCompany({...strip(S.company),features})){toast(cb.checked?`${T(TallyPlans.FEATURES[k].label)}: on for this company`:`${T(TallyPlans.FEATURES[k].label)}: off for this company`)}else cb.checked=!cb.checked});
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value,
     orgType:$('#sOrg').value,nonprofit:{...(S.company.nonprofit||{}),charityNo:$('#sCharNo').value.trim(),netTax:$('#sNetTax').value,itcPct:$('#sItc').value===''?'':Math.max(0,Math.min(100,+$('#sItc').value||0)),qualifying:$('#sQual').checked,rebate:$('#sRebate').checked,capitalItc:$('#sCapItc').checked}};
     if(data.orgType!=='business'&&S.company.quickMethod?.on&&(data.orgType==='charity'||data.nonprofit.qualifying)&&!await confirmBox('Turn off the Quick Method?','Registered charities and qualifying non-profits can’t use the Quick Method. Saving turns it off; returns already filed stay as they were.','Save'))return;if(await putCompany(data))toast('Settings saved')};

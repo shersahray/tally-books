@@ -6,7 +6,7 @@
 let AIS=null,aiTried=0,aiBusy=false;
 async function loadAI(){try{AIS=await api('GET','/api/ai')}catch(e){AIS={configured:false,unavailable:true}}}
 const usd=v=>isFr()?(+v||0).toLocaleString('fr-CA',{minimumFractionDigits:2,maximumFractionDigits:2})+' $ US':'US$'+(+v||0).toFixed(2);
-const aiOn=()=>!!(AIS&&AIS.configured&&S.company.ai&&ME&&!ME.readOnly&&ME.role!=='client');
+const aiOn=()=>!!(AIS&&AIS.configured&&S.company.ai&&ME&&!ME.readOnly&&ME.role!=='client'&&(typeof feat!=='function'||feat('ai')));
 
 // Used by suggest() in banking.js, after matches, rules and "same as last time".
 function aiSuggestion(b){
@@ -39,6 +39,7 @@ function aiPanel(){
   if(!ME||ME.role==='client')return '';
   if(!AIS)return '';
   if(AIS.unavailable)return '';
+  if(typeof feat==='function'&&!feat('ai')&&!(ME.role==='owner'&&ME.platformAdmin))return '';
   const owner=ME.role==='owner'&&ME.platformAdmin,c=S.company;
   const sw=`<label class="check"><input type="checkbox" id="aiCo" ${c.ai?'checked':''} ${AIS.configured?'':'disabled'}> Use AI suggestions for this company</label>`;
   const intro=`<div class="muted" style="font-size:13px">AI suggests a category, payee and sales tax for bank lines that rules and past choices don’t cover. It only suggests: you review every line and click Add. When you turn it on, each line’s date, description and amount, this company’s chart of accounts and payee names are sent to Anthropic (the maker of Claude) to be read. Anthropic doesn’t use data sent through its API to train its models. Tell your client if their engagement letter needs to say so.</div>`;

@@ -47,8 +47,19 @@ function createApp(opts) {
   /** Can this person see this company? Only companies of their own firm, and then as their role allows. */
   const canSeeCo = (user, cid) => { const c = reg.get(cid); return !!(c && user && c.firmId === user.firmId && auth.canSee(user, cid)); };
   /** AI costs the server's owner money, so each firm uses it only when an administrator allows it. */
-  const firmAi = cid => { const c = reg.get(cid); const f = c && auth.firm(c.firmId); return !!(f && f.ai); };
+  const PLANS = require('../../public/plans.js');
+  /** Is a plan feature on for this company: in its firm's plan, and not switched off in its settings? */
+  const featureOn = (cid, key, store) => {
+    const c = reg.get(cid), f = c && auth.firm(c.firmId);
+    const settings = (store || reg.store(cid)).getSetting('company') || {};
+    return PLANS.featureOn(f ? f.plan : 'plus', settings.features, key);
+  };
+  const needFeature = (cid, key, store) => {
+    if (!featureOn(cid, key, store)) throw new ValidationError(`${PLANS.FEATURES[key].label} isn’t part of this company’s plan.`, 403);
+  };
+  const firmAi = cid => { const c = reg.get(cid); const f = c && auth.firm(c.firmId); return !!(f && f.ai) && featureOn(cid, 'ai'); };
   const needFirmAi = cid => {
+    needFeature(cid, 'ai');
     if (!firmAi(cid)) throw new ValidationError('AI suggestions aren’t turned on for your firm. Ask the server’s administrator.', 403);
     const f = auth.firm(reg.get(cid).firmId);
     // Firms other than the administrators' each have a monthly limit, so one firm can't use the whole server's AI budget.
@@ -329,9 +340,18 @@ function createApp(opts) {
     throw e;
   }
 
-  function applyWrite(store, w, user) {
+  function applyWrite(store, w, user, ctx) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
+    // Plan features: payroll records, and the special sales tax methods on returns.
+    if (ctx && op === 'set') {
+      const d = w.data || {};
+      if (collection === 'employees' || collection === 'payruns' || (collection === 'entries' && ['payrun', 'payremit'].includes(d.type))) needFeature(ctx.id, 'payroll', store);
+      if (collection === 'filings' && ['quick', 'charity', 'npo'].includes(d.method)) {
+        const prev = store.get('filings', id);
+        if (!(prev && prev.method === d.method)) needFeature(ctx.id, 'specialTax', store);
+      }
+    }
     // Receipts are created only by the upload route (or a restore), never by a plain write.
     if (collection === 'receipts' && op === 'set' && !store.get('receipts', id)) throw new ValidationError('Add receipts from the Receipts screen.');
     // Attachments and questions have their own routes; a plain write can only delete an attachment.
@@ -524,22 +544,23 @@ function createApp(opts) {
       const firms = auth.data.firms.map(f => {
         const people = auth.firmUsers(f.id), owner = people.find(u => u.role === 'owner');
         return { ...f, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
-          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId };
+          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan) };
       });
-      return { firms, signups: auth.signups, myFirm: user.firmId };
+      return { firms, signups: auth.signups, defaultPlan: auth.defaultPlan, myFirm: user.firmId, plans: PLANS.PLANS, features: PLANS.FEATURES };
     }],
     ['PUT', /^\/api\/firms\/settings$/, async (req, m, res, user) => {
       adminOnly(user);
       const b = await readJson(req);
-      auth.setSignups(b.signups);
-      auth.log('security-changed', { by: user.username, signups: b.signups });
-      return { ok: true, signups: auth.signups };
+      if (b.signups !== undefined) auth.setSignups(b.signups);
+      if (b.defaultPlan !== undefined) auth.setDefaultPlan(b.defaultPlan);
+      auth.log('security-changed', { by: user.username, ...(b.signups !== undefined ? { signups: b.signups } : {}), ...(b.defaultPlan !== undefined ? { defaultPlan: b.defaultPlan } : {}) });
+      return { ok: true, signups: auth.signups, defaultPlan: auth.defaultPlan };
     }],
     ['PUT', /^\/api\/firms\/([^/]+)$/, async (req, m, res, user) => {
       adminOnly(user);
       const b = await readJson(req);
       const patch = {};
-      for (const k of ['status', 'name', 'ai', 'aiCapUsd']) if (b[k] !== undefined) patch[k] = b[k];
+      for (const k of ['status', 'name', 'ai', 'aiCapUsd', 'plan']) if (b[k] !== undefined) patch[k] = b[k];
       const f = auth.updateFirm(decodeURIComponent(m[1]), patch, user);
       broadcast({ companies: true, firmId: f.id });
       return { ok: true, firm: f };
@@ -622,18 +643,18 @@ function createApp(opts) {
     ['GET', /^\/state$/, ctx => state(ctx)],
     ['PUT', /^\/records\/([A-Za-z]+)\/([^/]+)$/, async (ctx, req, m) => {
       const data = await readJson(req);
-      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data }, ctx.user));
+      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data }, ctx.user, ctx));
       return { ok: true, rev: ctx.bump() };
     }],
     ['DELETE', /^\/records\/([A-Za-z]+)\/([^/]+)$/, (ctx, req, m) => {
-      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'delete', collection: m[1], id: decodeURIComponent(m[2]) }, ctx.user));
+      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'delete', collection: m[1], id: decodeURIComponent(m[2]) }, ctx.user, ctx));
       return { ok: true, rev: ctx.bump() };
     }],
     ['POST', /^\/batch$/, async (ctx, req) => {
       const body = await readJson(req);
       if (!Array.isArray(body.writes) || !body.writes.length) throw new ValidationError('Send a non-empty "writes" list.');
       if (body.writes.length > 500) throw new ValidationError('At most 500 writes per batch.');
-      ctx.store.transaction(() => body.writes.forEach(w => applyWrite(ctx.store, w, ctx.user)));
+      ctx.store.transaction(() => body.writes.forEach(w => applyWrite(ctx.store, w, ctx.user, ctx)));
       return { ok: true, rev: ctx.bump() };
     }],
     ['PUT', /^\/settings$/, async (ctx, req) => {
@@ -641,6 +662,12 @@ function createApp(opts) {
       const before = ctx.store.getSetting('company');
       const company = validateCompany(await readJson(req));
       company.logoFile = (before && before.logoFile) || ''; // changed only through the logo route
+      // Plan features: can't be turned on here when the plan doesn't include them (settings already saved stay as they were).
+      if (company.quickMethod && company.quickMethod.on && !(before && before.quickMethod && before.quickMethod.on)) needFeature(ctx.id, 'specialTax', ctx.store);
+      if (!featureOn(ctx.id, 'advancedReports', ctx.store) && JSON.stringify(company.savedReports || []) !== JSON.stringify((before && before.savedReports) || [])) {
+        const added = (company.savedReports || []).some(r => !((before && before.savedReports) || []).some(b => b.id === r.id));
+        if (added) needFeature(ctx.id, 'advancedReports', ctx.store);
+      }
       ctx.store.transaction(() => {
         ctx.store.putSetting('company', company);
         ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'company', summary: 'company settings', before, after: company });
@@ -964,7 +991,7 @@ function createApp(opts) {
       const counts = {};
       ctx.store.transaction(() => {
         body.writes.forEach((w, i) => {
-          try { applyWrite(ctx.store, w, ctx.user); } catch (e) {
+          try { applyWrite(ctx.store, w, ctx.user, ctx); } catch (e) {
             if (e instanceof ValidationError) throw new ValidationError(`Item ${i + 1} (${w.collection}${w.data && (w.data.name || w.data.number || w.data.date) ? ': ' + String(w.data.name || w.data.number || w.data.date).slice(0, 60) : ''}): ${e.message}`, e.status);
             throw e;
           }

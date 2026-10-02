@@ -1449,3 +1449,21 @@ addFr({
   'This conversation is long; start a new question.':'Cette conversation est longue; posez une nouvelle question.','That transaction isn’t here any more.':'Cette opération n’existe plus.',
   'There are {0} open questions already. Resolve some first.':'Il y a déjà {0} questions ouvertes. Réglez-en d’abord quelques-unes.','Financial reports for {s}: {s1}':'Rapports financiers de {s} : {s1}',
 });
+
+/* ---------- plans and features ---------- */
+addFr({
+  'Features':'Fonctionnalités','Plan':'Forfait','Essentials':'Essentiel','Plus':'Plus','In the Plus plan':'Dans le forfait Plus',
+  'Your firm’s plan:':'Forfait de votre cabinet :','Plan for firms that sign up':'Forfait des cabinets qui s’inscrivent',
+  'You can change each firm’s plan in the table below.':'Vous pouvez changer le forfait de chaque cabinet dans le tableau ci-dessous.',
+  'Everyday bookkeeping, banking, invoices and bills, GST/HST and QST returns and the standard reports are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.':
+    'La tenue de livres courante, la banque, les factures clients et fournisseurs, les déclarations de TPS/TVH et de TVQ et les rapports de base sont toujours inclus. Décochez ce que ce client n’utilise pas; cela disparaît du menu et les données sont conservées.',
+  'AI suggestions':'Suggestions de l’IA','Advanced reports':'Rapports avancés','Special sales tax methods':'Méthodes spéciales de taxes de vente',
+  'Pay runs, source deductions and remittances, vacation and holiday pay, ROE, T4 and RL-1':'Paies, retenues à la source et versements, vacances et jours fériés, RE, T4 et RL-1',
+  'Categories for bank lines and receipts read by AI':'Catégories pour les lignes bancaires et reçus lus par l’IA',
+  'Comparisons by period, cash flow statement, saved reports, report packages and the working trial balance':'Comparaisons par période, état des flux de trésorerie, rapports enregistrés, trousses de rapports et balance de travail',
+  'Quick Method, and the net tax calculation and rebates for charities and non-profits':'Méthode rapide, et calcul de la taxe nette et remboursements pour les organismes de bienfaisance et les OBNL',
+  '{s}: on for this company':'{s} : activé pour cette entreprise','{s}: off for this company':'{s} : désactivé pour cette entreprise',
+  '{s} isn’t part of this company’s plan.':'{s} ne fait pas partie du forfait de cette entreprise.','Choose one of the plans.':'Choisissez un des forfaits.',
+  'Payroll is off for this company':'La paie est désactivée pour cette entreprise',
+  'Turn it on in Settings → Features (it’s part of the Plus plan).':'Activez-la dans Paramètres → Fonctionnalités (elle fait partie du forfait Plus).',
+});

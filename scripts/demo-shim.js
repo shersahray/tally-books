@@ -86,18 +86,18 @@
 
   const auditLogs = {};
   // The demo's firms (see /api/firms below).
-  let demoSignups = 'approval', m0;
+  let demoSignups = 'approval', demoDefaultPlan = 'essentials', m0;
   const day = 864e5;
   let demoFirms = [
-    { id: 'f_demo', name: 'Demo firm', status: 'active', ai: true, aiCapUsd: 10, created: Date.now() - 90 * day, users: 1, companies: 0, owner: { name: 'Demo user', username: 'demo' }, lastLogin: Date.now(), aiSpentUsd: 0, main: true },
-    { id: 'f_north', name: 'North Ledger Bookkeeping (example)', status: 'pending', ai: false, aiCapUsd: 10, created: Date.now() - 2 * 3600e3, users: 1, companies: 0, owner: { name: 'Nora Example', username: 'nora@example.com' }, lastLogin: 0, aiSpentUsd: 0 },
-    { id: 'f_coast', name: 'Coast Accounting (example)', status: 'active', ai: true, aiCapUsd: 25, created: Date.now() - 40 * day, users: 4, companies: 12, owner: { name: 'Cal Example', username: 'cal@example.com' }, lastLogin: Date.now() - 3 * day, aiSpentUsd: 6.4 },
+    { id: 'f_demo', name: 'Demo firm', status: 'active', ai: true, aiCapUsd: 10, plan: 'plus', created: Date.now() - 90 * day, users: 1, companies: 0, owner: { name: 'Demo user', username: 'demo' }, lastLogin: Date.now(), aiSpentUsd: 0, main: true },
+    { id: 'f_north', name: 'North Ledger Bookkeeping (example)', status: 'pending', ai: false, aiCapUsd: 10, plan: 'essentials', created: Date.now() - 2 * 3600e3, users: 1, companies: 0, owner: { name: 'Nora Example', username: 'nora@example.com' }, lastLogin: 0, aiSpentUsd: 0 },
+    { id: 'f_coast', name: 'Coast Accounting (example)', status: 'active', ai: true, aiCapUsd: 25, plan: 'plus', created: Date.now() - 40 * day, users: 4, companies: 12, owner: { name: 'Cal Example', username: 'cal@example.com' }, lastLogin: Date.now() - 3 * day, aiSpentUsd: 6.4 },
   ];
   let auditSeq = 0;
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
-    const demoUser = { id: 'u_demo', name: 'Demo user', username: 'demo', role: 'owner', companies: [], disabled: false, lastLogin: Date.now(), mustChange: false, platformAdmin: true, firmName: demoFirms[0].name, firmId: 'f_demo' };
+    const demoUser = { id: 'u_demo', name: 'Demo user', username: 'demo', role: 'owner', companies: [], disabled: false, lastLogin: Date.now(), mustChange: false, platformAdmin: true, firmName: demoFirms[0].name, firmId: 'f_demo', firmPlan: demoFirms[0].plan };
     if (path === '/api/auth/me') return { user: demoUser, idleMinutes: 480 };
     if (path === '/api/auth/logout') return { ok: true };
     if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480, firm: demoFirms[0] };
@@ -107,15 +107,15 @@
       if (method === 'PUT') { const n = String((body && body.name) || '').trim(); if (!n) throw new ApiError(400, 'Enter the firm’s name.'); demoFirms[0].name = n; }
       return { ok: true, firm: demoFirms[0] };
     }
-    if (path === '/api/firms' && method === 'GET') return { firms: demoFirms.map(f => (f.main ? { ...f, companies: cos.length } : f)), signups: demoSignups, myFirm: 'f_demo' };
-    if (path === '/api/firms/settings') { demoSignups = body.signups; return { ok: true, signups: demoSignups }; }
+    if (path === '/api/firms' && method === 'GET') return { firms: demoFirms.map(f => (f.main ? { ...f, companies: cos.length } : f)), signups: demoSignups, defaultPlan: demoDefaultPlan, myFirm: 'f_demo' };
+    if (path === '/api/firms/settings') { if (body.signups) demoSignups = body.signups; if (body.defaultPlan) demoDefaultPlan = body.defaultPlan; return { ok: true, signups: demoSignups, defaultPlan: demoDefaultPlan }; }
     m0 = path.match(/^\/api\/firms\/([^/]+)$/);
     if (m0) {
       const f = demoFirms.find(x => x.id === decodeURIComponent(m0[1]));
       if (!f) throw new ApiError(404, 'That firm doesn’t exist.');
       if (method === 'DELETE') { if (f.companies) throw new ApiError(409, 'This firm has companies, so it can’t be removed. Their books are kept while it’s suspended.'); demoFirms = demoFirms.filter(x => x !== f); return { ok: true }; }
       if (f.main && body.status && body.status !== 'active') throw new ApiError(409, 'You can’t suspend your own firm.');
-      for (const k of ['status', 'ai', 'aiCapUsd', 'name']) if (body[k] !== undefined) f[k] = body[k];
+      for (const k of ['status', 'ai', 'aiCapUsd', 'name', 'plan']) if (body[k] !== undefined) f[k] = body[k];
       return { ok: true, firm: f };
     }
     if (path.startsWith('/api/users') || path.startsWith('/api/auth') || path === '/api/security') throw new ApiError(400, 'Users and passwords aren’t available in the demo.');

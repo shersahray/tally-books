@@ -107,7 +107,7 @@ test('server-wide settings are for the administrator only', async () => {
   assert.equal(bk.limited, true); assert.equal(bk.folder, undefined, 'where backups are kept is the administrator’s business');
   assert.equal((await req(bOwner, 'GET', '/api/ai')).json.firmAllowed, false);
   const ai = await req(bOwner, 'POST', `/api/c/${bCo}/ai/suggest`, { ids: ['x'] });
-  assert.equal(ai.status, 403); assert.match(ai.json.error, /turned on for your firm/);
+  assert.equal(ai.status, 403); assert.match(ai.json.error, /isn’t part of this company’s plan/, 'firms that sign up start on Essentials');
   // Owners can rename their own firm.
   assert.equal((await req(bOwner, 'PUT', '/api/firm', { name: 'North Ledger Inc.' })).json.firm.name, 'North Ledger Inc.');
 });
@@ -123,6 +123,43 @@ test('suspending a firm signs its people out; the administrator’s own firm can
   await req(admin, 'PUT', `/api/firms/${nl.id}`, { status: 'active', ai: true });
   bOwner = (await login('nora@north.ca')).cookie;
   assert.equal((await req(bOwner, 'GET', '/api/ai')).json.firmAllowed, true);
+});
+
+test('plans: Essentials leaves out payroll, AI, advanced reports and special tax methods; Plus has them; each company can switch them off', async () => {
+  const firms = (await req(admin, 'GET', '/api/firms')).json;
+  const nl = firms.firms.find(f => f.name === 'North Ledger Inc.');
+  assert.equal(nl.plan, 'essentials'); assert.equal(firms.defaultPlan, 'essentials');
+  assert.equal(firms.firms.find(f => f.id === firms.myFirm).plan, 'plus', 'the administrator’s own firm has everything');
+  assert.equal((await req(bOwner, 'GET', '/api/auth/me')).json.user.firmPlan, 'essentials');
+  const emp = { name: 'Pat Payroll', prov: 'NS', freq: 'biweekly', payType: 'salary', rate: 52000, td1Fed: '' };
+  let r = await req(bOwner, 'PUT', `/api/c/${bCo}/records/employees/e1`, emp);
+  assert.equal(r.status, 403); assert.match(r.json.error, /Payroll isn’t part/);
+  assert.equal((await req(bOwner, 'POST', `/api/c/${bCo}/batch`, { writes: [{ op: 'set', collection: 'payruns', id: 'p1', data: {} }] })).status, 403, 'not through a batch either');
+  assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/filings/f1`, { tax: 'gst', method: 'quick', from: '2026-07-01', to: '2026-09-30', filedOn: '2026-10-15', lines: { 101: 1000 } })).status, 403);
+  const st = (await req(bOwner, 'GET', `/api/c/${bCo}/state`)).json.company;
+  assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/settings`, { ...st, quickMethod: { on: true, from: '2026-01-01', type: 'service' } })).status, 403);
+  assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/settings`, { ...st, savedReports: [{ id: 'r1', name: 'Monthly', tab: 'pl' }] })).status, 403);
+  // Ordinary bookkeeping is in every plan.
+  assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/filings/f1`, { tax: 'gst', from: '2026-07-01', to: '2026-09-30', filedOn: '2026-10-15', lines: { 109: 100 } })).status, 200);
+  // Only the administrator changes plans.
+  assert.equal((await req(bOwner, 'PUT', `/api/firms/${nl.id}`, { plan: 'plus' })).status, 403);
+  assert.equal((await req(admin, 'PUT', `/api/firms/${nl.id}`, { plan: 'gold' })).status, 400);
+  assert.equal((await req(admin, 'PUT', `/api/firms/${nl.id}`, { plan: 'plus' })).status, 200);
+  assert.equal((await req(bOwner, 'GET', '/api/auth/me')).json.user.firmPlan, 'plus');
+  assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/employees/e1`, emp)).status, 200);
+  // A client who doesn't need payroll: switched off for this company only.
+  r = await req(bOwner, 'PUT', `/api/c/${bCo}/settings`, { ...st, features: { payroll: false, ai: true, nonsense: false } });
+  assert.equal(r.status, 200);
+  assert.deepEqual((await req(bOwner, 'GET', `/api/c/${bCo}/state`)).json.company.features, { payroll: false }, 'only switches that are off are kept');
+  assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/employees/e2`, { ...emp, name: 'Sam' })).status, 403);
+  assert.ok((await req(bOwner, 'GET', `/api/c/${bCo}/state`)).json.employees.some(e => e.id === 'e1'), 'switching off keeps the records');
+  assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/settings`, { ...st, features: {} })).status, 200);
+  assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/employees/e2`, { ...emp, name: 'Sam' })).status, 200);
+  // The plan new firms get when they sign up.
+  assert.equal((await req(admin, 'PUT', '/api/firms/settings', { defaultPlan: 'gold' })).status, 400);
+  assert.equal((await req(admin, 'PUT', '/api/firms/settings', { defaultPlan: 'plus' })).status, 200);
+  assert.equal((await req(admin, 'GET', '/api/firms')).json.defaultPlan, 'plus');
+  await req(admin, 'PUT', '/api/firms/settings', { defaultPlan: 'essentials' });
 });
 
 test('open sign-ups sign the new firm straight in; at most 5 sign-up tries a day from one network', async () => {

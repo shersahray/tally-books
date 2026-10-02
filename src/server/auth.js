@@ -17,6 +17,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const PLANS = require('../../public/plans.js');
 const crypto = require('node:crypto');
 
 const COOKIE = 'tb_session';
@@ -167,13 +168,13 @@ class Auth {
   adoptFirm() {
     if (!this.data.users.length || this.data.users.every(u => u.firmId)) return;
     let f = this.data.firms[0];
-    if (!f) { f = this.newFirm('My firm', 'active', true); }
+    if (!f) { f = this.newFirm('My firm', 'active', true, 'plus'); }
     for (const u of this.data.users) if (!u.firmId) u.firmId = f.id;
     if (!this.data.users.some(u => u.platformAdmin)) for (const u of this.data.users) if (u.role === 'owner' && u.firmId === f.id) u.platformAdmin = true;
     this.save();
   }
-  newFirm(name, status, ai) {
-    const f = { id: 'f_' + crypto.randomBytes(6).toString('hex'), name: String(name || '').trim().slice(0, 120) || 'My firm', status, ai: !!ai, aiCapUsd: 10, created: Date.now() };
+  newFirm(name, status, ai, plan) {
+    const f = { id: 'f_' + crypto.randomBytes(6).toString('hex'), name: String(name || '').trim().slice(0, 120) || 'My firm', status, ai: !!ai, aiCapUsd: 10, plan: PLANS.planOf(plan), created: Date.now() };
     this.data.firms.push(f);
     return f;
   }
@@ -181,6 +182,13 @@ class Auth {
   get mainFirmId() { return this.data.firms[0] ? this.data.firms[0].id : ''; }
   firm(id) { return this.data.firms.find(f => f.id === id) || null; }
   firmUsers(id) { return this.data.users.filter(u => u.firmId === id); }
+  /** The plan a firm gets when it signs itself up. */
+  get defaultPlan() { return PLANS.PLANS[this.data.settings.defaultPlan] ? this.data.settings.defaultPlan : 'essentials'; }
+  setDefaultPlan(v) {
+    if (!PLANS.PLANS[v]) throw new AuthError('Choose one of the plans.', 400);
+    this.data.settings.defaultPlan = v;
+    this.save();
+  }
   get signups() { return ['approval', 'open'].includes(this.data.settings.signups) ? this.data.settings.signups : 'off'; }
   setSignups(v) {
     if (!['off', 'approval', 'open'].includes(v)) throw new AuthError('Choose off, approval or open.', 400);
@@ -193,7 +201,7 @@ class Auth {
     firmName = String(firmName || '').trim();
     if (!firmName) throw new AuthError('Enter your firm’s name.', 400);
     if (this.data.firms.filter(f => f.status === 'pending').length >= 100) throw new AuthError('Sign-ups are paused for now. Try again later.', 429);
-    const f = this.newFirm(firmName, this.signups === 'open' ? 'active' : 'pending', false);
+    const f = this.newFirm(firmName, this.signups === 'open' ? 'active' : 'pending', false, this.defaultPlan);
     try {
       const u = this.addUser({ name, username, password, role: 'owner', firmId: f.id, self: true });
       this.log('firm-signup', { username: u.username, firm: f.name, status: f.status });
@@ -216,6 +224,10 @@ class Auth {
     }
     if (patch.name !== undefined) { const n = String(patch.name).trim().slice(0, 120); if (!n) throw new AuthError('Enter the firm’s name.', 400); f.name = n; }
     if (patch.ai !== undefined) f.ai = !!patch.ai;
+    if (patch.plan !== undefined) {
+      if (!PLANS.PLANS[patch.plan]) throw new AuthError('Choose one of the plans.', 400);
+      f.plan = patch.plan;
+    }
     if (patch.aiCapUsd !== undefined) {
       const c = Number(patch.aiCapUsd);
       if (!Number.isFinite(c) || c < 0 || c > 10000) throw new AuthError('The monthly AI limit must be between $0 and $10,000.', 400);
@@ -258,7 +270,7 @@ class Auth {
     const twoStep = !!(u.totp && u.totp.enabled);
     const f = this.firm(u.firmId);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
-      firmId: u.firmId || '', firmName: f ? f.name : '', platformAdmin: !!u.platformAdmin,
+      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: f ? PLANS.planOf(f.plan) : 'plus', platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '' };
   }
@@ -274,7 +286,7 @@ class Auth {
   /** First-time setup: create the owner account. Only works while there are no users. */
   setup({ name, username, password, firmName }) {
     if (!this.needsSetup()) throw new AuthError('Setup is already done. Sign in instead.', 409);
-    const f = this.data.firms[0] || this.newFirm(firmName || 'My firm', 'active', true);
+    const f = this.data.firms[0] || this.newFirm(firmName || 'My firm', 'active', true, 'plus');
     if (firmName && String(firmName).trim()) f.name = String(firmName).trim().slice(0, 120);
     const u = this.addUser({ name, username, password, role: 'owner', firmId: f.id });
     this.byId(u.id).platformAdmin = true;
