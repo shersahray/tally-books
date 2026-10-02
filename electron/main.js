@@ -11,6 +11,8 @@ const path = require('node:path');
 const { app, BrowserWindow, Menu, shell, dialog, ipcMain, net, nativeTheme } = require('electron');
 const { serverOrigin, netMessage } = require('./connection');
 const folders = require('./datafolder');
+const { setupUpdates, updatesOn } = require('./updater');
+let updates = null;
 
 let server = null;    // the private server, in "this computer" mode only
 let win = null;
@@ -216,6 +218,17 @@ async function start() {
   }
 
   await openBooks();
+  startUpdates();
+}
+
+/** Automatic updates: the installed, signed Windows app only (see updater.js). */
+function startUpdates() {
+  if (!updatesOn({ isPackaged: app.isPackaged })) return;
+  let autoUpdater;
+  try { ({ autoUpdater } = require('electron-updater')); } catch { return; }
+  const fr = /^fr/i.test(app.getLocale ? app.getLocale() : '');
+  updates = setupUpdates({ autoUpdater, dialog, window: () => win, localServer: () => server, fr, log: m => console.log(m) });
+  buildMenu();
 }
 
 function buildMenu() {
@@ -229,6 +242,8 @@ function buildMenu() {
       label: L('File', 'Fichier'),
       submenu: [
         { label: L('Where the books are…', 'Où sont les livres…'), click: () => { lastError = ''; showConnect('setup'); } },
+        ...(updates ? [{ label: L('Check for updates…', 'Rechercher des mises à jour…'), click: () => updates.check() }] : []),
+        ...(app.getVersion ? [{ label: `${L('Version', 'Version')} ${app.getVersion()}`, enabled: false }] : []),
         ...(c && c.mode === 'local' ? [{ label: L('Show data folder', 'Afficher le dossier des données'), click: () => shell.openPath(dataDir()) }] : []),
         ...(c && c.mode === 'server' ? [{ label: L('Reconnect to the server', 'Se reconnecter au serveur'), click: () => openBooks() }] : []),
         { type: 'separator' },
@@ -243,5 +258,8 @@ function buildMenu() {
 }
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { if (server) { server.shutdown(); server = null; } });
+app.on('before-quit', () => {
+  if (updates) updates.beforeQuit();
+  if (server) { server.shutdown(); server = null; }
+});
 

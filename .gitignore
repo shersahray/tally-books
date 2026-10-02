@@ -6,3 +6,4 @@ data/
 *.db-wal
 .DS_Store
 Thumbs.db
+electron/build-info.json

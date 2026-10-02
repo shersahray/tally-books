@@ -186,6 +186,17 @@ Choosing the standard folder again moves the books back.
 
 `.github/workflows/release.yml` builds the Windows `.exe`, the macOS `.dmg` and the Linux `.AppImage` on GitHub's computers. To run it, go to **Actions → Build desktop apps → Run workflow**. It also runs when you push a version tag such as `v1.0.0`. When the run finishes, download the installers from the **Artifacts** section at the bottom of the run's page.
 
+### Releasing a new version (automatic updates)
+
+The signed Windows app updates itself from this repository's **Releases**:
+
+1. On GitHub, open **Releases → Draft a new release**.
+2. **Choose a tag:** type the new version, such as `v1.3.0`, and choose *Create new tag on publish*. Each release needs a higher number than the last.
+3. Give it a title and a few lines about what's new, then click **Publish release**.
+4. The **Build desktop apps** workflow builds that version, signs the Windows installer, and attaches the installers to the release (about 10 minutes). A release is never published with an unsigned Windows installer.
+
+Installed Windows apps check for a new release when they start and every 4 hours, download it in the background, and ask to restart (or update the next time Tally Books is closed). They only install an update signed with the same certificate, and books kept on that computer are backed up first. **File → Check for updates…** checks right away, and the File menu shows the version. Copies connected to an office server get new features from the server itself; the Mac and Linux versions are updated by downloading the new installer from the release.
+
 ### Signing the Windows installer (Azure Artifact Signing)
 
 Without a signature, Windows warns "Windows protected your PC", and Smart App Control blocks the installer completely. Signing fixes both.

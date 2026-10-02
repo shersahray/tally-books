@@ -1,6 +1,6 @@
 {
   "name": "tally-books",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Double-entry bookkeeping for small businesses: invoices, bills, expenses, chart of accounts and financial reports. Runs as a web app or a desktop app.",
   "main": "electron/main.js",
   "bin": {
@@ -29,6 +29,9 @@
     "electron"
   ],
   "license": "MIT",
+  "dependencies": {
+    "electron-updater": "^6.8.10"
+  },
   "devDependencies": {
     "electron": "^37.0.0",
     "electron-builder": "26.0.12"
@@ -67,6 +70,14 @@
       "target": "AppImage",
       "category": "Office",
       "icon": "build/icon.png"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "shersahray",
+        "repo": "tally-books",
+        "releaseType": "release"
+      }
+    ]
   }
 }

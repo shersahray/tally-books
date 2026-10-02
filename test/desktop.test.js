@@ -236,3 +236,49 @@ test('a copy that can’t finish leaves both folders as they were', () => {
   fs.mkdirSync(path.join(c, 'Tally Books', 'companies'), { recursive: true });
   assert.equal(folders.checkFolder(c, a).error, 'That folder has part of a Tally Books data folder in it. Choose an empty folder.');
 });
+
+test('automatic updates: only the installed, signed Windows app; asks to restart; backs up first', async () => {
+  const { setupUpdates, updatesOn } = require('../electron/updater');
+  const info = { signed: true, publisher: 'Sher Hussain Sahray' };
+  assert.equal(updatesOn({ isPackaged: true, platform: 'win32', info }), true);
+  assert.equal(updatesOn({ isPackaged: false, platform: 'win32', info }), false, 'not while developing');
+  assert.equal(updatesOn({ isPackaged: true, platform: 'darwin', info }), false, 'Windows only');
+  assert.equal(updatesOn({ isPackaged: true, platform: 'win32', info: {} }), false, 'never an unsigned build');
+
+  const fakeUpdater = () => {
+    const u = new EventEmitter();
+    Object.assign(u, { checks: 0, installed: 0, checkForUpdates() { this.checks++; return Promise.resolve(); }, quitAndInstall() { this.installed++; } });
+    return u;
+  };
+  let backups = 0, answer = 0;
+  const dialogs = [];
+  const dialog = { showMessageBox: async (w, o) => { dialogs.push(o); return { response: answer }; } };
+  const localServer = () => ({ backups: { run: () => { backups++; return { ok: true }; } } });
+
+  const u = fakeUpdater();
+  const up = setupUpdates({ autoUpdater: u, dialog, window: () => ({}), localServer });
+  assert.equal(u.checks, 1, 'checks when it starts');
+  assert.equal(u.autoInstallOnAppQuit, true);
+  u.emit('update-downloaded', { version: '1.3.0' });
+  await new Promise(r => setImmediate(r));
+  assert.match(dialogs[0].message, /1\.3\.0 is ready/);
+  assert.equal(backups, 1, 'backed up before restarting');
+  assert.equal(u.installed, 1);
+  up.stop();
+
+  // "Later": installs when Tally Books closes, after a backup.
+  const u2 = fakeUpdater(); answer = 1; backups = 0;
+  const up2 = setupUpdates({ autoUpdater: u2, dialog, window: () => ({}), localServer });
+  u2.emit('update-downloaded', { version: '1.3.0' });
+  await new Promise(r => setImmediate(r));
+  assert.equal(u2.installed, 0);
+  up2.beforeQuit();
+  assert.equal(backups, 1);
+  // A check by hand says when it's up to date.
+  dialogs.length = 0;
+  up2.check();
+  u2.emit('update-not-available');
+  await new Promise(r => setImmediate(r));
+  assert.match(dialogs[0].message, /up to date/);
+  up2.stop();
+});
