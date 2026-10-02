@@ -50,15 +50,17 @@ jobs:
           SIGN_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           SIGN_PUBLISHER: ${{ vars.AZURE_PUBLISHER_NAME }}
         run: |
+          missing=""
           if [ "$RUNNER_OS" = "Windows" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
-            missing=""
             for v in AZURE_TENANT_ID AZURE_CLIENT_ID SIGN_ACCOUNT SIGN_PROFILE SIGN_ENDPOINT SIGN_PUBLISHER; do
               [ -z "${!v}" ] && missing="$missing $v"
             done
-            if [ -n "$missing" ]; then
-              echo "::error::Azure signing is half set up. Missing:$missing (see the notes at the top of this file)."
-              exit 1
-            fi
+          fi
+          if [ "$RUNNER_OS" = "Windows" ] && [ -n "$AZURE_CLIENT_SECRET" ] && [ -n "$missing" ]; then
+            # Typically while Microsoft is still checking the identity: build unsigned until the profile exists.
+            echo "::warning::Signing isn't finished: still missing$missing. Building the Windows installer unsigned for now."
+            npx electron-builder --publish never
+          elif [ "$RUNNER_OS" = "Windows" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
             echo "Signing the Windows installer as \"$SIGN_PUBLISHER\" with Azure Artifact Signing"
             echo "SIGNED=1" >> "$GITHUB_ENV"
             npx electron-builder --publish never \
