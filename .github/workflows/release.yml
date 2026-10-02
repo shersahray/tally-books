@@ -8,7 +8,7 @@ name: Build desktop apps
 # Settings → Secrets and variables → Actions:
 #   Secrets:    AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
 #   Variables:  AZURE_SIGNING_ACCOUNT, AZURE_CERT_PROFILE, AZURE_SIGNING_ENDPOINT, AZURE_PUBLISHER_NAME
-# Until then the Windows installer is built unsigned, as before.
+# Until then the Windows installer is built unsigned, with a warning saying which value is missing.
 
 on:
   workflow_dispatch:
