@@ -90,6 +90,7 @@ jobs:
           foreach ($f in Get-ChildItem dist -Filter *.exe) {
             $sig = Get-AuthenticodeSignature $f.FullName
             Write-Host "$($f.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
+            Write-Host "::notice title=Windows signature::$($f.Name): $($sig.Status), signed by $($sig.SignerCertificate.Subject)"
             if ($sig.Status -ne 'Valid') { $failed = $true }
           }
           if ($failed) { Write-Error 'The installer is not validly signed.'; exit 1 }

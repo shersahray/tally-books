@@ -48,11 +48,15 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "executableName": "TallyBooks"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "TallyBooks-Setup-${version}.${ext}",
+      "shortcutName": "Tally Books",
+      "uninstallDisplayName": "Tally Books"
     },
     "mac": {
       "target": "dmg",
