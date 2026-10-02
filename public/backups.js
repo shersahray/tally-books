@@ -15,7 +15,7 @@ function backupStatusLine(){
 function backupPanel(){
   if(!BK||BK.hidden)return '';
   const keep=[7,14,30,90,365];
-  if(typeof ME!=='undefined'&&ME&&ME.role!=='owner')return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Automatic backups</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px"><div>${backupStatusLine()}</div><div class="muted" style="font-size:13px">An owner manages backups.</div></div></div>`;
+  if(typeof ME!=='undefined'&&ME&&!(ME.role==='owner'&&ME.platformAdmin))return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Automatic backups</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px"><div>${backupStatusLine()}</div><div class="muted" style="font-size:13px">${ME.role==='owner'?'The server’s administrator manages backups.':'An owner manages backups.'}</div></div></div>`;
   return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Automatic backups</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
     <div>${backupStatusLine()}</div>
     <div class="fields">

@@ -40,7 +40,21 @@ const BACKUP_FORMAT = 'tally-books-backup';
 function createApp(opts) {
   const reg = new Registry(opts.dataDir);
   const auth = new Auth(opts.dataDir, { require2fa: opts.require2fa });
+  reg.adoptFirm(auth.mainFirmId);
   const ownerOnly = u => { if (u.role !== 'owner') throw new ValidationError('Only an owner can do that.', 403); };
+  // Server-wide settings (backups, the AI key, firms) belong to the server's administrators, not to each firm.
+  const adminOnly = u => { if (u.role !== 'owner' || !u.platformAdmin) throw new ValidationError('Only the server’s administrator can do that.', 403); };
+  /** Can this person see this company? Only companies of their own firm, and then as their role allows. */
+  const canSeeCo = (user, cid) => { const c = reg.get(cid); return !!(c && user && c.firmId === user.firmId && auth.canSee(user, cid)); };
+  /** AI costs the server's owner money, so each firm uses it only when an administrator allows it. */
+  const firmAi = cid => { const c = reg.get(cid); const f = c && auth.firm(c.firmId); return !!(f && f.ai); };
+  const needFirmAi = cid => {
+    if (!firmAi(cid)) throw new ValidationError('AI suggestions aren’t turned on for your firm. Ask the server’s administrator.', 403);
+    const f = auth.firm(reg.get(cid).firmId);
+    // Firms other than the administrators' each have a monthly limit, so one firm can't use the whole server's AI budget.
+    if (f.id !== auth.mainFirmId && ai.firmSpent(f.id) >= (f.aiCapUsd ?? 10)) throw new ValidationError(`Your firm’s AI limit for this month, $${Number(f.aiCapUsd ?? 10).toFixed(2)}, has been reached. The server’s administrator can raise it.`, 429);
+  };
+  const chargeFirm = (cid, usd) => { const c = reg.get(cid); if (c) ai.addFirmUsage(c.firmId, usd); };
   const notClient = u => { if (u.role === 'client') throw new ValidationError('Only your bookkeeper can do that.', 403); };
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
@@ -69,6 +83,7 @@ function createApp(opts) {
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       const save = patch => { const cur = ctx.store.get('receipts', q.rid); if (cur) { ctx.store.put('receipts', q.rid, { ...cur, ...patch }); ctx.bump(); } };
       if (r.status !== 'inbox') { if (r.readStatus === 'waiting' || r.readStatus === 'reading') save({ readStatus: 'off' }); return; }
+      if (!firmAi(q.cid)) { save({ readStatus: 'off', readError: 'AI isn’t turned on for this firm.' }); return; }
       // Each company gets up to 100 automatic reads a day, so one busy client can't use up everyone's AI budget.
       const aiKey = 'receipts-read:' + new Date().toISOString().slice(0, 10), readsToday = Number(ctx.store.getMeta(aiKey) || 0);
       if (!q.manual && readsToday >= 100) { save({ readStatus: 'off', readError: 'This company has had 100 receipts read today. The rest can be read from here.' }); return; }
@@ -77,7 +92,9 @@ function createApp(opts) {
       try {
         const f = ctx.store.getFile(r.fileId);
         if (!f) throw new ValidationError('The photo for this receipt is missing.');
-        const { draft } = await ai.read(ctx.store, company, { fileName: r.fileName, mediaType: f.mediaType, data: f.data.toString('base64') });
+        try { needFirmAi(q.cid); } catch (e) { save({ readStatus: 'off', readError: e.message }); return; }
+        const { draft, usd } = await ai.read(ctx.store, company, { fileName: r.fileName, mediaType: f.mediaType, data: f.data.toString('base64') });
+        chargeFirm(q.cid, usd);
         save({ readStatus: 'read', draft, readAt: Date.now() });
       } catch (e) {
         // Busy with another AI request: try again shortly.
@@ -107,8 +124,10 @@ function createApp(opts) {
     const line = `data: ${JSON.stringify(msg)}\n\n`;
     for (const res of clients) {
       const u = res.user && auth.byId(res.user.id);
-      if (!u || u.disabled) { res.end(); clients.delete(res); continue; }
-      if (msg.company && !auth.canSee(auth.publicUser(u), msg.company)) continue;
+      // A stream outlives its session (sign-out, inactivity, a suspended firm): end it then.
+      if (!u || u.disabled || auth.firmBlock(u) || !auth.sessionAlive(res.token)) { res.end(); clients.delete(res); continue; }
+      if (msg.firmId && u.firmId !== msg.firmId) continue;
+      if (msg.company && !canSeeCo(auth.publicUser(u), msg.company)) continue;
       res.write(line);
     }
   }
@@ -116,6 +135,7 @@ function createApp(opts) {
   const clientIp = req => (opts.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',').pop().trim()) || req.socket.remoteAddress || '';
   // Wrong passwords or codes from one address: after 20 in 15 minutes, that address waits.
   const ipFails = new Map();
+  const signupsByIp = new Map(); // address|day -> new firms signed up
   function ipCheck(ip) {
     const f = ipFails.get(ip);
     if (f && Date.now() - f.since < 15 * 60 * 1000 && f.count >= 20) throw new AuthError('Too many failed sign-ins from your network. Try again in 15 minutes.', 429);
@@ -204,17 +224,17 @@ function createApp(opts) {
     });
     let accounts = null;
     if (body.copyFrom) {
-      const src = reg.store(body.copyFrom);
+      const src = canSeeCo(user, body.copyFrom) && reg.store(body.copyFrom);
       if (!src) throw new ValidationError('The company to copy accounts from doesn’t exist.');
       accounts = src.list('accounts');
     }
-    const entry = reg.create(company.name);
+    const entry = reg.create(company.name, user ? user.firmId : auth.mainFirmId);
     const store = reg.store(entry.id);
     seedDefaults(store, { company, accounts });
     if (body.examples && company.orgType === 'business') loadExamples(store);
     if (body.code !== undefined && body.code !== '') { store.putSetting('companyCode', hashCode(body.code)); codeOpen.set(`${user.token}|${entry.id}`, Date.now() + CODE_TTL); }
     store.audit(user, 'create', { summary: `company created${body.copyFrom ? ' with a copied chart of accounts' : ''}${body.examples ? ', with example data' : ''}` });
-    broadcast({ companies: true });
+    broadcast({ companies: true, firmId: entry.firmId });
     return entry;
   }
 
@@ -381,7 +401,7 @@ function createApp(opts) {
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
     ['GET', /^\/api\/auth\/me$/, req => {
       const user = auth.userFor(req);
-      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode });
+      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode, signups: auth.signups !== 'off' && !auth.needsSetup() ? auth.signups : '' });
       const { token, ...u } = user;
       return { user: u, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.policy2fa };
     }],
@@ -394,9 +414,29 @@ function createApp(opts) {
         if (!crypto.timingSafeEqual(a, b)) { ipFail(ip); throw new AuthError('The setup code isn’t right. It’s the SETUP_CODE you chose when the server was set up.', 403); }
       }
       const u = auth.setup(body);
+      reg.adoptFirm(auth.mainFirmId);
       const { token } = await auth.login(u.username, body.password, { ip: clientIp(req) });
       res.setHeader('Set-Cookie', sessionCookie(token, req));
       return { ok: true, user: u };
+    }],
+    // A new firm signs itself up (only when an administrator allows sign-ups).
+    ['POST', /^\/api\/auth\/signup$/, async (req, m, res) => {
+      const body = await readJson(req);
+      const ip = clientIp(req);
+      ipCheck(ip);
+      const day = new Date().toISOString().slice(0, 10), k = `${ip}|${day}`;
+      if ((signupsByIp.get(k) || 0) >= 5) throw new AuthError('Too many sign-up attempts from your network today. Try again tomorrow.', 429);
+      signupsByIp.set(k, (signupsByIp.get(k) || 0) + 1); // every try counts, so sign-up can't be used to test which emails have accounts
+      let out;
+      try { out = auth.signup(body); } catch (e) {
+        ipFail(ip);
+        if (e.status === 409) throw new AuthError('That email can’t be used to sign up. If you already have an account, sign in instead.', 400);
+        throw e;
+      }
+      const { user: u, firm } = out;
+      if (signupsByIp.size > 5000) for (const key of signupsByIp.keys()) if (!key.endsWith(day)) signupsByIp.delete(key);
+      if (firm.status !== 'active') return { ok: true, pending: true };
+      return signIn(req, res, meta => auth.login(u.username, body.password, meta));
     }],
     ['POST', /^\/api\/auth\/login$/, async (req, m, res) => {
       const body = await readJson(req);
@@ -433,31 +473,85 @@ function createApp(opts) {
       auth.changeOwnPassword(user, body.current, body.password);
       return { ok: true };
     }],
-    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); return { users: auth.list(), idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa || 'off', forced2fa: auth.forced2fa }; }],
+    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); return { users: auth.list(user.firmId), idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa || 'off', forced2fa: auth.forced2fa, firm: auth.firm(user.firmId) }; }],
     ['POST', /^\/api\/users$/, async (req, m, res, user) => {
       ownerOnly(user);
       const b = await readJson(req);
-      const u = auth.addUser({ ...b, mustChange: !b.invite });
+      const mine = new Set(reg.list(user.firmId).map(c => c.id));
+      if ((Array.isArray(b.companies) ? b.companies : []).some(id => !mine.has(String(id)))) throw new ValidationError('That company doesn’t exist.', 404);
+      const u = auth.addUser({ ...b, mustChange: !b.invite, firmId: user.firmId, self: false });
       auth.log('user-added', { username: u.username, by: user.username, role: u.role });
       return { ok: true, user: u };
     }],
-    ['PUT', /^\/api\/users\/([^/]+)$/, async (req, m, res, user) => { ownerOnly(user); return { ok: true, user: auth.updateUser(decodeURIComponent(m[1]), await readJson(req), user) }; }],
+    ['PUT', /^\/api\/users\/([^/]+)$/, async (req, m, res, user) => {
+      ownerOnly(user);
+      const b = await readJson(req);
+      if (b.companies !== undefined) { const mine = new Set(reg.list(user.firmId).map(c => c.id)); if ((Array.isArray(b.companies) ? b.companies : []).some(id => !mine.has(String(id)))) throw new ValidationError('That company doesn’t exist.', 404); }
+      return { ok: true, user: auth.updateUser(decodeURIComponent(m[1]), b, user) };
+    }],
     ['POST', /^\/api\/users\/([^/]+)\/link$/, (req, m, res, user) => {
       ownerOnly(user);
-      const out = auth.issueLink(decodeURIComponent(m[1]));
+      const out = auth.issueLink(decodeURIComponent(m[1]), user);
       auth.log(out.kind === 'invite' ? 'invite-link' : 'reset-link', { username: auth.byId(decodeURIComponent(m[1])).username, by: user.username });
       return { ok: true, ...out };
     }],
     ['PUT', /^\/api\/security$/, async (req, m, res, user) => {
-      ownerOnly(user);
+      adminOnly(user);
       const b = await readJson(req);
       if (b.idleMinutes !== undefined) auth.setIdleMinutes(b.idleMinutes);
       if (b.require2fa !== undefined) auth.setRequire2fa(b.require2fa);
       auth.log('security-changed', { by: user.username, ...b });
       return { ok: true, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa };
     }],
-    ['GET', /^\/api\/security\/log$/, (req, m, res, user) => { ownerOnly(user); return { log: auth.readLog(1000) }; }],
-    ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list().filter(c => auth.canSee(user, c.id)).map(summary), provinces: PROVINCES })],
+    ['GET', /^\/api\/security\/log$/, (req, m, res, user) => {
+      ownerOnly(user);
+      // A firm sees its own people's sign-ins; the server's administrators see everything.
+      if (user.platformAdmin) return { log: auth.readLog(1000) };
+      const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
+      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings']);
+      return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
+    }],
+    // The signed-in person's firm: owners can rename it.
+    ['GET', /^\/api\/firm$/, (req, m, res, user) => ({ firm: auth.firm(user.firmId) })],
+    ['PUT', /^\/api\/firm$/, async (req, m, res, user) => {
+      ownerOnly(user);
+      const b = await readJson(req);
+      return { ok: true, firm: auth.updateFirm(user.firmId, { name: b.name }, user) };
+    }],
+    // Firms on this server (administrators): approve sign-ups, suspend, allow AI, and whether new firms can sign up.
+    ['GET', /^\/api\/firms$/, (req, m, res, user) => {
+      adminOnly(user);
+      const firms = auth.data.firms.map(f => {
+        const people = auth.firmUsers(f.id), owner = people.find(u => u.role === 'owner');
+        return { ...f, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
+          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId };
+      });
+      return { firms, signups: auth.signups, myFirm: user.firmId };
+    }],
+    ['PUT', /^\/api\/firms\/settings$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const b = await readJson(req);
+      auth.setSignups(b.signups);
+      auth.log('security-changed', { by: user.username, signups: b.signups });
+      return { ok: true, signups: auth.signups };
+    }],
+    ['PUT', /^\/api\/firms\/([^/]+)$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const b = await readJson(req);
+      const patch = {};
+      for (const k of ['status', 'name', 'ai', 'aiCapUsd']) if (b[k] !== undefined) patch[k] = b[k];
+      const f = auth.updateFirm(decodeURIComponent(m[1]), patch, user);
+      broadcast({ companies: true, firmId: f.id });
+      return { ok: true, firm: f };
+    }],
+    ['DELETE', /^\/api\/firms\/([^/]+)$/, (req, m, res, user) => {
+      adminOnly(user);
+      const id = decodeURIComponent(m[1]);
+      auth.deleteFirm(id, user, reg.list(id).length);
+      return { ok: true };
+    }],
+    ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list(user.firmId).filter(c => canSeeCo(user, c.id)).map(summary), provinces: PROVINCES,
+      ...(user.platformAdmin ? { pendingFirms: auth.data.firms.filter(f => f.status === 'pending').length } : {}) })],
     ['POST', /^\/api\/companies$/, async (req, m, res, user) => {
       ownerOnly(user);
       const entry = createCompany(await readJson(req), user);
@@ -466,25 +560,25 @@ function createApp(opts) {
     ['PUT', /^\/api\/companies\/([^/]+)$/, async (req, m, res, user) => {
       const body = await readJson(req);
       const id = decodeURIComponent(m[1]);
-      if (!reg.get(id) || !auth.canSee(user, id)) throw new ValidationError('That company doesn’t exist.', 404);
+      if (!canSeeCo(user, id)) throw new ValidationError('That company doesn’t exist.', 404);
       if (body.archived !== undefined) ownerOnly(user);
       const patch = {};
       if (body.archived !== undefined) patch.archived = !!body.archived;
       if (body.opened) patch.lastOpened = Date.now();
       reg.update(id, patch);
-      if (patch.archived !== undefined) broadcast({ companies: true });
+      if (patch.archived !== undefined) broadcast({ companies: true, firmId: reg.get(id).firmId });
       return { ok: true, company: summary(reg.get(id)) };
     }],
     ['GET', /^\/api\/backups$/, (req, m, res, user) => {
       if (user.role === 'client') return { enabled: true, hidden: true };
       const st = backups.status();
-      if (user.role === 'owner') return st;
-      // Staff see whether backups are working, not where they're kept.
-      return { enabled: st.enabled, lastRun: st.lastRun, lastCount: st.lastCount, lastError: st.lastError ? 'The latest backup had a problem. An owner can see the details.' : '', offsite: st.offsite ? { lastRun: st.offsite.lastRun, where: 'off-site storage' } : null, limited: true };
+      if (user.role === 'owner' && user.platformAdmin) return st;
+      // Everyone else sees whether backups are working, not where they're kept or how many companies the server has.
+      return { enabled: st.enabled, lastRun: st.lastRun, lastError: st.lastError ? 'The latest backup had a problem. The server’s administrator can see the details.' : '', limited: true };
     }],
-    ['PUT', /^\/api\/backups$/, async (req, m, res, user) => { ownerOnly(user); return backups.update(await readJson(req)); }],
+    ['PUT', /^\/api\/backups$/, async (req, m, res, user) => { adminOnly(user); return backups.update(await readJson(req)); }],
     ['POST', /^\/api\/backups\/run$/, async (req, m, res, user) => {
-      ownerOnly(user);
+      adminOnly(user);
       const r = backups.run();
       if (!r.ok) throw new ValidationError(r.error, 409);
       if (r.upload) { const up = await r.upload; delete r.upload; if (up.lastError) throw new ValidationError(up.lastError, 502); }
@@ -501,9 +595,13 @@ function createApp(opts) {
       try { spawn(cmd, args, { stdio: 'ignore', detached: true }).unref(); } catch { /* shown in the UI instead */ }
       return { ok: true, path: dir };
     }],
-    ['GET', /^\/api\/ai$/, (req, m, res, user) => (user.role === 'owner' ? ai.status(true) : { configured: ai.status().configured })],
+    ['GET', /^\/api\/ai$/, (req, m, res, user) => {
+      const f = auth.firm(user.firmId), allowed = !!(f && f.ai);
+      if (user.role === 'owner' && user.platformAdmin) return { ...ai.status(true), firmAllowed: allowed, admin: true };
+      return { configured: ai.status().configured && allowed, firmAllowed: allowed };
+    }],
     ['PUT', /^\/api\/ai$/, async (req, m, res, user) => {
-      ownerOnly(user);
+      adminOnly(user);
       const body = await readJson(req);
       const st = ai.update(body);
       auth.log('ai-settings', { username: user.username, ip: clientIp(req), change: body.apiKey !== undefined ? (body.apiKey ? 'API key changed' : 'API key removed') : 'settings changed' });
@@ -511,7 +609,7 @@ function createApp(opts) {
     }],
     ['GET', /^\/api\/events$/, (req, m, res, user) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-      res.user = user;
+      res.user = user; res.token = user.token;
       res.write(`retry: 3000\ndata: ${JSON.stringify({ hello: true })}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
@@ -548,7 +646,7 @@ function createApp(opts) {
         ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'company', summary: 'company settings', before, after: company });
       });
       reg.update(ctx.id, { name: company.name });
-      broadcast({ companies: true });
+      broadcast({ companies: true, firmId: (reg.get(ctx.id) || {}).firmId });
       return { ok: true, rev: ctx.bump() };
     }],
     // ---------- email from the company's own mailbox ----------
@@ -557,6 +655,7 @@ function createApp(opts) {
       return { ...mail.publicMail(m), sentToday: Number(ctx.store.getMeta('mail-sent:' + new Date().toISOString().slice(0, 10)) || 0) };
     }],
     ['PUT', /^\/mail$/, async (ctx, req) => {
+      notClient(ctx.user);
       const body = (await readJson(req)) || {};
       const before = ctx.store.getSetting('mail');
       if (body.remove) {
@@ -699,10 +798,12 @@ function createApp(opts) {
     // AI suggestions for bank lines waiting for review. Suggestions are saved on each line; nothing is added to the books.
     ['POST', /^\/ai\/suggest$/, async (ctx, req) => {
       notClient(ctx.user); // AI costs money: only the bookkeeper's team uses it
+      needFirmAi(ctx.id);
       const body = await readJson(req);
       if (!Array.isArray(body.ids) || !body.ids.length) throw new ValidationError('Choose the bank lines to suggest categories for.');
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       const { suggestions, usd } = await ai.suggest(ctx.store, company, body.ids.map(String));
+      chargeFirm(ctx.id, usd);
       const n = Object.keys(suggestions).length;
       if (!n) return { ok: true, count: 0, usd, rev: ctx.rev };
       ctx.store.transaction(() => {
@@ -728,7 +829,8 @@ function createApp(opts) {
       if (!mediaType) throw new ValidationError('Choose a PDF or a photo (JPEG, PNG or WebP).');
       const id = crypto.randomUUID(), fileId = crypto.randomUUID();
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
-      const canRead = ai.status().configured && company.ai;
+      let canRead = ai.status().configured && company.ai && firmAi(ctx.id);
+      try { if (canRead) needFirmAi(ctx.id); } catch { canRead = false; }
       const fileName = String(body.fileName || 'receipt').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').slice(0, 120);
       const rec = { fileId, fileName, mediaType, size: data.length, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now(),
         readStatus: canRead ? 'waiting' : 'off', readError: '', status: 'inbox', note: String(body.note || '').slice(0, 500), entryId: '', docId: '' };
@@ -821,6 +923,7 @@ function createApp(opts) {
       const r = ctx.store.get('receipts', m[1]);
       if (!r) throw new ValidationError('That receipt isn’t here any more.', 404);
       if (r.status !== 'inbox') throw new ValidationError('Only receipts waiting for review are read.', 409);
+      needFirmAi(ctx.id);
       ai.precheck({ ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) });
       ctx.store.put('receipts', r.id, { ...r, readStatus: 'waiting', readError: '' });
       queueRead(ctx.id, r.id, true);
@@ -829,10 +932,12 @@ function createApp(opts) {
     // Read a receipt or bill with AI and return a draft. Nothing is saved; the file isn't kept.
     ['POST', /^\/ai\/read$/, async (ctx, req) => {
       notClient(ctx.user);
+      needFirmAi(ctx.id);
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       ai.precheck(company); // before reading a large upload
       const body = (await readJson(req, 15 * 1024 * 1024)) || {};
       const out = await ai.read(ctx.store, company, body);
+      chargeFirm(ctx.id, out.usd);
       ctx.store.audit(ctx.user, 'ai', { summary: `AI read ${String(body.fileName || 'a document').slice(0, 80)}` });
       return { ok: true, ...out };
     }],
@@ -867,7 +972,7 @@ function createApp(opts) {
         });
         ctx.store.audit(ctx.user, 'import', { summary: `imported from ${String(body.source || 'another program').slice(0, 60)}: ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')}` });
       });
-      broadcast({ companies: true });
+      broadcast({ companies: true, firmId: (reg.get(ctx.id) || {}).firmId });
       return { ok: true, rev: ctx.bump(), counts };
     }],
     ['POST', /^\/examples$/, ctx => {
@@ -916,7 +1021,7 @@ function createApp(opts) {
       });
       ctx.store.audit(ctx.user, 'restore', { summary: `restored a backup exported ${String(body.exportedAt || '').slice(0, 10) || 'on an unknown date'}` });
       reg.update(ctx.id, { name: company.name });
-      broadcast({ companies: true });
+      broadcast({ companies: true, firmId: (reg.get(ctx.id) || {}).firmId });
       return { ok: true, rev: ctx.bump(), skippedReceipts };
     }],
     // Audit log for this company (owners and staff).
@@ -943,7 +1048,7 @@ function createApp(opts) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
         // Everything except signing in needs a signed-in user.
         let user = null;
-        if (!/^\/api\/(health|auth\/(me|setup|login|login\/code|logout|link|link\/accept))$/.test(url.pathname)) {
+        if (!/^\/api\/(health|auth\/(me|setup|signup|login|login\/code|logout|link|link\/accept))$/.test(url.pathname)) {
           user = auth.userFor(req);
           if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup() });
           if (user.mustChange && !['/api/auth/password', '/api/auth/prefs', '/api/events'].includes(url.pathname)) throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
@@ -952,7 +1057,12 @@ function createApp(opts) {
         const cm = url.pathname.match(/^\/api\/c\/([^/]+)(\/.*)$/);
         if (cm) {
           const cid = decodeURIComponent(cm[1]);
-          if (!auth.canSee(user, cid)) throw new ValidationError('You don’t have access to that company.', 403);
+          if (!canSeeCo(user, cid)) {
+            const c = reg.get(cid);
+            // Another firm's company is treated as not existing, so nobody can learn what other firms have.
+            if (!c || c.firmId !== user.firmId) throw new ValidationError('That company doesn’t exist.', 404);
+            throw new ValidationError('You don’t have access to that company.', 403);
+          }
           if (user.readOnly && req.method !== 'GET' && cm[2] !== '/code/check') throw new ValidationError('Your account is view only, so you can’t make changes.', 403);
           const ctx = ctxFor(cid);
           ctx.user = user;
@@ -983,7 +1093,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}) });
     }
   });
 

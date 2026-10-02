@@ -49,13 +49,13 @@ class AI {
   precheck(company) {
     if (!this.key()) throw new ValidationError('AI suggestions aren’t set up yet. An owner adds the API key in Settings.', 409);
     if (!company.ai) throw new ValidationError('AI suggestions are turned off for this company. Turn them on in Settings.', 409);
-    if (this.spent() + this.reserved >= this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} has been reached. An owner can raise it in Settings.`, 429);
+    if (this.spent() + this.reserved >= this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} has been reached. The server’s administrator can raise it in Settings.`, 429);
     if (this.inflight >= MAX_INFLIGHT) throw busyError();
   }
   /** Hold back an estimate of a call's cost so parallel requests can't run past the monthly limit. */
   async reserve(model, inTokens, outTokens, fn) {
     const p = MODELS[model], est = (inTokens * p.in + outTokens * p.out) / 1e6;
-    if (this.spent() + this.reserved + est > this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} would be passed. An owner can raise it in Settings.`, 429);
+    if (this.spent() + this.reserved + est > this.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${this.settings.capUsd.toFixed(2)} would be passed. The server’s administrator can raise it in Settings.`, 429);
     if (this.inflight >= MAX_INFLIGHT) throw busyError();
     this.inflight++; this.reserved += est;
     try { return await fn(); } finally { this.inflight--; this.reserved = Math.max(0, this.reserved - est); }
@@ -63,6 +63,15 @@ class AI {
   key() { return this.envKey || this.settings.apiKey || ''; }
   month() { return new Date().toISOString().slice(0, 7); }
   spent() { return (this.settings.usage[this.month()] || { usd: 0 }).usd; }
+  /** What one firm has spent on AI this month (each firm other than the administrators' has its own limit). */
+  firmSpent(firmId) { return ((this.settings.firmUsage || {})[this.month()] || {})[firmId] || 0; }
+  addFirmUsage(firmId, usd) {
+    if (!firmId || !(usd > 0)) return;
+    const m = this.month(), fu = this.settings.firmUsage || (this.settings.firmUsage = {});
+    fu[m] = fu[m] || {}; fu[m][firmId] = (fu[m][firmId] || 0) + usd;
+    for (const k of Object.keys(fu).sort().slice(0, -12)) delete fu[k];
+    this.save();
+  }
   save() {
     fs.writeFileSync(this.file, JSON.stringify(this.settings, null, 2), { mode: 0o600 });
     try { fs.chmodSync(this.file, 0o600); } catch { /* Windows */ }

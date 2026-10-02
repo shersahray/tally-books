@@ -89,7 +89,7 @@
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
-    const demoUser = { id: 'u_demo', name: 'Demo user', username: 'demo', role: 'owner', companies: [], disabled: false, lastLogin: Date.now(), mustChange: false };
+    const demoUser = { id: 'u_demo', name: 'Demo user', username: 'demo', role: 'owner', companies: [], disabled: false, lastLogin: Date.now(), mustChange: false, platformAdmin: true, firmName: 'Demo firm', firmId: 'f_demo' };
     if (path === '/api/auth/me') return { user: demoUser, idleMinutes: 480 };
     if (path === '/api/auth/logout') return { ok: true };
     if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480 };

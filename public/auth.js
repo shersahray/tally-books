@@ -48,14 +48,24 @@ function renderLock(mode,opt=''){
   if(mode==='signin')html=lockCard('Sign in',esc(msg||'Sign in to see your books.'),`
       ${fld('lgUser','Username or email',`<input type="text" id="lgUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('lgPass','Password',`<input type="password" id="lgPass" autocomplete="current-password">`,true)}`,'Sign in',
-      '<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>');
+      `<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>${SIGNUPS?'<button type="button" class="btn ghost block" data-locksignup>New firm? Create an account</button>':''}`);
   else if(mode==='setup')html=lockCard('Welcome to Tally Books','Create the owner account. You’ll use it to sign in, add staff and clients, and manage security. Only people with an account can see the books.',`
       ${opt&&opt.setupCode?fld('suCode','Setup code',`<input type="text" id="suCode" autocomplete="off" autocapitalize="none" spellcheck="false"><span class="hint">The setup code chosen when this server was installed.</span>`,true):''}
+      ${fld('suFirm','Your firm’s name',`<input type="text" id="suFirm" autocomplete="organization" placeholder="e.g. Sher Bookkeeping">`,true)}
       ${fld('suName','Your name',`<input type="text" id="suName" autocomplete="name">`,true)}
       ${fld('suUser','Username or email',`<input type="text" id="suUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('suPass','Password',`<input type="password" id="suPass" autocomplete="new-password">`,true)}
       ${fld('suPass2','Type the password again',`<input type="password" id="suPass2" autocomplete="new-password">`,true)}
       <div class="hint muted" style="font-size:12.5px">${pwHint} Write it down somewhere safe: only an owner can reset a password.</div>`,'Create owner account');
+  else if(mode==='signup')html=lockCard('Create your firm’s account','For bookkeeping and accounting firms. You’ll be the owner: you add your staff and your clients’ companies. Other firms on this server never see your books.',`
+      ${fld('sgFirm','Firm name',`<input type="text" id="sgFirm" autocomplete="organization">`,true)}
+      ${fld('sgName','Your name',`<input type="text" id="sgName" autocomplete="name">`,true)}
+      ${fld('sgUser','Your email (your username)',`<input type="email" id="sgUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
+      ${fld('sgPass','Password',`<input type="password" id="sgPass" autocomplete="new-password">`,true)}
+      ${fld('sgPass2','Type the password again',`<input type="password" id="sgPass2" autocomplete="new-password">`,true)}
+      <div class="hint muted" style="font-size:12.5px"><span>${pwHint}</span>${SIGNUPS==='approval'?' <span>New firms are approved by the server’s administrator before they can sign in.</span>':''}</div>`,'Create firm account',
+      '<button type="button" class="btn ghost block" data-lockback>Back to sign in</button>');
+  else if(mode==='pending')html=lockCard('Thanks! Your firm is waiting for approval','The server’s administrator approves new firms. Once your firm is approved, sign in with the email and password you just chose.','','','<button type="button" class="btn primary block" data-lockback>Back to sign in</button>');
   else if(mode==='code')html=lockCard('Enter your code','Open your authenticator app (Microsoft Authenticator, Google Authenticator, 1Password…) and enter the 6-digit code for Tally Books.',`
       ${fld('lgCode','Code',`<input type="text" id="lgCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456" style="font-size:20px;letter-spacing:.2em;text-align:center">`,true)}
       <div class="muted" style="font-size:12.5px">Lost your phone? Enter one of your recovery codes instead (it looks like <span class="mono">a1b2c-3d4e5</span>).</div>`,'Continue',
@@ -72,6 +82,8 @@ function renderLock(mode,opt=''){
   setTimeout(()=>f.querySelector('input')?.focus(),30);
   const lo=$('[data-lockout]',f);if(lo)lo.onclick=()=>signOut();
   const bk=$('[data-lockback]',f);if(bk)bk.onclick=()=>renderLock('signin');
+  const sg=$('[data-locksignup]',f);if(sg)sg.onclick=()=>renderLock('signup');
+  if(mode==='pending')return;
   if(mode==='link')return linkScreen(f);
   if(mode==='enroll')return enrollScreen(f,opt);
   f.onsubmit=async e=>{e.preventDefault();err('');btn.disabled=true;
@@ -85,8 +97,14 @@ function renderLock(mode,opt=''){
         await afterSignIn();
       }else if(mode==='setup'){
         if($('#suPass').value!==$('#suPass2').value)throw new Error('The two passwords don’t match.');
-        await api('POST','/api/auth/setup',{name:$('#suName').value,username:$('#suUser').value,password:$('#suPass').value,setupCode:($('#suCode')||{}).value});
+        await api('POST','/api/auth/setup',{firmName:$('#suFirm').value,name:$('#suName').value,username:$('#suUser').value,password:$('#suPass').value,setupCode:($('#suCode')||{}).value});
         await afterSignIn();toast('Owner account created');
+      }else if(mode==='signup'){
+        if($('#sgPass').value!==$('#sgPass2').value)throw new Error('The two passwords don’t match.');
+        const r=await api('POST','/api/auth/signup',{firmName:$('#sgFirm').value,name:$('#sgName').value,username:$('#sgUser').value,password:$('#sgPass').value});
+        if(r.pending)return renderLock('pending');
+        if(r.needCode)return renderLock('code',{ticket:r.ticket});
+        await afterSignIn();toast('Your firm’s account is ready');
       }else{
         if($('#npPass').value!==$('#npPass2').value)throw new Error('The two passwords don’t match.');
         await api('POST','/api/auth/password',{current:$('#npCur').value,password:$('#npPass').value});
@@ -178,7 +196,7 @@ async function authStart(){
   if(/[#&]link=/.test(location.hash))return requireSignIn('link');
   let me;
   try{me=await api('GET','/api/auth/me')}
-  catch(e){if(e.status===401)return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode}):requireSignIn('signin');throw e}
+  catch(e){if(e.status===401){SIGNUPS=(e.info&&e.info.signups)||'';return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode}):requireSignIn('signin')}throw e}
   REQ2FA=me.require2fa||'off';ME=me.user;IDLE_MIN=me.idleMinutes;
   if(me.user.theme&&me.user.theme!==TallyTheme.get())TallyTheme.set(me.user.theme,false);
   if(syncAccountLang(me.user))return new Promise(()=>{});
@@ -202,10 +220,10 @@ setInterval(async()=>{
 function renderUserBox(){
   const box=$('#userBox');if(!box)return;
   if(!ME){box.innerHTML='';return}
-  box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span>${roleLabel(ME)}</span></div>
-    <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}<button class="link" data-signout>Sign out</button></div>
+  box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span><span>${roleLabel(ME)}</span>${ME.firmName&&ME.role!=='client'?` · <span translate="no">${esc(ME.firmName)}</span>`:''}</span></div>
+    <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}${ME.platformAdmin?'<button class="link" data-firms>Firms</button>':''}<button class="link" data-signout>Sign out</button></div>
     <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;align-items:flex-start">${langSwitch()}${TallyTheme.html()}</div>`;
-  box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))myAccountForm();if(b.hasAttribute('data-users'))showUsers()};
+  box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))myAccountForm();if(b.hasAttribute('data-users'))showUsers();if(b.hasAttribute('data-firms'))showFirms()};
 }
 function passwordPrompt(title,msg,ok){
   return new Promise(res=>{
@@ -238,7 +256,7 @@ function myAccountForm(){
 }
 
 /* ---------- Users & security (owners) ---------- */
-let USERS=null,SIGNINS=null;
+let USERS=null,SIGNINS=null,SIGNUPS='';
 async function showUsers(){S.view='users';renderMain();try{USERS=await api('GET','/api/users');IDLE_MIN=USERS.idleMinutes}catch(e){toast(e.message,true)}if(S.view==='users')renderMain()}
 function vUsers(){
   if(!ME||ME.role!=='owner')return head('Users & security','')+'<div class="panel"><div class="empty"><b>Owners only</b>Ask an owner to change users or security settings.</div></div>';
@@ -247,12 +265,15 @@ function vUsers(){
   const access=u=>u.role==='owner'||(u.role==='staff'&&!u.companies.length)?'All companies':u.companies.map(coName).join(', ');
   const status=u=>u.disabled?'<span class="pill overdue">Turned off</span>':u.invited?`<span class="pill partial">${u.linkPending==='invite'?'Invited':'Invite expired'}</span>`:u.mustChange?'<span class="pill partial">Must set password</span>':u.mustEnroll?'<span class="pill partial">Must set up two-step</span>':'<span class="pill paid">Active</span>';
   const rank={off:0,owners:1,everyone:2},forced=USERS.forced2fa||'off',eff=rank[USERS.require2fa]>=rank[forced]?USERS.require2fa:forced;
+  const firm=USERS.firm||{};
   return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Users & security','Who can sign in, what they can see, and how sign-in is protected',`<button class="btn" data-signins>Sign-in activity</button><button class="btn primary" data-useradd>+ Add user</button>`)+
-  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Can see</th><th>Two-step</th><th>Last sign-in</th><th>Status</th></tr></thead><tbody>${USERS.users.map(u=>`<tr class="click" data-useredit="${u.id}"><td><b>${esc(u.name)}</b>${u.id===ME.id?' <span class="pill paid">You</span>':''}</td><td class="mono">${esc(u.username)}</td><td>${roleLabel(u)}</td><td class="trunc">${esc(access(u))}</td><td>${u.twoStep?'On':'<span class="muted">Off</span>'}</td><td class="muted">${u.lastLogin?fmtWhen(u.lastLogin):'Never'}</td><td>${status(u)}</td></tr>`).join('')}</tbody></table></div></div>
+  `<div class="panel" style="margin-bottom:16px"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span class="flabel" style="margin:0">Firm</span><b translate="no">${esc(firm.name||ME.firmName||'')}</b><button class="btn sm" data-firmname>Rename</button><span class="muted" style="font-size:13px">Everyone below belongs to this firm. Other firms on this server never see your people or companies.</span></div></div>`+
+  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Can see</th><th>Two-step</th><th>Last sign-in</th><th>Status</th></tr></thead><tbody>${USERS.users.map(u=>`<tr class="click" data-useredit="${u.id}"><td><b>${esc(u.name)}</b>${u.id===ME.id?' <span class="pill paid">You</span>':''}${u.platformAdmin?' <span class="pill quiet">Server administrator</span>':''}</td><td class="mono">${esc(u.username)}</td><td>${roleLabel(u)}</td><td class="trunc">${esc(access(u))}</td><td>${u.twoStep?'On':'<span class="muted">Off</span>'}</td><td class="muted">${u.lastLogin?fmtWhen(u.lastLogin):'Never'}</td><td>${status(u)}</td></tr>`).join('')}</tbody></table></div></div>
   <div class="panel" style="max-width:760px;margin-top:16px"><h3>Security</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
+    ${ME.platformAdmin?'':'<div class="muted" style="font-size:13px">These are set for the whole server by its administrator.</div>'}
     <div class="fields">
-    <div class="field"><label for="sec2fa">Require two-step sign-in for</label><select id="sec2fa">${[['off','No one (each person chooses)'],['owners','Owners'],['everyone','Everyone']].map(([k,v])=>`<option value="${k}" ${eff===k?'selected':''} ${rank[k]<rank[forced]?'disabled':''}>${v}</option>`).join('')}</select>${forced!=='off'?`<span class="hint">This server always requires it for ${forced==='everyone'?'everyone':'owners'}.</span>`:''}</div>
-    <div class="field"><label for="secIdle">Lock the app after no activity for</label><select id="secIdle">${[5,10,15,30,60,120,240,480].map(m=>`<option value="${m}" ${IDLE_MIN===m?'selected':''}>${m<60?m+' minutes':m/60+' hour'+(m===60?'':'s')}</option>`).join('')}</select></div>
+    <div class="field"><label for="sec2fa">Require two-step sign-in for</label><select id="sec2fa" ${ME.platformAdmin?'':'disabled'}>${[['off','No one (each person chooses)'],['owners','Owners'],['everyone','Everyone']].map(([k,v])=>`<option value="${k}" ${eff===k?'selected':''} ${rank[k]<rank[forced]?'disabled':''}>${v}</option>`).join('')}</select>${forced!=='off'?`<span class="hint">This server always requires it for ${forced==='everyone'?'everyone':'owners'}.</span>`:''}</div>
+    <div class="field"><label for="secIdle">Lock the app after no activity for</label><select id="secIdle" ${ME.platformAdmin?'':'disabled'}>${[5,10,15,30,60,120,240,480].map(m=>`<option value="${m}" ${IDLE_MIN===m?'selected':''}>${m<60?m+' minutes':m/60+' hour'+(m===60?'':'s')}</option>`).join('')}</select></div>
     </div>
     <div class="muted" style="font-size:13px">Also always on: passwords are stored only as secure hashes, five wrong tries lock an account for 15 minutes, too many failures from one network are blocked for 15 minutes, and every sign-in lasts at most 12 hours.</div>
   </div></div>`;
@@ -262,6 +283,7 @@ function bindUsers(m){
     const t=e.target.closest('button,tr.click');if(!t)return;const d=t.dataset;
     if(t.hasAttribute('data-back-co'))return showCompanies();
     if(t.hasAttribute('data-useradd'))return userForm(null);
+    if(t.hasAttribute('data-firmname'))return firmNameForm();
     if(t.hasAttribute('data-signins'))return showSignins();
     if(t.hasAttribute('data-back-users'))return showUsers();
     if(d.useredit)return userForm(USERS.users.find(u=>u.id===d.useredit));
@@ -293,6 +315,7 @@ function userForm(u){
     ${fld('usRole','Role',`<select id="usRole"><option value="client" ${role0==='client'?'selected':''}>Client: sees only their own company</option><option value="staff" ${role0==='staff'?'selected':''}>Staff: works in the companies below</option><option value="owner" ${role0==='owner'?'selected':''}>Owner: everything, including users and security</option></select>`,true)}
   </div>
   <label class="check" data-ro><input type="checkbox" id="usRO" ${u?(u.readOnly?'checked':''):'checked'}> View only: can see reports and transactions but can’t change anything</label>
+  ${ME.platformAdmin&&u?`<label class="check" data-adm><input type="checkbox" id="usAdm" ${u.platformAdmin?'checked':''}> Server administrator: manages firms, backups, the AI key and security for the whole server</label>`:''}
   <div data-cos><div class="flabel" style="margin-bottom:6px" data-coslabel>Companies this person can see</div>
     <label class="check" data-allrow><input type="checkbox" id="usAll" ${u&&u.role==='staff'&&!u.companies.length?'checked':''}> All companies, including new ones</label>
     <div data-colist style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 16px;margin-top:6px">${cos.map(c=>`<label class="check"><input type="checkbox" data-usco="${c.id}" ${sel.has(c.id)?'checked':''}> ${esc(c.name)}${c.archived?' <span class="muted">(archived)</span>':''}</label>`).join('')}</div></div>
@@ -302,7 +325,7 @@ function userForm(u){
    :`<div class="muted" style="font-size:13px">You’ll get an invitation link to send them. They choose their own password${REQ2FA!=='off'?' and set up two-step sign-in':''}.</div>`}`,
   `${u&&u.id!==ME.id?`<button type="button" class="btn ${u.disabled?'':'danger'} left" data-usdis>${u.disabled?'Turn account back on':'Turn account off'}</button>`:'<span class="left"></span>'}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${u?'Save':'Add and get invitation link'}</button>`);
   const role=$('#usRole',f),all=$('#usAll',f);
-  const sync=()=>{const r=role.value;$('[data-cos]',f).hidden=r==='owner';$('[data-ro]',f).hidden=r==='owner';$('[data-allrow]',f).hidden=r!=='staff';$('[data-colist]',f).hidden=r==='staff'&&all.checked;$('[data-coslabel]',f).textContent=r==='client'?'Their company (or companies)':'Companies this person can see'};
+  const sync=()=>{const r=role.value;const adm=$('[data-adm]',f);if(adm)adm.hidden=r!=='owner';$('[data-cos]',f).hidden=r==='owner';$('[data-ro]',f).hidden=r==='owner';$('[data-allrow]',f).hidden=r!=='staff';$('[data-colist]',f).hidden=r==='staff'&&all.checked;$('[data-coslabel]',f).textContent=r==='client'?'Their company (or companies)':'Companies this person can see'};
   role.onchange=all.onchange=sync;sync();
   const dis=$('[data-usdis]',f);if(dis)dis.onclick=async()=>{try{await api('PUT','/api/users/'+u.id,{disabled:!u.disabled});closeModal();await showUsers();toast(u.disabled?`${u.name} can sign in again`:`${u.name} is signed out and can’t sign in`)}catch(ex){f.err(ex.message)}};
   const ln=$('[data-uslink]',f);if(ln)ln.onclick=async()=>{try{const r=await api('POST',`/api/users/${u.id}/link`,{});closeModal();await showUsers();showLink(u,r.token,r.kind)}catch(ex){f.err(ex.message)}};
@@ -313,6 +336,7 @@ function userForm(u){
     const companies=r==='owner'||(r==='staff'&&all.checked)?[]:$$('[data-usco]',f).filter(c=>c.checked).map(c=>c.dataset.usco);
     if(r!=='owner'&&!(r==='staff'&&all.checked)&&!companies.length)return f.err(r==='client'?'Pick the client’s company.':'Pick at least one company, or tick “All companies”.');
     const body={name:$('#usName',f).value,role:r,companies,readOnly:r!=='owner'&&$('#usRO',f).checked};
+    const adm=$('#usAdm',f);if(adm&&r==='owner'&&adm.checked!==!!u.platformAdmin)body.platformAdmin=adm.checked;
     try{
       if(u){await api('PUT','/api/users/'+u.id,body);closeModal();await showUsers();toast('Saved')}
       else{const x=await api('POST','/api/users',{...body,username:$('#usUser',f).value,invite:true});closeModal();await showUsers();showLink(x.user,x.user.link,'invite')}
@@ -326,4 +350,44 @@ function vSignins(){
   const bad=new Set(['login-failed','code-failed','locked']);
   return `<button class="btn ghost sm" data-back-users style="margin-bottom:8px">← Users &amp; security</button>`+head('Sign-in activity','Sign-ins, failed attempts and account changes, newest first')+
   `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>When</th><th>What</th><th>Who</th><th>Details</th></tr></thead><tbody>${!SIGNINS?emptyRow(4,'Loading…',''):SIGNINS.length?SIGNINS.map(e=>`<tr><td class="muted" style="white-space:nowrap">${fmtWhen(Date.parse(e.at))}</td><td class="${bad.has(e.event)?'neg':''}">${esc(SIGNIN_EVENT[e.event]||e.event)}</td><td class="mono">${esc(e.username||e.by||'')}</td><td class="muted trunc">${esc([e.by&&e.username?'by '+e.by:'',e.ip?'from '+e.ip:'',e.reason||'',e.role||'',e.changes?e.changes.join(', '):'',e.require2fa?'two-step: '+e.require2fa:'',e.idleMinutes?'lock after '+e.idleMinutes+' min':''].filter(Boolean).join(' · '))}</td></tr>`).join(''):emptyRow(4,'Nothing yet','')}</tbody></table></div></div>`;
+}
+
+/* ---------- the firm ---------- */
+function firmNameForm(){
+  const f=openModal('Firm name',`${fld('fmName','Firm name',`<input type="text" id="fmName" maxlength="120" value="${esc((USERS&&USERS.firm&&USERS.firm.name)||ME.firmName||'')}">`,true)}`,`<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`,'small');
+  f.onsubmit=async e=>{e.preventDefault();f.err('');try{const r=await api('PUT','/api/firm',{name:$('#fmName',f).value});ME.firmName=r.firm.name;renderUserBox();closeModal();await showUsers();toast('Firm name saved')}catch(ex){f.err(ex.message)}};
+}
+
+/* ---------- Firms on this server (the server's administrators) ---------- */
+let FIRMS=null;
+async function showFirms(){S.view='firms';FIRMS=null;renderMain();try{FIRMS=await api('GET','/api/firms')}catch(e){toast(e.message,true)}if(S.view==='firms')renderMain()}
+const FIRM_STATUS={active:['paid','Active'],pending:['partial','Waiting for approval'],suspended:['overdue','Suspended']};
+function vFirms(){
+  if(!ME||!ME.platformAdmin)return head('Firms','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Only the server’s administrator manages firms.</div></div>';
+  if(!FIRMS)return head('Firms','Loading…');
+  const list=FIRMS.firms.slice().sort((a,b)=>(a.status==='pending'?0:1)-(b.status==='pending'?0:1)||b.created-a.created);
+  const pending=list.filter(f=>f.status==='pending').length;
+  return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Firms','Bookkeeping firms using this server. Each firm sees only its own people and companies.')+
+  `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>New firms</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
+    <div class="field"><label for="fmSignups">Can new firms sign up from the sign-in screen?</label><select id="fmSignups">${[['off','No: only people you invite can sign in'],['approval','Yes, after I approve each one'],['open','Yes, straight away']].map(([k,v])=>`<option value="${k}" ${FIRMS.signups===k?'selected':''}>${v}</option>`).join('')}</select></div>
+    <div class="muted" style="font-size:13px">A firm that signs up gets its own owner account and starts with no companies. Firms don’t use AI suggestions until you turn them on, because AI is billed to your API key.</div>
+  </div></div>
+  ${pending?`<div class="banner"><span><b>${pending} firm${pending===1?' is':'s are'} waiting for approval.</b> Check who they are before approving.</span></div>`:''}
+  <div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Firm</th><th>Owner</th><th class="n">People</th><th class="n">Companies</th><th>Signed up</th><th>Last sign-in</th><th>AI</th><th>Status</th><th></th></tr></thead><tbody>${list.map(f=>{const st=FIRM_STATUS[f.status]||['quiet',f.status],mine=f.id===FIRMS.myFirm;
+    return `<tr><td><b translate="no">${esc(f.name)}</b>${mine?' <span class="pill paid">Your firm</span>':''}</td><td><span translate="no">${f.owner?esc(f.owner.name):'—'}</span><div class="muted mono" style="font-size:12px" translate="no">${f.owner?esc(f.owner.username):''}</div></td><td class="n">${f.users}</td><td class="n">${f.companies}</td><td class="muted">${fmtWhen(f.created)}</td><td class="muted">${f.lastLogin?fmtWhen(f.lastLogin):'Never'}</td>
+      <td style="white-space:nowrap"><label class="check"><input type="checkbox" data-firmai="${f.id}" ${f.ai?'checked':''} aria-label="AI suggestions"> On</label>${f.main?'<div class="muted" style="font-size:12px">Server limit</div>':`<div class="muted" style="font-size:12px;display:flex;gap:4px;align-items:center"><span translate="no">${money(f.aiSpentUsd||0)}</span> / $<input type="number" min="0" step="1" value="${f.aiCapUsd??10}" data-firmcap="${f.id}" aria-label="Monthly AI limit (US$)" style="width:64px;padding:2px 4px"></div>`}</td><td><span class="pill ${st[0]}">${st[1]}</span></td>
+      <td style="white-space:nowrap">${f.status==='pending'?`<button class="btn sm primary" data-firmset="${f.id}" data-to="active">Approve</button>`:''}${f.status==='suspended'?`<button class="btn sm" data-firmset="${f.id}" data-to="active">Reactivate</button>`:''}${f.status!=='suspended'&&!mine?` <button class="btn sm ${f.status==='pending'?'ghost':'danger'}" data-firmset="${f.id}" data-to="suspended">${f.status==='pending'?'Decline':'Suspend'}</button>`:''}${f.status==='suspended'&&!f.companies&&!mine?` <button class="btn sm ghost" data-firmdel="${f.id}">Remove</button>`:''}</td></tr>`}).join('')}</tbody></table></div></div>`;
+}
+function bindFirms(m){
+  m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
+    if(b.hasAttribute('data-back-co'))return showCompanies();
+    if(b.dataset.firmdel){const f=FIRMS.firms.find(x=>x.id===b.dataset.firmdel);if(!await confirmBox('Remove this firm?',`${f.name}: the firm and its ${f.users} account${f.users===1?'':'s'} are removed, and their emails can be used again. It has no companies, so no books are lost.`,'Remove'))return;
+      try{await api('DELETE','/api/firms/'+encodeURIComponent(f.id));await showFirms();toast(`${f.name} removed`)}catch(ex){toast(ex.message,true)}return}
+    const id=b.dataset.firmset;if(!id)return;const f=FIRMS.firms.find(x=>x.id===id),to=b.dataset.to;
+    if(to==='suspended'&&!await confirmBox(f.status==='pending'?'Decline this firm?':'Suspend this firm?',`${f.name}: ${f.status==='pending'?'they won’t be able to sign in.':'everyone in this firm is signed out and can’t sign in until you reactivate it. Their books are kept.'}`,f.status==='pending'?'Decline':'Suspend'))return;
+    try{await api('PUT','/api/firms/'+encodeURIComponent(id),{status:to});await showFirms();toast(to==='active'?(f.status==='pending'?`${f.name} is approved`:`${f.name} is active again`):`${f.name} can’t sign in`)}catch(ex){toast(ex.message,true)}};
+  m.onchange=async e=>{const t=e.target;
+    if(t.id==='fmSignups'){try{await api('PUT','/api/firms/settings',{signups:t.value});await showFirms();toast('Saved')}catch(ex){toast(ex.message,true)}return}
+    if(t.dataset.firmcap){try{await api('PUT','/api/firms/'+encodeURIComponent(t.dataset.firmcap),{aiCapUsd:+t.value});toast('Monthly AI limit saved')}catch(ex){toast(ex.message,true)}return}
+    if(t.dataset.firmai){try{await api('PUT','/api/firms/'+encodeURIComponent(t.dataset.firmai),{ai:t.checked});toast(t.checked?'AI suggestions turned on for this firm':'AI suggestions turned off for this firm')}catch(ex){t.checked=!t.checked;toast(ex.message,true)}}};
 }

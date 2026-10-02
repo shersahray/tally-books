@@ -115,8 +115,10 @@ class Auth {
   constructor(dataDir, opts = {}) {
     this.file = path.join(dataDir, 'users.json');
     this.logFile = path.join(dataDir, 'signins.log');
-    this.data = { version: 1, users: [], settings: { idleMinutes: 30, require2fa: 'off' } };
+    this.data = { version: 1, users: [], firms: [], settings: { idleMinutes: 30, require2fa: 'off', signups: 'off' } };
     try { const d = JSON.parse(fs.readFileSync(this.file, 'utf8')); this.data = { ...this.data, ...d, settings: { ...this.data.settings, ...(d.settings || {}) } }; } catch { /* first run */ }
+    if (!Array.isArray(this.data.firms)) this.data.firms = [];
+    this.adoptFirm();
     this.forced2fa = ['owners', 'everyone'].includes(opts.require2fa) ? opts.require2fa : 'off';
     this.sessions = new Map(); // token -> { userId, created, lastSeen }
     this.failures = new Map(); // username -> { count, until }
@@ -157,27 +159,131 @@ class Auth {
   }
 
   needsSetup() { return this.data.users.length === 0; }
+
+  /* ---------- firms ----------
+     Each firm has its own owners, staff, clients and companies, and never sees another firm's. The people who
+     set up the server are its administrators: they approve new firms and look after server-wide settings. */
+  /** Books from before firms existed: everyone becomes one firm, and its owners run the server. */
+  adoptFirm() {
+    if (!this.data.users.length || this.data.users.every(u => u.firmId)) return;
+    let f = this.data.firms[0];
+    if (!f) { f = this.newFirm('My firm', 'active', true); }
+    for (const u of this.data.users) if (!u.firmId) u.firmId = f.id;
+    if (!this.data.users.some(u => u.platformAdmin)) for (const u of this.data.users) if (u.role === 'owner' && u.firmId === f.id) u.platformAdmin = true;
+    this.save();
+  }
+  newFirm(name, status, ai) {
+    const f = { id: 'f_' + crypto.randomBytes(6).toString('hex'), name: String(name || '').trim().slice(0, 120) || 'My firm', status, ai: !!ai, aiCapUsd: 10, created: Date.now() };
+    this.data.firms.push(f);
+    return f;
+  }
+  /** The firm everything belonged to before firms existed (the first one). */
+  get mainFirmId() { return this.data.firms[0] ? this.data.firms[0].id : ''; }
+  firm(id) { return this.data.firms.find(f => f.id === id) || null; }
+  firmUsers(id) { return this.data.users.filter(u => u.firmId === id); }
+  get signups() { return ['approval', 'open'].includes(this.data.settings.signups) ? this.data.settings.signups : 'off'; }
+  setSignups(v) {
+    if (!['off', 'approval', 'open'].includes(v)) throw new AuthError('Choose off, approval or open.', 400);
+    this.data.settings.signups = v;
+    this.save();
+  }
+  /** A firm signs itself up: a new firm and its owner. Waits for an administrator's approval unless sign-ups are open. */
+  signup({ firmName, name, username, password }) {
+    if (this.signups === 'off') throw new AuthError('New firms can’t sign up on this server.', 403);
+    firmName = String(firmName || '').trim();
+    if (!firmName) throw new AuthError('Enter your firm’s name.', 400);
+    if (this.data.firms.filter(f => f.status === 'pending').length >= 100) throw new AuthError('Sign-ups are paused for now. Try again later.', 429);
+    const f = this.newFirm(firmName, this.signups === 'open' ? 'active' : 'pending', false);
+    try {
+      const u = this.addUser({ name, username, password, role: 'owner', firmId: f.id, self: true });
+      this.log('firm-signup', { username: u.username, firm: f.name, status: f.status });
+      return { user: u, firm: f };
+    } catch (e) {
+      this.data.firms = this.data.firms.filter(x => x.id !== f.id);
+      throw e;
+    }
+  }
+  /** An administrator changes a firm: approve or suspend it, rename it, allow AI. */
+  updateFirm(id, patch, actor) {
+    const f = this.firm(id);
+    if (!f) throw new AuthError('That firm doesn’t exist.', 404);
+    if (patch.status !== undefined) {
+      if (!['active', 'suspended'].includes(patch.status)) throw new AuthError('A firm can be active or suspended.', 400);
+      if (f.id === actor.firmId && patch.status !== 'active') throw new AuthError('You can’t suspend your own firm.', 409);
+      if (f.status === 'pending' && patch.status === 'active') f.approved = Date.now();
+      f.status = patch.status;
+      if (f.status !== 'active') for (const u of this.firmUsers(f.id)) this.endSessionsFor(u.id);
+    }
+    if (patch.name !== undefined) { const n = String(patch.name).trim().slice(0, 120); if (!n) throw new AuthError('Enter the firm’s name.', 400); f.name = n; }
+    if (patch.ai !== undefined) f.ai = !!patch.ai;
+    if (patch.aiCapUsd !== undefined) {
+      const c = Number(patch.aiCapUsd);
+      if (!Number.isFinite(c) || c < 0 || c > 10000) throw new AuthError('The monthly AI limit must be between $0 and $10,000.', 400);
+      f.aiCapUsd = Math.round(c * 100) / 100;
+    }
+    this.save();
+    this.log('firm-changed', { by: actor.username, firm: f.name, changes: Object.keys(patch) });
+    return f;
+  }
+  /** Remove a firm that never got going (waiting, declined or suspended, with no companies), and its people, so their usernames are free again. */
+  deleteFirm(id, actor, companyCount) {
+    const f = this.firm(id);
+    if (!f) throw new AuthError('That firm doesn’t exist.', 404);
+    if (f.id === actor.firmId) throw new AuthError('You can’t remove your own firm.', 409);
+    if (f.status === 'active') throw new AuthError('Suspend the firm before removing it.', 409);
+    if (companyCount) throw new AuthError('This firm has companies, so it can’t be removed. Their books are kept while it’s suspended.', 409);
+    for (const u of this.firmUsers(f.id)) this.endSessionsFor(u.id);
+    this.data.users = this.data.users.filter(u => u.firmId !== f.id);
+    this.data.firms = this.data.firms.filter(x => x.id !== f.id);
+    this.save();
+    this.log('firm-deleted', { by: actor.username, firm: f.name });
+  }
+  /** Is this session still open (for live updates that outlast it)? */
+  sessionAlive(token) {
+    const s = token && this.sessions.get(token), now = Date.now();
+    return !!(s && now - s.lastSeen <= this.idleMs && now - s.created <= MAX_SESSION_MS);
+  }
+  /** Why people in this firm can't sign in, or '' if they can. */
+  firmBlock(u) {
+    const f = this.firm(u.firmId);
+    if (!f) return 'This account doesn’t belong to a firm. Ask the server’s administrator.';
+    if (f.status === 'pending') return 'Your firm’s account is waiting for approval. You can sign in once it’s approved.';
+    if (f.status === 'suspended') return 'Your firm’s account has been suspended. Contact the server’s administrator.';
+    return '';
+  }
   get idleMs() { return (this.data.settings.idleMinutes || 30) * 60 * 1000; }
 
   publicUser(u) {
     if (!u) return u;
     const twoStep = !!(u.totp && u.totp.enabled);
+    const f = this.firm(u.firmId);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
+      firmId: u.firmId || '', firmName: f ? f.name : '', platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '' };
   }
-  list() { return this.data.users.map(u => this.publicUser(u)); }
+  list(firmId) { return this.data.users.filter(u => u.firmId === firmId).map(u => this.publicUser(u)); }
+  /** A user in the same firm as the person asking (anyone else counts as not existing). */
+  inFirm(id, actor) { const u = this.byId(id); if (!u || u.firmId !== actor.firmId) throw new AuthError('That user doesn’t exist.', 404); return u; }
+  /** Only an administrator can change an administrator's account (otherwise any owner could take it over with a reset link). */
+  guardAdmin(u, actor) { if (u.platformAdmin && u.id !== actor.id && !actor.platformAdmin) throw new AuthError('Only the server’s administrator can change an administrator’s account.', 403); }
+  activeAdmins() { return this.data.users.filter(x => x.platformAdmin && x.role === 'owner' && !x.disabled); }
   byId(id) { return this.data.users.find(u => u.id === id); }
   byName(username) { return this.data.users.find(u => u.username === cleanUsername(username)); }
 
   /** First-time setup: create the owner account. Only works while there are no users. */
-  setup({ name, username, password }) {
+  setup({ name, username, password, firmName }) {
     if (!this.needsSetup()) throw new AuthError('Setup is already done. Sign in instead.', 409);
-    const u = this.addUser({ name, username, password, role: 'owner' });
-    return u;
+    const f = this.data.firms[0] || this.newFirm(firmName || 'My firm', 'active', true);
+    if (firmName && String(firmName).trim()) f.name = String(firmName).trim().slice(0, 120);
+    const u = this.addUser({ name, username, password, role: 'owner', firmId: f.id });
+    this.byId(u.id).platformAdmin = true;
+    this.save();
+    return this.publicUser(this.byId(u.id));
   }
 
-  addUser({ name, username, password, role = 'staff', companies = [], mustChange = false, readOnly = false, invite = false }) {
+  addUser({ name, username, password, role = 'staff', companies = [], mustChange = false, readOnly = false, invite = false, firmId, self = false }) {
+    if (!firmId || !this.firm(firmId)) throw new AuthError('Choose the firm for this person.', 400);
     name = String(name || '').trim().slice(0, 80);
     username = cleanUsername(username);
     if (!name) throw new AuthError('Enter a name.', 400);
@@ -186,10 +292,10 @@ class Auth {
     if (!ROLES.includes(role)) throw new AuthError('Role must be owner, staff or client.', 400);
     companies = Array.isArray(companies) ? companies.map(String) : [];
     if (role === 'client' && !companies.length) throw new AuthError('Choose the company this client can see.', 400);
-    const u = { id: 'u_' + crypto.randomBytes(8).toString('hex'), name, username, role, companies, readOnly: role !== 'owner' && !!readOnly, created: Date.now() };
+    const u = { id: 'u_' + crypto.randomBytes(8).toString('hex'), firmId, name, username, role, companies, readOnly: role !== 'owner' && !!readOnly, created: Date.now() };
     let link = '';
     if (invite) { link = this.setLink(u, 'invite'); }
-    else if (this.forced2fa !== 'off' && this.data.users.length) {
+    else if (this.forced2fa !== 'off' && this.data.users.length && !self) {
       throw new AuthError('On this server, add people with an invitation link so they choose their own password.', 400);
     } else {
       const problem = passwordProblem(password, { username });
@@ -208,9 +314,9 @@ class Auth {
     return token;
   }
   /** A new invitation (someone who hasn't set a password) or password reset link. Returns the token. */
-  issueLink(id) {
-    const u = this.byId(id);
-    if (!u) throw new AuthError('That user doesn’t exist.', 404);
+  issueLink(id, actor) {
+    const u = this.inFirm(id, actor);
+    this.guardAdmin(u, actor);
     if (u.disabled) throw new AuthError('Turn this account back on first.', 409);
     const token = this.setLink(u, u.hash ? 'reset' : 'invite');
     this.save();
@@ -239,14 +345,25 @@ class Auth {
   }
 
   updateUser(id, patch, actor) {
-    const u = this.byId(id);
-    if (!u) throw new AuthError('That user doesn’t exist.', 404);
-    const owners = () => this.data.users.filter(x => x.role === 'owner' && !x.disabled);
+    const u = this.inFirm(id, actor);
+    this.guardAdmin(u, actor);
+    const lastAdmin = u.platformAdmin && this.activeAdmins().length <= 1;
+    if (patch.platformAdmin !== undefined) {
+      if (!actor.platformAdmin) throw new AuthError('Only the server’s administrator can do that.', 403);
+      if (patch.platformAdmin && u.role !== 'owner' && patch.role !== 'owner') throw new AuthError('Only an owner can be an administrator of the server.', 400);
+      if (!patch.platformAdmin && lastAdmin) throw new AuthError('The server needs at least one administrator. Make someone else an administrator first.', 409);
+    }
+    if (lastAdmin && ((patch.role !== undefined && patch.role !== 'owner') || patch.disabled)) throw new AuthError('This is the server’s only administrator. Make someone else an administrator first.', 409);
+    const owners = () => this.data.users.filter(x => x.firmId === u.firmId && x.role === 'owner' && !x.disabled);
     if (patch.name !== undefined) { const n = String(patch.name).trim().slice(0, 80); if (!n) throw new AuthError('Enter a name.', 400); u.name = n; }
     if (patch.role !== undefined) {
       if (!ROLES.includes(patch.role)) throw new AuthError('Role must be owner, staff or client.', 400);
       if (u.role === 'owner' && patch.role !== 'owner' && owners().length <= 1) throw new AuthError('There must always be at least one owner.', 409);
       u.role = patch.role;
+      if (u.role !== 'owner') delete u.platformAdmin;
+    }
+    if (patch.platformAdmin !== undefined && u.role === 'owner') {
+      if (patch.platformAdmin) u.platformAdmin = true; else delete u.platformAdmin;
     }
     if (patch.companies !== undefined) u.companies = Array.isArray(patch.companies) ? patch.companies.map(String) : [];
     if (u.role === 'client' && !(u.companies || []).length) throw new AuthError('Choose the company this client can see.', 400);
@@ -403,6 +520,8 @@ class Auth {
       if (u && u.disabled) throw new AuthError('This account has been turned off. Ask the owner to turn it back on.', 403);
       throw new AuthError(left > 0 ? `The username or password isn’t right.${left <= 2 ? ` ${left} more tr${left === 1 ? 'y' : 'ies'} before the account is locked for 15 minutes.` : ''}` : 'Too many wrong tries. This account is locked for 15 minutes.', left > 0 ? 401 : 429);
     }
+    const blocked = this.firmBlock(u);
+    if (blocked) { this.log('login-blocked', { username: name, ip: meta.ip, reason: blocked }); throw new AuthError(blocked, 403); }
     if (u.totp && u.totp.enabled) {
       const ticket = crypto.randomBytes(24).toString('base64url');
       for (const [t, v] of this.tickets) if (Date.now() - v.created > TICKET_MS) this.tickets.delete(t);
@@ -416,7 +535,7 @@ class Auth {
     const t = this.tickets.get(ticket);
     if (!t || Date.now() - t.created > TICKET_MS) { this.tickets.delete(ticket); throw new AuthError('That took too long. Enter your password again.', 401, { restart: true }); }
     const u = this.byId(t.userId);
-    if (!u || u.disabled || !u.totp) { this.tickets.delete(ticket); throw new AuthError('Enter your password again.', 401, { restart: true }); }
+    if (!u || u.disabled || !u.totp || this.firmBlock(u)) { this.tickets.delete(ticket); throw new AuthError('Enter your password again.', 401, { restart: true }); }
     this.checkLock(u.username, meta.ip);
     if (!this.checkSecondStep(u, code)) {
       t.tries++;
@@ -450,7 +569,7 @@ class Auth {
     const now = Date.now();
     if (!s || now - s.lastSeen > this.idleMs || now - s.created > MAX_SESSION_MS) { if (s) this.sessions.delete(token); return null; }
     const u = this.byId(s.userId);
-    if (!u || u.disabled) { this.sessions.delete(token); return null; }
+    if (!u || u.disabled || this.firmBlock(u)) { this.sessions.delete(token); return null; }
     if (touch) s.lastSeen = now;
     return { ...this.publicUser(u), token };
   }

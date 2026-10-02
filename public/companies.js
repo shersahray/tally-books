@@ -6,6 +6,7 @@
 let CO_LIST=[],PROVS={};
 S.co={showArchived:false,q:''};
 const LAST_KEY='tally.lastCompany';
+let PENDING_FIRMS=0;
 const lsGet=()=>{try{return localStorage.getItem(LAST_KEY)}catch(e){return null}};
 const lsSet=v=>{try{localStorage.setItem(LAST_KEY,v)}catch(e){}};
 const UI_DEFAULTS=JSON.stringify({sales:S.sales,exp:S.exp,tx:S.tx,rep:S.rep,reg:S.reg,company:S.company});
@@ -20,7 +21,7 @@ function provinceOptions(sel){
   return Object.entries(PROVS).map(([k,p])=>`<option value="${k}" ${sel===k?'selected':''}>${esc(p.name)} · ${esc(p.taxName)} ${p.taxRate}%</option>`).join('')+`<option value="" ${!sel?'selected':''}>Outside Canada or other</option>`;
 }
 
-async function loadCompanies(){const r=await api('GET','/api/companies');CO_LIST=r.companies||[];PROVS=r.provinces||{};return CO_LIST}
+async function loadCompanies(){const r=await api('GET','/api/companies');CO_LIST=r.companies||[];PENDING_FIRMS=r.pendingFirms||0;PROVS=r.provinces||{};return CO_LIST}
 
 function resetBooks(){
   COLS.forEach(c=>S[c]=[]);
@@ -60,7 +61,7 @@ function vCompanies(){
   const active=all.filter(c=>!c.archived);
   const review=active.reduce((s,c)=>s+c.toReview,0),overdue=active.reduce((s,c)=>s+c.overdueCount,0);
   const h=head('Companies',all.length?`${active.length} active compan${active.length===1?'y':'ies'}${review?` · ${review} bank line${review===1?'':'s'} to review`:''}${overdue?` · ${overdue} overdue invoice${overdue===1?'':'s'}`:''}`:'',
-    `${ME&&ME.role==='owner'?'<button class="btn" data-coact="users">Users &amp; security</button><button class="btn" data-coact="convert">Bring over from QuickBooks or Sage</button><button class="btn primary" data-coact="new">+ New company</button>':''}`);
+    `${ME&&ME.platformAdmin?`<button class="btn" data-coact="firms">Firms${PENDING_FIRMS?` <span class="pill partial">${PENDING_FIRMS} waiting</span>`:''}</button>`:''}${ME&&ME.role==='owner'?'<button class="btn" data-coact="users">Users &amp; security</button><button class="btn" data-coact="convert">Bring over from QuickBooks or Sage</button><button class="btn primary" data-coact="new">+ New company</button>':''}`);
   if(!all.length)return h+`<div class="panel" style="max-width:640px"><div class="empty"><b>Set up your first company</b>Each company keeps its own chart of accounts, customers, bank accounts and reports, in its own file.${ME&&ME.role==='owner'?'<div style="margin-top:14px" class="actions"><button class="btn primary" data-coact="new">+ New company</button><button class="btn" data-coact="convert">Bring over from QuickBooks or Sage</button></div>':''}</div></div>`;
   const fyEnd=c=>{const end=+c.fyStart===1?12:(+c.fyStart||1)-1;return `${monthName(end).slice(0,3)} ${new Date(2026,end,0).getDate()} year-end`};
   return h+`<div class="panel"><div class="toolbar">
@@ -91,6 +92,7 @@ async function coClick(ev,t,d){
   if(d.coact==='new'){companyForm();return true}
   if(d.coact==='convert'){companyForm(true);return true}
   if(d.coact==='users'){showUsers();return true}
+  if(d.coact==='firms'){showFirms();return true}
   return false;
 }
 function bindCompanies(m){

@@ -37,7 +37,13 @@ class Registry {
     fs.renameSync(tmp, this.file);
   }
 
-  list() { return this.data.companies.slice(); }
+  list(firmId) { return this.data.companies.filter(c => firmId === undefined || c.firmId === firmId); }
+  /** Companies from before firms existed belong to the first firm. */
+  adoptFirm(firmId) {
+    if (!firmId || this.data.companies.every(c => c.firmId)) return;
+    for (const c of this.data.companies) if (!c.firmId) c.firmId = firmId;
+    this.save();
+  }
   get(id) { return this.data.companies.find(c => c.id === id) || null; }
 
   /** Open (and cache) a company's database. */
@@ -48,9 +54,9 @@ class Registry {
     return this.stores.get(id);
   }
 
-  create(name) {
+  create(name, firmId) {
     const id = newId();
-    const entry = { id, name, file: path.join('companies', id + '.db'), archived: false, created: Date.now() };
+    const entry = { id, firmId: firmId || '', name, file: path.join('companies', id + '.db'), archived: false, created: Date.now() };
     this.data.companies.push(entry);
     this.save();
     return entry;

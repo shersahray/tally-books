@@ -39,10 +39,10 @@ function aiPanel(){
   if(!ME||ME.role==='client')return '';
   if(!AIS)return '';
   if(AIS.unavailable)return '';
-  const owner=ME.role==='owner',c=S.company;
+  const owner=ME.role==='owner'&&ME.platformAdmin,c=S.company;
   const sw=`<label class="check"><input type="checkbox" id="aiCo" ${c.ai?'checked':''} ${AIS.configured?'':'disabled'}> Use AI suggestions for this company</label>`;
   const intro=`<div class="muted" style="font-size:13px">AI suggests a category, payee and sales tax for bank lines that rules and past choices don’t cover. It only suggests: you review every line and click Add. When you turn it on, each line’s date, description and amount, this company’s chart of accounts and payee names are sent to Anthropic (the maker of Claude) to be read. Anthropic doesn’t use data sent through its API to train its models. Tell your client if their engagement letter needs to say so.</div>`;
-  if(!owner)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>AI suggestions</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">${intro}${AIS.configured?sw:'<div class="muted">An owner sets up AI suggestions.</div>'}</div></div>`;
+  if(!owner)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>AI suggestions</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">${intro}${AIS.configured?sw:AIS.firmAllowed===false?'<div class="muted">AI suggestions aren’t turned on for your firm. The server’s administrator can turn them on.</div>':'<div class="muted">An owner sets up AI suggestions.</div>'}</div></div>`;
   if(AIS.demo)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>AI suggestions</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">${intro}${sw}<div class="muted" style="font-size:13px"><b>In this demo,</b> suggestions are simple keyword guesses so you can see how the screen works. In Tally Books, an owner adds a Claude API key here and the suggestions come from Claude.</div></div></div>`;
   const pct=AIS.capUsd?Math.min(100,Math.round(AIS.spentUsd/AIS.capUsd*100)):0;
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>AI suggestions</h3><div class="pad" style="display:flex;flex-direction:column;gap:14px">
