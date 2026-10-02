@@ -183,6 +183,10 @@ Choosing the standard folder again moves the books back.
 
 Without a signature, Windows warns "Windows protected your PC", and Smart App Control blocks the installer completely. Signing fixes both.
 
+Shortcut: open **Cloud Shell** (the `>_` button at the top of the Azure portal, choose Bash) and run
+`bash <(curl -fsSL https://raw.githubusercontent.com/shersahray/tally-books/main/deploy/azure/signing-setup.sh)`.
+It does everything in step 1 except the identity validation and certificate profile, and prints the values for step 2.
+
 1. Set up [Azure Artifact Signing](https://learn.microsoft.com/en-us/azure/trusted-signing/quickstart):
    - a signing account;
    - an approved identity validation;
