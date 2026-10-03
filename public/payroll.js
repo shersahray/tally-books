@@ -208,7 +208,7 @@ function employeeForm(emp){
     <h3 class="fsec">Vacation pay</h3>
     <div class="fields">${fld('eVacMode','Vacation pay',`<select id="eVacMode">${VAC_MODES.map(([k,l])=>`<option value="${k}" ${vacModeDefault(e)===k?'selected':''}>${l}</option>`).join('')}</select>`,true)}
       <div data-vac style="display:contents">${fld('eVacRate','Vacation pay rate (%)',`<input type="number" id="eVacRate" step="0.01" min="0" max="100" inputmode="decimal" value="${v(e.vacRate)}" placeholder="${vr.rate}"><span class="hint" data-vachint></span>`)}</div>
-      <div data-vacacc style="display:contents">${num('eVacOpen','Vacation pay owed before Tally Books',e.vacOpening,'Set aside and not yet paid, from your previous payroll')}</div></div>
+      <div data-vacacc style="display:contents">${num('eVacOpen','Vacation pay owed before Sumlora',e.vacOpening,'Set aside and not yet paid, from your previous payroll')}</div></div>
     <h3 class="fsec">Tax claims (TD1)</h3>
     <div class="fields">${num('eTd1','Federal TD1 total claim',e.td1Fed,'Blank = basic personal amount (claim code 1). 0 = claim code 0.')}
       <div data-notqc style="display:contents">${num('eTd1p','Provincial TD1 total claim',e.td1Prov,'Blank = basic personal amount')}</div>
@@ -220,7 +220,7 @@ function employeeForm(emp){
     <div class="fields">${num('eRrsp','RRSP / pension deducted each pay',e.rrsp,'Reduces taxable income')}${fld('ePen','That deduction goes to',`<select id="ePen"><option value="rrsp" ${e.pensionType!=='rpp'?'selected':''}>A group RRSP (not on the T4)</option><option value="rpp" ${e.pensionType==='rpp'?'selected':''}>A registered pension plan (T4 box 20, RL-1 box D)</option></select>`)}${num('eUnion','Union dues each pay',e.union)}
       <div data-rpp style="display:contents">${fld('eRppNo','Pension plan registration number (T4 box 50)',`<input type="text" id="eRppNo" inputmode="numeric" maxlength="7" value="${v(e.rppNo)}" translate="no">`)}</div></div>
     <div style="display:flex;gap:18px;flex-wrap:wrap"><label class="check"><input type="checkbox" id="eCppX" ${e.cppExempt?'checked':''}> Exempt from <span data-cpplbl>CPP</span></label><label class="check"><input type="checkbox" id="eEiX" ${e.eiExempt?'checked':''}> Exempt from EI</label><label class="check" data-qc><input type="checkbox" id="eQpipX" ${e.qpipExempt?'checked':''}> Exempt from QPIP</label>${emp?`<label class="check"><input type="checkbox" id="eInactive" ${e.active===false?'checked':''}> Inactive (no longer paid)</label>`:''}</div>
-    <details ${Object.keys(o).length>1?'open':''}><summary class="fsum">Paid earlier in ${yr} outside Tally Books?</summary>
+    <details ${Object.keys(o).length>1?'open':''}><summary class="fsum">Paid earlier in ${yr} outside Sumlora?</summary>
       <div class="muted" style="font-size:13px;margin:8px 0">Enter this year’s totals from your previous payroll so CPP, EI and QPIP stop at the yearly maximums and pay stubs show the right year-to-date.</div>
       <div class="fields">${ytdF('gross','Gross pay')}${ytdF('pensionable','Pensionable earnings (if different)')}${ytdF('insurable','Insurable earnings (if different)')}
         <div data-notqc style="display:contents">${ytdF('cpp','CPP')}${ytdF('cpp2','CPP2')}</div><div data-qc style="display:contents">${ytdF('qpp','QPP')}${ytdF('qpp2','QPP2')}${ytdF('qpip','QPIP (employee)')}${ytdF('erQpip','QPIP (employer)')}</div>
@@ -325,7 +325,7 @@ function payRunForm(){
       auto('[data-hol]',parts.reduce((t,x)=>t+x.pay,0));
       auto('[data-holhrs]',hols.length*(+e.hours||0)/(WORKDAYS[freq]||10));
       hn.innerHTML=parts.map(x=>`<div><b>${esc(x.h.name)}</b> · <span>${fmtDate(x.h.date)}: ${money(x.pay)}, which is 1/20 of ${money(x.base)} earned from ${fmtDate(x.window.from)} to ${fmtDate(x.window.to)}</span></div>`).join('')+
-        (short?`<div class="neg">Tally Books has ${esc(e.name)}’s pay only from ${fmtDate(firstPay)}, so pay before that isn’t counted. Check the holiday pay against your earlier payroll.</div>`:'')+
+        (short?`<div class="neg">Sumlora has ${esc(e.name)}’s pay only from ${fmtDate(firstPay)}, so pay before that isn’t counted. Check the holiday pay against your earlier payroll.</div>`:'')+
         `<div>${['ON','QC'].includes(e.prov)?'':'<span>This is the Ontario and Quebec formula. Check your province’s rule.</span> '}<span>If ${esc(e.name)} worked on the holiday, add the premium pay under Other pay.</span>${e.prov==='ON'?' <span>Ontario counts vacation pay paid in those weeks too.</span>':''}</div>`;
     }else for(const k of ['[data-hol]','[data-holhrs]']){const el=q(k);if(el){delete el.dataset.ov;delete el.dataset.ovk;el.value=''}}
     // Vacation pay on regular, holiday and other pay.

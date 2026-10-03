@@ -1,7 +1,7 @@
 'use strict';
 /* Desktop wrapper. Two ways to work:
  *  - "On this computer": starts the same server privately on this computer (127.0.0.1) and shows it in a window.
- *  - "On our office server": keeps no books here; the window opens your firm's Tally Books server
+ *  - "On our office server": keeps no books here; the window opens your firm's Sumlora server
  *    (the server version, over HTTPS), so everyone in every office works in the same books.
  * The choice is saved in desktop.json in the app's data folder and can be changed from File → Where the books are.
  */
@@ -13,6 +13,13 @@ const { serverOrigin, netMessage } = require('./connection');
 const folders = require('./datafolder');
 const { setupUpdates, updatesOn, buildInfo } = require('./updater');
 let updates = null;
+
+// Before the new name, the app's own folder was "Tally Books" (in AppData\Roaming). Copies installed then keep
+// their books, their choice of where the books are and their licence there. Must run before the app starts.
+try {
+  const old = path.join(app.getPath('appData'), 'Tally Books');
+  if (fs.existsSync(path.join(old, 'desktop.json')) || folders.hasBooks(old) || fs.existsSync(path.join(old, 'licence.json'))) app.setPath('userData', old);
+} catch { /* the standard folder */ }
 
 let server = null;    // the private server, in "this computer" mode only
 let win = null;
@@ -27,7 +34,7 @@ if (!app.requestSingleInstanceLock()) {
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
   });
   app.whenReady().then(start).catch(err => {
-    dialog.showErrorBox('Tally Books could not start', String(err && err.stack || err));
+    dialog.showErrorBox('Sumlora could not start', String(err && err.stack || err));
     app.quit();
   });
 }
@@ -48,12 +55,12 @@ function saveConfig(c) {
 }
 const hasLocalBooks = () => folders.hasBooks(dataDir());
 
-/** Is a Tally Books server answering there? */
+/** Is a Sumlora server answering there? */
 async function checkServer(o) {
   let r;
   try { r = await net.fetch(o + '/api/health', { signal: AbortSignal.timeout(10000), cache: 'no-store' }); } catch (e) { throw new Error(netMessage(e)); }
   let j = null; try { j = await r.json(); } catch { /* not JSON */ }
-  if (!r.ok || !j || j.ok !== true) throw new Error('Something answered at that address, but it isn’t Tally Books. Check the address.');
+  if (!r.ok || !j || j.ok !== true) throw new Error('Something answered at that address, but it isn’t Sumlora. Check the address.');
 }
 async function startLocal() {
   if (server) return;
@@ -99,8 +106,8 @@ async function start() {
     width: 1280,
     height: 860,
     minWidth: 380,
-    title: 'Tally Books',
-    backgroundColor: nativeTheme && nativeTheme.shouldUseDarkColors ? '#0e1412' : '#eef2f0',
+    title: 'Sumlora',
+    backgroundColor: nativeTheme && nativeTheme.shouldUseDarkColors ? '#0c131d' : '#eef3f4',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.js') },
   });

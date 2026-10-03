@@ -1,7 +1,7 @@
 'use strict';
 /* Licence codes for the desktop app.
  *
- * You (the seller) make a code for each client in your own Tally Books (the Licences page). A code says who
+ * You (the seller) make a code for each client in your own Sumlora (the Licences page). A code says who
  * it's for, the plan (Essentials or Plus) and the last day it's good for, and it's signed with your private
  * key. The desktop app checks the signature with your public key, which the build puts in
  * electron/build-info.json, so it works without the internet and nobody else can make codes.
@@ -65,7 +65,7 @@ function readCode(code, publicKeys) {
   // Codes arrive by email: ignore spaces, line breaks and quotes picked up when copying.
   const c = String(code || '').replace(/[\s"'“”‘’<>]/g, '');
   if (!c) throw new LicenceError('Paste the licence code.');
-  if (!c.startsWith(PREFIX) || c.length > 1200) throw new LicenceError('That isn’t a Tally Books licence code. Copy the whole code from the email, starting with TB1-.');
+  if (!c.startsWith(PREFIX) || c.length > 1200) throw new LicenceError('That isn’t a Sumlora licence code. Copy the whole code from the email, starting with TB1-.');
   const [bodyText, sigText, extra] = c.slice(PREFIX.length).split('.');
   if (!bodyText || !sigText || extra !== undefined) throw new LicenceError('That code is incomplete. Copy the whole code from the email.');
   let body, sig;
@@ -76,7 +76,7 @@ function readCode(code, publicKeys) {
   }
   let p;
   try { p = JSON.parse(body.toString('utf8')); } catch { throw new LicenceError('That code isn’t valid.'); }
-  if (!p || p.v !== 1 || !PLAN_CODES[p.p] || !isDay(p.u) || typeof p.n !== 'string' || typeof p.i !== 'string') throw new LicenceError('That code is from a newer version of Tally Books. Update the app, then enter it again.');
+  if (!p || p.v !== 1 || !PLAN_CODES[p.p] || !isDay(p.u) || typeof p.n !== 'string' || typeof p.i !== 'string') throw new LicenceError('That code is from a newer version of Sumlora. Update the app, then enter it again.');
   return { id: p.i, name: p.n, plan: PLAN_CODES[p.p], until: p.u, issued: isDay(p.d) ? p.d : '', ...(Number.isInteger(p.t) ? { at: p.t * 1000 } : {}) };
 }
 
@@ -159,7 +159,7 @@ class Licence {
    * can't replace a renewal or a corrected code.
    */
   enter(code) {
-    if (!this.on) throw new LicenceError('This copy of Tally Books doesn’t use licence codes.', 409);
+    if (!this.on) throw new LicenceError('This copy of Sumlora doesn’t use licence codes.', 409);
     const lic = readCode(code, this.keys);
     const cur = this.current();
     const madeAt = l => l.at || dayNum(l.issued || '1970-01-01') * 86400000;
@@ -211,10 +211,10 @@ class Issuer {
   }
   /** Bring back a key from a copy, for example on a new computer. The codes made before come with it. */
   importKey(body, { mustMatch } = {}) {
-    if (!body || body.format !== 'tally-books-licence-key' || !body.key || !privateKeyFrom(body.key)) throw new LicenceError('That isn’t a copy of a Tally Books licence key.');
+    if (!body || body.format !== 'tally-books-licence-key' || !body.key || !privateKeyFrom(body.key)) throw new LicenceError('That isn’t a copy of a Sumlora licence key.');
     const pub = publicKeyText(crypto.createPublicKey(privateKeyFrom(body.key)));
     if (pub !== body.key.x) throw new LicenceError('That key file is damaged.');
-    if (mustMatch && !mustMatch.includes(pub)) throw new LicenceError('That key doesn’t match this version of Tally Books.', 409);
+    if (mustMatch && !mustMatch.includes(pub)) throw new LicenceError('That key doesn’t match this version of Sumlora.', 409);
     const cur = this.load();
     if (cur && cur.key && cur.key.x !== pub) throw new LicenceError('There’s already a different licence key here.', 409);
     // Only well-formed entries come in with the key (they're shown on the Licence codes page).

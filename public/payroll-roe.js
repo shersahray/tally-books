@@ -1,7 +1,7 @@
 'use strict';
 /* ---------- Record of Employment (ROE) ----------
    When an employee leaves, or stops working for 7 days in a row, Service Canada needs a record of employment
-   within 5 days of the end of that pay period. Tally Books works out the blocks from the pay runs; you enter
+   within 5 days of the end of that pay period. Sumlora works out the blocks from the pay runs; you enter
    them in ROE Web, then keep the serial number here. The maths is PR.roe in payroll-calc.js. */
 
 /** This employee's pays, for the ROE: one per pay run. */
@@ -22,12 +22,12 @@ const ROE_TYPE_LABEL={W:'Weekly',B:'Every 2 weeks',S:'Twice a month',M:'Monthly'
 function roeForm(emp){
   if(!emp)return;
   const lines=roeLines(emp);
-  if(!lines.length){toast(`${emp.name} hasn’t been paid in Tally Books yet.`,true);return}
+  if(!lines.length){toast(`${emp.name} hasn’t been paid in Sumlora yet.`,true);return}
   const last=lines[lines.length-1];
   const c=S.company,cfg=payCfg();
   const v=x=>x==null?'':esc(x);
   const f=openModal(`Record of employment · ${emp.name}`,`
-    <div class="muted" style="font-size:13px">When ${esc(emp.name)} leaves, or stops working for 7 days in a row, Service Canada needs a record of employment (ROE) within 5 days of the end of that pay period. Tally Books works out the figures from the pay runs. Enter them in ROE Web on Service Canada’s site, then save the ROE’s serial number here.</div>
+    <div class="muted" style="font-size:13px">When ${esc(emp.name)} leaves, or stops working for 7 days in a row, Service Canada needs a record of employment (ROE) within 5 days of the end of that pay period. Sumlora works out the figures from the pay runs. Enter them in ROE Web on Service Canada’s site, then save the ROE’s serial number here.</div>
     <div class="fields">
       ${fld('roReason','Reason (block 16)',`<select id="roReason"><option value="">Choose…</option>${PR.ROE_REASONS.map(([k,l])=>`<option value="${k}">${k} · ${esc(l)}</option>`).join('')}</select>`,true)}
       ${fld('roFirst','First day worked (block 10)',`<input type="date" id="roFirst" value="${v(emp.hireDate||lines[0].from)}">`)}

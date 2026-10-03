@@ -7,7 +7,7 @@ const { createApp } = require('./app');
 
 const [major, minor] = process.versions.node.split('.').map(Number);
 if (major < 22 || (major === 22 && minor < 13)) {
-  console.error(`Tally Books needs Node.js 22.13 or newer (you have ${process.versions.node}).`);
+  console.error(`Sumlora needs Node.js 22.13 or newer (you have ${process.versions.node}).`);
   process.exit(1);
 }
 
@@ -41,22 +41,22 @@ const server = createApp({
 });
 server.on('error', err => {
   if (err.code === 'EADDRINUSE') {
-    console.log(`Tally Books is already running at http://localhost:${PORT}`);
+    console.log(`Sumlora is already running at http://localhost:${PORT}`);
     if (args.has('--open')) openBrowser(`http://localhost:${PORT}`);
     setTimeout(() => process.exit(0), 1500);
   } else { console.error(err); process.exit(1); }
 });
 server.listen(PORT, HOST, () => {
   const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
-  console.log(`Tally Books is running at http://${shown}:${PORT}`);
+  console.log(`Sumlora is running at http://${shown}:${PORT}`);
   console.log(`Data folder: ${DATA_DIR}`);
   if (require2fa) console.log(`Two-step sign-in required for: ${require2fa}`);
   if (process.env.BACKUP_BLOB_URL) console.log(`Off-site backups: ${new URL(process.env.BACKUP_BLOB_URL).host}`);
-  console.log('Keep this window open while you use Tally Books. Close it (or press Ctrl+C) to stop.');
+  console.log('Keep this window open while you use Sumlora. Close it (or press Ctrl+C) to stop.');
   if (args.has('--open')) openBrowser(`http://localhost:${PORT}`);
 });
 
-// Open the app in the default browser (used by the Start Tally Books shortcuts).
+// Open the app in the default browser (used by the Start Sumlora shortcuts).
 function openBrowser(url) {
   const { spawn } = require('node:child_process');
   const [cmd, cmdArgs] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]

@@ -59,7 +59,7 @@ function createApp(opts) {
   // Server-wide settings (backups, the AI key, firms) belong to the server's administrators, not to each firm.
   const adminOnly = u => { if (u.role !== 'owner' || !u.platformAdmin) throw new ValidationError('Only the server’s administrator can do that.', 403); };
   /** Making licence codes: administrators, and in a licensed desktop copy only the seller's own (it holds the key). */
-  const canIssue = u => { adminOnly(u); if (licence.on && !licence.isIssuer()) throw new ValidationError('Licence codes are made in your own copy of Tally Books.', 403); };
+  const canIssue = u => { adminOnly(u); if (licence.on && !licence.isIssuer()) throw new ValidationError('Licence codes are made in your own copy of Sumlora.', 403); };
   /** Can this person see this company? Only companies of their own firm, and then as their role allows. */
   const canSeeCo = (user, cid) => { const c = reg.get(cid); return !!(c && user && c.firmId === user.firmId && auth.canSee(user, cid)); };
   /** AI costs the server's owner money, so each firm uses it only when an administrator allows it. */
@@ -560,7 +560,7 @@ function createApp(opts) {
     ['GET', /^\/api\/licences$/, (req, m, res, user) => { canIssue(user); return { ...issuer.info(), inBuild: licence.on ? licence.isIssuer() : null, licensing: licence.on }; }],
     ['POST', /^\/api\/licences\/key$/, (req, m, res, user) => {
       canIssue(user);
-      if (licence.on) throw new ValidationError('Create your licence key in a copy of Tally Books that doesn’t ask for a licence code (your server, or the desktop app before licences were turned on). Here, bring back your key from a copy instead.', 409);
+      if (licence.on) throw new ValidationError('Create your licence key in a copy of Sumlora that doesn’t ask for a licence code (your server, or the desktop app before licences were turned on). Here, bring back your key from a copy instead.', 409);
       const out = issuer.createKey();
       auth.log('licence-key-created', { by: user.username });
       return out;
@@ -569,7 +569,7 @@ function createApp(opts) {
       canIssue(user);
       const body = issuer.exportKey();
       auth.log('licence-key-copied', { by: user.username });
-      send(res, 200, JSON.stringify(body, null, 2), { 'Content-Type': MIME['.json'], 'Content-Disposition': 'attachment; filename="tally-books-licence-key.json"', 'Cache-Control': 'no-store' });
+      send(res, 200, JSON.stringify(body, null, 2), { 'Content-Type': MIME['.json'], 'Content-Disposition': 'attachment; filename="sumlora-licence-key.json"', 'Cache-Control': 'no-store' });
     }],
     ['POST', /^\/api\/licences\/key\/restore$/, async (req, m, res, user) => {
       adminOnly(user);
@@ -663,7 +663,7 @@ function createApp(opts) {
       notClient(user);
       // Only for someone sitting at this computer: opens the folder in File Explorer / Finder.
       const ip = req.socket.remoteAddress || '';
-      if (!/^(::1|127\.|::ffff:127\.)/.test(ip)) throw new ValidationError('The backup folder can only be opened on the computer running Tally Books.', 403);
+      if (!/^(::1|127\.|::ffff:127\.)/.test(ip)) throw new ValidationError('The backup folder can only be opened on the computer running Sumlora.', 403);
       const dir = fs.existsSync(backups.target()) ? backups.target() : backups.settings.folder;
       const { spawn } = require('node:child_process');
       const [cmd, args] = process.platform === 'win32' ? ['explorer', [dir]] : process.platform === 'darwin' ? ['open', [dir]] : ['xdg-open', [dir]];
@@ -759,8 +759,8 @@ function createApp(opts) {
       const bad = [...to, ...cc].find(x => !mail.EMAIL_RE.test(x));
       if (bad) throw new ValidationError(`“${bad.slice(0, 80)}” isn’t an email address.`);
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
-      const subject = m[1] === 'test' ? `Test email from Tally Books (${company.name})` : String(body.subject || '').slice(0, 200);
-      const text = m[1] === 'test' ? `This is a test from Tally Books. Email for ${company.name} is working.` : String(body.text || '').slice(0, 20000);
+      const subject = m[1] === 'test' ? `Test email from Sumlora (${company.name})` : String(body.subject || '').slice(0, 200);
+      const text = m[1] === 'test' ? `This is a test from Sumlora. Email for ${company.name} is working.` : String(body.text || '').slice(0, 20000);
       if (!subject.trim()) throw new ValidationError('Enter a subject.');
       const attachments = [];
       let total = 0;
@@ -1074,7 +1074,7 @@ function createApp(opts) {
     ['POST', /^\/restore$/, async (ctx, req) => {
       const body = await readJson(req, 50 * 1024 * 1024);
       ownerOnly(ctx.user);
-      if (body.format !== BACKUP_FORMAT) throw new ValidationError('That file isn’t a Tally Books backup.');
+      if (body.format !== BACKUP_FORMAT) throw new ValidationError('That file isn’t a Sumlora backup.');
       const company = validateCompany(body.company || {});
       // Keep a copy of what's about to be replaced, in the data folder, in case the wrong file was chosen.
       const snapDir = path.join(opts.dataDir, 'before-restore');
@@ -1122,7 +1122,7 @@ function createApp(opts) {
   const server = http.createServer(async (req, res) => {
     try {
       if (opts.password && !authorized(req, opts.password)) {
-        return send(res, 401, 'Sign in required', { 'WWW-Authenticate': 'Basic realm="Tally Books", charset="UTF-8"', 'Content-Type': 'text/plain' });
+        return send(res, 401, 'Sign in required', { 'WWW-Authenticate': 'Basic realm="Sumlora", charset="UTF-8"', 'Content-Type': 'text/plain' });
       }
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname.startsWith('/api/')) {

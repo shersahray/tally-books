@@ -43,7 +43,7 @@ function coUrl(url){
 async function api(method,url,body,retried){
   let r;const asked=url;url=coUrl(url);
   try{r=await fetch(url,{method,headers:body!==undefined?{'Content-Type':'application/json'}:{},body:body!==undefined?JSON.stringify(body):undefined})}
-  catch(e){throw new Error("Can't reach the Tally Books server. Check that it's still running.")}
+  catch(e){throw new Error("Can't reach the Sumlora server. Check that it's still running.")}
   let j=null;try{j=await r.json()}catch(e){}
   if(!r.ok){
     // The books are closed for that date: offer to unlock them, then try again once.
@@ -139,7 +139,7 @@ function ready(){return S.loaded}
 function go(view,param=null){S.view=view;S.param=param;renderMain();window.scrollTo(0,0)}
 function renderMain(){
   $('#coName').textContent=CO?(S.loaded?S.company.name:'Opening…'):'No company open';
-  document.title=CO&&S.loaded?`${S.company.name} · Tally Books`:'Tally Books';
+  document.title=CO&&S.loaded?`${S.company.name} · Sumlora`:'Sumlora';
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
   const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences';
@@ -576,7 +576,7 @@ function gifiForm(){
     list.length?`<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save codes</button>`:`<button type="button" class="btn primary" data-close>Close</button>`,'wide');
   if(!list.length)return;
   const all_=$('[data-gall]',f);all_.onchange=()=>$$('[data-gpick]',f).forEach(x=>x.checked=all_.checked);
-  $$('[data-gcode]',f).forEach(inp=>inp.oninput=()=>{const id=inp.dataset.gcode,a=acct(id),v=inp.value.trim(),bad=TallyGIFI.problem(v,a.type,I18N.lang);$(`[data-gdesc="${id}"]`,f).innerHTML=bad?`<span class="neg">${esc(bad)}</span>`:esc(gifiName(v)||(v?T('Not in Tally Books’ list of GIFI codes. Check it against CRA’s current list.'):''));const pick=$(`[data-gpick="${id}"]`,f);if(v&&!bad)pick.checked=true});
+  $$('[data-gcode]',f).forEach(inp=>inp.oninput=()=>{const id=inp.dataset.gcode,a=acct(id),v=inp.value.trim(),bad=TallyGIFI.problem(v,a.type,I18N.lang);$(`[data-gdesc="${id}"]`,f).innerHTML=bad?`<span class="neg">${esc(bad)}</span>`:esc(gifiName(v)||(v?T('Not in Sumlora’s list of GIFI codes. Check it against CRA’s current list.'):''));const pick=$(`[data-gpick="${id}"]`,f);if(v&&!bad)pick.checked=true});
   f.onsubmit=async e=>{e.preventDefault();f.err('');const writes=[];
     for(const x of $$('[data-gpick]',f).filter(x=>x.checked)){const a=acct(x.dataset.gpick),v=$(`[data-gcode="${a.id}"]`,f).value.trim();if(!v)continue;const bad=TallyGIFI.problem(v,a.type,I18N.lang);if(bad)return f.err(`${a.name}: ${bad}`);if(v!==a.gifi)writes.push({op:'set',collection:'accounts',id:a.id,data:{...strip(a),gifi:v}})}
     if(!writes.length)return f.err('Tick the accounts to save, with a code for each.');
@@ -587,7 +587,7 @@ function gifiForm(){
    A trial balance CaseWare Working Papers can import: one row per account with its number, name,
    map number, and the year-end balance (debits positive, credits negative) for this year and last.
    Income and expense accounts show the year's total; balance sheet accounts the balance at year-end.
-   Earnings from earlier years, which Tally Books works out rather than posting, are a row of their own. */
+   Earnings from earlier years, which Sumlora works out rather than posting, are a row of their own. */
 function casewareRows(yearEnd){
   const fy=fyStartOf(yearEnd);
   const rows=[];
@@ -640,7 +640,7 @@ function saveFile(name,blob){const a=document.createElement('a');a.href=URL.crea
 async function loadExamples(){if(await write(()=>api('POST','/api/examples')))toast('Example data loaded')}
 async function restoreBackup(file){
   let body;try{body=JSON.parse(await file.text())}catch(e){toast('That file isn’t valid JSON.',true);return}
-  if(body.format!=='tally-books-backup'){toast('That file isn’t a Tally Books backup.',true);return}
+  if(body.format!=='tally-books-backup'){toast('That file isn’t a Sumlora backup.',true);return}
   const n=COLS.reduce((s,c)=>s+(body[c]||[]).length,0);
   if(!await confirmBox('Restore this backup?',`Everything currently in your books will be replaced with the ${n} records in ${file.name} (saved ${body.exportedAt?fmtDate(body.exportedAt.slice(0,10)):'on an unknown date'}). Download a backup first if you might need the current data.`,'Replace and restore'))return;
   let r=null;if(await write(async()=>{r=await api('POST','/api/restore',body)}))toast(r&&r.skippedReceipts?`Backup restored. ${r.skippedReceipts} receipt${r.skippedReceipts===1?' or attachment was':'s or attachments were'} left out because the file isn’t in this company.`:'Backup restored');
@@ -1034,7 +1034,7 @@ function accountForm(a){
     if(!a&&!gTouched&&sug!==v){gi.value=sug;return gifiHint()}
     const bad=TallyGIFI.problem(v,t,I18N.lang);
     gh.className='hint'+(bad?' neg':'');
-    gh.innerHTML=bad?esc(bad):v?esc(gifiName(v)||T('Not in Tally Books’ list of GIFI codes. Check it against CRA’s current list.')):sug?`${esc(T('Suggested:'))} <button type="button" class="link" data-gifiuse="${sug}">${sug}</button> ${esc(gifiName(sug))}`:esc(T('Optional. The code this account goes under on the T2 return (Schedules 100 and 125).'));
+    gh.innerHTML=bad?esc(bad):v?esc(gifiName(v)||T('Not in Sumlora’s list of GIFI codes. Check it against CRA’s current list.')):sug?`${esc(T('Suggested:'))} <button type="button" class="link" data-gifiuse="${sug}">${sug}</button> ${esc(gifiName(sug))}`:esc(T('Optional. The code this account goes under on the T2 return (Schedules 100 and 125).'));
     const u=$('[data-gifiuse]',gh);if(u)u.onclick=()=>{gi.value=u.dataset.gifiuse;gTouched=true;gifiHint()}};
   const gifiList=()=>{$('#aGifiList',f).innerHTML=TallyGIFI.forType(ty.value).map(x=>`<option value="${x.code}">${esc(isFr()?x.fr:x.en)}</option>`).join('')};
   gi.oninput=()=>{gTouched=true;gifiHint()};$('#aName',f).addEventListener('input',gifiHint);

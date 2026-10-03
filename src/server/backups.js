@@ -10,7 +10,8 @@ const path = require('node:path');
 const { COLLECTIONS } = require('./db');
 const { DEFAULT_COMPANY } = require('./seed');
 
-const BACKUP_DIR_NAME = 'Tally Books Backups';
+const BACKUP_DIR_NAME = 'Sumlora Backups';
+const OLD_BACKUP_DIR_NAME = 'Tally Books Backups'; // the app's name before Sumlora: keep backing up there
 const EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const pad = n => String(n).padStart(2, '0');
@@ -62,8 +63,13 @@ class Backups {
     fs.renameSync(tmp, this.file);
   }
 
-  /** Where backups actually go: a "Tally Books Backups" folder inside the chosen folder. */
-  target() { return path.join(this.settings.folder, BACKUP_DIR_NAME); }
+  /** Where backups actually go: a "Sumlora Backups" folder inside the chosen folder
+      (or the "Tally Books Backups" folder from before the new name, if that's there). */
+  target() {
+    const old = path.join(this.settings.folder, OLD_BACKUP_DIR_NAME);
+    try { if (fs.statSync(old).isDirectory() && !fs.existsSync(path.join(this.settings.folder, BACKUP_DIR_NAME))) return old; } catch { /* not there */ }
+    return path.join(this.settings.folder, BACKUP_DIR_NAME);
+  }
 
   status() {
     return { ...this.settings, offsite: this.blob ? { where: this.blob.host, ...(this.settings.offsite || {}) } : null, target: this.target(), suggestions: suggestedFolders(), dueToday: this.settings.enabled && this.settings.lastDay !== localDay() };
@@ -162,7 +168,7 @@ class Backups {
         await this.blobFetch('PUT', `${day}/${f}`, '', fs.readFileSync(path.join(dir, f)));
         st.lastCount++;
       }
-      // Receipt photos: each one once, under receipts/<company>/, never removed by Tally Books.
+      // Receipt photos: each one once, under receipts/<company>/, never removed by Sumlora.
       const doneFile = path.join(path.dirname(this.file), 'receipts-offsite.json');
       let done = new Set(); try { done = new Set(JSON.parse(fs.readFileSync(doneFile, 'utf8'))); } catch { /* none yet */ }
       try {

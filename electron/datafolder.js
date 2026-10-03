@@ -14,7 +14,7 @@ const BOOK_DIRS = ['companies', 'before-restore'];
 const BOOK_ITEMS = [...BOOK_FILES, ...BOOK_DIRS];
 
 const exists = p => { try { fs.accessSync(p); return true; } catch { return false; } };
-/** Does this folder hold Tally Books books? */
+/** Does this folder hold Sumlora books? */
 const hasBooks = dir => ['companies.json', 'users.json', 'tally-books.db'].some(f => exists(path.join(dir, f)));
 const real = p => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
 // Windows and Mac folders ignore upper/lower case; Linux folders don't.
@@ -40,17 +40,18 @@ function checkFolder(picked, current, { platform = process.platform, standard = 
   const dir = path.resolve(picked);
   if (!exists(dir) || !fs.statSync(dir).isDirectory()) return { error: 'That folder doesn’t exist any more. Choose another.' };
   if (same(dir, current)) return { same: true, target: dir };
-  try { const t = path.join(dir, '.tally-books-write-test-' + process.pid); fs.writeFileSync(t, 'ok'); fs.unlinkSync(t); } catch { return { error: 'Tally Books can’t save in that folder. Choose one you can save files in.' }; }
+  try { const t = path.join(dir, '.tally-books-write-test-' + process.pid); fs.writeFileSync(t, 'ok'); fs.unlinkSync(t); } catch { return { error: 'Sumlora can’t save in that folder. Choose one you can save files in.' }; }
   // A folder that already has books opens them. An empty folder takes the books as is; any other folder
-  // gets a "Tally Books" folder inside it, so the books don't mix with other files.
+  // gets a "Sumlora" folder inside it, so the books don't mix with other files.
   let target = dir;
   if (!hasBooks(dir) && !(standard && same(dir, standard))) {
     const others = fs.readdirSync(dir).filter(n => !n.startsWith('.') && n !== 'desktop.ini');
-    if (others.length) target = path.join(dir, 'Tally Books');
+    // Books kept in a "Tally Books" folder (the app's name before Sumlora) open from there.
+    if (others.length) target = hasBooks(path.join(dir, 'Tally Books')) ? path.join(dir, 'Tally Books') : path.join(dir, 'Sumlora');
   }
   if (same(target, current)) return { same: true, target };
   const booksThere = hasBooks(target);
-  if (!booksThere && exists(target) && BOOK_ITEMS.some(n => exists(path.join(target, n)))) return { error: 'That folder has part of a Tally Books data folder in it. Choose an empty folder.' };
+  if (!booksThere && exists(target) && BOOK_ITEMS.some(n => exists(path.join(target, n)))) return { error: 'That folder has part of a Sumlora data folder in it. Choose an empty folder.' };
   return { target, booksThere, standard: !!standard && same(target, standard), warnings: folderWarnings(dir, platform) };
 }
 

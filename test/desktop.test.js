@@ -137,7 +137,7 @@ test('folder warnings: cloud-synced and network folders', () => {
   assert.deepEqual(folders.folderWarnings('/Users/sher/Library/CloudStorage/GoogleDrive-sher@x.ca/My Drive/Books', 'darwin'), ['sync']);
   assert.deepEqual(folders.folderWarnings('/Users/sher/Dropbox/Books', 'darwin'), ['sync']);
   assert.deepEqual(folders.folderWarnings('\\\\nas\\accounting\\Books', 'win32'), ['network']);
-  assert.deepEqual(folders.folderWarnings('D:\\Tally Books', 'win32'), []);
+  assert.deepEqual(folders.folderWarnings('D:\\Sumlora', 'win32'), []);
   assert.deepEqual(folders.folderWarnings('D:\\Box\\Sync\\MEGA', 'win32'), [], 'ordinary folder names');
 });
 
@@ -159,17 +159,17 @@ test('choosing a folder moves the books there, checked, and back again', async (
   pickReply = { canceled: false, filePaths: [userData] };
   assert.equal((await handlers['desktop:pick-folder'](fromPage)).same, true);
 
-  // A folder with other files in it: the books go in a "Tally Books" folder inside it.
+  // A folder with other files in it: the books go in a "Sumlora" folder inside it.
   const drive = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-drive-'));
   fs.writeFileSync(path.join(drive, 'notes.txt'), 'mine');
   pickReply = { canceled: false, filePaths: [drive] };
   const chk = await handlers['desktop:pick-folder'](fromPage);
-  assert.equal(chk.target, path.join(drive, 'Tally Books'));
+  assert.equal(chk.target, path.join(drive, 'Sumlora'));
   assert.equal(chk.hasBooks, true);
   assert.equal(chk.booksThere, false);
   assert.deepEqual(chk.warnings, []);
   assert.deepEqual(await handlers['desktop:use-folder'](fromPage, 'move'), { ok: true });
-  const moved = path.join(drive, 'Tally Books');
+  const moved = path.join(drive, 'Sumlora');
   assert.equal(fs.readFileSync(path.join(moved, 'users.json'), 'utf8'), before, 'copied exactly');
   assert.ok(fs.existsSync(path.join(moved, 'companies')));
   assert.ok(!fs.existsSync(path.join(userData, 'users.json')), 'removed from the old folder');
@@ -232,9 +232,9 @@ test('a copy that can’t finish leaves both folders as they were', () => {
   assert.ok(fs.existsSync(path.join(a, 'companies', 'c1.db')));
   const c = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-c-'));
   fs.mkdirSync(path.join(c, 'companies'));
-  assert.equal(folders.checkFolder(c, a).target, path.join(c, 'Tally Books'), 'their own files are left alone');
-  fs.mkdirSync(path.join(c, 'Tally Books', 'companies'), { recursive: true });
-  assert.equal(folders.checkFolder(c, a).error, 'That folder has part of a Tally Books data folder in it. Choose an empty folder.');
+  assert.equal(folders.checkFolder(c, a).target, path.join(c, 'Sumlora'), 'their own files are left alone');
+  fs.mkdirSync(path.join(c, 'Sumlora', 'companies'), { recursive: true });
+  assert.equal(folders.checkFolder(c, a).error, 'That folder has part of a Sumlora data folder in it. Choose an empty folder.');
 });
 
 test('automatic updates: only the installed, signed Windows app; asks to restart; backs up first', async () => {
@@ -266,7 +266,7 @@ test('automatic updates: only the installed, signed Windows app; asks to restart
   assert.equal(u.installed, 1);
   up.stop();
 
-  // "Later": installs when Tally Books closes, after a backup.
+  // "Later": installs when Sumlora closes, after a backup.
   const u2 = fakeUpdater(); answer = 1; backups = 0;
   const up2 = setupUpdates({ autoUpdater: u2, dialog, window: () => ({}), localServer });
   u2.emit('update-downloaded', { version: '1.3.0' });
@@ -281,4 +281,32 @@ test('automatic updates: only the installed, signed Windows app; asks to restart
   await new Promise(r => setImmediate(r));
   assert.match(dialogs[0].message, /up to date/);
   up2.stop();
+});
+
+test('after the new name (Sumlora): books and backups kept under the old “Tally Books” names are still found', () => {
+  const folders = require('../electron/datafolder');
+  const { Backups } = require('../src/server/backups');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-rename-'));
+  try {
+    // A folder with other files and an old "Tally Books" books folder inside: those books open.
+    fs.writeFileSync(path.join(dir, 'notes.txt'), 'x');
+    fs.mkdirSync(path.join(dir, 'Tally Books'));
+    fs.writeFileSync(path.join(dir, 'Tally Books', 'users.json'), '{"users":[]}');
+    const c = folders.checkFolder(dir, path.join(os.tmpdir(), 'elsewhere'));
+    assert.equal(c.target, path.join(dir, 'Tally Books')); assert.equal(c.booksThere, true);
+    // Without one, new books go in a "Sumlora" folder.
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-rename2-'));
+    fs.writeFileSync(path.join(dir2, 'notes.txt'), 'x');
+    assert.equal(folders.checkFolder(dir2, path.join(os.tmpdir(), 'elsewhere')).target, path.join(dir2, 'Sumlora'));
+    fs.rmSync(dir2, { recursive: true, force: true });
+    // Backups keep going to "Tally Books Backups" when that folder is already there; new ones go to "Sumlora Backups".
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-rename-data-'));
+    const reg = { list: () => [] };
+    const b = new Backups(data, reg, {});
+    b.settings.folder = dir;
+    assert.equal(b.target(), path.join(dir, 'Sumlora Backups'));
+    fs.mkdirSync(path.join(dir, 'Tally Books Backups'));
+    assert.equal(b.target(), path.join(dir, 'Tally Books Backups'));
+    fs.rmSync(data, { recursive: true, force: true });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

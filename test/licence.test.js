@@ -43,9 +43,9 @@ async function start2(opts) {
   return { server, req };
 }
 
-// Your own Tally Books (no licensing): make the key and codes there.
+// Your own Sumlora (no licensing): make the key and codes there.
 let seller, pub, code, codeRec;
-test('the seller makes a licence key and codes in their own Tally Books', async () => {
+test('the seller makes a licence key and codes in their own Sumlora', async () => {
   const at = new Date(2026, 9, 2, 12);
   let tick = 0;
   seller = await start({ dataDir: tmp(), now: () => new Date(at.getTime() + 1000 * tick++) });
@@ -84,7 +84,7 @@ test('codes can’t be made up or changed', () => {
   const forged = 'TB1-' + Buffer.from(JSON.stringify(p)).toString('base64url') + '.' + sig;
   assert.throws(() => L.readCode(forged, [pub]), /isn’t valid/);
   assert.throws(() => L.readCode(code.slice(0, -3), [pub]), /isn’t valid|incomplete/);
-  assert.throws(() => L.readCode('hello', [pub]), /isn’t a Tally Books licence code/);
+  assert.throws(() => L.readCode('hello', [pub]), /isn’t a Sumlora licence code/);
   const { privateKey } = require('node:crypto').generateKeyPairSync('ed25519');
   const other = L.makeCode({ id: 'x', name: 'Copycat', plan: 'plus', until: '2030-01-01', issued: '2026-01-01' }, privateKey);
   assert.throws(() => L.readCode(other, [pub]), /isn’t valid/, 'someone else’s key');

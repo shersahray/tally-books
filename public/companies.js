@@ -142,10 +142,10 @@ async function boot(){
   // Sign in first: nothing else loads without a session.
   try{await authStart()}
   catch(e){
-    {$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Tally Books server.</b> ${esc(e.message)}</span><button class="btn sm" data-reload>Try again</button></div>`;$('#main [data-reload]').onclick=()=>location.reload();$('#coName').textContent='Not connected';return}
+    {$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Sumlora server.</b> ${esc(e.message)}</span><button class="btn sm" data-reload>Try again</button></div>`;$('#main [data-reload]').onclick=()=>location.reload();$('#coName').textContent='Not connected';return}
   }
   try{await Promise.all([loadCompanies(),loadBackups()])}
-  catch(e){$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Tally Books server.</b> ${esc(e.message)}</span><button class="btn sm" data-reload>Try again</button></div>`;$('#main [data-reload]').onclick=()=>location.reload();$('#coName').textContent='Not connected';return}
+  catch(e){$('#main').innerHTML=`<div class="banner err"><span><b>Can't reach the Sumlora server.</b> ${esc(e.message)}</span><button class="btn sm" data-reload>Try again</button></div>`;$('#main [data-reload]').onclick=()=>location.reload();$('#coName').textContent='Not connected';return}
   const active=CO_LIST.filter(c=>!c.archived);
   const pick=[location.hash.slice(1),lsGet()].find(id=>id&&CO_LIST.some(c=>c.id===id))||(active.length===1?active[0].id:null);
   if(pick)await openCompany(pick);else{S.view='companies';renderMain()}

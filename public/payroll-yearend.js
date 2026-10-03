@@ -2,7 +2,7 @@
 /* ---------- Payroll year-end: T4 and RL-1 slips and summaries ----------
    The figures come from TallyPayroll.yearEnd() (payroll-calc.js), built from the year's pay runs,
    amounts entered for earlier payroll, and remittance payments.
-   Tally Books prepares the figures; slips are filed with CRA's T4 Web Forms (which also prints
+   Sumlora prepares the figures; slips are filed with CRA's T4 Web Forms (which also prints
    the employees' copies) and Revenu Québec's online service. Revenu Québec accepts printed RL-1
    slips only from software it has certified, so these printouts are worksheets, not slips. */
 S.ye={year:null};

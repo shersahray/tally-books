@@ -33,7 +33,7 @@ async function afterSignIn(){
 }
 const pwHint='At least 10 characters. A short phrase of a few unrelated words works well, for example “maple river copper lamp”.';
 const lockCard=(title,sub,body,submit,extra='')=>`<div class="lock"><form class="lock-card" novalidate>
-    <div class="lock-brand"><img src="icon.svg" alt="" width="40" height="40"><b>Tally Books</b></div>
+    <div class="lock-brand"><span class="logo" aria-label="Sumlora">${LOGO_SVG}</span></div>
     <h1>${title}</h1>${sub?`<p class="muted">${sub}</p>`:''}
     <div class="fields" style="grid-template-columns:1fr">${body}</div>
     <div class="err-msg" data-lockerr></div>
@@ -50,7 +50,7 @@ function renderLock(mode,opt=''){
       ${fld('lgUser','Username or email',`<input type="text" id="lgUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('lgPass','Password',`<input type="password" id="lgPass" autocomplete="current-password">`,true)}`,'Sign in',
       `<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>${SIGNUPS?'<button type="button" class="btn ghost block" data-locksignup>New firm? Create an account</button>':''}`);
-  else if(mode==='setup')html=lockCard('Welcome to Tally Books','Create the owner account. You’ll use it to sign in, add staff and clients, and manage security. Only people with an account can see the books.',`
+  else if(mode==='setup')html=lockCard('Welcome to Sumlora','Create the owner account. You’ll use it to sign in, add staff and clients, and manage security. Only people with an account can see the books.',`
       ${opt&&opt.setupCode?fld('suCode','Setup code',`<input type="text" id="suCode" autocomplete="off" autocapitalize="none" spellcheck="false"><span class="hint">The setup code chosen when this server was installed.</span>`,true):''}
       ${fld('suFirm','Your firm’s name',`<input type="text" id="suFirm" autocomplete="organization" placeholder="e.g. Sher Bookkeeping">`,true)}
       ${fld('suName','Your name',`<input type="text" id="suName" autocomplete="name">`,true)}
@@ -67,7 +67,7 @@ function renderLock(mode,opt=''){
       <div class="hint muted" style="font-size:12.5px"><span>${pwHint}</span>${SIGNUPS==='approval'?' <span>New firms are approved by the server’s administrator before they can sign in.</span>':''}</div>`,'Create firm account',
       '<button type="button" class="btn ghost block" data-lockback>Back to sign in</button>');
   else if(mode==='pending')html=lockCard('Thanks! Your firm is waiting for approval','The server’s administrator approves new firms. Once your firm is approved, sign in with the email and password you just chose.','','','<button type="button" class="btn primary block" data-lockback>Back to sign in</button>');
-  else if(mode==='code')html=lockCard('Enter your code','Open your authenticator app (Microsoft Authenticator, Google Authenticator, 1Password…) and enter the 6-digit code for Tally Books.',`
+  else if(mode==='code')html=lockCard('Enter your code','Open your authenticator app (Microsoft Authenticator, Google Authenticator, 1Password…) and enter the 6-digit code for Sumlora.',`
       ${fld('lgCode','Code',`<input type="text" id="lgCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456" style="font-size:20px;letter-spacing:.2em;text-align:center">`,true)}
       <div class="muted" style="font-size:12.5px">Lost your phone? Enter one of your recovery codes instead (it looks like <span class="mono">a1b2c-3d4e5</span>).</div>`,'Continue',
       '<button type="button" class="btn ghost block" data-lockback>Back</button>');
@@ -128,7 +128,7 @@ async function linkScreen(f){
   try{info=await api('POST','/api/auth/link',{token})}
   catch(ex){$('#lockRoot').innerHTML=lockCard('This link doesn’t work',esc(ex.message),'','','<button type="button" class="btn primary block" data-tosignin>Go to sign in</button>');$('#lockRoot [data-tosignin]').onclick=()=>renderLock('signin');return}
   const invite=info.kind==='invite';
-  $('#lockRoot').innerHTML=lockCard(invite?`Welcome, ${esc(info.name)}`:'Choose a new password',invite?'You’ve been invited to Tally Books. Choose a password to finish setting up your account.':`Choose a new password for ${esc(info.username)}.`,`
+  $('#lockRoot').innerHTML=lockCard(invite?`Welcome, ${esc(info.name)}`:'Choose a new password',invite?'You’ve been invited to Sumlora. Choose a password to finish setting up your account.':`Choose a new password for ${esc(info.username)}.`,`
     <div class="muted">Username: <b class="mono">${esc(info.username)}</b></div>
     ${fld('lkPass','Password',`<input type="password" id="lkPass" autocomplete="new-password">`,true)}
     ${fld('lkPass2','Type it again',`<input type="password" id="lkPass2" autocomplete="new-password">`,true)}
@@ -157,7 +157,7 @@ async function enrollScreen(f,opt){
     </ol>
     <div class="qr">${TallyQR.qrSvg(s.uri,{px:4,label:'QR code for your authenticator app'})}</div>
     <details><summary class="fsum">Can’t scan it?</summary><div class="muted" style="font-size:13px;margin-top:6px">Choose “Enter a setup key” in the app and type this key (time-based):<div class="mono" style="font-size:15px;margin-top:6px;word-break:break-all;user-select:all">${key}</div></div></details>
-    <ol class="steps" start="3"><li>Enter the 6-digit code the app shows for Tally Books:</li></ol>
+    <ol class="steps" start="3"><li>Enter the 6-digit code the app shows for Sumlora:</li></ol>
     ${fld('enCode','Code',`<input type="text" id="enCode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" style="font-size:20px;letter-spacing:.2em;text-align:center">`,true)}`,
     'Turn on two-step sign-in',optional?'<button type="button" class="btn ghost block" data-lockcancel>Not now</button>':'<button type="button" class="btn ghost block" data-lockout>Sign out</button>');
   const g=$('#lockRoot form'),btn=g.querySelector('button[type=submit]'),err=m=>{$('[data-lockerr]',g).textContent=m||''};
@@ -168,7 +168,7 @@ async function enrollScreen(f,opt){
     catch(ex){err(ex.message);btn.disabled=false;$('#enCode').value='';$('#enCode').focus()}};
 }
 function showRecovery(codes,fromAccount){
-  const text=`Tally Books recovery codes for ${ME?ME.username:''}\nEach code works once, if you can't use your authenticator app.\n\n${codes.join('\n')}\n`;
+  const text=`Sumlora recovery codes for ${ME?ME.username:''}\nEach code works once, if you can't use your authenticator app.\n\n${codes.join('\n')}\n`;
   document.body.classList.add('locked');
   $('#lockRoot').innerHTML=lockCard('Save your recovery codes','If you lose your phone, each of these codes lets you sign in once. Keep them somewhere safe, such as a password manager or a printed copy in a drawer. They won’t be shown again.',`
     <div class="recovery mono">${codes.map(c=>`<span>${c}</span>`).join('')}</div>
@@ -177,7 +177,7 @@ function showRecovery(codes,fromAccount){
   const g=$('#lockRoot form'),btn=g.querySelector('button[type=submit]');btn.disabled=true;
   $('#rcSaved').onchange=()=>{btn.disabled=!$('#rcSaved').checked};
   $('[data-rcopy]',g).onclick=async()=>{try{await navigator.clipboard.writeText(text);toast('Copied')}catch(e){toast('Select the codes and copy them instead.',true)}};
-  $('[data-rsave]',g).onclick=()=>saveFile('tally-books-recovery-codes.txt',new Blob([text],{type:'text/plain'}));
+  $('[data-rsave]',g).onclick=()=>saveFile('sumlora-recovery-codes.txt',new Blob([text],{type:'text/plain'}));
   g.onsubmit=async e=>{e.preventDefault();
     if(fromAccount){$('#lockRoot').innerHTML='';document.body.classList.remove('locked');const me=await api('GET','/api/auth/me');ME=me.user;toast('Two-step sign-in is on');return}
     await afterSignIn();toast('Two-step sign-in is on')};
@@ -297,11 +297,11 @@ function bindUsers(m){
 function showLink(u,token,kind){
   const url=`${location.origin}${location.pathname}#link=${encodeURIComponent(token)}`;
   const invite=kind==='invite';
-  const mail=isFr()?`Bonjour ${u.name.split(' ')[0]},\n\n${invite?`J’ai créé votre compte Tally Books pour que vous puissiez consulter les livres de votre entreprise en ligne. Ouvrez ce lien pour choisir votre mot de passe (il fonctionne une fois, pendant 7 jours)`:`Voici un lien pour choisir un nouveau mot de passe Tally Books (il fonctionne une fois, pendant 24 heures)`} :\n\n${url}\n\nVotre nom d’utilisateur est ${u.username}.${REQ2FA!=='off'||invite?' Vous configurerez aussi une application de codes sur votre téléphone pour la connexion en deux étapes.':''}\n`:`Hi ${u.name.split(' ')[0]},\n\n${invite?`I've set up your Tally Books account so you can see your company's books online. Open this link to choose your password (it works once, for 7 days)`:`Here's a link to choose a new Tally Books password (it works once, for 24 hours)`}:\n\n${url}\n\nYour username is ${u.username}.${REQ2FA!=='off'||invite?' You’ll also set up a code app on your phone for two-step sign-in.':''}\n`;
+  const mail=isFr()?`Bonjour ${u.name.split(' ')[0]},\n\n${invite?`J’ai créé votre compte Sumlora pour que vous puissiez consulter les livres de votre entreprise en ligne. Ouvrez ce lien pour choisir votre mot de passe (il fonctionne une fois, pendant 7 jours)`:`Voici un lien pour choisir un nouveau mot de passe Sumlora (il fonctionne une fois, pendant 24 heures)`} :\n\n${url}\n\nVotre nom d’utilisateur est ${u.username}.${REQ2FA!=='off'||invite?' Vous configurerez aussi une application de codes sur votre téléphone pour la connexion en deux étapes.':''}\n`:`Hi ${u.name.split(' ')[0]},\n\n${invite?`I've set up your Sumlora account so you can see your company's books online. Open this link to choose your password (it works once, for 7 days)`:`Here's a link to choose a new Sumlora password (it works once, for 24 hours)`}:\n\n${url}\n\nYour username is ${u.username}.${REQ2FA!=='off'||invite?' You’ll also set up a code app on your phone for two-step sign-in.':''}\n`;
   const f=openModal(invite?'Invitation link':'Password reset link',`
     <div class="muted">Send this link to <b>${esc(u.name)}</b> yourself, for example by email. Anyone with the link can set the password, so send it only to them. It works once and expires in ${invite?'7 days':'24 hours'}.</div>
     <div class="linkbox mono">${esc(url)}</div>
-    <div class="actions" style="justify-content:flex-start"><button type="button" class="btn sm" data-lcopy>Copy link</button><button type="button" class="btn sm" data-mcopy>Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(u.username.includes('@')?u.username:'')}?subject=${encodeURIComponent(T(invite?'Your Tally Books account':'Reset your Tally Books password'))}&body=${encodeURIComponent(mail)}">Open in email</a></div>`,
+    <div class="actions" style="justify-content:flex-start"><button type="button" class="btn sm" data-lcopy>Copy link</button><button type="button" class="btn sm" data-mcopy>Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(u.username.includes('@')?u.username:'')}?subject=${encodeURIComponent(T(invite?'Your Sumlora account':'Reset your Sumlora password'))}&body=${encodeURIComponent(mail)}">Open in email</a></div>`,
     `<button type="button" class="btn primary" data-close>Done</button>`);
   $('[data-lcopy]',f).onclick=async()=>{try{await navigator.clipboard.writeText(url);toast('Link copied')}catch(e){toast('Select the link and copy it instead.',true)}};
   $('[data-mcopy]',f).onclick=async()=>{try{await navigator.clipboard.writeText(mail);toast('Email text copied')}catch(e){toast('Select the text and copy it instead.',true)}};

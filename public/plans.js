@@ -1,5 +1,5 @@
 /*
- * Tally Books plans. Each firm on a server has a plan; the plan decides which extra features its companies
+ * Sumlora plans. Each firm on a server has a plan; the plan decides which extra features its companies
  * can use, and inside that, each company can switch features off (a client who doesn't need payroll).
  * Works in the browser (window.TallyPlans) and in Node (require), so the server enforces the same rules.
  */

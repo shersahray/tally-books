@@ -134,7 +134,7 @@ function rBS(){
 
 /* ---------- cash flow statement (indirect method) ----------
    Starts from net income, adds back amortization, then the change in every balance sheet account that isn't cash.
-   Each account goes to operating, investing or financing activities: set it on the account, or Tally Books
+   Each account goes to operating, investing or financing activities: set it on the account, or Sumlora
    decides from its type (capital assets are investing; loans, shareholder accounts and equity are financing). */
 const CF_NONCASH=/accumulated (amortization|amortisation|depreciation)|amortissement cumul|depreciation, accumulated/i;
 const CF_FINANCING=/loan|mortgage|note payable|notes payable|line of credit|due to (shareholder|owner|related)|shareholder|lease obligation|long[- ]term debt|emprunt|hypoth|prêt|marge de crédit|actionnaire/i;

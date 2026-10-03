@@ -38,8 +38,8 @@ const pub = f => fs.readFileSync(path.join(root, 'public', f), 'utf8');
   const fonts = index.match(/<link rel="stylesheet" href="https:\/\/fonts[^>]+>/)[0];
   const body = index.split('<body>')[1].split('<script')[0].trim();
   const safe = s => s.replace(/<\/script/gi, '<\\/script');
-  const html = `<title>Tally Books Demo</title>
-<meta name="description" content="Try Tally Books in your browser. Example data; nothing is saved.">
+  const html = `<title>Sumlora Demo</title>
+<meta name="description" content="Try Sumlora in your browser. Example data; nothing is saved.">
 ${fonts}
 <style>
 ${pub('styles.css')}
@@ -50,7 +50,7 @@ ${body}
 <div class="demo-ribbon">Demo · example data · changes aren’t saved</div>
 <script>window.__TALLY_DEMO__=${safe(JSON.stringify(data))};</script>
 <script>${safe(fs.readFileSync(path.join(__dirname, 'demo-shim.js'), 'utf8'))}</script>
-${['i18n.js', 'fr.js', 'gifi.js', 'plans.js', 'bankparse.js', 'app.js', 'banking.js', 'ai.js', 'receipts.js', 'convert-parse.js', 'convert.js', 'pdf.js', 'docout.js', 'salestax.js', 'reports.js', 'review.js', 'payroll-calc.js', 'payroll.js', 'payroll-yearend.js', 'payroll-roe.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js', 'licence.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
+${['i18n.js', 'fr.js', 'gifi.js', 'plans.js', 'logo.js', 'bankparse.js', 'app.js', 'banking.js', 'ai.js', 'receipts.js', 'convert-parse.js', 'convert.js', 'pdf.js', 'docout.js', 'salestax.js', 'reports.js', 'review.js', 'payroll-calc.js', 'payroll.js', 'payroll-yearend.js', 'payroll-roe.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js', 'licence.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
 `;
   fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'dist', 'demo.html'), html);

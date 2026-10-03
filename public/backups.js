@@ -8,7 +8,7 @@ function backupStatusLine(){
   if(!BK)return '';
   if(!BK.enabled)return `<span class="pill overdue">Off</span> <span class="neg">Automatic backups are turned off. If this computer fails, your clients’ books could be lost.</span>`;
   if(BK.lastError)return `<span class="pill overdue">Problem</span> <span class="neg">${esc(BK.lastError)}</span>`;
-  if(!BK.lastRun)return `<span class="pill partial">Waiting</span> The first backup runs within a minute of starting Tally Books, or click Back up now.`;
+  if(!BK.lastRun)return `<span class="pill partial">Waiting</span> The first backup runs within a minute of starting Sumlora, or click Back up now.`;
   const off=BK.offsite?(BK.offsite.lastRun?` · off-site copy in ${esc(BK.offsite.where)} ${fmtWhen(BK.offsite.lastRun)}`:` · off-site copy to ${esc(BK.offsite.where)} after the next backup`):'';
   return `<span class="pill paid">On</span> Last backup ${fmtWhen(BK.lastRun)} · ${BK.lastCount} compan${BK.lastCount===1?'y':'ies'}${off}`;
 }
@@ -27,7 +27,7 @@ function backupPanel(){
       <span class="flabel">Choose where backups go</span>
       <div class="actions">${BK.suggestions.map(s=>`<button class="btn sm" data-bkfolder="${esc(s.path)}">${esc(s.label)}</button>`).join('')}</div>
       <input type="text" id="bkFolder" value="${esc(BK.folder)}" aria-label="Backup folder">
-      <span class="hint muted" style="font-size:12.5px">Pick a folder that syncs to the cloud, such as OneDrive or Google Drive, so a copy survives if this computer is lost. A “Tally Books Backups” folder is created inside it.</span>
+      <span class="hint muted" style="font-size:12.5px">Pick a folder that syncs to the cloud, such as OneDrive or Google Drive, so a copy survives if this computer is lost. A “Sumlora Backups” folder is created inside it.</span>
       <div class="actions"><button class="btn sm primary" data-bkact="save-folder">Save folder</button><button class="btn sm" data-bkact="cancel-folder">Cancel</button></div>
     </div>`:''}
     <div class="actions">
@@ -35,7 +35,7 @@ function backupPanel(){
       ${bkEditing?'':'<button class="btn" data-bkact="edit-folder">Change folder</button>'}
       <button class="btn ghost" data-bkact="open">Open backup folder</button>
     </div>
-    <div class="muted" style="font-size:13px">Tally Books backs up every company once a day while it’s open, into a dated folder, and removes backups older than the period above. To bring a client back, open that company, go to <b>Settings → Restore from backup</b>, and choose its file from the dated folder.</div>
+    <div class="muted" style="font-size:13px">Sumlora backs up every company once a day while it’s open, into a dated folder, and removes backups older than the period above. To bring a client back, open that company, go to <b>Settings → Restore from backup</b>, and choose its file from the dated folder.</div>
   </div></div>`;
 }
 async function bkAction(act,d){

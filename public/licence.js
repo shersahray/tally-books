@@ -17,7 +17,7 @@ async function licenceEnded(){await loadLicence();if(typeof renderMain==='functi
 function licenceBanner(){
   if(!LIC||!LIC.on)return '';
   const btn=LIC.canEnter?`<button class="btn sm" data-act="licence">${['trial','trial-ended'].includes(LIC.state)?'Enter licence code':'Enter renewal code'}</button>`:'';
-  const ask=LIC.canEnter?'':' <span>Ask the owner of this computer’s Tally Books to enter it.</span>';
+  const ask=LIC.canEnter?'':' <span>Ask the owner of this computer’s Sumlora to enter it.</span>';
   if(LIC.state==='trial')return `<div class="banner"><span><b>Free trial: ${LIC.daysLeft===0?'last day':`${LIC.daysLeft} days left`}.</b> <span>Everything is included during the trial. Enter a licence code to keep making changes after ${esc(fmtDate(LIC.until))}.</span>${ask}</span>${btn}</div>`;
   if(LIC.state==='trial-ended')return `<div class="banner err"><span><b>The free trial has ended.</b> <span>Your books are view only: you can still open, print, export and back up everything. Enter a licence code to make changes.</span>${ask}</span>${btn}</div>`;
   if(LIC.state==='active'&&LIC.renewSoon)return `<div class="banner"><span><b>Your licence ends on ${esc(fmtDate(LIC.until))}.</b> <span>Renew it to keep making changes after that date.</span>${ask}</span>${btn}</div>`;
@@ -39,9 +39,9 @@ function licenceDialog(){
   const f=openModal('Licence',`
     <div class="banner ${['trial-ended','ended','grace'].includes(st.state)?'err':''}" style="margin:0"><span>${now}</span></div>
     ${st.canEnter&&st.state!=='issuer'?`${fld('licCode','Licence code',`<textarea id="licCode" rows="4" class="mono" spellcheck="false" autocomplete="off" placeholder="TB1-…" style="font-size:12.5px;word-break:break-all"></textarea>`,true)}
-    <div class="muted" style="font-size:12.5px">Paste the whole code from the email, starting with TB1-. Your books stay as they are; the code only changes how long you can keep making changes, and the plan.</div>`:st.state!=='issuer'?'<div class="muted">Ask the owner of this computer’s Tally Books to enter the licence code.</div>':''}
-    ${st.canEnter&&st.state!=='issuer'?`<details style="margin-top:4px"><summary class="muted" style="font-size:12.5px;cursor:pointer">Selling Tally Books? Bring back your licence key</summary>
-      <div class="muted" style="font-size:12.5px;margin:6px 0">Choose the copy of your licence key (tally-books-licence-key.json). This copy then makes codes, and doesn’t need one.</div>
+    <div class="muted" style="font-size:12.5px">Paste the whole code from the email, starting with TB1-. Your books stay as they are; the code only changes how long you can keep making changes, and the plan.</div>`:st.state!=='issuer'?'<div class="muted">Ask the owner of this computer’s Sumlora to enter the licence code.</div>':''}
+    ${st.canEnter&&st.state!=='issuer'?`<details style="margin-top:4px"><summary class="muted" style="font-size:12.5px;cursor:pointer">Selling Sumlora? Bring back your licence key</summary>
+      <div class="muted" style="font-size:12.5px;margin:6px 0">Choose the copy of your licence key (sumlora-licence-key.json). This copy then makes codes, and doesn’t need one.</div>
       <input type="file" id="licKeyFile" accept=".json,application/json"></details>`:''}`,
     `<button type="button" class="btn" data-close>${st.canEnter&&st.state!=='issuer'?'Cancel':'Close'}</button>${st.canEnter&&st.state!=='issuer'?'<button type="submit" class="btn primary">Turn on</button>':''}`,'small keep');
   f.onsubmit=async e=>{e.preventDefault();
@@ -51,7 +51,7 @@ function licenceDialog(){
 }
 async function restoreKeyFile(input,done){
   const file=input.files&&input.files[0];if(!file)return;
-  let body;try{body=JSON.parse(await file.text())}catch(e){input.value='';return toast('That isn’t a copy of a Tally Books licence key.',true)}
+  let body;try{body=JSON.parse(await file.text())}catch(e){input.value='';return toast('That isn’t a copy of a Sumlora licence key.',true)}
   try{await api('POST','/api/licences/key/restore',body);toast('Licence key brought back');await done()}catch(ex){input.value='';toast(ex.message,true)}
 }
 
@@ -68,21 +68,21 @@ function licStatus(l){
   return ['paid','Active'];
 }
 function licMail(l){
-  return `${T('Hello,')}\n\n${T('Here is your Tally Books licence code.')} ${T(`It’s for ${l.name}, with the ${licPlan(l.plan)} plan, until ${fmtDate(l.until)}.`)}\n\n${T('To enter it, open Tally Books, click Licence at the bottom left, paste the code and click Turn on.')}\n\n${l.code}\n\n${T('Thank you!')}\n`;
+  return `${T('Hello,')}\n\n${T('Here is your Sumlora licence code.')} ${T(`It’s for ${l.name}, with the ${licPlan(l.plan)} plan, until ${fmtDate(l.until)}.`)}\n\n${T('To enter it, open Sumlora, click Licence at the bottom left, paste the code and click Turn on.')}\n\n${l.code}\n\n${T('Thank you!')}\n`;
 }
 function vLicences(){
   const back=`<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`;
-  if(!ME||!ME.platformAdmin||!LIC||!LIC.canIssue)return back+head('Licence codes','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Licence codes are made in your own copy of Tally Books.</div></div>';
+  if(!ME||!ME.platformAdmin||!LIC||!LIC.canIssue)return back+head('Licence codes','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Licence codes are made in your own copy of Sumlora.</div></div>';
   if(!LICS)return back+head('Licence codes','Loading…');
-  const h=back+head('Licence codes','For clients who use the desktop app with their books on their own computer. A code turns Tally Books on until a date, with a plan.');
+  const h=back+head('Licence codes','For clients who use the desktop app with their books on their own computer. A code turns Sumlora on until a date, with a plan.');
   if(!LICS.key)return h+`<div class="panel" style="max-width:720px"><h3>Your licence key</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
-    <div>Codes are signed with a key that only you have, so nobody else can make them. Create it once, here in your own Tally Books.</div>
+    <div>Codes are signed with a key that only you have, so nobody else can make them. Create it once, here in your own Sumlora.</div>
     <div class="actions" style="justify-content:flex-start"><button class="btn primary" data-lic="newkey">Create licence key</button><label class="btn">Bring back a key from a copy<input type="file" id="licRestore" accept=".json,application/json" hidden></label></div>
   </div></div>`;
   const today=isoDay(new Date()),F=LIC_FORM||{name:'',email:'',plan:'plus',until:yearFrom(today),note:''};
   const list=LICS.issued;
   return h+`<div class="panel" style="max-width:820px;margin-bottom:16px"><h3>Your licence key</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
-    ${LICS.licensing?`<div><span class="pill paid">Working</span> <span>This copy holds your key, so it makes codes and doesn’t need one.</span></div>`:`<div><b>1. Put your public key in GitHub, once.</b> <span>In your repository: Settings → Secrets and variables → Actions → Variables → New repository variable. Name:</span> <code translate="no">TALLY_LICENCE_KEY</code><span>, value:</span></div>
+    ${LICS.licensing?`<div><span class="pill paid">Working</span> <span>This copy holds your key, so it makes codes and doesn’t need one.</span></div>`:`<div><b>1. Put your public key in GitHub, once.</b> <span>In your repository: Settings → Secrets and variables → Actions → Variables → New repository variable. Name:</span> <code translate="no">SUMLORA_LICENCE_KEY</code><span>, value:</span></div>
     <div class="linkbox mono" translate="no">${esc(LICS.key.publicKey)}</div>
     <div class="actions" style="justify-content:flex-start"><button class="btn sm" data-lic="copypub">Copy public key</button></div>
     <div class="muted" style="font-size:13px">The public key only checks codes; it can’t make them, so it’s safe in GitHub. Desktop versions built after you add it ask for a licence code (with a 30-day free trial). Copies installed before that keep working without one until they update.</div>`}
@@ -98,8 +98,8 @@ function vLicences(){
   </form></div>
   ${LIC_MADE?`<div class="panel" style="max-width:820px;margin-bottom:16px" id="licMade"><h3><span><span>Code for</span> <span translate="no">${esc(LIC_MADE.name)}</span></span></h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="linkbox mono" translate="no" style="word-break:break-all">${esc(LIC_MADE.code)}</div>
-    <div class="muted" style="font-size:13px"><span>${esc(licPlan(LIC_MADE.plan))} plan</span> · <span>until ${esc(fmtDate(LIC_MADE.until))}</span>. <span>Send it to your client by email. They paste it in Tally Books under Licence.</span></div>
-    <div class="actions" style="justify-content:flex-start"><button class="btn sm" data-lic="copy" data-id="${esc(LIC_MADE.id)}">Copy code</button><button class="btn sm" data-lic="copymail" data-id="${esc(LIC_MADE.id)}">Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(LIC_MADE.email||'')}?subject=${encodeURIComponent(T('Your Tally Books licence code'))}&body=${encodeURIComponent(licMail(LIC_MADE))}">Open in email</a></div>
+    <div class="muted" style="font-size:13px"><span>${esc(licPlan(LIC_MADE.plan))} plan</span> · <span>until ${esc(fmtDate(LIC_MADE.until))}</span>. <span>Send it to your client by email. They paste it in Sumlora under Licence.</span></div>
+    <div class="actions" style="justify-content:flex-start"><button class="btn sm" data-lic="copy" data-id="${esc(LIC_MADE.id)}">Copy code</button><button class="btn sm" data-lic="copymail" data-id="${esc(LIC_MADE.id)}">Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(LIC_MADE.email||'')}?subject=${encodeURIComponent(T('Your Sumlora licence code'))}&body=${encodeURIComponent(licMail(LIC_MADE))}">Open in email</a></div>
   </div></div>`:''}
   <div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Client</th><th>Plan</th><th>Last day</th><th>Made</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(l=>{const st=licStatus(l);
     return `<tr><td><b translate="no">${esc(l.name)}</b>${l.email?`<div class="muted" style="font-size:12px" translate="no">${esc(l.email)}</div>`:''}${l.note?`<div class="muted" style="font-size:12px">${esc(l.note)}</div>`:''}</td><td>${esc(licPlan(l.plan))}</td><td>${esc(fmtDate(l.until))}</td><td class="muted">${esc(fmtDate(l.issued))}</td><td><span class="pill ${st[0]}">${esc(T(st[1]))}</span></td>

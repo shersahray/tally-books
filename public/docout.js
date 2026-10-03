@@ -19,7 +19,7 @@ async function logoBytes(){
 }
 
 /* ---------- drawing ---------- */
-const M=50,RIGHT=562,GREY='#666666',ACC='#0d6a55';
+const M=50,RIGHT=562,GREY='#666666',ACC='#0a7369';
 // Company block (logo, name, address, contact, tax number) and the title on the right. Returns the y below it.
 function drawHeader(pdf,logo,title,meta){
   const c=S.company;let y=40;

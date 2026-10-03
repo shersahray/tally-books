@@ -1,5 +1,5 @@
 /*
- * Tally Books payroll calculator.
+ * Sumlora payroll calculator.
  *
  * Works in the browser (window.TallyPayroll) and in Node (require) so the tests can check it.
  *
@@ -555,7 +555,7 @@
   }
 
   /* ---------- vacation pay ----------
-     Suggested minimum by years of service. Where Tally Books doesn't know when the rate goes up, it suggests 4%
+     Suggested minimum by years of service. Where Sumlora doesn't know when the rate goes up, it suggests 4%
      and says to check. Always the minimum: an employer can pay more. */
   const VACATION = {
     ON: [[0, 4], [5, 6]], QC: [[0, 4], [3, 6]], BC: [[0, 4], [5, 6]], AB: [[0, 4], [5, 6]], MB: [[0, 4], [5, 6]],

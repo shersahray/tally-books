@@ -1,10 +1,10 @@
 #!/bin/bash
 # =====================================================================================
-#  Tally Books: set up an online server on Azure (Ubuntu Server 24.04 LTS)
+#  Sumlora: set up an online server on Azure (Ubuntu Server 24.04 LTS)
 #
 #  Paste this whole file into "Custom data" (Advanced tab) when you create the virtual
 #  machine. It runs once, on first start, and takes about 5 minutes. It installs:
-#    - Node.js 22 and Tally Books (from GitHub), running as its own locked-down user
+#    - Node.js 22 and Sumlora (from GitHub), running as its own locked-down user
 #    - Caddy, which gets a free HTTPS certificate and renews it automatically
 #    - a nightly update at 3:15 a.m. (Toronto), run by a separate account that can't read the
 #      books: new versions are tested before they go live, and the previous version comes
@@ -24,7 +24,7 @@ set -euo pipefail
 umask 022
 exec > >(tee -a /var/log/tally-setup.log) 2>&1
 chmod 600 /var/log/tally-setup.log
-echo "=== Tally Books setup started $(date) ==="
+echo "=== Sumlora setup started $(date) ==="
 export DEBIAN_FRONTEND=noninteractive
 
 # The setup code: letters, numbers, spaces, . _ - only. If it wasn't changed, make a random one
@@ -89,7 +89,7 @@ chmod 640 /etc/tally-books.env
 
 cat > /etc/systemd/system/tally-books.service <<'UNIT'
 [Unit]
-Description=Tally Books
+Description=Sumlora
 After=network-online.target
 Wants=network-online.target
 
@@ -174,7 +174,7 @@ chmod 755 /usr/local/lib/tally/update.sh
 
 cat > /etc/systemd/system/tally-update.service <<'UNIT'
 [Unit]
-Description=Update Tally Books from GitHub
+Description=Update Sumlora from GitHub
 After=network-online.target
 [Service]
 Type=oneshot
@@ -192,7 +192,7 @@ InaccessiblePaths=/var/lib/tally-books /etc/tally-books.env
 UNIT
 cat > /etc/systemd/system/tally-update.timer <<'UNIT'
 [Unit]
-Description=Update Tally Books every night
+Description=Update Sumlora every night
 [Timer]
 OnCalendar=*-*-* 03:15:00
 Persistent=true
@@ -201,7 +201,7 @@ WantedBy=timers.target
 UNIT
 cat > /etc/systemd/system/tally-restart.path <<'UNIT'
 [Unit]
-Description=Restart Tally Books when an update asks
+Description=Restart Sumlora when an update asks
 [Path]
 PathChanged=/opt/tally/restart-request
 [Install]
@@ -209,7 +209,7 @@ WantedBy=multi-user.target
 UNIT
 cat > /etc/systemd/system/tally-restart.service <<'UNIT'
 [Unit]
-Description=Restart Tally Books
+Description=Restart Sumlora
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/systemctl restart tally-books
@@ -237,7 +237,7 @@ printf 'BACKUP_BLOB_URL="%s"\n' "$URL" >> /etc/tally-books.env
 systemctl restart tally-books
 sleep 3
 echo "Off-site backups are on: ${URL%%\?*}"
-echo "Open Tally Books > Settings and click Back up now to test it."
+echo "Open Sumlora > Settings and click Back up now to test it."
 HELPER
 chmod 755 /usr/local/bin/tally-set-backup
 
@@ -265,4 +265,4 @@ systemctl enable --now tally-books
 systemctl enable --now tally-update.timer
 systemctl enable --now tally-restart.path
 systemctl restart caddy
-echo "=== Tally Books setup finished $(date). Open https://${DOMAIN} ==="
+echo "=== Sumlora setup finished $(date). Open https://${DOMAIN} ==="

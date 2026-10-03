@@ -173,7 +173,7 @@ function filingPeriods(){
   const step={monthly:1,quarterly:3,annual:12}[S.company.filingFreq||'quarterly']||3;
   const ids=taxAcctIds();
   let first=today();
-  // Opening balances brought over from other software aren't sales tax activity in Tally Books.
+  // Opening balances brought over from other software aren't sales tax activity in Sumlora.
   for(const e of S.entries)if(!e.opening&&e.date<first&&(e.lines||[]).some(l=>ids.has(l.account)))first=e.date;
   for(const f of S.filings)if(f.from<first)first=f.from;
   const out=[];let d=pd(fyStartOf(first));const end=pd(today());
@@ -517,7 +517,7 @@ function qmBox(k,w,filed){
       ${row(`${name} paid on expenses, not claimed (becomes part of expenses)`,Q.itcOps)}
       ${row(`${name} paid on capital purchases, still claimed (line ${k==='qst'?'206':'106'})`,Q.itcCap)}
     </tbody></table>
-    <div class="muted" style="font-size:13px;margin-top:8px">${adj?`Posted on ${fmtDate(adj.date)} when this return was filed.`:`When you mark the return as filed, Tally Books posts these to income and expenses on ${fmtDate(w.filed?w.filed.to:(S.stax.period||'|').split('|')[1])}, so the sales tax account matches the return.`} <span>Mark purchases of equipment, vehicles and buildings as capital assets in the chart of accounts to keep their credits.</span></div>
+    <div class="muted" style="font-size:13px;margin-top:8px">${adj?`Posted on ${fmtDate(adj.date)} when this return was filed.`:`When you mark the return as filed, Sumlora posts these to income and expenses on ${fmtDate(w.filed?w.filed.to:(S.stax.period||'|').split('|')[1])}, so the sales tax account matches the return.`} <span>Mark purchases of equipment, vehicles and buildings as capital assets in the chart of accounts to keep their credits.</span></div>
   </div>`;
 }
 /** The journal entry that brings the tax account to the Quick Method amount: the gain to income, unclaimed tax to expenses. */
@@ -603,6 +603,6 @@ function npoBox(k,w,filed){
       ${row('Not recovered (becomes an expense)',X.ops,true)}
     </tbody></table>
     ${X.journals?`<div class="banner" style="margin:8px 0 0"><span>${money(X.journals)} of tax was posted by journal entries. It’s on lines ${k==='qst'?'204 and 207':'104 and 107'} in full, without the rules for non-profits. Record purchases and sales as bills, expenses, invoices or deposits so the rules apply.</span></div>`:''}
-    <div class="muted" style="font-size:13px;margin-top:8px">${w.rebate?`<span>Claim the rebate with form ${form} and include it on line ${k==='qst'?'211':'111'}.</span> `:''}${X.capComm?'<span>Credits on capital property assume it’s used mainly (more than 50%) in taxable activities. Change this in Settings if it isn’t.</span> ':''}${adj?`<span>Posted on ${fmtDate(adj.date)} when this return was filed.</span>`:'<span>When you mark the return as filed, Tally Books posts the tax kept to income and the tax not recovered to expenses, so the sales tax account matches the return.</span>'}</div>
+    <div class="muted" style="font-size:13px;margin-top:8px">${w.rebate?`<span>Claim the rebate with form ${form} and include it on line ${k==='qst'?'211':'111'}.</span> `:''}${X.capComm?'<span>Credits on capital property assume it’s used mainly (more than 50%) in taxable activities. Change this in Settings if it isn’t.</span> ':''}${adj?`<span>Posted on ${fmtDate(adj.date)} when this return was filed.</span>`:'<span>When you mark the return as filed, Sumlora posts the tax kept to income and the tax not recovered to expenses, so the sales tax account matches the return.</span>'}</div>
   </div>`;
 }

@@ -56,7 +56,7 @@ test('first run seeds the chart of accounts and company settings', async () => {
 test('serves the web app', async () => {
   const r = await call('GET', '/');
   assert.equal(r.status, 200);
-  assert.match(r.text, /<title>Tally Books<\/title>/);
+  assert.match(r.text, /<title>Sumlora<\/title>/);
   const js = await call('GET', '/app.js');
   assert.equal(js.status, 200);
   const trav = await fetch(base + '/..%2f..%2fpackage.json');
@@ -330,10 +330,10 @@ test('automatic backups write every company and remove old days', async () => {
   assert.equal(r.status, 400, 'folder must exist');
   r = await call('PUT', '/api/backups', { folder: out, keepDays: 3, enabled: true });
   assert.equal(r.status, 200, r.text);
-  assert.equal(r.json.target, path.join(out, 'Tally Books Backups'));
+  assert.equal(r.json.target, path.join(out, 'Sumlora Backups'));
 
   // an old day that should be pruned, an old folder with foreign files that must be kept
-  const root = path.join(out, 'Tally Books Backups');
+  const root = path.join(out, 'Sumlora Backups');
   fs.mkdirSync(path.join(root, '2020-01-01'), { recursive: true });
   fs.writeFileSync(path.join(root, '2020-01-01', 'x.json'), '{}');
   fs.mkdirSync(path.join(root, '2020-01-02'), { recursive: true });
@@ -558,7 +558,7 @@ test('two-step sign-in: set up, sign in with a code, recovery codes, replay and 
   assert.equal(r.json.mustEnroll, true);
 
   const start = (await j('POST', '/api/auth/2fa/start', {}, ck)).json;
-  assert.match(start.uri, /^otpauth:\/\/totp\/Tally%20Books:owner%40example\.com\?secret=[A-Z2-7]{32}&issuer=Tally%20Books/);
+  assert.match(start.uri, /^otpauth:\/\/totp\/Sumlora:owner%40example\.com\?secret=[A-Z2-7]{32}&issuer=Sumlora/);
   const step = Math.floor(Date.now() / 30000);
   assert.equal((await j('POST', '/api/auth/2fa/confirm', { code: '000000' === totp(start.secret, step) ? '111111' : '000000' }, ck)).status, 400);
   r = await j('POST', '/api/auth/2fa/confirm', { code: totp(start.secret, step) }, ck);

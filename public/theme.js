@@ -8,7 +8,7 @@
   function apply(m){
     const r=document.documentElement;
     if(m==='light'||m==='dark')r.setAttribute('data-theme',m);else r.removeAttribute('data-theme');
-    const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.setAttribute('content',dark(m)?'#151d1a':'#0d6a55');
+    const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.setAttribute('content',dark(m)?'#121b27':'#0A7369');
     document.querySelectorAll('.themesw [data-theme-set]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.themeSet===m)));
   }
   function set(m,save){

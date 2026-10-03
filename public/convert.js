@@ -6,28 +6,28 @@ const CV_SOURCES={qbo:'QuickBooks Online',sage50:'Sage 50',sageacc:'Sage Account
 const CV_HELP={
   qbo:[
     'Reports → Account List: export to Excel.',
-    'Reports → Trial Balance, as of the day before you start in Tally Books (usually the last fiscal year-end): export to Excel.',
+    'Reports → Trial Balance, as of the day before you start in Sumlora (usually the last fiscal year-end): export to Excel.',
     'Reports → A/R Aging Detail (or Open Invoices) and A/P Aging Detail (or Unpaid Bills), as of the same date.',
     'Reports → Customer Contact List and Vendor Contact List.',
     'Optional: Reports → Journal, from the day after the trial balance date to today, to bring this year’s transactions.',
   ],
   sage50:[
     'Reports → Lists → Chart of Accounts, then export it (File → Export, to Excel or a CSV file).',
-    'Reports → Financials → Trial Balance, as at the day before you start in Tally Books (usually the last fiscal year-end).',
+    'Reports → Financials → Trial Balance, as at the day before you start in Sumlora (usually the last fiscal year-end).',
     'Customer Aged Detail and Vendor Aged Detail reports, as at the same date.',
     'Customer and Vendor lists (Reports → Lists).',
     'Optional: All Journal Entries, from the day after the trial balance date to today, to bring this year’s transactions.',
   ],
   sageacc:[
     'Settings → Chart of Accounts: export.',
-    'Reporting → Trial Balance, as at the day before you start in Tally Books: export as CSV.',
+    'Reporting → Trial Balance, as at the day before you start in Sumlora: export as CSV.',
     'Aged Debtors and Aged Creditors (detailed), as at the same date.',
     'Contacts: export customers and suppliers.',
     'Optional: the Journals or Audit trail report, from the day after the trial balance date to today.',
   ],
   other:[
     'A chart of accounts (account number, name and type).',
-    'A trial balance as of the day before you start in Tally Books.',
+    'A trial balance as of the day before you start in Sumlora.',
     'Open invoices and unpaid bills as of the same date.',
     'Customer and vendor lists.',
     'Optional: a journal with each transaction’s date, account, debit and credit.',
@@ -60,7 +60,7 @@ async function cvAddFiles(files){
     try{
       if(f.size>60*1024*1024)throw new Error(`${f.name} is too large.`);
       const tables=await Convert.readFile(f.name,new Uint8Array(await f.arrayBuffer()),cvInflate);
-      if(!tables.length)toast(`Nothing Tally Books can read was found in ${f.name}.`,true);
+      if(!tables.length)toast(`Nothing Sumlora can read was found in ${f.name}.`,true);
       for(const t of tables){const c=Convert.classify(t);C.tables.push({...t,...c,id:uid(),from:f.name})}
     }catch(e){toast(e.message,true)}
   }
@@ -71,7 +71,7 @@ function cvWarn(w){
   const m=v=>money(v);
   switch(w.code){
     case 'tb-many':return 'More than one trial balance was chosen. Only the first one is used.';
-    case 'tb-computed':return `“${w.name}” on the trial balance (${m(w.amount)}) is worked out from income and expenses, so it isn’t brought over. Tally Books works it out the same way.`;
+    case 'tb-computed':return `“${w.name}” on the trial balance (${m(w.amount)}) is worked out from income and expenses, so it isn’t brought over. Sumlora works it out the same way.`;
     case 'tb-date':return 'Enter the date of the trial balance.';
     case 'tb-unbalanced':return Math.abs(w.diff)<=1?`The trial balance is off by ${m(w.diff)} (rounding). The difference goes to Opening balance equity.`:`The trial balance doesn’t balance (off by ${m(w.diff)}). Check that the file is the whole trial balance.`;
     case 'ar-credits':return w.count===1?`1 payment or credit on the receivables report (${m(w.total)}) isn’t applied to an invoice, so it isn’t brought over as an item. It’s still in the Accounts receivable balance.`:`${w.count} payments or credits on the receivables report (${m(w.total)}) aren’t applied to an invoice, so they aren’t brought over as items. They’re still in the Accounts receivable balance.`;
@@ -84,7 +84,7 @@ function cvWarn(w){
     case 'already-imported':return 'Opening balances were already brought into these books. Importing a trial balance again would double them. Remove the trial balance file, or start a new company.';
     case 'ar-missing':return `The trial balance has ${money(w.tb)} in Accounts receivable, but no open invoices report was chosen, so there won’t be invoices to receive payments against.`;
     case 'ap-missing':return `The trial balance has ${money(w.tb)} in Accounts payable, but no unpaid bills report was chosen, so there won’t be bills to pay against.`;
-    case 'gl':return 'A General Ledger report was chosen. Tally Books uses the Journal report for transaction history instead, because the General Ledger lists each transaction more than once.';
+    case 'gl':return 'A General Ledger report was chosen. Sumlora uses the Journal report for transaction history instead, because the General Ledger lists each transaction more than once.';
     case 'tb-after-history':return `The trial balance (as of ${fmtDate(w.tb)}) must be dated before the first transaction in the history (${fmtDate(w.from)}), or those transactions would count twice.`;
     case 'no-ar':return 'There are open invoices but no Accounts receivable account. Add one to the chart of accounts, or set an account’s detail to Accounts receivable below.';
     case 'no-ap':return 'There are unpaid bills but no Accounts payable account. Add one, or set an account’s detail to Accounts payable below.';
@@ -97,7 +97,7 @@ function vConvert(){
   const C=S.cv;
   if(ME&&ME.role==='client')return head('Bring over books')+`<div class="panel"><div class="empty"><b>Your bookkeeper does this</b></div></div>`;
   if(C.done)return head('Bring over from QuickBooks or Sage')+`<div class="panel" style="max-width:720px"><div class="pad" style="display:flex;flex-direction:column;gap:12px">
-    <h3 style="margin:0">Done: the books are in Tally Books</h3>
+    <h3 style="margin:0">Done: the books are in Sumlora</h3>
     <div>${Object.entries(C.done.counts).map(([k,v])=>`<div>${({accounts:`${v} accounts`,contacts:`${v} customers and vendors`,entries:`${v} transactions`,docs:`${v} open invoices and bills`})[k]||v+' '+k}</div>`).join('')}</div>
     <div class="muted">${C.done.date?`Next: run the trial balance as of ${fmtDate(C.done.date)} and compare it with the one from the other program, then import bank statements from the day after.`:'Next: run the trial balance and compare it with the one from the other program, then import bank statements.'}</div>
     <div class="actions"><button class="btn primary" data-cvgo="reports">Open reports</button><button class="btn" data-cvgo="sales">Open invoices</button><button class="btn" data-cvact="again">Bring over more</button></div></div></div>`;

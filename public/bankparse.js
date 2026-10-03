@@ -1,5 +1,5 @@
 /*
- * Bank statement parsing for Tally Books.
+ * Bank statement parsing for Sumlora.
  * Reads CSV exports (with or without a header row) and OFX / QFX / QBO files.
  * Works in the browser (window.BankParse) and in Node (require) so it can be tested.
  *

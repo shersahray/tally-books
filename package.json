@@ -38,7 +38,7 @@
   },
   "build": {
     "appId": "com.tallybooks.app",
-    "productName": "Tally Books",
+    "productName": "Sumlora",
     "files": [
       "electron/**",
       "src/**",
@@ -52,14 +52,14 @@
     "win": {
       "target": "nsis",
       "icon": "build/icon.png",
-      "executableName": "TallyBooks"
+      "executableName": "Sumlora"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "TallyBooks-Setup-${version}.${ext}",
-      "shortcutName": "Tally Books",
-      "uninstallDisplayName": "Tally Books"
+      "artifactName": "Sumlora-Setup-${version}.${ext}",
+      "shortcutName": "Sumlora",
+      "uninstallDisplayName": "Sumlora"
     },
     "mac": {
       "target": "dmg",

@@ -1,5 +1,5 @@
 /*
- * Moving a client to Tally Books from QuickBooks Online, Sage 50 or Sage Accounting (or anything that
+ * Moving a client to Sumlora from QuickBooks Online, Sage 50 or Sage Accounting (or anything that
  * exports similar reports): reads the exported files (CSV, Excel .xlsx, or a .zip of them), works out
  * which report each one is, and turns them into a plan of records to import.
  *
@@ -47,7 +47,7 @@
         if (!f) return null;
         if (f.method === 0) return f.data;
         if (f.method === 8) return inflateRaw(f.data);
-        throw new Error('That zip file uses a kind of compression Tally Books can’t read. Unzip it and choose the files instead.');
+        throw new Error('That zip file uses a kind of compression Sumlora can’t read. Unzip it and choose the files instead.');
       },
     };
   }
@@ -376,7 +376,7 @@
   }
 
   /* ---------- account types ---------- */
-  /** Tally Books type and detail for an account from another program. */
+  /** Sumlora type and detail for an account from another program. */
   function guessType(a) {
     const t = low(a.srcType), d = low(a.srcDetail), n = low(a.fullName || a.name), all = `${t} ${d}`;
     const num = parseInt(String(a.number || '').replace(/\D.*$/, ''), 10);

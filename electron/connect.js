@@ -12,11 +12,11 @@ const FR = {
   'Connecting…': 'Connexion…',
   'On this computer': 'Sur cet ordinateur',
   'Just you, on this computer. The books are saved here and backed up every day. Nobody else can open them.': 'Vous seul, sur cet ordinateur. Les livres sont enregistrés ici et sauvegardés chaque jour. Personne d’autre ne peut les ouvrir.',
-  'This computer already has books in Tally Books. They stay here whichever you choose.': 'Cet ordinateur contient déjà des livres Tally Books. Ils restent ici, quel que soit votre choix.',
+  'This computer already has books in Sumlora. They stay here whichever you choose.': 'Cet ordinateur contient déjà des livres Sumlora. Ils restent ici, quel que soit votre choix.',
   'Use this computer': 'Utiliser cet ordinateur',
   'Back to my books': 'Retour à mes livres',
   'Can’t reach your office server': 'Impossible de joindre le serveur du bureau',
-  'Tally Books tried': 'Tally Books a essayé',
+  'Sumlora tried': 'Sumlora a essayé',
   'Your books are safe on the server. Once this computer can reach it again, everything is where you left it.': 'Vos livres sont en sécurité sur le serveur. Dès que cet ordinateur pourra le joindre, tout sera comme vous l’avez laissé.',
   'Try again': 'Réessayer',
   'Change server': 'Changer de serveur',
@@ -25,7 +25,7 @@ const FR = {
   'That isn’t a web address. It looks like https://books.yourfirm.ca': 'Ce n’est pas une adresse Web. Elle ressemble à https://livres.votrecabinet.ca',
   'The address has to start with https:// so passwords and the books travel encrypted.': 'L’adresse doit commencer par https:// pour que les mots de passe et les livres circulent chiffrés.',
   'Leave the user name and password out of the address. You sign in after connecting.': 'N’incluez pas le nom d’utilisateur ni le mot de passe dans l’adresse. Vous vous connectez ensuite.',
-  'Something answered at that address, but it isn’t Tally Books. Check the address.': 'Quelque chose répond à cette adresse, mais ce n’est pas Tally Books. Vérifiez l’adresse.',
+  'Something answered at that address, but it isn’t Sumlora. Check the address.': 'Quelque chose répond à cette adresse, mais ce n’est pas Sumlora. Vérifiez l’adresse.',
   'The server’s security certificate isn’t valid, so the app won’t connect. Ask whoever set up the server to check its HTTPS certificate.': 'Le certificat de sécurité du serveur n’est pas valide, alors l’application ne s’y connecte pas. Demandez à la personne qui a installé le serveur de vérifier son certificat HTTPS.',
   'Couldn’t find a server with that address. Check the spelling, and that you’re connected to the internet or the office VPN.': 'Aucun serveur trouvé à cette adresse. Vérifiez l’orthographe et que vous êtes connecté à Internet ou au RPV du bureau.',
   'The server didn’t answer. It may be off, or this computer can’t reach it (check the internet or the office VPN).': 'Le serveur n’a pas répondu. Il est peut-être éteint, ou cet ordinateur ne peut pas le joindre (vérifiez Internet ou le RPV du bureau).',
@@ -40,7 +40,7 @@ const FR = {
   'The books are already in this folder.': 'Les livres sont déjà dans ce dossier.',
   'This folder is synced with a cloud service (OneDrive, Google Drive, Dropbox or iCloud). Syncing can damage books while they’re open and being saved. Choose a folder on this computer, and send the daily backups to the cloud folder instead (Settings → Backups).': 'Ce dossier est synchronisé avec un service infonuagique (OneDrive, Google Drive, Dropbox ou iCloud). La synchronisation peut endommager les livres pendant qu’ils sont ouverts et enregistrés. Choisissez un dossier sur cet ordinateur et envoyez plutôt les sauvegardes quotidiennes dans le dossier infonuagique (Paramètres → Sauvegardes).',
   'This folder is on a network drive. If the connection drops while the books are being saved they can be damaged, and two computers opening the same books at once will damage them. To share books between people or offices, use the office server instead.': 'Ce dossier est sur un lecteur réseau. Si la connexion coupe pendant l’enregistrement, les livres peuvent être endommagés, et deux ordinateurs qui ouvrent les mêmes livres en même temps les endommageront. Pour partager des livres entre personnes ou bureaux, utilisez plutôt le serveur du bureau.',
-  'That folder already has books in Tally Books. Open them? The books in the current folder stay where they are.': 'Ce dossier contient déjà des livres Tally Books. Les ouvrir? Les livres du dossier actuel restent où ils sont.',
+  'That folder already has books in Sumlora. Open them? The books in the current folder stay where they are.': 'Ce dossier contient déjà des livres Sumlora. Les ouvrir? Les livres du dossier actuel restent où ils sont.',
   'Open the books in that folder': 'Ouvrir les livres de ce dossier',
   'Your books will be moved to:': 'Vos livres seront déplacés vers :',
   'They’re copied, every file is checked, they’re opened from the new folder, and only then removed from the old one.': 'Ils sont copiés, chaque fichier est vérifié, ils sont ouverts depuis le nouveau dossier, et seulement ensuite retirés de l’ancien.',
@@ -52,8 +52,8 @@ const FR = {
   'Moving the books…': 'Déplacement des livres…',
   'Choose a folder.': 'Choisissez un dossier.',
   'That folder doesn’t exist any more. Choose another.': 'Ce dossier n’existe plus. Choisissez-en un autre.',
-  'Tally Books can’t save in that folder. Choose one you can save files in.': 'Tally Books ne peut pas enregistrer dans ce dossier. Choisissez un dossier où vous pouvez enregistrer des fichiers.',
-  'That folder has part of a Tally Books data folder in it. Choose an empty folder.': 'Ce dossier contient une partie d’un dossier de données Tally Books. Choisissez un dossier vide.',
+  'Sumlora can’t save in that folder. Choose one you can save files in.': 'Sumlora ne peut pas enregistrer dans ce dossier. Choisissez un dossier où vous pouvez enregistrer des fichiers.',
+  'That folder has part of a Sumlora data folder in it. Choose an empty folder.': 'Ce dossier contient une partie d’un dossier de données Sumlora. Choisissez un dossier vide.',
   'The books couldn’t be opened from the new folder, so they stay where they were.': 'Les livres n’ont pas pu être ouverts depuis le nouveau dossier, alors ils restent où ils étaient.',
   'The books couldn’t be moved, so they stay where they were.': 'Les livres n’ont pas pu être déplacés, alors ils restent où ils étaient.',
 };
@@ -126,7 +126,7 @@ async function chooseFolder(errEl, panel) {
   const where = el('div'); const b = el('b', r.target, 'path'); b.setAttribute('translate', 'no');
   if (r.booksThere) {
     how = 'open'; label = 'Open the books in that folder';
-    para(T('That folder already has books in Tally Books. Open them? The books in the current folder stay where they are.'));
+    para(T('That folder already has books in Sumlora. Open them? The books in the current folder stay where they are.'));
     where.appendChild(b); panel.appendChild(where);
   } else if (r.hasBooks) {
     label = 'Move the books here';

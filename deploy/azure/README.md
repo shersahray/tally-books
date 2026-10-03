@@ -1,6 +1,6 @@
-# Putting Tally Books online with Azure
+# Putting Sumlora online with Azure
 
-This puts Tally Books on a small server in Microsoft's Toronto data centre (Canada Central). You and your clients sign in from any browser at an address like `https://yourname-books.canadacentral.cloudapp.azure.com`.
+This puts Sumlora on a small server in Microsoft's Toronto data centre (Canada Central). You and your clients sign in from any browser at an address like `https://yourname-books.canadacentral.cloudapp.azure.com`.
 
 Everything is done in the [Azure portal](https://portal.azure.com). You never need to type commands on the server: when a step says "Run command", use the portal's **Run command** page (step 6).
 
@@ -17,7 +17,7 @@ Expect about 45 minutes, most of it waiting.
 
 ## 2. Resource group
 
-A resource group is a folder that holds everything for Tally Books.
+A resource group is a folder that holds everything for Sumlora.
 
 1. Search for **Resource groups**, then choose **+ Create**.
 2. Name: `tally-books`. Region: **Canada Central**.
@@ -71,7 +71,7 @@ Choose **Review + create**, then **Create**. Download the key when asked, then w
 
 Wait about 10 minutes after creating the server: it installs everything and gets its HTTPS certificate. Then open `https://<your address>`.
 
-1. You'll see **Welcome to Tally Books**. Enter your **setup code**, your name, your email and a password.
+1. You'll see **Welcome to Sumlora**. Enter your **setup code**, your name, your email and a password.
 2. Set up **two-step sign-in**: scan the QR code with Microsoft Authenticator or Google Authenticator on your phone, and enter the code it shows. Every account on the online server needs this.
 3. **Save your recovery codes.** If you lose your phone, they're the only way back in without another owner.
 
@@ -133,9 +133,9 @@ The server gets **write-only** access to that storage. Even if someone broke int
    tally-set-backup 'PASTE-THE-BLOB-SAS-URL-HERE'
    ```
 
-6. In Tally Books, go to **Settings → Automatic backups** and click **Back up now**. The status line should mention the off-site copy.
+6. In Sumlora, go to **Settings → Automatic backups** and click **Back up now**. The status line should mention the off-site copy.
 
-**To restore from an off-site copy:** open the storage account in the portal, go to the container and the day's folder, and download the company's `.json` file. Then use **Settings → Restore from backup** in Tally Books.
+**To restore from an off-site copy:** open the storage account in the portal, go to the container and the day's folder, and download the company's `.json` file. Then use **Settings → Restore from backup** in Sumlora.
 
 ## 8. Invite clients
 
@@ -168,8 +168,8 @@ tally-update
 
 ## Good to know
 
-- **Where the books are:** `/var/lib/tally-books/data`, readable only by the Tally Books service. Nothing about your clients goes to GitHub.
-- **Restoring over a company:** only owners can do this. Tally Books first saves a copy of what it's replacing in `/var/lib/tally-books/data/before-restore`.
+- **Where the books are:** `/var/lib/tally-books/data`, readable only by the Sumlora service. Nothing about your clients goes to GitHub.
+- **Restoring over a company:** only owners can do this. Sumlora first saves a copy of what it's replacing in `/var/lib/tally-books/data/before-restore`.
 - **Sign-in activity:** under **Users & security → Sign-in activity** you can see every sign-in, failed attempt and account change. The **Activity log** under Settings shows every change to a company's books.
 - **Two-step sign-in is required for everyone** on the online server. This is set in `/etc/tally-books.env` (`REQUIRE_2FA=everyone`).
 - **A bigger server:** if the app ever feels slow with many clients, stop the virtual machine, choose **Size → Standard_B2s**, and start it again.

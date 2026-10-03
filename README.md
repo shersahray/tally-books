@@ -1,4 +1,6 @@
-# Tally Books
+# Sumlora
+
+*Formerly Tally Books.* Copies installed under the old name update to Sumlora by themselves and keep their books, backups, licence and settings: the app keeps using its existing folders, and nothing needs to be moved. Logo files (SVG and PNG) are in [`brand/`](brand/).
 
 Double-entry bookkeeping for small businesses. Send invoices, enter bills and expenses, keep a chart of accounts, and run the reports an accountant needs at year-end.
 
@@ -7,7 +9,7 @@ It runs two ways from the same code:
 - **Web app:** a small server you run on your computer or a server, then open in any browser. Several people can use it at once, and changes show up live for everyone.
 - **Desktop app:** an installable app for Windows, macOS and Linux. It keeps your books in a file on your own computer.
 
-![Tally Books dashboard](docs/screenshot.png)
+![Sumlora dashboard](docs/screenshot.png)
 
 ## Features
 
@@ -42,7 +44,7 @@ It runs two ways from the same code:
   - **Filed periods:** changing a transaction in a filed period asks for confirmation first, and the worksheet shows when the books no longer match what was filed.
   - The app produces the figures; returns are still submitted on CRA My Business Account or with Revenu Québec.
 - **Payroll (Canada, including Quebec):** pay employees and track what's owed to CRA and Revenu Québec.
-  - **Employees:** province of employment, pay schedule (weekly, every 2 weeks, twice a month, monthly), salary or hourly rate, TD1 and TP-1015.3 claim amounts, extra tax, RRSP and union dues at source, CPP/QPP, EI and QPIP exemptions, and amounts paid earlier in the year outside Tally Books.
+  - **Employees:** province of employment, pay schedule (weekly, every 2 weeks, twice a month, monthly), salary or hourly rate, TD1 and TP-1015.3 claim amounts, extra tax, RRSP and union dues at source, CPP/QPP, EI and QPIP exemptions, and amounts paid earlier in the year outside Sumlora.
   - **Pay runs** calculate CPP, CPP2, EI and federal and provincial income tax for every province and territory, and QPP, QPP2, QPIP, Quebec EI and Quebec income tax for Quebec, using CRA's *Payroll Deductions Formulas* (T4127, 123rd edition, July 2026). Employer CPP/QPP, EI (1.4×), QPIP and the Quebec Health Services Fund are included. Yearly maximums are tracked from year-to-date amounts.
   - Every amount can be changed before posting. Changed amounts are marked "Edited" on the pay run.
   - Posting a pay run records one journal entry: wages and employer contributions as expenses, source deductions as liabilities to CRA and Revenu Québec, and net pay out of the bank. Payroll accounts (2300, 2310, 2320, 2330, 7110) are added the first time they're needed.
@@ -50,12 +52,12 @@ It runs two ways from the same code:
   - **Remittances:** what's owed to each agency per month (or quarter), the due date (the 15th of the following month), the figures for the PD7A voucher and for Revenu Québec, and payments that clear the liability.
   - **Vacation pay:** for each employee, set it aside each pay (posted to *Vacation pay payable*, 2330) and pay it out when they take vacation or leave, add it to every pay, or let a salary continue during vacation. The rate defaults to the provincial minimum for the employee's years of service (for example Ontario 4%, then 6% after 5 years; Quebec 6% after 3 years) and can be set by hand. It's worked out on regular, holiday and other pay, not on bonuses marked as such. Pay stubs show what's owed, and the employee list shows each balance.
   - **Statutory holiday pay:** each province's public holidays are built in. When one falls in an hourly employee's pay period, the pay run suggests holiday pay at 1/20 of what they earned in the 4 weeks before the holiday's week (the Ontario and Quebec rule; Ontario adds vacation pay paid). Salaried pay already covers holidays. Every amount can be changed.
-  - **Records of employment (ROE):** mark an employee's final pay (it pays out the vacation pay owed), then open **Record of employment** on their page. Tally Books fills in every block: pay period type, dates, insurable hours (15A), insurable earnings for each of the last 27 pay periods (15C, for every 2 weeks), the reason code, vacation pay on leaving (17A), statutory holiday pay and other money. It shows the due date (5 days after the final pay period) and prints a worksheet to enter in Service Canada's ROE Web. Saving it keeps the ROE and its serial number with the employee.
-  - **Year-end (T4 and RL-1):** a T4 for every employee (one per province they worked in), an RL-1 for Quebec employees, the T4 Summary and the RL-1 Summary, built from the year's pay runs, amounts paid earlier outside Tally Books, and recorded remittances. It covers boxes 14 to 56 (including CPP2/QPP2 in 16A/17A, RPP box 20 with registration number 50 and pension adjustment 52, exemptions in 28, and dental benefits in 45) and RL-1 boxes A to I. Yearly maximums for insurable and pensionable earnings are shared across an employee's slips in date order. The Health Services Fund rate is set from total payroll (all provinces, plus associated employers) and applied to Quebec payroll, and the labour standards contribution is worked out too. Checks flag a missing or invalid SIN, a missing dental code or pension adjustment, and deductions that don't match what CRA's year-end review expects. Export the figures to CSV or print worksheets.
-  - Tally Books prepares the figures; you file them with CRA's T4 Web Forms and Revenu Québec's My Account for businesses. Revenu Québec accepts printed RL-1 slips only from certified software, so the printouts are worksheets, not slips.
+  - **Records of employment (ROE):** mark an employee's final pay (it pays out the vacation pay owed), then open **Record of employment** on their page. Sumlora fills in every block: pay period type, dates, insurable hours (15A), insurable earnings for each of the last 27 pay periods (15C, for every 2 weeks), the reason code, vacation pay on leaving (17A), statutory holiday pay and other money. It shows the due date (5 days after the final pay period) and prints a worksheet to enter in Service Canada's ROE Web. Saving it keeps the ROE and its serial number with the employee.
+  - **Year-end (T4 and RL-1):** a T4 for every employee (one per province they worked in), an RL-1 for Quebec employees, the T4 Summary and the RL-1 Summary, built from the year's pay runs, amounts paid earlier outside Sumlora, and recorded remittances. It covers boxes 14 to 56 (including CPP2/QPP2 in 16A/17A, RPP box 20 with registration number 50 and pension adjustment 52, exemptions in 28, and dental benefits in 45) and RL-1 boxes A to I. Yearly maximums for insurable and pensionable earnings are shared across an employee's slips in date order. The Health Services Fund rate is set from total payroll (all provinces, plus associated employers) and applied to Quebec payroll, and the labour standards contribution is worked out too. Checks flag a missing or invalid SIN, a missing dental code or pension adjustment, and deductions that don't match what CRA's year-end review expects. Export the figures to CSV or print worksheets.
+  - Sumlora prepares the figures; you file them with CRA's T4 Web Forms and Revenu Québec's My Account for businesses. Revenu Québec accepts printed RL-1 slips only from certified software, so the printouts are worksheets, not slips.
   - Rates are loaded for pay dates from July 1 to December 31, 2026. Quebec income tax follows Revenu Québec's TP-1015.F method but hasn't been checked line by line against WebRAS yet, so compare a first pay run with WebRAS. Always check unusual cases against CRA's PDOC.
 - **AI suggestions (optional, suggestions only):** with a Claude API key, AI suggests a category, payee and sales tax for bank lines that rules and past choices don't cover, and reads a receipt or supplier invoice (photo or PDF) into a draft expense or bill. Nothing is added to the books until someone reviews it and clicks Add or Save. It's switched on per company; an owner sets the key, the model (Claude Haiku 4.5 or Sonnet 5.5) and a monthly spending limit in Settings. The key stays on the server and is never sent to the browser; it can also be set with the `ANTHROPIC_API_KEY` environment variable. What's sent to Anthropic: each bank line's date, description and amount (or the receipt), the company's chart of accounts and payee names. Typical cost is well under a cent per bank line and about a cent per receipt.
-- **Receipts from a phone:** clients (or you) open Tally Books on a phone, tap **Take a photo of a receipt**, and it goes to that company's Receipts inbox. Photos are made smaller before they're sent. If AI suggestions are on, each receipt is read in the background (up to 100 a day per company) and matched to a transaction already in the books, a bank line waiting for review, or an unpaid bill. The bookkeeper approves each one: attach it, or record it as an expense or bill (matching the bank line in the same step). The photo stays with the transaction as proof (**View receipt**). Clients can add a note or remove a receipt until it's been recorded; after that it's kept. Add Tally Books to the phone's home screen and it opens like an app. Photos are kept in each company's database; automatic backups copy each one once into a `Receipts` folder beside the dated backups (and off-site), since the daily backup files don't include them.
+- **Receipts from a phone:** clients (or you) open Sumlora on a phone, tap **Take a photo of a receipt**, and it goes to that company's Receipts inbox. Photos are made smaller before they're sent. If AI suggestions are on, each receipt is read in the background (up to 100 a day per company) and matched to a transaction already in the books, a bank line waiting for review, or an unpaid bill. The bookkeeper approves each one: attach it, or record it as an expense or bill (matching the bank line in the same step). The photo stays with the transaction as proof (**View receipt**). Clients can add a note or remove a receipt until it's been recorded; after that it's kept. Add Sumlora to the phone's home screen and it opens like an app. Photos are kept in each company's database; automatic backups copy each one once into a `Receipts` folder beside the dated backups (and off-site), since the daily backup files don't include them.
 - **Bring a client over from QuickBooks Online or Sage:** a wizard (Companies → *Bring over from QuickBooks or Sage*, or Settings) reads the reports exported from QuickBooks Online, Sage 50 or Sage Accounting (Excel .xlsx, CSV, or a .zip of them): the chart of accounts, customer and vendor lists, the trial balance, open invoices and unpaid bills, and optionally the Journal report for this year's transactions. It recognises each report, works out each account's type (bank, credit card, A/R, A/P, sales tax…) for you to check, keeps the client's account numbers, and checks that the trial balance balances, that open invoices and bills agree with A/R and A/P, and that the history starts after the trial balance date. Opening balances come in as one journal entry; open invoices and bills come in as items you can receive and make payments against; everything is imported in one go or not at all, with a copy of the books kept on the server first.
 - **Light or dark:** each person chooses Automatic (follows the computer), Light or Dark, in the sidebar, on the sign-in screen or under Account. The choice is saved on their account, so it follows them to other computers.
 - **Reports for accountants:**
@@ -101,7 +103,7 @@ It runs two ways from the same code:
   - Sessions use HttpOnly, SameSite=Strict cookies (Secure over HTTPS). Pages are served with a strict Content Security Policy and, over HTTPS, HSTS.
   - **Sign-in activity:** every sign-in, failed attempt and account change is logged for owners.
 - **Activity log:** every change to a company's books is recorded with who made it, when, and the record before and after. Filter by person or kind of record, open any change to see what was different, and export to CSV (Settings → Activity log).
-- **Online server:** [deploy/azure](deploy/azure/README.md) puts Tally Books on a small Azure server in Toronto with HTTPS, nightly tested updates, automatic security patches, and off-site backups to Azure Storage in Canada.
+- **Online server:** [deploy/azure](deploy/azure/README.md) puts Sumlora on a small Azure server in Toronto with HTTPS, nightly tested updates, automatic security patches, and off-site backups to Azure Storage in Canada.
 - **Automatic backups:** every company is backed up once a day while the app is open. On a server, each day's backup is also copied to Azure Blob Storage. Backups go to OneDrive by default, or any folder you pick, such as Google Drive. Each day gets its own dated folder, and backups older than the keep period (30 days unless you change it) are removed. Each file restores through **Settings → Restore from backup**. Settings and the company list show backup status, with **Back up now**, **Change folder** and **Open backup folder**.
 - **Journal entries:** manual entries with debit and credit lines. The server rejects any entry that doesn't balance.
 - **Chart of accounts:** set up for a Canadian small business charging HST (13%). The tax name, rate and fiscal year start are all in Settings.
@@ -123,7 +125,7 @@ npm start            # or: npm run start:demo  (loads example data on first run)
 
 Then open <http://localhost:3000>.
 
-**Shortcut:** instead of typing the command, double-click **Start Tally Books.bat** on Windows or **Start Tally Books.command** on a Mac. It starts the server and opens the app in your browser. Keep the window it opens running while you work, and close it to stop.
+**Shortcut:** instead of typing the command, double-click **Start Sumlora.bat** on Windows or **Start Sumlora.command** on a Mac. It starts the server and opens the app in your browser. Keep the window it opens running while you work, and close it to stop.
 
 Your books are saved in the `data` folder:
 - `companies.json` lists your companies;
@@ -140,13 +142,13 @@ If you're upgrading from the single-company version, your existing `data/tally-b
 | `PORT` | `3000` | Port to listen on |
 | `HOST` | `127.0.0.1` | Set to `0.0.0.0` to allow other computers on your network |
 | `DATA_DIR` | `./data` | Folder that holds the company list and each company's database |
-| `APP_PASSWORD` | *(none)* | An extra shared password the browser asks for before the Tally Books sign-in screen. User accounts protect the data either way; this adds a second layer when the app is on a network. |
+| `APP_PASSWORD` | *(none)* | An extra shared password the browser asks for before the Sumlora sign-in screen. User accounts protect the data either way; this adds a second layer when the app is on a network. |
 | `REQUIRE_2FA` | *(none)* | `owners` or `everyone`: the least two-step sign-in allowed. Online servers use `everyone`. |
 | `SETUP_CODE` | *(none)* | If set, creating the first owner account needs this code, so a stranger can't claim a new server. |
 | `TRUST_PROXY` | *(off)* | `1` when running behind an HTTPS proxy such as Caddy, so sign-in limits use the visitor's real address. |
 | `BACKUP_FOLDER` | OneDrive, if found | Folder for the daily backups. |
 | `ANTHROPIC_API_KEY` | *(none)* | A Claude API key for AI suggestions. Without it, an owner can enter one in Settings. |
-| `BACKUP_BLOB_URL` | *(none)* | An Azure Blob Storage container URL with a SAS token. Each day's backup is also copied there. A write-only token (Create, Write) is safest, with an Azure lifecycle rule removing old days. If the token can also list and delete, Tally Books removes old days itself. |
+| `BACKUP_BLOB_URL` | *(none)* | An Azure Blob Storage container URL with a SAS token. Each day's backup is also copied there. A write-only token (Create, Write) is safest, with an Azure lifecycle rule removing old days. If the token can also list and delete, Sumlora removes old days itself. |
 
 To put it on the internet for clients, follow [deploy/azure/README.md](deploy/azure/README.md) rather than opening a port: it adds HTTPS, two-step sign-in and off-site backups.
 
@@ -160,7 +162,7 @@ To put it on the internet, run it behind a reverse proxy that handles HTTPS, suc
 
 ### Several offices
 
-Run **one** Tally Books server and have every office sign in to it in a browser: for example the server in Toronto, with Ottawa connecting over HTTPS (or over the offices' VPN). Don't run a second server on a copy of the same books, because the two copies would drift apart. One server comfortably handles a few dozen people working at the same time; everyone sees each other's changes live.
+Run **one** Sumlora server and have every office sign in to it in a browser: for example the server in Toronto, with Ottawa connecting over HTTPS (or over the offices' VPN). Don't run a second server on a copy of the same books, because the two copies would drift apart. One server comfortably handles a few dozen people working at the same time; everyone sees each other's changes live.
 
 People can work in a browser, or in the desktop app: the first time it starts, choose **On our office server** and enter the server's address (it has to start with `https://`). The app then keeps no books on that computer; it opens the office server in its own window, and each person signs in with their own account. **On this computer** keeps the books privately on that one computer instead. Change it any time from **File → Where the books are**. People who used the desktop app before keep their books on their computer without being asked.
 
@@ -177,12 +179,12 @@ To build an installer for the computer you're on:
 npm run dist         # output goes to dist/
 ```
 
-The desktop app keeps its books in your user data folder (on Windows `C:\Users\<you>\AppData\Roaming\Tally Books`). **File → Show data folder** in the app opens it.
+The desktop app keeps its books in your user data folder (on Windows `C:\Users\<you>\AppData\Roaming\Sumlora`). **File → Show data folder** in the app opens it.
 
 To keep them somewhere else, such as a second drive, open **File → Where the books are**, and under *On this computer* click **Choose folder…**:
 - Your books are moved there: closed, copied, every file checked, opened from the new folder, and only then removed from the old one. If anything goes wrong they stay where they were.
 - A folder that already has books in it opens those books instead (the ones in the old folder stay put).
-- A folder with other files in it gets a *Tally Books* folder inside it, so nothing of yours is touched.
+- A folder with other files in it gets a *Sumlora* folder inside it, so nothing of yours is touched.
 - Folders synced by OneDrive, Google Drive, Dropbox or iCloud, and network drives, get a warning: syncing or a dropped connection can damage books while they're being saved. Put the daily backups there instead (Settings → Backups).
 - If the folder can't be found when the app starts (an unplugged drive), the app says so and lets you try again or choose the folder, rather than starting empty books.
 
@@ -201,15 +203,15 @@ The signed Windows app updates itself from this repository's **Releases**:
 3. Give it a title and a few lines about what's new, then click **Publish release**.
 4. The **Build desktop apps** workflow builds that version, signs the Windows installer, and attaches the installers to the release (about 10 minutes). A release is never published with an unsigned Windows installer.
 
-Installed Windows apps check for a new release when they start and every 4 hours, download it in the background, and ask to restart (or update the next time Tally Books is closed). They only install an update signed with the same certificate, and books kept on that computer are backed up first. **File → Check for updates…** checks right away, and the File menu shows the version. Copies connected to an office server get new features from the server itself; the Mac and Linux versions are updated by downloading the new installer from the release.
+Installed Windows apps check for a new release when they start and every 4 hours, download it in the background, and ask to restart (or update the next time Sumlora is closed). They only install an update signed with the same certificate, and books kept on that computer are backed up first. **File → Check for updates…** checks right away, and the File menu shows the version. Copies connected to an office server get new features from the server itself; the Mac and Linux versions are updated by downloading the new installer from the release.
 
 ### Selling the desktop app: licence codes
 
-For clients who keep their books on their own computer, you sell a licence for a period (a year, say) and send them a code. Pasting the code into Tally Books turns it on until the code's last day; a renewal code turns it back on for the next period.
+For clients who keep their books on their own computer, you sell a licence for a period (a year, say) and send them a code. Pasting the code into Sumlora turns it on until the code's last day; a renewal code turns it back on for the next period.
 
 **Set up, once:**
-1. In your own Tally Books, click **Licence codes** (bottom left), then **Create licence key**. The key that signs codes stays on that computer; nobody else can make codes.
-2. Copy the **public key** shown there. On GitHub: **Settings → Secrets and variables → Actions → Variables → New repository variable**, name `TALLY_LICENCE_KEY`, paste the public key. (It only checks codes, so it's safe there.)
+1. In your own Sumlora, click **Licence codes** (bottom left), then **Create licence key**. The key that signs codes stays on that computer; nobody else can make codes.
+2. Copy the **public key** shown there. On GitHub: **Settings → Secrets and variables → Actions → Variables → New repository variable**, name `SUMLORA_LICENCE_KEY`, paste the public key. (It only checks codes, so it's safe there.)
 3. Click **Download a copy of the key** and keep the file somewhere safe and private (a USB key or a password manager). It isn't in the daily backups. On a new computer, bring it back from the **Licence** window.
 4. Publish a new release. Windows installers built from then on ask for a licence code. Copies installed earlier keep working without one until they update, and then start a 30-day trial.
 

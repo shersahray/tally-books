@@ -3,7 +3,7 @@
  *
  * New versions are GitHub releases (see .github/workflows/release.yml). The app checks when it starts and
  * every 4 hours, downloads a new version in the background, and asks to restart; otherwise it installs
- * the next time Tally Books is closed. Only installers signed with the same certificate as this copy are
+ * the next time Sumlora is closed. Only installers signed with the same certificate as this copy are
  * installed (electron-updater compares the publisher name), and updates are only turned on in signed
  * builds, so an update can't come from anyone else. Books kept on this computer are backed up first.
  */
@@ -51,7 +51,7 @@ function setupUpdates({ autoUpdater, dialog, window, localServer, fr = false, lo
   });
   autoUpdater.on('update-not-available', () => {
     checking = false;
-    if (manual) { manual = false; dialog.showMessageBox(window(), { type: 'info', message: L('Tally Books is up to date.', 'Tally Books est à jour.') }).catch(() => {}); }
+    if (manual) { manual = false; dialog.showMessageBox(window(), { type: 'info', message: L('Sumlora is up to date.', 'Sumlora est à jour.') }).catch(() => {}); }
   });
   autoUpdater.on('update-available', () => { manual = false; });
   autoUpdater.on('update-downloaded', async info => {
@@ -61,9 +61,9 @@ function setupUpdates({ autoUpdater, dialog, window, localServer, fr = false, lo
     const v = info && info.version ? info.version : '';
     const r = await dialog.showMessageBox(window(), {
       type: 'info', buttons: [L('Restart now', 'Redémarrer maintenant'), L('Later', 'Plus tard')], defaultId: 0, cancelId: 1,
-      message: L(`Tally Books ${v} is ready`, `Tally Books ${v} est prête`),
-      detail: L('Restart to update. It takes a few seconds and your books are kept. If you choose Later, it updates the next time you close Tally Books.',
-        'Redémarrez pour faire la mise à jour. Cela prend quelques secondes et vos livres sont conservés. Si vous choisissez Plus tard, elle se fera à la prochaine fermeture de Tally Books.'),
+      message: L(`Sumlora ${v} is ready`, `Sumlora ${v} est prête`),
+      detail: L('Restart to update. It takes a few seconds and your books are kept. If you choose Later, it updates the next time you close Sumlora.',
+        'Redémarrez pour faire la mise à jour. Cela prend quelques secondes et vos livres sont conservés. Si vous choisissez Plus tard, elle se fera à la prochaine fermeture de Sumlora.'),
     }).catch(() => ({ response: 1 }));
     if (r.response === 0) { backup(); autoUpdater.quitAndInstall(false, true); }
   });
@@ -77,7 +77,7 @@ function setupUpdates({ autoUpdater, dialog, window, localServer, fr = false, lo
   check();
   timer = setInterval(() => check(), CHECK_EVERY);
   if (timer.unref) timer.unref();
-  // An update waiting for Tally Books to close: back up first (called from the app's before-quit).
+  // An update waiting for Sumlora to close: back up first (called from the app's before-quit).
   const beforeQuit = () => { if (downloaded) backup(); };
   return { check: () => check(true), stop: () => clearInterval(timer), beforeQuit };
 }

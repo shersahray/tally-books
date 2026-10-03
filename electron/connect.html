@@ -4,10 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'">
-<title>Tally Books</title>
+<title>Sumlora</title>
 <style>
-  :root{--bg:#eef2f0;--panel:#fff;--ink:#17231e;--muted:#5d6b65;--line:#d5ddd9;--accent:#0f5a45;--accent-soft:#e2efe9;--neg:#b42318}
-  @media (prefers-color-scheme: dark){:root{--bg:#121816;--panel:#1b2420;--ink:#e7eeea;--muted:#9aa8a1;--line:#2d3a34;--accent:#4fb08f;--accent-soft:#1f3a30;--neg:#f28b82}}
+  :root{--bg:#eef3f4;--panel:#fff;--ink:#14243a;--muted:#56677c;--line:#d5dee3;--accent:#0a7369;--accent-ink:#fff;--accent-soft:#d9efec;--neg:#b42318}
+  @media (prefers-color-scheme: dark){:root{--bg:#0c131d;--panel:#121b27;--ink:#e4eaf1;--muted:#93a3b6;--line:#223042;--accent:#3fcfbf;--accent-ink:#04212b;--accent-soft:#12302f;--neg:#f28b82}}
+  .logo{display:block;height:34px;margin:0 0 22px}
+  .logo.dark{display:none}
+  @media (prefers-color-scheme: dark){.logo.light{display:none}.logo.dark{display:block}}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
   main{width:100%;max-width:760px}
@@ -24,7 +27,7 @@
   input{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
   input:focus{outline:2px solid var(--accent);outline-offset:-1px}
   button{font:inherit;font-weight:600;border-radius:8px;padding:9px 16px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
-  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
   button:disabled{opacity:.6;cursor:default}
   .err{color:var(--neg);font-size:14px;min-height:1em}
   .hint{font-size:13px;color:var(--muted)}
@@ -38,6 +41,7 @@
 </head>
 <body>
 <main>
+  <img class="logo light" src="logo.svg" alt="Sumlora"><img class="logo dark" src="logo-white.svg" alt="Sumlora">
   <section id="setup" hidden>
     <h1 data-t>Where are your books?</h1>
     <p class="lead" data-t>You can change this later from File → Where the books are.</p>
@@ -56,7 +60,7 @@
       <div class="card" id="cardLocal">
         <h2><span data-t>On this computer</span><span class="pill" id="nowLocal" hidden data-t>Now</span></h2>
         <p data-t>Just you, on this computer. The books are saved here and backed up every day. Nobody else can open them.</p>
-        <p id="localHas" hidden data-t>This computer already has books in Tally Books. They stay here whichever you choose.</p>
+        <p id="localHas" hidden data-t>This computer already has books in Sumlora. They stay here whichever you choose.</p>
         <div class="grow"></div>
         <div class="hint"><span data-t>Books folder:</span> <b id="dirPath" class="path" translate="no"></b></div>
         <div class="row"><button type="button" id="localBtn" data-t>Use this computer</button><button type="button" id="dirBtn" data-t>Choose folder…</button></div>
@@ -80,7 +84,7 @@
 
   <section id="offline" hidden>
     <h1 data-t>Can’t reach your office server</h1>
-    <p class="lead"><span data-t>Tally Books tried</span> <b id="offUrl" translate="no"></b></p>
+    <p class="lead"><span data-t>Sumlora tried</span> <b id="offUrl" translate="no"></b></p>
     <div class="card">
       <div class="err" id="offErr" role="alert"></div>
       <p data-t>Your books are safe on the server. Once this computer can reach it again, everything is where you left it.</p>

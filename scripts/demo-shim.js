@@ -1,5 +1,5 @@
 /*
- * Browser-only stand-in for the Tally Books server, used by the online demo.
+ * Browser-only stand-in for the Sumlora server, used by the online demo.
  * It answers the app's /api/... requests from memory, starting from example companies.
  * Nothing is saved: reloading the page starts over.
  */
@@ -112,7 +112,7 @@
       demoLic.issued.push(rec);
       return { licence: rec };
     }
-    if (path.startsWith('/api/licences')) throw new ApiError(400, 'Your licence key is made in your own copy of Tally Books, not in the demo.');
+    if (path.startsWith('/api/licences')) throw new ApiError(400, 'Your licence key is made in your own copy of Sumlora, not in the demo.');
     if (path === '/api/auth/logout') return { ok: true };
     if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480, firm: demoFirms[0] };
     if (path === '/api/security/log') return { log: [] };
@@ -195,7 +195,7 @@
       w.questions = (w.questions || []).map(q => q.id !== m[1] ? q : m[2] === 'reply' ? { ...q, status: 'open', thread: [...q.thread, { by: 'demo', name: 'Demo user', role: 'owner', at: Date.now(), text: String(body.text || '') }] } : { ...q, status: m[2] === 'resolve' ? 'resolved' : 'open' });
       if (method === 'DELETE') w.questions = w.questions.filter(q => q.id !== m[1]);
     });
-    if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Tally Books, receipts go to this screen from a phone or a computer.');
+    if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Sumlora, receipts go to this screen from a phone or a computer.');
     if (rest === '/closing') { const out = transact(id, w => { w.company = { ...w.company, closingDate: body.date || '', closingPassword: body.password !== undefined ? !!body.password : !!w.company.closingPassword }; }); return out; }
     if (rest === '/closing/unlock') return { ok: true, minutes: 15 };
     if (rest === '/code') {
@@ -229,7 +229,7 @@
     }
     if (rest === '/examples') throw new ApiError(400, 'The demo companies already include example data. Create a new Ontario or Quebec company with “Add example data” ticked to get another copy.');
     if (rest === '/backup') return { format: 'tally-books-backup', version: 1, exportedAt: new Date().toISOString(), ...clone(b) };
-    if (rest === '/restore') { if (body.format !== 'tally-books-backup') throw new ApiError(400, 'That file isn’t a Tally Books backup.'); return transact(id, w => { w.company = body.company; COLS.forEach(c => (w[c] = clone(body[c] || []))); }); }
+    if (rest === '/restore') { if (body.format !== 'tally-books-backup') throw new ApiError(400, 'That file isn’t a Sumlora backup.'); return transact(id, w => { w.company = body.company; COLS.forEach(c => (w[c] = clone(body[c] || []))); }); }
     throw new ApiError(404, 'Not found');
   }
 

@@ -110,7 +110,7 @@ test('receipts: photos are backed up once, in their own folder', async () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-rcb-'));
   assert.equal((await call('PUT', '/api/backups', { folder: out, enabled: true })).status, 200);
   assert.equal((await call('POST', '/api/backups/run', {})).status, 200);
-  const rdir = path.join(out, 'Tally Books Backups', 'Receipts', co);
+  const rdir = path.join(out, 'Sumlora Backups', 'Receipts', co);
   const files = fs.readdirSync(rdir);
   assert.ok(files.some(f => f.endsWith('.jpg')) && files.some(f => f.endsWith('.pdf')));
   fs.rmSync(out, { recursive: true, force: true });

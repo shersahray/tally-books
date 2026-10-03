@@ -430,8 +430,8 @@ class Auth {
     if (u.totp && u.totp.enabled && !checkPassword(u, password)) throw new AuthError('Enter your password to set up a new authenticator app.', 400);
     u.totpPending = { secret: base32(crypto.randomBytes(20)), created: Date.now() };
     this.save();
-    const label = encodeURIComponent('Tally Books') + ':' + encodeURIComponent(u.username);
-    return { secret: u.totpPending.secret, uri: `otpauth://totp/${label}?secret=${u.totpPending.secret}&issuer=${encodeURIComponent('Tally Books')}&algorithm=SHA1&digits=6&period=30` };
+    const label = encodeURIComponent('Sumlora') + ':' + encodeURIComponent(u.username);
+    return { secret: u.totpPending.secret, uri: `otpauth://totp/${label}?secret=${u.totpPending.secret}&issuer=${encodeURIComponent('Sumlora')}&algorithm=SHA1&digits=6&period=30` };
   }
   /** Confirm with a code from the app. Turns two-step sign-in on and returns one-time recovery codes. */
   confirm2fa(user, code) {

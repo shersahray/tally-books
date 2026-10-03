@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets up Azure Artifact Signing for the Tally Books Windows installer, as far as it can be done
+# Sets up Azure Artifact Signing for the Sumlora Windows installer, as far as it can be done
 # without you: run it in Azure Cloud Shell (the >_ button at the top of the Azure portal, Bash).
 #
 #   bash <(curl -fsSL https://raw.githubusercontent.com/shersahray/tally-books/main/deploy/azure/signing-setup.sh)
