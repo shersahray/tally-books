@@ -280,6 +280,16 @@ test('automatic updates: only the installed, signed Windows app; asks to restart
   u2.emit('update-not-available');
   await new Promise(r => setImmediate(r));
   assert.match(dialogs[0].message, /up to date/);
+  // Nothing published on GitHub yet: "up to date", not a made-up internet problem.
+  const errs = async msg => { dialogs.length = 0; up2.check(); u2.emit('error', new Error(msg)); await new Promise(r => setImmediate(r)); return dialogs[0]; };
+  let d = await errs('HttpError: 404 \n"method: GET url: https://github.com/shersahray/tally-books/releases.atom"');
+  assert.match(d.message, /up to date/); assert.equal(d.type, 'info');
+  d = await errs('Cannot find latest.yml in the latest release artifacts');
+  assert.match(d.message, /up to date/);
+  d = await errs('net::ERR_INTERNET_DISCONNECTED');
+  assert.match(d.message, /Couldn’t check/); assert.match(d.detail, /internet connection/);
+  d = await errs('HttpError: 500 Internal Server Error');
+  assert.match(d.detail, /didn’t answer as expected/);
   up2.stop();
 });
 

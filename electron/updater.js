@@ -12,6 +12,9 @@ const path = require('node:path');
 
 const CHECK_EVERY = 4 * 60 * 60 * 1000;
 
+/** GitHub's answer when no release (or no installer for this system) has been published yet. */
+const noRelease = msg => /\b404\b|Cannot find latest|No published versions|Unable to find latest version|latest\.yml/i.test(msg);
+
 /** What the build recorded about itself (written by the build workflow when it signs the installer). */
 function buildInfo(dir = __dirname) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, 'build-info.json'), 'utf8')); } catch { return {}; }
@@ -46,8 +49,16 @@ function setupUpdates({ autoUpdater, dialog, window, localServer, fr = false, lo
 
   autoUpdater.on('error', err => {
     checking = false;
-    log('update error: ' + (err && err.message));
-    if (manual) { manual = false; dialog.showMessageBox(window(), { type: 'warning', message: L('Couldn’t check for updates.', 'Impossible de vérifier les mises à jour.'), detail: L('Check the internet connection and try again later.', 'Vérifiez la connexion Internet et réessayez plus tard.') }).catch(() => {}); }
+    const msg = String((err && err.message) || '');
+    log('update error: ' + msg);
+    if (!manual) return;
+    manual = false;
+    const offline = /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_NETWORK|ERR_CONNECTION|net::/i.test(msg);
+    // No release published yet (GitHub answers "not found"): there's simply nothing newer, not a connection problem.
+    if (!offline && noRelease(msg)) { dialog.showMessageBox(window(), { type: 'info', message: L('Sumlora is up to date.', 'Sumlora est à jour.'), detail: L('No newer version has been published.', 'Aucune version plus récente n’a été publiée.') }).catch(() => {}); return; }
+    dialog.showMessageBox(window(), { type: 'warning', message: L('Couldn’t check for updates.', 'Impossible de vérifier les mises à jour.'),
+      detail: offline ? L('Check the internet connection and try again later.', 'Vérifiez la connexion Internet et réessayez plus tard.')
+        : L('The update server didn’t answer as expected. Try again later.', 'Le serveur de mises à jour n’a pas répondu comme prévu. Réessayez plus tard.') + '\n\n' + msg.split('\n')[0].slice(0, 200) }).catch(() => {});
   });
   autoUpdater.on('update-not-available', () => {
     checking = false;
@@ -82,4 +93,4 @@ function setupUpdates({ autoUpdater, dialog, window, localServer, fr = false, lo
   return { check: () => check(true), stop: () => clearInterval(timer), beforeQuit };
 }
 
-module.exports = { setupUpdates, updatesOn, buildInfo };
+module.exports = { setupUpdates, updatesOn, buildInfo, noRelease };
