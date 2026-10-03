@@ -121,15 +121,24 @@ jobs:
 
       - name: Attach the installers to the release
         if: github.event_name == 'release'
+        # Automatic updates need only the Windows files; a Mac or Linux upload problem is reported but doesn't fail the build.
+        continue-on-error: ${{ runner.os != 'Windows' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(dist/*.exe dist/*.exe.blockmap dist/latest.yml dist/*.dmg dist/*.AppImage)
-          [ ${#files[@]} -gt 0 ] || { echo "::error::No installers to attach."; exit 1; }
-          gh release upload "${{ github.event.release.tag_name }}" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
-          echo "::notice title=Release::Attached ${files[*]}"
+          files=(dist/*.exe dist/*.exe.blockmap dist/latest*.yml dist/*.dmg dist/*.dmg.blockmap dist/*.AppImage)
+          [ ${#files[@]} -gt 0 ] || { echo "::error::No installers to attach. dist has: $(ls dist | tr '\n' ' ')"; exit 1; }
+          for try in 1 2 3; do
+            if out=$(gh release upload "${{ github.event.release.tag_name }}" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY" 2>&1); then
+              echo "::notice title=Release::Attached ${files[*]}"; exit 0
+            fi
+            echo "Upload try $try failed: $out"
+            sleep $((try * 15))
+          done
+          echo "::error title=Attaching to the release failed::$(echo "$out" | tr '\n' ' ' | cut -c1-500)"
+          exit 1
 
       - uses: actions/upload-artifact@v7
         with:
