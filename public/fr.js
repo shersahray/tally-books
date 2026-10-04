@@ -1577,3 +1577,21 @@ addFr({
   'Choose who the licence is for: a firm or one business.':'Choisissez à qui est la licence : un cabinet ou une seule entreprise.',
   'Firms:':'Cabinets :','Single businesses:':'Entreprises uniques :',
 });
+
+/* ---------- licence subscriptions and client company limits ---------- */
+addFr({
+  'Firm · up to {0} clients':'Cabinet · jusqu’à {0} clients','Firm · unlimited clients':'Cabinet · clients illimités',
+  'A bookkeeping firm (client companies)':'Un cabinet de tenue de livres (entreprises clientes)','Client companies':'Entreprises clientes',
+  'Up to {0}':'Jusqu’à {0}','Unlimited (more than 30)':'Illimité (plus de 30)','Subscription':'Abonnement','Custom number of days':'Nombre de jours personnalisé',
+  'Number of days':'Nombre de jours','Starts the day after the current licence ends.':'Commence le lendemain de la fin de la licence actuelle.','Starts today.':'Commence aujourd’hui.',
+  'You can change the date.':'Vous pouvez changer la date.',
+  'It’s a firm licence for up to {0} client companies at a time.':'C’est une licence de cabinet pour au plus {0} entreprises clientes à la fois.',
+  'Subscription: Monthly.':'Abonnement : mensuel.','Subscription: Quarterly.':'Abonnement : trimestriel.','Subscription: Annual.':'Abonnement : annuel.','Subscription: Custom.':'Abonnement : durée personnalisée.',
+  'Firm licence · up to {0} companies':'Licence de cabinet · jusqu’à {0} entreprises',
+  'All {0} client companies in your licence are in use.':'Les {0} entreprises clientes de votre licence sont toutes utilisées.',
+  'Archive a company you no longer work on to make room, or ask for a licence with more companies.':'Archivez une entreprise avec laquelle vous ne travaillez plus pour faire de la place, ou demandez une licence avec plus d’entreprises.',
+  'This licence covers up to {0} client companies, and all {1} are in use. Archive a company you no longer work on, or ask for a licence with more companies.':'Cette licence couvre au plus {0} entreprises clientes, et les {1} sont utilisées. Archivez une entreprise avec laquelle vous ne travaillez plus, ou demandez une licence avec plus d’entreprises.',
+  'Choose how many client companies: 5, 10, 15, 20, 30 or unlimited.':'Choisissez le nombre d’entreprises clientes : 5, 10, 15, 20, 30 ou illimité.',
+  'Choose monthly, quarterly, annual or a number of days.':'Choisissez mensuel, trimestriel, annuel ou un nombre de jours.',
+});
+addFr({'{0} active companies':'{0} entreprises actives','{0} active company':'{0} entreprise active'});

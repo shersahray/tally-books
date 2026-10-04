@@ -26,6 +26,10 @@ const CODE_FOR_PLAN = { essentials: 'e', plus: 'p' };
 // Who the licence is for: a bookkeeping firm (any number of client companies) or one business (one company).
 const KINDS = { firm: 'f', business: 'b' };
 const KIND_CODES = { f: 'firm', b: 'business' };
+// Firm licences: how many client companies (active ones) they can keep. null: no limit.
+const COMPANY_TIERS = [5, 10, 15, 20, 30];
+// How the client pays; it sets the length of each code (the code itself carries its last day).
+const PERIODS = ['monthly', 'quarterly', 'annual', 'custom'];
 
 class LicenceError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -58,7 +62,7 @@ function privateKeyFrom(jwk) {
 
 /** Make a code. payload: { id, name, plan, until (YYYY-MM-DD), issued (YYYY-MM-DD), at (ms, when it was made) } */
 function makeCode(payload, privateKey) {
-  const body = Buffer.from(JSON.stringify({ v: 1, i: payload.id, n: payload.name, p: CODE_FOR_PLAN[payload.plan], u: payload.until, d: payload.issued, ...(payload.kind === 'business' ? { k: 'b' } : {}), ...(payload.at ? { t: Math.floor(payload.at / 1000) } : {}) }));
+  const body = Buffer.from(JSON.stringify({ v: 1, i: payload.id, n: payload.name, p: CODE_FOR_PLAN[payload.plan], u: payload.until, d: payload.issued, ...(payload.kind === 'business' ? { k: 'b' } : {}), ...(payload.kind !== 'business' && payload.maxCompanies ? { c: payload.maxCompanies } : {}), ...(payload.at ? { t: Math.floor(payload.at / 1000) } : {}) }));
   const sig = crypto.sign(null, body, privateKey);
   return PREFIX + b64u(body) + '.' + b64u(sig);
 }
@@ -81,8 +85,9 @@ function readCode(code, publicKeys) {
   try { p = JSON.parse(body.toString('utf8')); } catch { throw new LicenceError('That code isn’t valid.'); }
   if (!p || p.v !== 1 || !PLAN_CODES[p.p] || !isDay(p.u) || typeof p.n !== 'string' || typeof p.i !== 'string') throw new LicenceError('That code is from a newer version of Sumlora. Update the app, then enter it again.');
   if (p.k !== undefined && !KIND_CODES[p.k]) throw new LicenceError('That code is from a newer version of Sumlora. Update the app, then enter it again.');
+  if (p.c !== undefined && !(Number.isInteger(p.c) && p.c > 0 && p.c < 100000)) throw new LicenceError('That code isn’t valid.');
   // Codes made before licence types existed are firm licences.
-  return { id: p.i, name: p.n, plan: PLAN_CODES[p.p], kind: KIND_CODES[p.k || 'f'], until: p.u, issued: isDay(p.d) ? p.d : '', ...(Number.isInteger(p.t) ? { at: p.t * 1000 } : {}) };
+  return { id: p.i, name: p.n, plan: PLAN_CODES[p.p], kind: KIND_CODES[p.k || 'f'], maxCompanies: p.k === 'b' ? 1 : (p.c || null), until: p.u, issued: isDay(p.d) ? p.d : '', ...(Number.isInteger(p.t) ? { at: p.t * 1000 } : {}) };
 }
 
 /**
@@ -150,7 +155,7 @@ class Licence {
     const lic = this.current();
     if (lic) {
       const left = dayNum(lic.until) - dayNum(today);
-      const base = { on: true, name: lic.name, plan: lic.plan, kind: lic.kind, until: lic.until, id: lic.id, daysLeft: left };
+      const base = { on: true, name: lic.name, plan: lic.plan, kind: lic.kind, maxCompanies: lic.maxCompanies, until: lic.until, id: lic.id, daysLeft: left };
       if (left >= 0) return { ...base, state: 'active', canChange: true, renewSoon: left < WARN_DAYS };
       if (-left <= GRACE_DAYS) return { ...base, state: 'grace', canChange: true, readOnlyFrom: addDays(lic.until, GRACE_DAYS + 1) };
       return { ...base, state: 'ended', canChange: false };
@@ -237,7 +242,7 @@ class Issuer {
     if (cur && cur.key && cur.key.x !== pub) throw new LicenceError('There’s already a different licence key here.', 409);
     // Only well-formed entries come in with the key (they're shown on the Licence codes page).
     const clean = x => (x && typeof x === 'object' && /^[0-9a-f]{6,20}$/.test(x.id) && CODE_FOR_PLAN[x.plan] && isDay(x.until) && isDay(x.issued) && typeof x.code === 'string' && x.code.startsWith(PREFIX)
-      ? { id: x.id, name: String(x.name || '').slice(0, 80), email: String(x.email || '').slice(0, 120), plan: x.plan, kind: KINDS[x.kind] ? x.kind : 'firm', until: x.until, issued: x.issued, note: String(x.note || '').slice(0, 200), code: x.code.slice(0, 1200), ...(/^[0-9a-f]{6,20}$/.test(x.renews) ? { renews: x.renews } : {}) }
+      ? { id: x.id, name: String(x.name || '').slice(0, 80), email: String(x.email || '').slice(0, 120), plan: x.plan, kind: KINDS[x.kind] ? x.kind : 'firm', ...(COMPANY_TIERS.includes(x.maxCompanies) ? { maxCompanies: x.maxCompanies } : {}), ...(PERIODS.includes(x.period) ? { period: x.period } : {}), until: x.until, issued: x.issued, note: String(x.note || '').slice(0, 200), code: x.code.slice(0, 1200), ...(/^[0-9a-f]{6,20}$/.test(x.renews) ? { renews: x.renews } : {}) }
       : null);
     const issued = Array.isArray(body.issued) ? body.issued.map(clean).filter(Boolean).slice(-5000) : [];
     if (cur && Array.isArray(cur.issued)) for (const x of cur.issued) if (!issued.some(y => y.code === x.code)) issued.push(x);
@@ -245,24 +250,27 @@ class Issuer {
     return this.info();
   }
   /** Make a code for a client. */
-  make({ name, email, plan, until, note, renews, kind = 'firm' }) {
+  make({ name, email, plan, until, note, renews, kind = 'firm', maxCompanies = null, period = 'annual' }) {
     const d = this.load();
     if (!d || !d.key) throw new LicenceError('Create your licence key first.', 409);
     name = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
     if (!name) throw new LicenceError('Enter who the licence is for (the client’s business name).');
     if (!CODE_FOR_PLAN[plan]) throw new LicenceError('Choose one of the plans.');
     if (!KINDS[kind]) throw new LicenceError('Choose who the licence is for: a firm or one business.');
+    maxCompanies = kind === 'business' || maxCompanies === null || maxCompanies === '' || maxCompanies === undefined ? null : Number(maxCompanies);
+    if (maxCompanies !== null && !COMPANY_TIERS.includes(maxCompanies)) throw new LicenceError('Choose how many client companies: 5, 10, 15, 20, 30 or unlimited.');
+    if (!PERIODS.includes(period)) throw new LicenceError('Choose monthly, quarterly, annual or a number of days.');
     if (!isDay(until)) throw new LicenceError('Enter the last day the licence is good for.');
     const today = localDay(this.now());
     if (until < today) throw new LicenceError('The end date has already passed.');
     if (dayNum(until) - dayNum(today) > 5 * 366) throw new LicenceError('A licence can last at most five years.');
     const id = crypto.randomBytes(5).toString('hex');
-    const code = makeCode({ id, name, plan, kind, until, issued: today, at: this.now().getTime() }, privateKeyFrom(d.key));
-    const rec = { id, name, email: String(email || '').trim().slice(0, 120), plan, kind, until, issued: today, note: String(note || '').trim().slice(0, 200), code, ...(renews ? { renews: String(renews).slice(0, 20) } : {}) };
+    const code = makeCode({ id, name, plan, kind, maxCompanies, until, issued: today, at: this.now().getTime() }, privateKeyFrom(d.key));
+    const rec = { id, name, email: String(email || '').trim().slice(0, 120), plan, kind, ...(kind === 'firm' ? { maxCompanies } : {}), period, until, issued: today, note: String(note || '').trim().slice(0, 200), code, ...(renews ? { renews: String(renews).slice(0, 20) } : {}) };
     d.issued = [...(d.issued || []), rec];
     this.save(d);
     return rec;
   }
 }
 
-module.exports = { Licence, Issuer, LicenceError, KINDS, makeCode, readCode, publicKeyFrom, localDay, addDays, TRIAL_DAYS, GRACE_DAYS };
+module.exports = { Licence, Issuer, LicenceError, KINDS, COMPANY_TIERS, PERIODS, makeCode, readCode, publicKeyFrom, localDay, addDays, TRIAL_DAYS, GRACE_DAYS };

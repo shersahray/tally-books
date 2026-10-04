@@ -7,6 +7,10 @@ let LIC=null,LICS=null,LIC_MADE=null,LIC_FORM=null;
 
 const licPlan=p=>T(TallyPlans.PLANS[TallyPlans.planOf(p)].label);
 const licKind=k=>T(k==='business'?'Single business':'Firm');
+/** "Firm · up to 10 clients", "Firm · unlimited clients" or "Single business". */
+const licType=l=>l.kind==='business'?T('Single business'):l.maxCompanies?T(`Firm · up to ${l.maxCompanies} clients`):T('Firm · unlimited clients');
+const PERIOD_LABEL={monthly:'Monthly',quarterly:'Quarterly',annual:'Annual',custom:'Custom'};
+const licPeriod=p=>T(PERIOD_LABEL[p]||'Annual');
 async function loadLicence(){
   try{LIC=await api('GET','/api/licence')}catch(e){LIC=null}
   document.body.classList.toggle('readonly',!!((typeof ME!=='undefined'&&ME&&ME.readOnly)||(LIC&&LIC.on&&!LIC.canChange)));
@@ -38,7 +42,7 @@ function licenceDialog(){
     :st.state==='trial'?`<b>Free trial</b> <span>until ${esc(fmtDate(st.until))}.</span>`
     :st.state==='trial-ended'?`<b>The free trial has ended.</b> <span>The books are view only.</span>`
     :st.state==='none'?`<b>Not activated yet.</b> <span>Enter the licence code you received.</span>`
-    :`<span>Licensed to</span> <b translate="no">${esc(st.name)}</b> · <span>${esc(licPlan(st.plan))} plan</span> · <span>${esc(T(st.kind==='business'?'One business':'Firm licence'))}</span> · <span>${st.state==='active'?'until':'ended'} ${esc(fmtDate(st.until))}</span>`;
+    :`<span>Licensed to</span> <b translate="no">${esc(st.name)}</b> · <span>${esc(licPlan(st.plan))} plan</span> · <span>${esc(st.kind==='business'?T('One business'):st.maxCompanies?T(`Firm licence · up to ${st.maxCompanies} companies`):T('Firm licence'))}</span> · <span>${st.state==='active'?'until':'ended'} ${esc(fmtDate(st.until))}</span>`;
   const f=openModal('Licence',`
     <div class="banner ${['trial-ended','ended','grace','none'].includes(st.state)?'err':''}" style="margin:0"><span>${now}</span></div>
     ${st.canEnter&&st.state!=='issuer'?`${fld('licCode','Licence code',`<textarea id="licCode" rows="4" class="mono" spellcheck="false" autocomplete="off" placeholder="TB1-…" style="font-size:12.5px;word-break:break-all"></textarea>`,true)}
@@ -63,9 +67,16 @@ async function showLicences(){S.view='licences';LICS=null;renderMain();try{LICS=
 const isoDay=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 /** One year on from a day: the day before the same date next year (Oct 2 → Oct 1). */
 const yearFrom=day=>{const d=pd(day);d.setFullYear(d.getFullYear()+1);d.setDate(d.getDate()-1);return isoDay(d)};
+/** The last day of a subscription starting on a day: a month, 3 months or a year later, less a day; or a number of days. */
+function periodEnd(start,period,days){
+  const d=pd(start);
+  if(period==='custom'){d.setDate(d.getDate()+Math.max(1,Math.min(1830,+days||30))-1);return isoDay(d)}
+  const months=period==='monthly'?1:period==='quarterly'?3:12,day=d.getDate();
+  d.setDate(1);d.setMonth(d.getMonth()+months);d.setDate(Math.min(day,new Date(d.getFullYear(),d.getMonth()+1,0).getDate()));d.setDate(d.getDate()-1);return isoDay(d)}
 /** The "Make a code" form filled in to renew a licence: same client and plan, the next year after it ends. */
-function renewFormFor(l){const today=isoDay(new Date());
-  return {name:l.name,email:l.email||'',plan:l.plan,kind:l.kind||'firm',until:yearFrom(l.until>=today?isoDay(new Date(pd(l.until).getTime()+864e5)):today),note:'',renews:l.id}}
+function renewFormFor(l){const today=isoDay(new Date()),start=l.until>=today?isoDay(new Date(pd(l.until).getTime()+864e5)):today,period=l.period||'annual';
+  const days=period==='custom'?Math.round((pd(l.until)-pd(l.issued||l.until))/864e5)+1||30:30;
+  return {name:l.name,email:l.email||'',plan:l.plan,kind:l.kind||'firm',maxCompanies:l.kind==='business'?'':String(l.maxCompanies||''),period,days,start,until:periodEnd(start,period,days),note:'',renews:l.id}}
 /** Open Licence codes with the renewal form ready (from the Overview page). */
 async function renewLicence(l){LIC_FORM=renewFormFor(l);LIC_MADE=null;await showLicences();const f=$('#licForm');if(f){f.scrollIntoView({block:'center'});$('#lfUntil').focus()}}
 function licStatus(l){
@@ -76,7 +87,7 @@ function licStatus(l){
   return ['paid','Active'];
 }
 function licMail(l){
-  return `${T('Hello,')}\n\n${T('Here is your Sumlora licence code.')} ${T(`It’s for ${l.name}, with the ${licPlan(l.plan)} plan, until ${fmtDate(l.until)}.`)} ${T(l.kind==='business'?'It covers one business: the books of one company.':'It’s a firm licence: you can keep the books of as many client companies as you need.')}\n\n${T('To enter it, open Sumlora, click Licence at the bottom left, paste the code and click Turn on.')}\n\n${l.code}\n\n${T('Thank you!')}\n`;
+  return `${T('Hello,')}\n\n${T('Here is your Sumlora licence code.')} ${T(`It’s for ${l.name}, with the ${licPlan(l.plan)} plan, until ${fmtDate(l.until)}.`)} ${T(l.kind==='business'?'It covers one business: the books of one company.':l.maxCompanies?`It’s a firm licence for up to ${l.maxCompanies} client companies at a time.`:'It’s a firm licence: you can keep the books of as many client companies as you need.')} ${T(`Subscription: ${PERIOD_LABEL[l.period]||'Annual'}.`)}\n\n${T('To enter it, open Sumlora, click Licence at the bottom left, paste the code and click Turn on.')}\n\n${l.code}\n\n${T('Thank you!')}\n`;
 }
 function vLicences(){
   const back=`<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`;
@@ -87,7 +98,7 @@ function vLicences(){
     <div>Codes are signed with a key that only you have, so nobody else can make them. Create it once, here in your own Sumlora.</div>
     <div class="actions" style="justify-content:flex-start"><button class="btn primary" data-lic="newkey">Create licence key</button><label class="btn">Bring back a key from a copy<input type="file" id="licRestore" accept=".json,application/json" hidden></label></div>
   </div></div>`;
-  const today=isoDay(new Date()),F=LIC_FORM||{name:'',email:'',plan:'plus',kind:'firm',until:yearFrom(today),note:''};
+  const today=isoDay(new Date()),F=LIC_FORM||{name:'',email:'',plan:'plus',kind:'firm',maxCompanies:'5',period:'annual',days:30,start:today,until:periodEnd(today,'annual'),note:''};
   const list=LICS.issued;
   return h+`<div class="panel" style="max-width:820px;margin-bottom:16px"><h3>Your licence key</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
     ${LICS.licensing?`<div><span class="pill paid">Working</span> <span>This copy holds your key, so it makes codes and doesn’t need one.</span></div>`:`<div><b>1. Put your public key in GitHub, once.</b> <span>In your repository: Settings → Secrets and variables → Actions → Variables → New repository variable. Name:</span> <code translate="no">SUMLORA_LICENCE_KEY</code><span>, value:</span></div>
@@ -99,20 +110,21 @@ function vLicences(){
   </div></div>
   <div class="panel" style="max-width:820px;margin-bottom:16px"><h3>${F.renews?'Renew a licence':'Make a code'}</h3><form class="pad" id="licForm" style="display:flex;flex-direction:column;gap:10px">
     <div class="grid2">${fld('lfName','Client (business name)',`<input type="text" id="lfName" maxlength="80" value="${esc(F.name)}" required>`,true)}${fld('lfEmail','Email (optional)',`<input id="lfEmail" type="email" maxlength="120" value="${esc(F.email)}">`)}</div>
-    ${fld('lfKind','Who it’s for',`<select id="lfKind"><option value="firm" ${(F.kind||'firm')==='firm'?'selected':''}>A bookkeeping firm: as many client companies as they need</option><option value="business" ${F.kind==='business'?'selected':''}>One business: its own company only</option></select>`)}
-    <div class="grid2">${fld('lfPlan','Plan',`<select id="lfPlan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${F.plan===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select>`)}${fld('lfUntil','Last day it works',`<input id="lfUntil" type="date" min="${today}" value="${esc(F.until)}" required>`)}</div>
+    <div class="grid2">${fld('lfKind','Who it’s for',`<select id="lfKind"><option value="firm" ${(F.kind||'firm')==='firm'?'selected':''}>A bookkeeping firm (client companies)</option><option value="business" ${F.kind==='business'?'selected':''}>One business: its own company only</option></select>`)}<div id="lfCoWrap" ${F.kind==='business'?'hidden':''}>${fld('lfCos','Client companies',`<select id="lfCos">${['5','10','15','20','30',''].map(n=>`<option value="${n}" ${String(F.maxCompanies??'5')===n?'selected':''}>${n?esc(T(`Up to ${n}`)):esc(T('Unlimited (more than 30)'))}</option>`).join('')}</select>`)}</div></div>
+    <div class="grid2">${fld('lfPlan','Plan',`<select id="lfPlan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${F.plan===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select>`)}${fld('lfPeriod','Subscription',`<select id="lfPeriod">${Object.keys(PERIOD_LABEL).map(k=>`<option value="${k}" ${F.period===k?'selected':''}>${esc(T(k==='custom'?'Custom number of days':PERIOD_LABEL[k]))}</option>`).join('')}</select>`)}</div>
+    <div class="grid2"><div id="lfDaysWrap" ${F.period==='custom'?'':'hidden'}>${fld('lfDays','Number of days',`<input id="lfDays" type="number" min="1" max="1830" step="1" value="${esc(F.days||30)}">`)}</div>${fld('lfUntil','Last day it works',`<input id="lfUntil" type="date" min="${today}" value="${esc(F.until)}" required><span class="hint">${esc(T(F.renews?'Starts the day after the current licence ends.':'Starts today.'))} <span>You can change the date.</span></span>`)}</div>
     ${fld('lfNote','Note for you (optional)',`<input type="text" id="lfNote" maxlength="200" value="${esc(F.note)}" placeholder="Invoice number, payment…">`)}
     <div class="muted" style="font-size:12.5px">The client name shows in their app (Licensed to …). After the last day there are 14 more days to renew; then their books are view only until they enter a new code. Nothing is ever deleted.</div>
     <div class="actions" style="justify-content:flex-start">${F.renews?'<button type="button" class="btn" data-lic="cancelrenew">Cancel</button>':''}<button type="submit" class="btn primary">${F.renews?'Make renewal code':'Make code'}</button></div>
   </form></div>
   ${LIC_MADE?`<div class="panel" style="max-width:820px;margin-bottom:16px" id="licMade"><h3><span><span>Code for</span> <span translate="no">${esc(LIC_MADE.name)}</span></span></h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="linkbox mono" translate="no" style="word-break:break-all">${esc(LIC_MADE.code)}</div>
-    <div class="muted" style="font-size:13px"><span>${esc(licKind(LIC_MADE.kind))}</span> · <span>${esc(licPlan(LIC_MADE.plan))} plan</span> · <span>until ${esc(fmtDate(LIC_MADE.until))}</span>. <span>Send it to your client by email. They paste it in Sumlora under Licence.</span></div>
+    <div class="muted" style="font-size:13px"><span>${esc(licType(LIC_MADE))}</span> · <span>${esc(licPlan(LIC_MADE.plan))} plan</span> · <span>${esc(licPeriod(LIC_MADE.period))}</span> · <span>until ${esc(fmtDate(LIC_MADE.until))}</span>. <span>Send it to your client by email. They paste it in Sumlora under Licence.</span></div>
     <div class="actions" style="justify-content:flex-start"><button class="btn sm" data-lic="copy" data-id="${esc(LIC_MADE.id)}">Copy code</button><button class="btn sm" data-lic="copymail" data-id="${esc(LIC_MADE.id)}">Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(LIC_MADE.email||'')}?subject=${encodeURIComponent(T('Your Sumlora licence code'))}&body=${encodeURIComponent(licMail(LIC_MADE))}">Open in email</a></div>
   </div></div>`:''}
-  <div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Client</th><th>Type</th><th>Plan</th><th>Last day</th><th>Made</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(l=>{const st=licStatus(l);
-    return `<tr><td><b translate="no">${esc(l.name)}</b>${l.email?`<div class="muted" style="font-size:12px" translate="no">${esc(l.email)}</div>`:''}${l.note?`<div class="muted" style="font-size:12px">${esc(l.note)}</div>`:''}</td><td>${esc(licKind(l.kind))}</td><td>${esc(licPlan(l.plan))}</td><td>${esc(fmtDate(l.until))}</td><td class="muted">${esc(fmtDate(l.issued))}</td><td><span class="pill ${st[0]}">${esc(T(st[1]))}</span></td>
-      <td style="white-space:nowrap"><button class="btn sm" data-lic="copy" data-id="${esc(l.id)}">Copy code</button> ${st[1]==='Renewed'?'':`<button class="btn sm" data-lic="renew" data-id="${esc(l.id)}">Renew</button>`}</td></tr>`}).join(''):emptyRow(7,'No codes yet','Make the first one above when a client buys the desktop app.')}</tbody></table></div></div>`;
+  <div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Client</th><th>Type</th><th>Plan</th><th>Subscription</th><th>Last day</th><th>Made</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(l=>{const st=licStatus(l);
+    return `<tr><td><b translate="no">${esc(l.name)}</b>${l.email?`<div class="muted" style="font-size:12px" translate="no">${esc(l.email)}</div>`:''}${l.note?`<div class="muted" style="font-size:12px">${esc(l.note)}</div>`:''}</td><td>${esc(licType(l))}</td><td>${esc(licPlan(l.plan))}</td><td>${esc(licPeriod(l.period))}</td><td>${esc(fmtDate(l.until))}</td><td class="muted">${esc(fmtDate(l.issued))}</td><td><span class="pill ${st[0]}">${esc(T(st[1]))}</span></td>
+      <td style="white-space:nowrap"><button class="btn sm" data-lic="copy" data-id="${esc(l.id)}">Copy code</button> ${st[1]==='Renewed'?'':`<button class="btn sm" data-lic="renew" data-id="${esc(l.id)}">Renew</button>`}</td></tr>`}).join(''):emptyRow(8,'No codes yet','Make the first one above when a client buys the desktop app.')}</tbody></table></div></div>`;
 }
 function bindLicences(m){
   const find=id=>LICS.issued.find(x=>x.id===id)||(LIC_MADE&&LIC_MADE.id===id?LIC_MADE:null);
@@ -129,7 +141,12 @@ function bindLicences(m){
       renderMain();const f=$('#licForm');if(f){f.scrollIntoView({block:'center'});$('#lfUntil').focus()}return}
   };
   const r=$('#licRestore',m);if(r)r.onchange=()=>restoreKeyFile(r,showLicences);
-  const f=$('#licForm',m);if(f)f.onsubmit=async e=>{e.preventDefault();
-    const body={name:$('#lfName',f).value,email:$('#lfEmail',f).value,plan:$('#lfPlan',f).value,kind:$('#lfKind',f).value,until:$('#lfUntil',f).value,note:$('#lfNote',f).value,...(LIC_FORM&&LIC_FORM.renews?{renews:LIC_FORM.renews}:{})};
+  const f=$('#licForm',m);
+  if(f){const start=()=>(LIC_FORM&&LIC_FORM.start)||isoDay(new Date());
+    const recalc=()=>{const p=$('#lfPeriod',f).value;$('#lfDaysWrap',f).hidden=p!=='custom';$('#lfUntil',f).value=periodEnd(start(),p,$('#lfDays',f).value)};
+    $('#lfPeriod',f).onchange=recalc;$('#lfDays',f).oninput=recalc;
+    $('#lfKind',f).onchange=()=>{$('#lfCoWrap',f).hidden=$('#lfKind',f).value!=='firm'}}
+  if(f)f.onsubmit=async e=>{e.preventDefault();
+    const body={name:$('#lfName',f).value,email:$('#lfEmail',f).value,plan:$('#lfPlan',f).value,kind:$('#lfKind',f).value,maxCompanies:$('#lfKind',f).value==='firm'&&$('#lfCos',f).value?+$('#lfCos',f).value:null,period:$('#lfPeriod',f).value,until:$('#lfUntil',f).value,note:$('#lfNote',f).value,...(LIC_FORM&&LIC_FORM.renews?{renews:LIC_FORM.renews}:{})};
     try{const out=await api('POST','/api/licences',body);LIC_MADE=out.licence;LIC_FORM=null;LICS=await api('GET','/api/licences');renderMain();const d=$('#licMade');if(d)d.scrollIntoView({block:'center'});toast(`Code made for ${out.licence.name}`)}catch(ex){toast(ex.message,true)}};
 }

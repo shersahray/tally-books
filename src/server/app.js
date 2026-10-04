@@ -52,6 +52,15 @@ function createApp(opts) {
   const issuer = new Issuer(opts.licenceDir || opts.dataDir, { now: opts.now });
   const licencePlan = () => (licence.on ? licence.status().plan : null);
   auth.planOverride = licencePlan;
+  /** Desktop licences limit companies: one for a single business; for a firm, its number of active client companies. */
+  const checkCompanyLimit = ({ restoring = false } = {}) => {
+    if (!licence.on) return;
+    const st = licence.status();
+    if (st.kind === 'business' && !restoring && reg.list().length >= 1) throw new ValidationError('This licence is for one business, so it has one company. To keep books for more companies, ask for a firm licence.', 403);
+    if (st.kind === 'firm' && st.maxCompanies && reg.list().filter(c => !c.archived).length >= st.maxCompanies) {
+      throw new ValidationError(`This licence covers up to ${st.maxCompanies} client companies, and all ${st.maxCompanies} are in use. Archive a company you no longer work on, or ask for a licence with more companies.`, 403);
+    }
+  };
   const licenceInfo = u => {
     const admin = !!(u && u.role === 'owner' && u.platformAdmin);
     return { ...licence.status(), canEnter: admin && licence.on, canIssue: admin && (!licence.on || licence.isIssuer()) };
@@ -673,7 +682,7 @@ function createApp(opts) {
     ['POST', /^\/api\/licences$/, async (req, m, res, user) => {
       canIssue(user);
       const b = await readJson(req);
-      const rec = issuer.make({ name: b.name, email: b.email, plan: b.plan, kind: b.kind || 'firm', until: b.until, note: b.note, renews: b.renews });
+      const rec = issuer.make({ name: b.name, email: b.email, plan: b.plan, kind: b.kind || 'firm', maxCompanies: b.maxCompanies ?? null, period: b.period || 'annual', until: b.until, note: b.note, renews: b.renews });
       auth.log('licence-made', { by: user.username, licence: rec.id, name: rec.name, plan: rec.plan, kind: rec.kind, until: rec.until });
       return { licence: rec };
     }],
@@ -721,11 +730,7 @@ function createApp(opts) {
       ...(user.platformAdmin ? { pendingFirms: auth.data.firms.filter(f => f.status === 'pending').length } : {}) })],
     ['POST', /^\/api\/companies$/, async (req, m, res, user) => {
       ownerOnly(user);
-      // A single-business licence (desktop app) keeps one company; a firm licence has no limit.
-      if (licence.on) {
-        const st = licence.status();
-        if (st.kind === 'business' && reg.list().length >= 1) throw new ValidationError('This licence is for one business, so it has one company. To keep books for more companies, ask for a firm licence.', 403);
-      }
+      checkCompanyLimit();
       const entry = createCompany(await readJson(req), user);
       return { ok: true, company: summary(entry) };
     }],
@@ -736,6 +741,8 @@ function createApp(opts) {
       if (body.archived !== undefined) ownerOnly(user);
       const patch = {};
       if (body.archived !== undefined) patch.archived = !!body.archived;
+      // Bringing an archived company back counts against a firm licence's limit.
+      if (patch.archived === false && reg.get(id).archived) checkCompanyLimit({ restoring: true });
       if (body.opened) patch.lastOpened = Date.now();
       reg.update(id, patch);
       if (patch.archived !== undefined) broadcast({ companies: true, firmId: reg.get(id).firmId });

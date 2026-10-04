@@ -69,7 +69,7 @@ test('the seller makes a licence key and codes in their own Sumlora', async () =
   const read = L.readCode(code, [pub]);
   assert.ok(read.at >= at.getTime() - 1000 && read.at < at.getTime() + 60000, 'when it was made, signed with it');
   delete read.at;
-  assert.deepEqual(read, { id: codeRec.id, name: 'Maple Dental', plan: 'essentials', kind: 'firm', until: '2027-10-01', issued: '2026-10-02' });
+  assert.deepEqual(read, { id: codeRec.id, name: 'Maple Dental', plan: 'essentials', kind: 'firm', maxCompanies: null, until: '2027-10-01', issued: '2026-10-02' });
   const list = (await req('GET', '/api/licences')).json;
   assert.equal(list.issued.length, 1); assert.equal(list.licensing, false);
   // A copy of the key, to keep safe.
@@ -337,4 +337,34 @@ test('licence types: a firm licence has any number of companies; a single-busine
   // The overview counts each type.
   const o = (await seller.req('GET', '/api/overview')).json;
   assert.ok(o.licences.byKind.business >= 1 && o.licences.byKind.firm >= 1);
+});
+
+test('firm licences by number of client companies, and the subscription period is kept', async () => {
+  const at = new Date(2026, 9, 4, 9);
+  assert.equal((await seller.req('POST', '/api/licences', { name: 'X', plan: 'plus', until: '2027-10-01', kind: 'firm', maxCompanies: 7 })).status, 400, 'only 5, 10, 15, 20, 30 or unlimited');
+  assert.equal((await seller.req('POST', '/api/licences', { name: 'X', plan: 'plus', until: '2027-10-01', period: 'weekly' })).status, 400);
+  const five = (await seller.req('POST', '/api/licences', { name: 'Small Firm', plan: 'plus', until: '2026-11-03', kind: 'firm', maxCompanies: 5, period: 'monthly' })).json.licence;
+  assert.equal(five.maxCompanies, 5); assert.equal(five.period, 'monthly');
+  assert.equal(L.readCode(five.code, [pub]).maxCompanies, 5);
+  const unl = (await seller.req('POST', '/api/licences', { name: 'Big Firm', plan: 'plus', until: '2027-01-03', kind: 'firm', maxCompanies: null, period: 'quarterly' })).json.licence;
+  assert.equal(L.readCode(unl.code, [pub]).maxCompanies, null);
+  const biz = (await seller.req('POST', '/api/licences', { name: 'Solo', plan: 'plus', until: '2027-10-01', kind: 'business', maxCompanies: 30 })).json.licence;
+  assert.equal(L.readCode(biz.code, [pub]).maxCompanies, 1, 'one business is always one company');
+
+  const c = await start({ dataDir: tmp(), licenceDir: tmp(), licenceKeys: [pub], now: () => at });
+  const lic = (await c.req('PUT', '/api/licence', { code: five.code })).json;
+  assert.equal(lic.maxCompanies, 5);
+  const ids = [];
+  for (let i = 1; i <= 5; i++) ids.push((await c.req('POST', '/api/companies', { name: 'Client ' + i, province: 'ON' })).json.company.id);
+  let r = await c.req('POST', '/api/companies', { name: 'Client 6', province: 'ON' });
+  assert.equal(r.status, 403); assert.match(r.json.error, /up to 5 client companies/);
+  // Archiving a client makes room; bringing it back while full is refused.
+  assert.equal((await c.req('PUT', `/api/companies/${ids[0]}`, { archived: true })).status, 200);
+  assert.equal((await c.req('POST', '/api/companies', { name: 'Client 6', province: 'ON' })).status, 200);
+  r = await c.req('PUT', `/api/companies/${ids[0]}`, { archived: false });
+  assert.equal(r.status, 403);
+  // A bigger licence lifts the limit.
+  await c.req('PUT', '/api/licence', { code: unl.code });
+  assert.equal((await c.req('PUT', `/api/companies/${ids[0]}`, { archived: false })).status, 200);
+  assert.equal((await c.req('POST', '/api/companies', { name: 'Client 7', province: 'ON' })).status, 200);
 });
