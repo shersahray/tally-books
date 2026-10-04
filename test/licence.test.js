@@ -224,3 +224,52 @@ test('a key copy with odd entries brings in only well-formed ones', async () => 
   assert.equal(r.status, 200);
   assert.equal(r.json.issued.length, copy.issued.length);
 });
+
+test('the client creates their account with the licence code: checked first, then Sumlora is activated', async () => {
+  const at = new Date(2026, 9, 4, 9);
+  const fresh = async trialDays => {
+    const server = createApp({ dataDir: tmp(), licenceDir: tmp(), licenceKeys: [pub], licenceTrialDays: trialDays, autoBackup: false, now: () => at });
+    await new Promise(r => server.listen(0, '127.0.0.1', r));
+    servers.push(server);
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const call = async (method, url, body, cookie) => {
+      const res = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      return { status: res.status, json: await res.json().catch(() => null), cookie: (res.headers.get('set-cookie') || '').split(';')[0] };
+    };
+    return call;
+  };
+  const owner = { firmName: 'Maple Dental', name: 'Mia', username: 'mia@maple.ca', password: PW };
+  const good = (await seller.req('POST', '/api/licences', { name: 'Maple Dental', plan: 'essentials', until: '2027-10-03' })).json.licence.code;
+
+  // With a free trial: the setup screen offers the field, a code is optional.
+  let call = await fresh(30);
+  let me = await call('GET', '/api/auth/me');
+  assert.deepEqual(me.json.licenceSetup, { required: false, trialDays: 30 });
+  let r = await call('POST', '/api/auth/setup', { ...owner, licenceCode: good.slice(0, -4) + 'AAAA' });
+  assert.equal(r.status, 400, 'a wrong code is refused…');
+  assert.equal((await call('GET', '/api/auth/me')).json.setup, true, '…and no account was made');
+  r = await call('POST', '/api/auth/setup', { ...owner, licenceCode: good });
+  assert.equal(r.status, 200);
+  me = await call('GET', '/api/auth/me', null, r.cookie);
+  assert.equal(me.json.licence.state, 'active'); assert.equal(me.json.licence.name, 'Maple Dental'); assert.equal(me.json.user.firmPlan, 'essentials');
+
+  // No trial (SUMLORA_TRIAL_DAYS = 0): a code is needed to create the account.
+  call = await fresh(0);
+  assert.deepEqual((await call('GET', '/api/auth/me')).json.licenceSetup, { required: true, trialDays: 0 });
+  r = await call('POST', '/api/auth/setup', owner);
+  assert.equal(r.status, 400); assert.match(r.json.error, /licence code/);
+  r = await call('POST', '/api/auth/setup', { ...owner, licenceCode: good });
+  assert.equal(r.status, 200);
+  assert.equal((await call('GET', '/api/auth/me', null, r.cookie)).json.licence.state, 'active');
+
+  // Servers without licensing (your own server, the web version) don't ask.
+  call = await (async () => { const s = createApp({ dataDir: tmp(), autoBackup: false }); await new Promise(res => s.listen(0, '127.0.0.1', res)); servers.push(s); const b = `http://127.0.0.1:${s.address().port}`; return async (m, u) => ({ json: await (await fetch(b + u, { method: m })).json() }); })();
+  assert.equal((await call('GET', '/api/auth/me')).json.licenceSetup, undefined);
+});
+
+test('with no trial, a copy without a code is view only until one is entered', () => {
+  const dir = tmp();
+  const lic = new L.Licence(dir, { publicKeys: [pub], trialDays: 0, now: () => new Date(2026, 9, 4) });
+  const st = lic.status();
+  assert.equal(st.state, 'none'); assert.equal(st.canChange, false);
+});

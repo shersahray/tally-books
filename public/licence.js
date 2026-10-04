@@ -16,8 +16,9 @@ async function licenceEnded(){await loadLicence();if(typeof renderMain==='functi
 
 function licenceBanner(){
   if(!LIC||!LIC.on)return '';
-  const btn=LIC.canEnter?`<button class="btn sm" data-act="licence">${['trial','trial-ended'].includes(LIC.state)?'Enter licence code':'Enter renewal code'}</button>`:'';
+  const btn=LIC.canEnter?`<button class="btn sm" data-act="licence">${['trial','trial-ended','none'].includes(LIC.state)?'Enter licence code':'Enter renewal code'}</button>`:'';
   const ask=LIC.canEnter?'':' <span>Ask the owner of this computer’s Sumlora to enter it.</span>';
+  if(LIC.state==='none')return `<div class="banner err"><span><b>Enter your licence code to start using Sumlora.</b> <span>It’s in the email you received when you bought Sumlora.</span>${ask}</span>${btn}</div>`;
   if(LIC.state==='trial')return `<div class="banner"><span><b>Free trial: ${LIC.daysLeft===0?'last day':`${LIC.daysLeft} days left`}.</b> <span>Everything is included during the trial. Enter a licence code to keep making changes after ${esc(fmtDate(LIC.until))}.</span>${ask}</span>${btn}</div>`;
   if(LIC.state==='trial-ended')return `<div class="banner err"><span><b>The free trial has ended.</b> <span>Your books are view only: you can still open, print, export and back up everything. Enter a licence code to make changes.</span>${ask}</span>${btn}</div>`;
   if(LIC.state==='active'&&LIC.renewSoon)return `<div class="banner"><span><b>Your licence ends on ${esc(fmtDate(LIC.until))}.</b> <span>Renew it to keep making changes after that date.</span>${ask}</span>${btn}</div>`;
@@ -35,9 +36,10 @@ function licenceDialog(){
   const st=LIC,now=st.state==='issuer'?`<b>This is your own copy.</b> <span>It holds your licence key, so it doesn’t need a code.</span>`
     :st.state==='trial'?`<b>Free trial</b> <span>until ${esc(fmtDate(st.until))}.</span>`
     :st.state==='trial-ended'?`<b>The free trial has ended.</b> <span>The books are view only.</span>`
+    :st.state==='none'?`<b>Not activated yet.</b> <span>Enter the licence code you received.</span>`
     :`<span>Licensed to</span> <b translate="no">${esc(st.name)}</b> · <span>${esc(licPlan(st.plan))} plan</span> · <span>${st.state==='active'?'until':'ended'} ${esc(fmtDate(st.until))}</span>`;
   const f=openModal('Licence',`
-    <div class="banner ${['trial-ended','ended','grace'].includes(st.state)?'err':''}" style="margin:0"><span>${now}</span></div>
+    <div class="banner ${['trial-ended','ended','grace','none'].includes(st.state)?'err':''}" style="margin:0"><span>${now}</span></div>
     ${st.canEnter&&st.state!=='issuer'?`${fld('licCode','Licence code',`<textarea id="licCode" rows="4" class="mono" spellcheck="false" autocomplete="off" placeholder="TB1-…" style="font-size:12.5px;word-break:break-all"></textarea>`,true)}
     <div class="muted" style="font-size:12.5px">Paste the whole code from the email, starting with TB1-. Your books stay as they are; the code only changes how long you can keep making changes, and the plan.</div>`:st.state!=='issuer'?'<div class="muted">Ask the owner of this computer’s Sumlora to enter the licence code.</div>':''}
     ${st.canEnter&&st.state!=='issuer'?`<details style="margin-top:4px"><summary class="muted" style="font-size:12.5px;cursor:pointer">Selling Sumlora? Bring back your licence key</summary>

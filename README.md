@@ -215,10 +215,12 @@ For clients who keep their books on their own computer, you sell a licence for a
 3. Click **Download a copy of the key** and keep the file somewhere safe and private (a USB key or a password manager). It isn't in the daily backups. On a new computer, bring it back from the **Licence** window.
 4. Publish a new release. Windows installers built from then on ask for a licence code. Copies installed earlier keep working without one until they update, and then start a 30-day trial.
 
+**Free trial or code from the start:** by default a new install has a 30-day free trial, and the client can paste their code when they create their account or any time later. To require a code from the start, add a GitHub variable `SUMLORA_TRIAL_DAYS` set to `0` (or another number of days for a shorter or longer trial) and publish a release.
+
 **When a client buys or renews:** on **Licence codes**, enter the client's business name, the plan (Essentials or Plus) and the last day, and click **Make code** (or **Renew** on an existing row, which picks the next year). Copy the code or the ready-made email and send it. The client clicks **Licence** (bottom left, or the button in the yellow bar) and pastes it.
 
 **What the client sees:**
-- A new install has a 30-day free trial with everything included.
+- When the client creates their account, the first screen asks for the licence code: a valid code activates Sumlora straight away (a wrong one is refused before the account is made). With the trial on, they can leave it empty and get 30 days with everything included.
 - A licence shows "Licensed to …", and the plan in the code decides the features (Essentials or Plus).
 - In the last 30 days, a bar reminds them to renew. After the last day, they have 14 more days.
 - After that, or after the trial, the books are **view only**: they can still open, print, export, email and back up everything, but not change anything until they enter a new code. Nothing is ever deleted or locked away.

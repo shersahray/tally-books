@@ -37,6 +37,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {boolean} [opts.mailAllowLocal]  Tests only: allow a mail server on this computer or the local network.
  * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
  * @param {string} [opts.licenceDir]  Where the licence is kept (the desktop app's own folder, so it stays with the computer, not the books).
+ * @param {number} [opts.licenceTrialDays] Days of free trial before a code is needed (default 30; 0 = a code from the start).
  * @param {string[]} [opts.licenceKeys] Public keys that sign licence codes (the installed desktop app): turns licensing on.
  * @param {string} [opts.setupCode]   If set, creating the first owner account needs this code (so a stranger can't claim a new server).
  */
@@ -46,7 +47,7 @@ function createApp(opts) {
   reg.adoptFirm(auth.mainFirmId);
   // Desktop licence codes (licence.js). With a licence, its plan is the plan for everything in this copy.
   // The first day and latest day seen are also kept with the books (users.json), so deleting licence.json doesn't start a new trial.
-  const licence = new Licence(opts.licenceDir || opts.dataDir, { publicKeys: opts.licenceKeys || [], now: opts.now,
+  const licence = new Licence(opts.licenceDir || opts.dataDir, { publicKeys: opts.licenceKeys || [], now: opts.now, trialDays: opts.licenceTrialDays,
     memo: { get: () => auth.data.settings.licenceDays, set: v => { const c = auth.data.settings.licenceDays || {}; if (c.firstDay !== v.firstDay || c.lastSeen !== v.lastSeen) { auth.data.settings.licenceDays = v; auth.save(); } } } });
   const issuer = new Issuer(opts.licenceDir || opts.dataDir, { now: opts.now });
   const licencePlan = () => (licence.on ? licence.status().plan : null);
@@ -437,7 +438,8 @@ function createApp(opts) {
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
     ['GET', /^\/api\/auth\/me$/, req => {
       const user = auth.userFor(req);
-      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode, signups: auth.signups !== 'off' && !auth.needsSetup() ? auth.signups : '' });
+      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode, signups: auth.signups !== 'off' && !auth.needsSetup() ? auth.signups : '',
+        ...(auth.needsSetup() && licence.on ? { licenceSetup: { required: licence.trialDays === 0, trialDays: licence.trialDays } } : {}) });
       const { token, ...u } = user;
       return { user: u, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.policy2fa, licence: licenceInfo(u) };
     }],
@@ -449,8 +451,18 @@ function createApp(opts) {
         const a = crypto.createHash('sha256').update(String(body.setupCode || '').trim()).digest(), b = crypto.createHash('sha256').update(String(opts.setupCode).trim()).digest();
         if (!crypto.timingSafeEqual(a, b)) { ipFail(ip); throw new AuthError('The setup code isn’t right. It’s the SETUP_CODE you chose when the server was set up.', 403); }
       }
+      // Licensed desktop copy: the code the seller sent is checked before anything is created.
+      const code = String(body.licenceCode || '').trim();
+      if (licence.on && auth.needsSetup()) {
+        if (code) licence.check(code);
+        else if (licence.trialDays === 0) throw new ValidationError('Enter the licence code you received with Sumlora.', 400);
+      }
       const u = auth.setup(body);
       reg.adoptFirm(auth.mainFirmId);
+      if (licence.on && code) {
+        const lic = licence.enter(code);
+        auth.log('licence-entered', { by: u.username, licence: lic.id, name: lic.name, plan: lic.plan, until: lic.until });
+      }
       const { token } = await auth.login(u.username, body.password, { ip: clientIp(req) });
       res.setHeader('Set-Cookie', sessionCookie(token, req));
       return { ok: true, user: u };
@@ -1138,7 +1150,7 @@ function createApp(opts) {
         // Licence ended (desktop): the books stay open to read, print, export and back up, but not to change.
         if (user && licence.on && req.method !== 'GET' && !/^\/api\/(auth\/.*|licence|licences\/key\/restore|backups\/(run|open)|c\/[^/]+\/(code\/check|mail\/send))$/.test(url.pathname)) {
           const st = licence.status();
-          if (!st.canChange) throw Object.assign(new ValidationError(st.state === 'trial-ended' ? 'The free trial has ended, so the books are view only. Enter a licence code to make changes.' : `The licence ended on ${st.until}, so the books are view only. Enter a renewal code to make changes.`, 402), { licence: true });
+          if (!st.canChange) throw Object.assign(new ValidationError(st.state === 'none' ? 'Enter your licence code to start using Sumlora.' : st.state === 'trial-ended' ? 'The free trial has ended, so the books are view only. Enter a licence code to make changes.' : `The licence ended on ${st.until}, so the books are view only. Enter a renewal code to make changes.`, 402), { licence: true });
         }
         const cm = url.pathname.match(/^\/api\/c\/([^/]+)(\/.*)$/);
         if (cm) {
@@ -1179,7 +1191,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}), ...(err.licenceSetup ? { licenceSetup: err.licenceSetup } : {}) });
     }
   });
 

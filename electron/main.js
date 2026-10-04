@@ -67,7 +67,8 @@ async function startLocal() {
   const { createApp } = require('../src/server/app');
   // Licence codes: the installed app checks them with the seller's public key, written into the build (see licence.js).
   const licenceKeys = app.isPackaged ? (buildInfo().licenceKeys || []) : [];
-  server = createApp({ dataDir: dataDir(), licenceDir: appDir(), licenceKeys });
+  const trial = app.isPackaged ? buildInfo().licenceTrialDays : undefined;
+  server = createApp({ dataDir: dataDir(), licenceDir: appDir(), licenceKeys, licenceTrialDays: Number.isInteger(trial) ? trial : undefined });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve); // random free port, reachable only from this computer

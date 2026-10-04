@@ -1529,3 +1529,15 @@ addFr({
   'That key doesn’t match this version of Sumlora.':'Cette clé ne correspond pas à cette version de Sumlora.','There’s already a different licence key here.':'Il y a déjà une autre clé de licence ici.',
   'Create your licence key in a copy of Sumlora that doesn’t ask for a licence code (your server, or the desktop app before licences were turned on). Here, bring back your key from a copy instead.':'Créez votre clé de licence dans une copie de Sumlora qui ne demande pas de code de licence (votre serveur, ou l’application de bureau avant l’activation des licences). Ici, récupérez plutôt votre clé à partir d’une copie.',
 });
+
+/* ---------- licence code when the account is created ---------- */
+addFr({
+  'Paste the licence code you received with Sumlora. It starts with TB1-.':'Collez le code de licence reçu avec Sumlora. Il commence par TB1-.',
+  'Paste the licence code you received with Sumlora. No code yet? Leave it empty for a {0}-day free trial.':'Collez le code de licence reçu avec Sumlora. Pas encore de code? Laissez vide pour un essai gratuit de {0} jours.',
+  'Paste the licence code you received with Sumlora.':'Collez le code de licence reçu avec Sumlora.',
+  'Owner account created and Sumlora is activated':'Compte propriétaire créé et Sumlora est activé',
+  'Enter your licence code to start using Sumlora.':'Entrez votre code de licence pour commencer à utiliser Sumlora.',
+  'It’s in the email you received when you bought Sumlora.':'Il se trouve dans le courriel reçu à l’achat de Sumlora.',
+  'Not activated yet.':'Pas encore activé.','Enter the licence code you received.':'Entrez le code de licence que vous avez reçu.',
+  'Enter the licence code you received with Sumlora.':'Entrez le code de licence reçu avec Sumlora.',
+});

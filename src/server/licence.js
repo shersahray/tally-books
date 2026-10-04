@@ -89,13 +89,15 @@ class Licence {
    * @param {object} [o.memo] A second place to remember the first day and the latest day seen (the books'
    *   own settings), so deleting licence.json doesn't start a new trial or undo the clock check: { get(), set(v) }.
    */
-  constructor(dataDir, { publicKeys = [], now = () => new Date(), memo = null } = {}) {
+  constructor(dataDir, { publicKeys = [], now = () => new Date(), memo = null, trialDays = TRIAL_DAYS } = {}) {
     this.file = path.join(dataDir, 'licence.json');
     this.issuerFile = path.join(dataDir, 'licence-issuer.json');
     this.keys = publicKeys.map(publicKeyFrom).filter(Boolean);
     this.keyTexts = this.keys.map(publicKeyText);
     this.now = now;
     this.memo = memo;
+    // 0: no trial, a code is needed from the start (set with the SUMLORA_TRIAL_DAYS build variable).
+    this.trialDays = Number.isInteger(trialDays) && trialDays >= 0 && trialDays <= 365 ? trialDays : TRIAL_DAYS;
     this.data = readJson(this.file) || {};
     // Whichever place remembers more: the earliest first day and the latest day seen.
     const m = (memo && memo.get()) || {};
@@ -148,12 +150,23 @@ class Licence {
       if (-left <= GRACE_DAYS) return { ...base, state: 'grace', canChange: true, readOnlyFrom: addDays(lic.until, GRACE_DAYS + 1) };
       return { ...base, state: 'ended', canChange: false };
     }
+    if (this.trialDays === 0) return { on: true, state: 'none', plan: 'plus', canChange: false, needCode: true };
     const first = this.data.firstDay || today;
-    const trialUntil = addDays(first, TRIAL_DAYS - 1);
+    const trialUntil = addDays(first, this.trialDays - 1);
     const left = dayNum(trialUntil) - dayNum(today);
     if (left >= 0) return { on: true, state: 'trial', plan: 'plus', until: trialUntil, daysLeft: left, canChange: true };
     return { on: true, state: 'trial-ended', plan: 'plus', until: trialUntil, canChange: false };
   }
+  /** Check a code without entering it: a LicenceError if it can't be used here. */
+  check(code) {
+    if (!this.on) throw new LicenceError('This copy of Sumlora doesn’t use licence codes.', 409);
+    const lic = readCode(code, this.keys);
+    const real = localDay(this.now());
+    const today = isDay(this.data.lastSeen) && this.data.lastSeen > real && !(lic.issued && lic.issued >= this.data.lastSeen) ? this.data.lastSeen : real;
+    if (dayNum(lic.until) + GRACE_DAYS < dayNum(today)) throw new LicenceError(`That code ended on ${lic.until}. Ask for a renewal code.`);
+    return lic;
+  }
+
   /**
    * Enter a code. The newest code wins: a code made before the one already here is refused, so an old email
    * can't replace a renewal or a corrected code.

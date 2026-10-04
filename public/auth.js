@@ -52,6 +52,7 @@ function renderLock(mode,opt=''){
       `<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>${SIGNUPS?'<button type="button" class="btn ghost block" data-locksignup>New firm? Create an account</button>':''}`);
   else if(mode==='setup')html=lockCard('Welcome to Sumlora','Create the owner account. You’ll use it to sign in, add staff and clients, and manage security. Only people with an account can see the books.',`
       ${opt&&opt.setupCode?fld('suCode','Setup code',`<input type="text" id="suCode" autocomplete="off" autocapitalize="none" spellcheck="false"><span class="hint">The setup code chosen when this server was installed.</span>`,true):''}
+      ${opt&&opt.licence?fld('suLic','Licence code',`<textarea id="suLic" rows="3" class="mono" spellcheck="false" autocomplete="off" placeholder="TB1-…" style="font-size:12.5px;word-break:break-all"></textarea><span class="hint">${opt.licence.required?'Paste the licence code you received with Sumlora. It starts with TB1-.':`Paste the licence code you received with Sumlora. No code yet? Leave it empty for a ${opt.licence.trialDays}-day free trial.`}</span>`,!!opt.licence.required):''}
       ${fld('suFirm','Your firm’s name',`<input type="text" id="suFirm" autocomplete="organization" placeholder="e.g. Sher Bookkeeping">`,true)}
       ${fld('suName','Your name',`<input type="text" id="suName" autocomplete="name">`,true)}
       ${fld('suUser','Username or email',`<input type="text" id="suUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
@@ -80,7 +81,7 @@ function renderLock(mode,opt=''){
   else if(mode==='enroll')html=lockCard('Set up two-step sign-in','Loading…','','');
   $('#lockRoot').innerHTML=html;
   const f=$('#lockRoot form'),err=m=>{$('[data-lockerr]',f).textContent=m||''},btn=f.querySelector('button[type=submit]');
-  setTimeout(()=>f.querySelector('input')?.focus(),30);
+  setTimeout(()=>f.querySelector('input,textarea')?.focus(),30);
   const lo=$('[data-lockout]',f);if(lo)lo.onclick=()=>signOut();
   const bk=$('[data-lockback]',f);if(bk)bk.onclick=()=>renderLock('signin');
   const sg=$('[data-locksignup]',f);if(sg)sg.onclick=()=>renderLock('signup');
@@ -98,8 +99,10 @@ function renderLock(mode,opt=''){
         await afterSignIn();
       }else if(mode==='setup'){
         if($('#suPass').value!==$('#suPass2').value)throw new Error('The two passwords don’t match.');
-        await api('POST','/api/auth/setup',{firmName:$('#suFirm').value,name:$('#suName').value,username:$('#suUser').value,password:$('#suPass').value,setupCode:($('#suCode')||{}).value});
-        await afterSignIn();toast('Owner account created');
+        const lic=($('#suLic')||{}).value||'';
+        if(opt&&opt.licence&&opt.licence.required&&!lic.trim())throw new Error('Paste the licence code you received with Sumlora.');
+        await api('POST','/api/auth/setup',{firmName:$('#suFirm').value,name:$('#suName').value,username:$('#suUser').value,password:$('#suPass').value,setupCode:($('#suCode')||{}).value,licenceCode:lic});
+        await afterSignIn();toast(lic.trim()?'Owner account created and Sumlora is activated':'Owner account created');
       }else if(mode==='signup'){
         if($('#sgPass').value!==$('#sgPass2').value)throw new Error('The two passwords don’t match.');
         const r=await api('POST','/api/auth/signup',{firmName:$('#sgFirm').value,name:$('#sgName').value,username:$('#sgUser').value,password:$('#sgPass').value});
@@ -188,7 +191,7 @@ let reauthing=null;
 function sessionEnded(info){
   if(reauthing)return reauthing;
   $('#main').innerHTML='';ME=null;
-  reauthing=requireSignIn(info&&info.setup?'setup':'signin',info&&info.idle?`Locked after ${IDLE_MIN} minutes without activity. Sign in to continue.`:'Your session ended. Sign in to continue.')
+  reauthing=requireSignIn(info&&info.setup?'setup':'signin',info&&info.setup?{setupCode:!!info.setupCode,licence:info.licenceSetup||null}:info&&info.idle?`Locked after ${IDLE_MIN} minutes without activity. Sign in to continue.`:'Your session ended. Sign in to continue.')
     .then(()=>{reauthing=null;if(CO)load();renderMain()});
   return reauthing;
 }
@@ -197,7 +200,7 @@ async function authStart(){
   if(/[#&]link=/.test(location.hash))return requireSignIn('link');
   let me;
   try{me=await api('GET','/api/auth/me')}
-  catch(e){if(e.status===401){SIGNUPS=(e.info&&e.info.signups)||'';return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode}):requireSignIn('signin')}throw e}
+  catch(e){if(e.status===401){SIGNUPS=(e.info&&e.info.signups)||'';return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode,licence:e.info.licenceSetup||null}):requireSignIn('signin')}throw e}
   REQ2FA=me.require2fa||'off';ME=me.user;IDLE_MIN=me.idleMinutes;
   if(me.user.theme&&me.user.theme!==TallyTheme.get())TallyTheme.set(me.user.theme,false);
   if(syncAccountLang(me.user))return new Promise(()=>{});
