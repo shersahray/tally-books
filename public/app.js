@@ -269,7 +269,7 @@ function vAccounts(){
     rows+=`<tr class="click" data-acct="${a.id}"><td class="mono">${esc(a.code||'')}</td><td><span translate="no">${esc(a.name)}</span> ${a.active===false?'<span class="pill quiet">Inactive</span>':''}</td><td class="mono" ${a.gifi?`title="${esc(gifiName(a.gifi))}"`:''}>${esc(a.gifi||'')}</td><td class="muted">${detailLabel(a)}</td><td class="n">${mcell(b)}</td></tr>`;
   }
   const staff=ME&&ME.role!=='client'&&!ME.readOnly;
-  return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`${staff?'<button class="btn" data-act="gifi">GIFI codes…</button>':''}<button class="btn primary" data-new="account">+ Add account</button>`)+
+  return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`${staff?'<button class="btn" data-act="industry">Accounts for a type of business…</button><button class="btn" data-act="gifi">GIFI codes…</button>':''}<button class="btn primary" data-new="account">+ Add account</button>`)+
   `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th title="CRA GIFI code (T2 Schedules 100 and 125)">GIFI</th><th>Detail</th><th class="n">Balance</th></tr></thead><tbody>${rows||emptyRow(5,'No accounts yet','Add accounts to start recording transactions.')}</tbody></table></div></div>`;
 }
 
@@ -495,6 +495,7 @@ function bindMain(m){
     if(d.act==='activity')return showActivity();
     if(d.act==='caseware')return casewareForm();
     if(d.act==='gifi')return gifiForm();
+    if(d.act==='industry')return industryForm();
     if(d.act==='load-examples')return loadExamples();
     if(d.act==='backup')return saveFile(`${(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase()}-backup-${today()}.json`,await fetch(coUrl('/api/backup')).then(r=>r.blob()));
     if(d.act==='restore')return $('#restoreFile').click();
@@ -571,6 +572,28 @@ async function codeAction(act){
     await api('PUT','/api/code',{code});await load();refreshCompaniesSoon();toast(had?'Company code changed':'Company code set');
   }catch(e){toast(e.message,true)}
 }
+/* ---------- accounts for a type of business (industries.js) ---------- */
+/** Add the accounts an industry uses to these books. Only missing ones are added: existing accounts keep their names. */
+function industryForm(){
+  const IND=TallyIndustries.INDUSTRIES,fr=S.company.lang==='fr';
+  const keys=Object.keys(IND).filter(k=>k!=='general');
+  // Missing by name. When an account already uses the code, the next free code after it is used.
+  const missing=k=>{const used=new Set(S.accounts.map(a=>a.code));
+    return TallyIndustries.accountsFor(k).filter(([,name,,,frName])=>!S.accounts.some(a=>a.name.toLowerCase()===(fr?frName||name:name).toLowerCase())).map(a=>{
+      let c=+a[0];while(used.has(String(c))&&c<+a[0]+99)c++;const code=used.has(String(c))?'':String(c);if(code)used.add(code);return[code,...a.slice(1)]})};
+  const f=openModal('Accounts for a type of business',`<div class="muted" style="font-size:13px">Adds the accounts a type of business usually needs, like food cost and delivery app commissions for a restaurant. Accounts you already have are left as they are.</div>
+    ${fld('indKey','Type of business',`<select id="indKey">${keys.map(k=>`<option value="${k}" ${S.company.industry===k?'selected':''}>${esc(IND[k].label)}</option>`).join('')}</select>`,true)}
+    <div data-indlist></div>`,`<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Add accounts</button>`,'wide');
+  const draw=()=>{const list=missing($('#indKey',f).value);
+    $('[data-indlist]',f).innerHTML=list.length?`<div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th>Type</th></tr></thead><tbody>${list.map(([code,name,type,,frName])=>`<tr><td class="mono">${esc(code)}</td><td translate="no">${esc(fr?frName||name:name)}</td><td>${esc(type)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty"><b>Nothing to add</b>These books already have all of these accounts.</div>'};
+  $('#indKey',f).onchange=draw;draw();
+  f.onsubmit=async e=>{e.preventDefault();const k=$('#indKey',f).value,list=missing(k);if(!list.length){closeModal();return}
+    const writes=list.map(([code,name,type,detail,frName])=>({op:'set',collection:'accounts',id:!code||acct('a'+code)?uid():'a'+code,data:{code,name:fr?frName||name:name,type,detail,desc:'',active:true}}));
+    if(!await batch(writes))return;
+    if(!S.company.industry)await putCompany({...strip(S.company),industry:k});
+    closeModal();toast(`Added ${list.length} account${list.length===1?'':'s'}`)};
+}
+
 /* ---------- closing date ---------- */
 function closingPanel(){
   if(!ME||ME.role==='client')return '';

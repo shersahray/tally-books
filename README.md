@@ -15,6 +15,7 @@ It runs two ways from the same code:
 
 - **Multiple companies:** keep books for any number of clients. A client list shows each company's bank lines waiting for review, overdue invoices, receivables and when it was last reconciled. Switch between companies from the sidebar.
   - Each company is a separate database file, so books never mix, and a backup covers one client.
+  - **Type of business:** a new company can start with the accounts its industry needs on top of the standard chart: restaurant, café or bar; pizza or take-out; convenience store or gas bar; retail store; online store; painting contractor; construction or renovation; electrician, plumber or HVAC; cleaning or landscaping; trucking; salon, spa or barber; consulting; rental property. For example a restaurant gets food and beverage sales, delivery app sales and commissions, food and beverage cost, kitchen equipment, gift cards and tips payable. Existing books can add an industry's accounts any time from Chart of accounts (only the missing ones are added).
   - New companies get the right sales tax for their province or territory: 13% HST in Ontario, 14% in Nova Scotia, 15% in New Brunswick, Newfoundland and Labrador, and PEI, combined GST/QST in Quebec, and 5% GST elsewhere. You can also set the rate yourself.
   - You pick the fiscal year-end, and can copy the chart of accounts from another client.
   - Archive former clients to hide them without deleting anything.
@@ -267,6 +268,7 @@ The Mac and Linux builds stay unsigned. Signing the Mac version needs Apple's se
 
 ```
 public/            Browser app (plain HTML, CSS and JavaScript, no build step)
+  industries.js    Starter accounts by type of business (shared with the server)
   bankparse.js     Bank file parsers (CSV column detection, OFX/QFX/QBO)
   banking.js       Banking screens: import, review, rules, reconcile
   ai.js            AI suggestions for bank lines, reading receipts, AI settings

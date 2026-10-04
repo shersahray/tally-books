@@ -267,6 +267,7 @@ function createApp(opts) {
       fyStart: body.fyStart || 1,
       lang: body.lang,
       orgType: body.orgType,
+      industry: body.industry,
     });
     let accounts = null;
     if (body.copyFrom) {

@@ -1,6 +1,7 @@
 'use strict';
 const GIFI = require('../../public/gifi.js');
 const PLANS = require('../../public/plans.js');
+const IND = require('../../public/industries.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -495,6 +496,8 @@ function validateCompany(data) {
     quickMethod: validateQuickMethod(data.quickMethod, fy >= 1 && fy <= 12 ? Math.floor(fy) : 1, data.filingFreq),
     // Business, non-profit organization or registered charity: changes report wording and how sales tax is worked out.
     orgType: ['npo', 'charity'].includes(data.orgType) ? data.orgType : 'business',
+    // Type of business chosen when the books were set up (industries.js).
+    industry: IND.INDUSTRIES[data.industry] && !['npo', 'charity'].includes(data.orgType) ? data.industry : '',
     nonprofit: validateNonprofit(data.nonprofit),
     // Features switched off for this company (only "false" is stored: everything in the plan is on by default).
     features: Object.fromEntries(Object.keys(PLANS.FEATURES).filter(k => isObj(data.features) && data.features[k] === false).map(k => [k, false])),

@@ -75,6 +75,10 @@
     else {
       const split = company.qstRate > 0;
       b.accounts = DEFAULT_ACCOUNTS.map(([code, n, type, detail]) => ({ id: 'a' + code, code, name: detail === 'tax' ? (split ? 'GST payable' : `${company.taxName} payable`) : n, type, detail, desc: '', active: true }));
+      if (typeof TallyIndustries !== 'undefined') for (const [code, n, type, detail] of TallyIndustries.accountsFor(body.industry)) {
+        const a = { id: 'a' + code, code, name: n, type, detail, desc: '', active: true }, i = b.accounts.findIndex(x => x.id === a.id);
+        if (i >= 0) b.accounts[i] = a; else b.accounts.push(a);
+      }
       if (split) b.accounts.push({ id: 'a2210', code: '2210', name: 'QST payable', type: 'Liability', detail: 'qst', desc: '', active: true });
     }
     const tpl = templates[company.province];
