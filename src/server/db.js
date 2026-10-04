@@ -16,7 +16,7 @@ const { DatabaseSync } = require('node:sqlite');
 process.emitWarning = origEmit;
 
 // Order matters for restore: later collections are validated against earlier ones.
-const COLLECTIONS = ['accounts', 'contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts', 'attachments', 'questions'];
+const COLLECTIONS = ['accounts', 'contacts', 'employees', 'rules', 'recurring', 'docs', 'estimates', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts', 'attachments', 'questions'];
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS records (
@@ -93,7 +93,7 @@ class Store {
       putMeta: this.db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?)
                                 ON CONFLICT (key) DO UPDATE SET value = excluded.value`),
       accountUsed: this.db.prepare('SELECT 1 FROM journal_lines WHERE account_id = ? LIMIT 1'),
-      contactUsed: this.db.prepare(`SELECT 1 FROM records WHERE collection IN ('docs','entries')
+      contactUsed: this.db.prepare(`SELECT 1 FROM records WHERE collection IN ('docs','entries','estimates','recurring')
                                     AND json_extract(data, '$.contactId') = ? LIMIT 1`),
       bankTxnsForEntry: this.db.prepare(`SELECT id, data FROM records WHERE collection = 'bankTxns'
                                     AND json_extract(data, '$.entryId') = ?`),

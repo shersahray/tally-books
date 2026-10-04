@@ -7,7 +7,7 @@
   'use strict';
   const DATA = window.__TALLY_DEMO__;
   const PROVS = DATA.provinces, DEFAULT_ACCOUNTS = DATA.defaultAccounts;
-  const COLS = ['accounts', 'contacts', 'employees', 'rules', 'docs', 'entries', 'bankTxns', 'recons', 'filings', 'payruns'];
+  const COLS = ['accounts', 'contacts', 'employees', 'rules', 'recurring', 'docs', 'estimates', 'entries', 'bankTxns', 'recons', 'filings', 'payruns'];
   const clone = o => JSON.parse(JSON.stringify(o));
   const cos = DATA.companies.map(c => ({ ...c.entry }));
   const books = {};
@@ -54,7 +54,7 @@
   }
   function apply(b, w) {
     check(b, w);
-    const arr = b[w.collection], i = arr.findIndex(x => x.id === w.id);
+    const arr = b[w.collection] || (b[w.collection] = []), i = arr.findIndex(x => x.id === w.id);
     if (w.op === 'set') { const rec = { ...w.data, id: w.id }; if (i >= 0) arr[i] = rec; else arr.push(rec); }
     else {
       if (i >= 0) arr.splice(i, 1);
@@ -217,6 +217,8 @@
     }
     if (rest === '/code/check') { if (codes[id] && String(body.code) !== codes[id]) throw new ApiError(403, 'That code isn’t right for this company.'); return { ok: true }; }
     if (rest === '/mail' && method === 'GET') return { configured: false, sentToday: 0 };
+    if (rest === '/pay' && method === 'GET') return { configured: false };
+    if (rest.startsWith('/pay')) throw new ApiError(400, 'Card payments aren’t available in the demo, because nothing in it is saved.');
     if (rest.startsWith('/mail') || rest === '/logo') throw new ApiError(400, 'Email and logos aren’t available in the demo, because nothing in it is saved. You can still download invoices and statements as PDFs.');
     if (rest === '/import') throw new ApiError(400, 'Importing isn’t available in the demo, because nothing in it is saved. You can still choose files to see how they’re read and checked.');
     if (rest === '/ai/read') throw new ApiError(400, 'Reading receipts needs a Claude API key, so it isn’t available in the demo. Try “Suggest with AI” under Banking instead.');

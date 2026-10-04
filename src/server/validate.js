@@ -410,6 +410,8 @@ function validateRecord(collection, id, data, store) {
     case 'receipts': return validateReceipt(data, store, id);
     case 'attachments': return validateAttachment(data, store);
     case 'questions': return validateQuestion(data, store);
+    case 'estimates': return validateEstimate(data, store);
+    case 'recurring': return validateRecurring(data, store);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -425,6 +427,10 @@ function checkDelete(collection, id, store) {
   }
   if (collection === 'accounts' && (store.list('bankTxns').some(b => b.account === id) || store.list('rules').some(r => r.account === id))) {
     throw new ValidationError('This account has imported bank transactions or bank rules, so it can’t be deleted. Mark it inactive instead.', 409);
+  }
+  const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id;
+  if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines))) {
+    throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
   }
   if (collection === 'contacts' && (store.contactUsed(id) || store.list('rules').some(r => r.contactId === id))) {
     throw new ValidationError('This contact appears on transactions, so it can’t be deleted.', 409);
@@ -482,6 +488,8 @@ function validateCompany(data) {
     email: str(data.email, 120).trim(),
     website: str(data.website, 120).trim(),
     invoiceNote: str(data.invoiceNote, 1000).trim(),
+    // Interac e-Transfer address printed on invoices ("how to pay").
+    etransfer: /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(String(data.etransfer || '').trim()) ? String(data.etransfer).trim() : '',
     logoFile: /^[A-Za-z0-9-]{0,64}$/.test(String(data.logoFile || '')) ? String(data.logoFile || '') : '',
     payroll: validatePayrollSettings(data.payroll),
     quickMethod: validateQuickMethod(data.quickMethod, fy >= 1 && fy <= 12 ? Math.floor(fy) : 1, data.filingFreq),
@@ -532,6 +540,52 @@ function validateAttachment(data, store) {
     uploadedBy: str(data.uploadedBy, 120), uploadedByName: str(data.uploadedByName, 120), uploadedAt: Number(data.uploadedAt) || 0 };
 }
 /* A question about a transaction, invoice or bill, answered in a thread by the client or the team. */
+/* Estimates (quotes): not posted to the ledger. Turning one into an invoice links them (invoiceId). */
+const EST_STATUS = ['open', 'accepted', 'declined'];
+function docLines(lines) {
+  if (!Array.isArray(lines)) throw new ValidationError('Lines must be a list.');
+  if (lines.length > 200) throw new ValidationError('Use at most 200 lines.');
+  return lines.map(l => {
+    if (!isObj(l)) throw new ValidationError('Each line must be an object.');
+    const out = { desc: str(l.desc, 500), account: String(l.account || ''), taxCode: ['std', 'gst', 'zero', 'export', 'exempt', 'none'].includes(l.taxCode) ? l.taxCode : 'none' };
+    if (l.qty !== undefined) out.qty = Number(l.qty) || 0;
+    if (l.rate !== undefined) out.rate = Number(l.rate) || 0;
+    if (l.amount !== undefined) out.amount = Number(l.amount) || 0;
+    if (![out.qty, out.rate, out.amount].every(n => n === undefined || Number.isFinite(n))) throw new ValidationError('Line amounts must be numbers.');
+    return out;
+  });
+}
+function validateEstimate(data, store) {
+  if (!isDate(data.date)) throw new ValidationError('Estimate date must be YYYY-MM-DD.');
+  if (data.expires && !isDate(data.expires)) throw new ValidationError('The date the estimate is good until must be YYYY-MM-DD.');
+  const c = store.get('contacts', String(data.contactId || ''));
+  if (!c) throw new ValidationError('Choose the customer for this estimate.');
+  if (!Number.isFinite(Number(data.total))) throw new ValidationError('Estimate total must be a number.');
+  const lines = docLines(data.lines);
+  for (const l of lines) if (l.account && !store.get('accounts', l.account)) throw new ValidationError('An account on this estimate doesn’t exist.');
+  if (data.invoiceId && !store.get('docs', String(data.invoiceId))) throw new ValidationError('The invoice made from this estimate doesn’t exist.');
+  return { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
+}
+/* Recurring invoices and bills: a template and a schedule. The client makes each one when it's due. */
+const REC_KINDS = ['invoice', 'bill'], REC_EVERY = ['week', 'month', 'quarter', 'year'];
+function validateRecurring(data, store) {
+  if (!REC_KINDS.includes(data.kind)) throw new ValidationError('A recurring transaction must be an invoice or a bill.');
+  if (!str(data.name).trim()) throw new ValidationError('Give the recurring transaction a name.');
+  const c = store.get('contacts', String(data.contactId || ''));
+  if (!c) throw new ValidationError(`Choose the ${data.kind === 'invoice' ? 'customer' : 'vendor'}.`);
+  if (!REC_EVERY.includes(data.every)) throw new ValidationError('Choose how often: every week, month, quarter or year.');
+  const n = Math.round(Number(data.n) || 1);
+  if (n < 1 || n > 12) throw new ValidationError('Repeat every 1 to 12 weeks, months, quarters or years.');
+  if (!isDate(data.next)) throw new ValidationError('Choose the date of the next one.');
+  if (data.end && !isDate(data.end)) throw new ValidationError('The end date must be YYYY-MM-DD.');
+  const lines = docLines(data.lines);
+  if (!lines.length) throw new ValidationError('Add at least one line.');
+  for (const l of lines) if (!store.get('accounts', l.account)) throw new ValidationError('Choose an account on every line.');
+  const terms = data.terms === '' || data.terms == null ? '' : Math.max(0, Math.min(365, Math.round(Number(data.terms) || 0)));
+  return { ...data, name: str(data.name, 100).trim(), memo: str(data.memo, 2000), n, lines, terms, end: data.end || '', mode: data.mode === 'remind' ? 'remind' : 'auto',
+    email: data.kind === 'invoice' && !!data.email, active: data.active !== false, made: Math.max(0, Math.round(Number(data.made) || 0)) };
+}
+
 function validateQuestion(data, store) {
   if (!isObj(data)) throw new ValidationError('A question must be an object.');
   if (!['entries', 'docs', 'bankTxns'].includes(data.target)) throw new ValidationError('A question has to be about a transaction.');
@@ -542,4 +596,4 @@ function validateQuestion(data, store) {
     label: str(data.label, 200), created: Number(data.created) || 0 };
 }
 
-module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate, str, sanitizeDraft };
+module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate, str, sanitizeDraft, settledOn };

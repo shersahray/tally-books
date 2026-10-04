@@ -28,7 +28,7 @@ const S={accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
+const COLS=['accounts','entries','docs','contacts','estimates','recurring','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
@@ -167,6 +167,7 @@ function banners(){
   if(S.connErr)h+=`<div class="banner err"><span><b>Can't reach the server.</b> Showing the last data loaded. Changes won't save until the connection is back.</span><button class="btn sm" data-act="retry">Try again</button></div>`;
   else if(!S.entries.length&&!S.docs.length&&!S.contacts.length)h+=`<div class="banner"><span><b>Your books are empty.</b> Start with + New, bring a client over from QuickBooks or Sage, or load example data to see how everything fits together.</span><span class="actions">${ME&&ME.role!=='client'?'<button class="btn sm" data-go="convert">Bring over from QuickBooks or Sage</button>':''}<button class="btn sm" data-act="load-examples">Load example data</button></span></div>`;
   if(typeof BK!=='undefined'&&BK&&(!BK.enabled||BK.lastError))h+=`<div class="banner err"><span><b>${BK.enabled?'Backups aren’t working.':'Automatic backups are off.'}</b> ${BK.enabled?esc(BK.lastError):'Turn them on so your clients’ books are safe if this computer fails.'}</span><button class="btn sm" data-go="settings">Fix in Settings</button></div>`;
+  if(typeof recBanner==='function'&&S.view!=='settings')h+=recBanner()+opIssueBanner();
   if(hasExamples())h+=`<div class="banner"><span><b>Example data is loaded</b> so you can see how things work. Clear it when you're ready to enter your real books.</span><button class="btn sm" data-act="clear-examples">Clear example data</button></div>`;
   return h;
 }
@@ -220,12 +221,14 @@ function chart6(){
 
 function vDocs(kind){
   const inv=kind==='invoice',st=inv?S.sales:S.exp,ck=inv?'customer':'vendor';
-  const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button></div>`;
+  const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button>${inv?`<button role="tab" data-dtab="estimates" aria-selected="${st.tab==='estimates'}">Estimates</button>`:''}<button role="tab" data-dtab="recurring" aria-selected="${st.tab==='recurring'}">Recurring</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button></div>`;
   const actions=inv?`${typeof salesMailButtons==='function'?salesMailButtons():''}<button class="btn" data-new="credit">Credit note</button><button class="btn" data-new="payment">Receive payment</button><button class="btn primary" data-new="invoice">New invoice</button>`:`${typeof aiReceiptButton==='function'?aiReceiptButton():''}<button class="btn" data-new="vcredit">Vendor credit</button><button class="btn" data-new="billpayment">Pay bill</button><button class="btn" data-new="expense">Expense</button><button class="btn primary" data-new="bill">New bill</button>`;
   const h=head(inv?'Sales':'Expenses',inv?'Invoices you send and the customers who owe you':'Bills you receive and the vendors you pay',actions)+tabs;
   const ckind=inv?'credit':'vcredit';
   const docs=S.docs.filter(d=>d.kind===kind).map(d=>({d,s:docStatus(d)}));
   const credits=S.docs.filter(d=>d.kind===ckind).map(d=>({d,s:docStatus(d)}));
+  if(st.tab==='estimates'&&inv)return h+vEstimates();
+  if(st.tab==='recurring')return h+vRecurring(kind);
   if(st.tab==='contacts'){
     const cs=S.contacts.filter(c=>c.kind===ck).sort((a,b)=>a.name.localeCompare(b.name));
     return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span><button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0)-credits.filter(x=>x.d.contactId===c.id).reduce((s,x)=>s+x.s.bal,0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${money(ob)}</td><td class="n ${ov?'neg':''}">${ov?money(ov):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
@@ -437,6 +440,7 @@ function vSettings(){
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
   ${typeof mailPanel==='function'?mailPanel():''}
+  ${typeof payPanel==='function'?payPanel():''}
   ${codePanel()}
   ${closingPanel()}
   ${aiPanel()}
@@ -462,6 +466,7 @@ function bindMain(m){
     if(S.view==='activity'&&await actClick(e,t,d))return;
     if(S.view==='receipts'&&rcClick(e,t,d))return;
     if(S.view==='convert'&&cvClick(e,t,d))return;
+    if(typeof salesExtraClick==='function'&&salesExtraClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
     if(d.clact)return closingAction(d.clact);
@@ -512,6 +517,7 @@ function bindMain(m){
   bindBackups(m);
   bindAI(m);bindAIRead(m);
   if(typeof bindDocout==='function')bindDocout(m);
+  if(typeof bindPayPanel==='function')bindPayPanel(m);
   if(S.view==='users'||S.view==='signins')bindUsers(m);
   if(S.view==='firms')bindFirms(m);
   if(S.view==='licences')bindLicences(m);
@@ -858,6 +864,17 @@ function nextNum(kind){
 }
 // Accounts a document's lines can use: income on sales; expenses, cost of goods sold and other or capital assets on purchases.
 const DOC_ACCT_FILTER=sale=>sale?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&(!a.detail||a.detail==='capital'));
+/** The ledger lines for an invoice, bill or credit: c from calcLines, ctl the receivable or payable account. */
+function docPostLines(kind,c,ctl){
+  const lines=[];const g=groupBy(c.ls);
+  if(kind==='invoice'){lines.push({account:ctl,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
+  else if(kind==='credit'){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' credited'}));lines.push({account:ctl,debit:0,credit:c.total})}
+  else if(kind==='vcredit'){lines.push({account:ctl,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' paid, credited'}))}
+  else{Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ctl,debit:0,credit:c.total})}
+  return lines;
+}
+/** A saved document's record: its lines as entered, and its totals. */
+const docRecord=(c)=>({lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
 function docForm(kind,doc,preset){
   if(doc&&doc.carried)return carriedDocForm(kind,doc);
   const sale=saleKind(kind),cred=isCreditKind(kind),L=DOCL[kind],ck=sale?'customer':'vendor',t=today();
@@ -918,15 +935,11 @@ function docForm(kind,doc,preset){
     const ar=needAcct(sale?'ar':'ap',sale?'Accounts receivable':'Accounts payable');if(!ar)return;
     if(c.tax&&!taxReady(c.parts))return;
     const cid=await resolveContact(f,'dC',ck);if(!cid)return;
-    const id=doc?doc.id:uid();const num=$('#dN',f).value.trim();
-    const lines=[];const g=groupBy(c.ls);
-    if(kind==='invoice'){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
-    else if(kind==='credit'){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' credited'}));lines.push({account:ar.id,debit:0,credit:c.total})}
-    else if(kind==='vcredit'){lines.push({account:ar.id,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' paid, credited'}))}
-    else{Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ar.id,debit:0,credit:c.total})}
+    const id=doc?doc.id:(preset&&preset.id)||uid();const num=$('#dN',f).value.trim();
+    const lines=docPostLines(kind,c,ar.id);
     const base={date:$('#dD',f).value,contactId:cid,memo:$('#dM',f).value.trim(),...(doc&&doc.example?{example:true}:{})};
     if(preset&&preset.receiptId)base.receiptId=preset.receiptId;
-    const dd={...(doc?strip(doc):{}),...base,kind,number:num,due:cred?'':$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
+    const dd={...(doc?strip(doc):{}),...base,kind,number:num,due:cred?'':$('#dDue',f).value,...docRecord(c),created:doc?.created||Date.now()};
     if(cred)dd.applied=applied;
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:kind,ref:num,docId:id,lines,created:dd.created}}]))return;
     closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(L.saved);

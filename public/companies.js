@@ -46,6 +46,7 @@ async function openCompany(id,view){
   S.view=view;renderMain();window.scrollTo(0,0);
   await load();
   api('PUT','/api/companies/'+encodeURIComponent(id),{opened:true}).catch(()=>{});
+  if(typeof salesOnOpen==='function')salesOnOpen(id);
 }
 async function showCompanies(){
   S.view='companies';renderMain();

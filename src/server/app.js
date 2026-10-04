@@ -10,9 +10,10 @@ const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
 const mail = require('./mail');
+const stripe = require('./stripe');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { Licence, Issuer, localDay, addDays } = require('./licence');
-const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
+const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
@@ -33,6 +34,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {string} [opts.require2fa]  Least two-step sign-in allowed: 'owners' or 'everyone' (use 'everyone' online).
  * @param {boolean} [opts.trustProxy] Behind a reverse proxy (Caddy): take the client's address from X-Forwarded-For.
  * @param {string} [opts.backupBlobUrl] Azure Blob Storage container URL with a SAS token, for off-site backups.
+ * @param {Function} [opts.stripeFetch]    Tests only: answers in place of Stripe's API.
  * @param {boolean} [opts.mailInsecureTls] Tests only: accept the test mail server's certificate.
  * @param {boolean} [opts.mailAllowLocal]  Tests only: allow a mail server on this computer or the local network.
  * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
@@ -43,6 +45,13 @@ const BACKUP_FORMAT = 'tally-books-backup';
  */
 function createApp(opts) {
   const reg = new Registry(opts.dataDir);
+  const stripeFetch = opts.stripeFetch || ((...a) => fetch(...a)); // tests pass a stand-in for Stripe
+  /** Every Stripe link an invoice has had (the current one included); closedAt marks the current one as turned off. */
+  const payLinkList = (d, closedAt) => {
+    const list = (Array.isArray(d.payLinks) ? d.payLinks : []).slice(-30);
+    if (d.payLink && d.payLink.id && !list.some(l => l.id === d.payLink.id)) list.push({ id: d.payLink.id, cents: d.payLink.cents, created: d.payLink.created });
+    return closedAt && d.payLink ? list.map(l => (l.id === d.payLink.id && !l.closed ? { ...l, closed: closedAt } : l)) : list;
+  };
   const auth = new Auth(opts.dataDir, { require2fa: opts.require2fa });
   reg.adoptFirm(auth.mainFirmId);
   // Desktop licence codes (licence.js). With a licence, its plan is the plan for everything in this copy.
@@ -383,6 +392,11 @@ function createApp(opts) {
     // Attachments and questions have their own routes; a plain write can only delete an attachment.
     if (collection === 'attachments' && (op !== 'delete' || (user && user.role === 'client'))) throw new ValidationError('Attach files from the transaction.', 403);
     if (collection === 'questions') throw new ValidationError('Use Questions to ask or answer.', 403);
+    // A recurring invoice or bill being made: if another window already made this date, don't make it again.
+    if (collection === 'docs' && op === 'set' && w.data && w.data.recurringNew) {
+      if (store.get('docs', id)) throw new ValidationError('That recurring transaction was already made.', 409);
+      w.data = { ...w.data }; delete w.data.recurringNew;
+    }
     if (collection === 'receipts' && user && user.role === 'client') {
       // Clients can add a note to, or remove, a receipt they sent that hasn't been dealt with yet.
       const r = store.get('receipts', id);
@@ -414,6 +428,8 @@ function createApp(opts) {
         const key = collection === 'entries' ? 'entryId' : 'docId';
         for (const r of store.list('receipts').filter(x => x[key] === id)) store.put('receipts', r.id, { ...r, [key]: '', status: 'inbox' });
       }
+      // An estimate turned into a deleted invoice goes back to accepted, ready to invoice again.
+      if (collection === 'docs') for (const x of store.list('estimates').filter(x => x.invoiceId === id)) store.put('estimates', x.id, { ...x, invoiceId: '' });
       if (before) store.audit(user, 'delete', { collection, id, summary: auditSummary(collection, before), before });
       if (collection === 'bankTxns') for (const q of store.list('questions').filter(q => q.target === 'bankTxns' && q.targetId === id)) store.delete('questions', q.id);
       // A deleted transaction sends any bank lines linked to it back to "For review".
@@ -429,6 +445,8 @@ function createApp(opts) {
     const amt = n => '$' + (Number(n) || 0).toFixed(2);
     const tot = e => (e.lines || []).reduce((s, l) => s + (Number(l.debit) || 0), 0);
     switch (col) {
+      case 'estimates': return `estimate ${d.number ? '#' + d.number + ' ' : ''}${d.date} ${amt(d.total)}`;
+      case 'recurring': return `recurring ${d.kind} “${String(d.name || '').slice(0, 60)}”, next ${d.next}`;
       case 'entries': return `${d.type} ${d.date}${d.ref ? ' #' + d.ref : ''} ${amt(tot(d))}${d.memo ? ' · ' + String(d.memo).slice(0, 60) : ''}`;
       case 'docs': return `${d.kind}${d.number ? ' #' + d.number : ''} ${d.date} ${amt(d.total)}`;
       case 'accounts': return `${d.code ? d.code + ' ' : ''}${d.name}`;
@@ -889,6 +907,121 @@ function createApp(opts) {
         ctx.store.audit(ctx.user, 'email', { summary: `${m[1] === 'test' ? 'test email' : 'emailed'} “${subject.slice(0, 80)}” to ${to.join(', ').slice(0, 120)}` });
       });
       return { ok: true, rev: docIds.length ? ctx.bump() : ctx.rev };
+    }],
+    // ---------- online payments (Stripe) ----------
+    ['GET', /^\/pay$/, ctx => { const p = stripe.publicStripe(ctx.store.getSetting('stripe')); return ctx.user.role === 'client' ? { configured: p.configured } : p; }],
+    ['PUT', /^\/pay$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const body = (await readJson(req)) || {};
+      if (body.remove) {
+        ctx.store.transaction(() => { ctx.store.putSetting('stripe', {}); ctx.store.audit(ctx.user, 'stripe', { collection: 'settings', id: 'stripe', summary: 'online payments turned off' }); });
+        return stripe.publicStripe(null);
+      }
+      const key = String(body.key || '').trim();
+      if (!stripe.validKey(key)) throw new ValidationError('That doesn’t look like a Stripe key. It starts with rk_live_ (or rk_test_ to try it out).');
+      const cfg = { key, connected: new Date().toISOString().slice(0, 10) };
+      try { await stripe.check(cfg, stripeFetch); } catch (e) { throw new ValidationError(e.message, e.status || 502); }
+      ctx.store.transaction(() => { ctx.store.putSetting('stripe', cfg); ctx.store.audit(ctx.user, 'stripe', { collection: 'settings', id: 'stripe', summary: `online payments turned on (${/_test_/.test(key) ? 'test' : 'live'} key ending ${key.slice(-4)})` }); });
+      return stripe.publicStripe(cfg);
+    }],
+    // A "Pay now" link for an invoice's balance. Kept while the balance is the same; replaced when it changes.
+    ['POST', /^\/pay\/link$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const cfg = ctx.store.getSetting('stripe');
+      if (!cfg || !cfg.key) throw new ValidationError('Turn on online payments first (Settings → Online payments).', 409);
+      const body = (await readJson(req)) || {};
+      const doc = ctx.store.get('docs', String(body.docId || ''));
+      if (!doc || doc.kind !== 'invoice') throw new ValidationError('Choose an invoice.');
+      const cents = Math.round(((Number(doc.total) || 0) - settledOn(ctx.store, doc.id)) * 100);
+      if (cents < 50) throw new ValidationError('There’s nothing left to pay on this invoice.', 409);
+      const cur = doc.payLink;
+      if (cur && cur.active !== false && cur.cents === cents) return { url: cur.url, rev: ctx.rev };
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      let link;
+      try { link = await stripe.createLink(cfg, stripeFetch, { cents, docId: doc.id, company: company.name, name: `${company.name} · Invoice ${doc.number || ''}`.trim() }); }
+      catch (e) { throw new ValidationError(e.message, e.status || 502); }
+      // The old link is turned off, but kept on the list so a payment made through it before then is still found.
+      const closed = cur && cur.id && cur.active !== false ? await stripe.deactivate(cfg, stripeFetch, cur.id).then(() => Date.now(), () => 0) : 0;
+      ctx.store.transaction(() => {
+        const d = ctx.store.get('docs', doc.id);
+        if (d) ctx.store.put('docs', doc.id, { ...d, payLink: { id: link.id, url: link.url, cents, created: Date.now(), active: true }, payLinks: payLinkList(d, closed) });
+        ctx.store.audit(ctx.user, 'stripe', { collection: 'docs', id: doc.id, summary: `payment link for invoice ${doc.number ? '#' + doc.number : doc.id}: $${(cents / 100).toFixed(2)}` });
+      });
+      return { url: link.url, rev: ctx.bump() };
+    }],
+    // Record payments made through the links: each paid checkout session becomes a payment into the Stripe account.
+    // Every link an invoice has had is checked until it's been paid or has been turned off for a week, so a payment
+    // made through an old link is still found. A payment that can't be recorded (more than what's owing) is kept on
+    // the invoice as a problem to deal with, never dropped.
+    ['POST', /^\/pay\/sync$/, async ctx => {
+      notClient(ctx.user);
+      const cfg = ctx.store.getSetting('stripe');
+      if (!cfg || !cfg.key) return { added: [], errors: [], rev: ctx.rev };
+      const recorded = new Set(ctx.store.list('entries').filter(e => e.stripeSession).map(e => e.stripeSession));
+      const week = 7 * 864e5, now = Date.now();
+      const docs = ctx.store.list('docs').filter(d => d.kind === 'invoice' && (d.payLinks || d.payLink));
+      const found = [], errors = [], closeNow = [];
+      outer: for (const d of docs) {
+        const known = new Set((d.payIssues || []).map(x => x.session));
+        const balance = Math.round(((Number(d.total) || 0) - settledOn(ctx.store, d.id)) * 100);
+        for (const l of payLinkList(d)) {
+          if (l.done || (l.closed && now - l.closed > week)) continue;
+          // The balance changed some other way (a payment entered by hand, the invoice edited): this link is out of date.
+          if (d.payLink && d.payLink.id === l.id && d.payLink.active !== false && d.payLink.cents !== balance) closeNow.push({ d, l });
+          try { for (const x of await stripe.paidSessions(cfg, stripeFetch, l.id)) if (!recorded.has(x.id) && !known.has(x.id)) found.push({ d, l, s: x }); }
+          catch (e) { errors.push(e.message); break outer; }
+        }
+      }
+      for (const c of closeNow) c.closedOk = await stripe.deactivate(cfg, stripeFetch, c.l.id).then(() => true, () => false);
+      const added = [], issues = [];
+      ctx.store.transaction(() => {
+        let acc = ctx.store.list('accounts').find(a => a.stripe);
+        const ar = ctx.store.list('accounts').find(a => a.detail === 'ar' && a.active !== false) || ctx.store.list('accounts').find(a => a.detail === 'ar');
+        const touched = new Map(); // doc id -> { done: Set(link ids), issues: [] }
+        const mark = id => { if (!touched.has(id)) touched.set(id, { done: new Set(), issues: [] }); return touched.get(id); };
+        for (const { d, l, s } of found) {
+          const amount = s.cents / 100, t = new Date(s.created * 1000);
+          const date = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+          mark(d.id).done.add(l.id);
+          try {
+            if (!acc) {
+              const id = ctx.store.get('accounts', 'a1090') ? crypto.randomUUID() : 'a1090';
+              applyWrite(ctx.store, { op: 'set', collection: 'accounts', id, data: { code: ctx.store.list('accounts').some(a => a.code === '1090') ? '' : '1090', name: 'Stripe', type: 'Asset', detail: 'bank', stripe: true, active: true,
+                desc: 'Online payments received through Stripe, until Stripe pays them out to your bank. Record payouts as transfers to your bank, and Stripe’s fees as an expense.' } }, ctx.user, ctx);
+              acc = ctx.store.get('accounts', id);
+            }
+            const id = 'stripe_' + s.id.replace(/[^A-Za-z0-9_]/g, '').slice(-80);
+            applyWrite(ctx.store, { op: 'set', collection: 'entries', id, data: { type: 'payment', date, ref: 'Stripe', memo: `Paid online${d.number ? ' · invoice #' + d.number : ''}`, contactId: d.contactId || '', applyTo: d.id, amount, bank: acc.id,
+              lines: [{ account: acc.id, debit: amount, credit: 0 }, { account: ar && ar.id, debit: 0, credit: amount }], stripeSession: s.id, created: Date.now() } }, ctx.user, ctx);
+            added.push({ docId: d.id, number: d.number || '', amount });
+          } catch (e) {
+            // Usually: more than what's still owing (paid twice, or an old link after another payment). Kept for a person to sort out.
+            const issue = { session: s.id, link: l.id, amount, date, error: String(e.message).slice(0, 200), at: Date.now() };
+            mark(d.id).issues.push(issue); issues.push({ docId: d.id, number: d.number || '', ...issue });
+          }
+        }
+        for (const c of closeNow) if (c.closedOk) { const m = mark(c.d.id); m.closed = m.closed || new Set(); m.closed.add(c.l.id); }
+        for (const [id, m] of touched) {
+          const cur = ctx.store.get('docs', id); if (!cur) continue;
+          const list = payLinkList(cur).map(l => ({ ...l, ...(m.done.has(l.id) ? { done: true } : {}), ...(m.closed && m.closed.has(l.id) && !l.closed ? { closed: Date.now() } : {}) }));
+          const pl = cur.payLink && (m.done.has(cur.payLink.id) || (m.closed && m.closed.has(cur.payLink.id))) ? { ...cur.payLink, active: false } : cur.payLink;
+          ctx.store.put('docs', id, { ...cur, payLink: pl, payLinks: list, ...(m.issues.length ? { payIssues: [...(cur.payIssues || []), ...m.issues].slice(-20) } : {}) });
+        }
+      });
+      for (const i of issues) errors.push(`A Stripe payment of $${i.amount.toFixed(2)} for invoice ${i.number ? '#' + i.number : ''} couldn’t be recorded: ${i.error}`);
+      return { added, issues, errors, rev: added.length || issues.length || closeNow.length ? ctx.bump() : ctx.rev };
+    }],
+    // A problem payment was dealt with by hand (refunded in Stripe, or recorded as a credit): stop showing it.
+    ['POST', /^\/pay\/issue$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const body = (await readJson(req)) || {};
+      const d = ctx.store.get('docs', String(body.docId || ''));
+      if (!d || !(d.payIssues || []).some(x => x.session === body.session)) throw new ValidationError('That payment problem isn’t on this invoice.', 404);
+      ctx.store.transaction(() => {
+        ctx.store.put('docs', d.id, { ...d, payIssues: d.payIssues.map(x => (x.session === body.session ? { ...x, resolved: Date.now() } : x)) });
+        ctx.store.audit(ctx.user, 'stripe', { collection: 'docs', id: d.id, summary: `marked a Stripe payment problem on invoice ${d.number ? '#' + d.number : d.id} as dealt with` });
+      });
+      return { ok: true, rev: ctx.bump() };
     }],
     // ---------- logo on invoices ----------
     ['PUT', /^\/logo$/, async (ctx, req) => {
