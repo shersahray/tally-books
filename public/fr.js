@@ -1541,3 +1541,26 @@ addFr({
   'Not activated yet.':'Pas encore activé.','Enter the licence code you received.':'Entrez le code de licence que vous avez reçu.',
   'Enter the licence code you received with Sumlora.':'Entrez le code de licence reçu avec Sumlora.',
 });
+
+/* ---------- administrator overview ---------- */
+addFr({
+  'Overview':'Vue d’ensemble','Refresh':'Actualiser','Only the server’s administrator sees the overview.':'Seul l’administrateur du serveur voit la vue d’ensemble.',
+  'Everyone using Sumlora: firms on this server, desktop licences you’ve sold, and installer downloads.':'Tous ceux qui utilisent Sumlora : les cabinets sur ce serveur, les licences de bureau vendues et les téléchargements du programme d’installation.',
+  'Firms using your server':'Cabinets sur votre serveur','People with accounts':'Personnes avec un compte','Desktop licences':'Licences de bureau','Installer downloads':'Téléchargements du programme d’installation',
+  '{0} new this month':'{0} nouveaux ce mois-ci','{0} companies':'{0} entreprises','{0} ending in 30 days':'{0} se terminent dans 30 jours','{0} waiting for approval':'{0} en attente d’approbation',
+  'None ending soon':'Aucune ne se termine bientôt','Make codes under Licence codes':'Faites des codes sous Codes de licence','All versions, from GitHub':'Toutes les versions, selon GitHub',
+  'GitHub didn’t answer':'GitHub n’a pas répondu','Checking GitHub…':'Vérification auprès de GitHub…','Renewals due':'Renouvellements à faire',
+  '{0} days left':'{0} jours restants','Ends today':'Se termine aujourd’hui','Ended {0} days ago':'Terminée il y a {0} jours',
+  'Firms on your server':'Cabinets sur votre serveur','Active:':'Actifs :','Waiting for approval:':'En attente d’approbation :','Suspended:':'Suspendus :',
+  'Active firms by plan:':'Cabinets actifs par forfait :','Essentials:':'Essentiel :','Plus:':'Plus :','Signed in during the last 30 days:':'Connectés dans les 30 derniers jours :',
+  'New this month:':'Nouveaux ce mois-ci :','Newest firms':'Cabinets les plus récents','Manage firms':'Gérer les cabinets',
+  'No other firms yet. When firms sign up on your online server, they show here.':'Aucun autre cabinet pour l’instant. Quand des cabinets s’inscrivent sur votre serveur en ligne, ils s’affichent ici.',
+  'Ending in 30 days:':'Se terminent dans 30 jours :','Ended:':'Terminées :','Active licences by plan:':'Licences actives par forfait :','Codes made in total:':'Codes faits au total :',
+  'Desktop copies don’t report back, so this counts the licences you’ve sold, not who’s using them right now.':'Les copies de bureau ne transmettent rien, alors ceci compte les licences vendues, pas qui les utilise en ce moment.',
+  'You haven’t created your licence key yet. Go to Licence codes to set it up.':'Vous n’avez pas encore créé votre clé de licence. Allez à Codes de licence pour la configurer.',
+  'Windows:':'Windows :','Mac:':'Mac :','Linux:':'Linux :','Version':'Version','Published':'Publiée','No releases published yet.':'Aucune version publiée pour l’instant.',
+  'GitHub counts every download of an installer, including your own. Automatic updates are counted too, so one computer can count more than once.':'GitHub compte chaque téléchargement d’un programme d’installation, y compris les vôtres. Les mises à jour automatiques sont aussi comptées, alors un ordinateur peut compter plus d’une fois.',
+  'AI suggestions this month':'Suggestions de l’IA ce mois-ci','Spent across all firms:':'Dépensé pour tous les cabinets :','No AI use this month.':'Aucune utilisation de l’IA ce mois-ci.',
+  'Couldn’t get the download counts from GitHub right now. Try again later.':'Impossible d’obtenir les téléchargements auprès de GitHub pour l’instant. Réessayez plus tard.',
+  'Pre-release':'Préversion',
+});

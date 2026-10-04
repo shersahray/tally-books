@@ -104,6 +104,18 @@
     if (path === '/api/health') return { ok: true };
     const demoUser = { id: 'u_demo', name: 'Demo user', username: 'demo', role: 'owner', companies: [], disabled: false, lastLogin: Date.now(), mustChange: false, platformAdmin: true, firmName: demoFirms[0].name, firmId: 'f_demo', firmPlan: demoFirms[0].plan };
     if (path === '/api/auth/me') return { user: demoUser, idleMinutes: 480, licence: { on: false, state: 'off', canEnter: false, canIssue: true } };
+    // The administrator's Overview, from the made-up firms and licences above.
+    if (path === '/api/overview') {
+      const act = demoFirms.filter(f => f.status === 'active'), iso = d => new Date(d).toISOString().slice(0, 10);
+      return { firms: { total: demoFirms.length, active: act.length, pending: demoFirms.filter(f => f.status === 'pending').length, suspended: demoFirms.filter(f => f.status === 'suspended').length,
+          people: demoFirms.reduce((t, f) => t + f.users, 0), companies: demoFirms.reduce((t, f) => t + (f.main ? cos.length : f.companies), 0), newThisMonth: 1, activeLast30: 2,
+          byPlan: { essentials: act.filter(f => f.plan === 'essentials').length, plus: act.filter(f => f.plan === 'plus').length },
+          recent: demoFirms.filter(f => !f.main).map(f => ({ name: f.name, created: f.created })) },
+        ai: { totalUsd: 6.4, top: [{ name: 'Coast Accounting (example)', usd: 6.4 }] },
+        licences: { made: demoLic.issued.length, active: 2, endingSoon: 1, ended: 0, byPlan: { essentials: 1, plus: 1 },
+          due: demoLic.issued.filter(l => l.until <= iso(Date.now() + 30 * day)).map(({ id, name, email, plan, until }) => ({ id, name, email, plan, until })) } };
+    }
+    if (path === '/api/overview/downloads') return { repo: 'example', releases: [{ tag: 'v1.3.1', published: new Date(Date.now() - 3 * day).toISOString(), installs: 41, windows: 37, mac: 3, linux: 1 }, { tag: 'v1.3.0', published: new Date(Date.now() - 20 * day).toISOString(), installs: 63, windows: 58, mac: 4, linux: 1 }], totals: { installs: 104, windows: 95, mac: 7, linux: 2 } };
     if (path === '/api/licence') return { on: false, state: 'off', canEnter: false, canIssue: true };
     if (path === '/api/licences' && method === 'GET') return { ...demoLic, issued: demoLic.issued.slice().reverse(), licensing: false, inBuild: null };
     if (path === '/api/licences' && method === 'POST') {

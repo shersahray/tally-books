@@ -399,3 +399,6 @@ label.btn.disabled{opacity:.6;pointer-events:none}
 .msg.from-client{align-self:flex-end;background:var(--accent-soft)}
 .msg .who{font-size:12px;margin-bottom:2px}
 .msg .text{white-space:pre-wrap}
+/* Overview (administrators): two columns of panels, one on narrow screens. */
+.ov-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+@media (max-width:980px){.ov-grid{grid-template-columns:minmax(0,1fr)}}

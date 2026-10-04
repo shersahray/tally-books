@@ -36,7 +36,7 @@ let CO=null; // id of the company whose books are open
 const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|licences?(?:\/|$)|ai$|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -142,7 +142,7 @@ function renderMain(){
   document.title=CO&&S.loaded?`${S.company.name} · Sumlora`:'Sumlora';
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
-  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences';
+  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences'||S.view==='overview';
   if(!noCo&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
@@ -154,7 +154,7 @@ function renderMain(){
   if(S.view==='payroll'&&!feat('payroll'))S.view='dashboard';
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
@@ -503,6 +503,7 @@ function bindMain(m){
   if(S.view==='users'||S.view==='signins')bindUsers(m);
   if(S.view==='firms')bindFirms(m);
   if(S.view==='licences')bindLicences(m);
+  if(S.view==='overview')bindOverview(m);
   if(S.view==='activity')bindActivity(m);
   if(S.view==='salestax')bindSalesTax(m);
   bindPayrollSettings(m);

@@ -11,7 +11,7 @@ const { Backups } = require('./backups');
 const { AI } = require('./ai');
 const mail = require('./mail');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
-const { Licence, Issuer } = require('./licence');
+const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 
@@ -433,6 +433,39 @@ function createApp(opts) {
     }
   }
 
+  // GitHub release download counts for the Overview page.
+  let dlCache = null;
+  const releasesRepo = () => {
+    if (opts.releasesRepo) return opts.releasesRepo;
+    try { const p = require('../../package.json').build.publish[0]; return `${p.owner}/${p.repo}`; } catch { return 'shersahray/tally-books'; }
+  };
+  async function downloadCounts() {
+    if (dlCache && Date.now() - dlCache.at < 10 * 60 * 1000) return dlCache.data;
+    const repo = releasesRepo();
+    const get = opts.releasesFetch || (url => fetch(url, { headers: { 'User-Agent': 'Sumlora', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(8000) }));
+    let data;
+    try {
+      const r = await get(`https://api.github.com/repos/${repo}/releases?per_page=30`);
+      if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
+      const list = await r.json();
+      const kind = n => (/\.exe$/i.test(n) ? 'windows' : /\.dmg$/i.test(n) ? 'mac' : /\.AppImage$/i.test(n) ? 'linux' : '');
+      const releases = (Array.isArray(list) ? list : []).filter(x => !x.draft).map(x => {
+        const t = { windows: 0, mac: 0, linux: 0 };
+        let checks = 0;
+        for (const a of x.assets || []) { const k = kind(a.name); if (k) t[k] += a.download_count || 0; if (a.name === 'latest.yml') checks = a.download_count || 0; }
+        return { tag: x.tag_name, name: x.name || x.tag_name, published: x.published_at, prerelease: !!x.prerelease, ...t, installs: t.windows + t.mac + t.linux, updateChecks: checks };
+      });
+      const sum = k => releases.reduce((n, x) => n + x[k], 0);
+      data = { repo, releases, totals: { installs: sum('installs'), windows: sum('windows'), mac: sum('mac'), linux: sum('linux') }, checkedAt: Date.now() };
+    } catch (e) {
+      data = { repo, error: 'Couldn’t get the download counts from GitHub right now. Try again later.', checkedAt: Date.now() };
+      dlCache = { at: Date.now() - 9 * 60 * 1000, data }; // try again in a minute
+      return data;
+    }
+    dlCache = { at: Date.now(), data };
+    return data;
+  }
+
   // Routes that work across companies.
   const globalRoutes = [
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
@@ -558,6 +591,52 @@ function createApp(opts) {
       const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
       const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
+    }],
+    // The administrator's overview: firms on this server, desktop licences sold, renewals due, AI use.
+    ['GET', /^\/api\/overview$/, (req, m, res, user) => {
+      adminOnly(user);
+      const now = Date.now(), monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+      const firms = auth.data.firms.map(f => {
+        const people = auth.firmUsers(f.id);
+        return { id: f.id, name: f.name, status: f.status, plan: PLANS.planOf(f.plan), created: f.created || 0, people: people.length, companies: reg.list(f.id).length,
+          lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)), aiUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, mine: f.id === user.firmId };
+      });
+      const count = (list, fn) => list.filter(fn).length;
+      const out = {
+        firms: {
+          total: firms.length, active: count(firms, f => f.status === 'active'), pending: count(firms, f => f.status === 'pending'), suspended: count(firms, f => f.status === 'suspended'),
+          people: firms.reduce((t, f) => t + f.people, 0), companies: firms.reduce((t, f) => t + f.companies, 0),
+          newThisMonth: count(firms, f => f.created >= monthStart && !f.mine),
+          activeLast30: count(firms, f => f.lastLogin >= now - 30 * 864e5),
+          byPlan: Object.fromEntries(Object.keys(PLANS.PLANS).map(k => [k, count(firms, f => f.status === 'active' && f.plan === k)])),
+          recent: firms.filter(f => !f.mine).sort((a, b) => b.created - a.created).slice(0, 5),
+        },
+        ai: { totalUsd: Math.round(firms.reduce((t, f) => t + f.aiUsd, 0) * 100) / 100, top: firms.filter(f => f.aiUsd > 0).sort((a, b) => b.aiUsd - a.aiUsd).slice(0, 5).map(f => ({ name: f.name, usd: f.aiUsd })) },
+        licences: null,
+      };
+      // Desktop licences: only in the copy that makes the codes.
+      if (!licence.on || licence.isIssuer()) {
+        const info = issuer.info();
+        if (info.key) {
+          const today = localDay(new Date(now));
+          const soon = addDays(today, 30), longAgo = addDays(today, -60);
+          const renewedIds = new Set(info.issued.map(l => l.renews).filter(Boolean));
+          const current = info.issued.filter(l => !renewedIds.has(l.id));
+          out.licences = {
+            made: info.issued.length,
+            active: count(current, l => l.until >= today), endingSoon: count(current, l => l.until >= today && l.until <= soon), ended: count(current, l => l.until < today),
+            byPlan: Object.fromEntries(Object.keys(PLANS.PLANS).map(k => [k, count(current, l => l.until >= today && l.plan === k)])),
+            due: current.filter(l => l.until <= soon && l.until >= longAgo).sort((a, b) => a.until.localeCompare(b.until))
+              .map(({ id, name, email, plan, until }) => ({ id, name, email, plan, until })),
+          };
+        } else out.licences = { noKey: true };
+      }
+      return out;
+    }],
+    // Installer downloads, from the GitHub releases the desktop app updates from (public counts; cached for 10 minutes).
+    ['GET', /^\/api\/overview\/downloads$/, async (req, m, res, user) => {
+      adminOnly(user);
+      return downloadCounts();
     }],
     // Licence for this copy of the desktop app.
     ['GET', /^\/api\/licence$/, (req, m, res, user) => licenceInfo(user)],

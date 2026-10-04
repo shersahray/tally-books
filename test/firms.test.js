@@ -99,6 +99,8 @@ test('each firm manages only its own people', async () => {
 test('server-wide settings are for the administrator only', async () => {
   assert.equal((await req(bOwner, 'PUT', '/api/security', { idleMinutes: 5 })).status, 403);
   assert.equal((await req(bOwner, 'GET', '/api/firms')).status, 403);
+  assert.equal((await req(bOwner, 'GET', '/api/overview')).status, 403, 'the overview is for the administrator');
+  assert.equal((await req(bOwner, 'GET', '/api/overview/downloads')).status, 403);
   assert.equal((await req(bOwner, 'PUT', '/api/firms/settings', { signups: 'open' })).status, 403);
   assert.equal((await req(bOwner, 'PUT', '/api/backups', { keepDays: 1 })).status, 403);
   assert.equal((await req(bOwner, 'POST', '/api/backups/run', {})).status, 403);

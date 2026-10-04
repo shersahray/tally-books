@@ -62,6 +62,11 @@ async function showLicences(){S.view='licences';LICS=null;renderMain();try{LICS=
 const isoDay=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 /** One year on from a day: the day before the same date next year (Oct 2 → Oct 1). */
 const yearFrom=day=>{const d=pd(day);d.setFullYear(d.getFullYear()+1);d.setDate(d.getDate()-1);return isoDay(d)};
+/** The "Make a code" form filled in to renew a licence: same client and plan, the next year after it ends. */
+function renewFormFor(l){const today=isoDay(new Date());
+  return {name:l.name,email:l.email||'',plan:l.plan,until:yearFrom(l.until>=today?isoDay(new Date(pd(l.until).getTime()+864e5)):today),note:'',renews:l.id}}
+/** Open Licence codes with the renewal form ready (from the Overview page). */
+async function renewLicence(l){LIC_FORM=renewFormFor(l);LIC_MADE=null;await showLicences();const f=$('#licForm');if(f){f.scrollIntoView({block:'center'});$('#lfUntil').focus()}}
 function licStatus(l){
   const today=isoDay(new Date()),days=Math.round((pd(l.until)-pd(today))/864e5);
   if(LICS.issued.some(x=>x.renews===l.id))return ['quiet','Renewed'];
@@ -118,8 +123,7 @@ function bindLicences(m){
     if(a==='copy')return copy(find(b.dataset.id).code,'Code copied');
     if(a==='copymail')return copy(licMail(find(b.dataset.id)),'Email text copied');
     if(a==='cancelrenew'){LIC_FORM=null;return renderMain()}
-    if(a==='renew'){const l=find(b.dataset.id),today=isoDay(new Date());
-      LIC_FORM={name:l.name,email:l.email||'',plan:l.plan,until:yearFrom(l.until>=today?isoDay(new Date(pd(l.until).getTime()+864e5)):today),note:'',renews:l.id};
+    if(a==='renew'){LIC_FORM=renewFormFor(find(b.dataset.id));
       renderMain();const f=$('#licForm');if(f){f.scrollIntoView({block:'center'});$('#lfUntil').focus()}return}
   };
   const r=$('#licRestore',m);if(r)r.onchange=()=>restoreKeyFile(r,showLicences);

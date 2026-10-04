@@ -273,3 +273,42 @@ test('with no trial, a copy without a code is view only until one is entered', (
   const st = lic.status();
   assert.equal(st.state, 'none'); assert.equal(st.canChange, false);
 });
+
+test('the Overview page: firms, licences sold, renewals due, downloads from GitHub; administrators only', async () => {
+  const at = new Date(2026, 9, 4, 9);
+  let calls = 0, fail = false;
+  const releasesFetch = async url => {
+    calls++;
+    assert.match(url, /api\.github\.com\/repos\/shersahray\/tally-books\/releases/);
+    if (fail) return { ok: false, status: 503 };
+    return { ok: true, json: async () => [
+      { tag_name: 'v1.3.1', published_at: '2026-10-03T00:00:00Z', assets: [{ name: 'Sumlora-Setup-1.3.1.exe', download_count: 12 }, { name: 'latest.yml', download_count: 300 }, { name: 'Sumlora-1.3.1-arm64.dmg', download_count: 2 }] },
+      { tag_name: 'v1.3.0', published_at: '2026-09-20T00:00:00Z', assets: [{ name: 'Sumlora-Setup-1.3.0.exe', download_count: 30 }, { name: 'Sumlora-1.3.0.AppImage', download_count: 1 }] },
+      { tag_name: 'v1.4.0-draft', draft: true, assets: [{ name: 'x.exe', download_count: 99 }] }] };
+  };
+  const { req } = await start({ dataDir: tmp(), now: () => at, releasesFetch });
+  let o = (await req('GET', '/api/overview')).json;
+  assert.equal(o.firms.active, 1); assert.equal(o.firms.people, 1); assert.deepEqual(o.firms.recent, [], 'your own firm isn’t listed as a new firm');
+  assert.deepEqual(o.licences, { noKey: true }, 'no key yet: says so');
+  await req('POST', '/api/licences/key', {});
+  const mk = async (name, until, extra = {}) => (await req('POST', '/api/licences', { name, plan: 'plus', until, ...extra })).json.licence;
+  await mk('Far Away Co', '2027-09-30');
+  const soon = await mk('Soon Co', '2026-10-20');
+  const renewed = await mk('Renewed Co', '2026-10-10');
+  await mk('Renewed Co', '2027-10-10', { renews: renewed.id });
+  o = (await req('GET', '/api/overview')).json;
+  assert.equal(o.licences.made, 4); assert.equal(o.licences.active, 3, 'a renewed code isn’t counted twice'); assert.equal(o.licences.endingSoon, 1);
+  assert.deepEqual(o.licences.due.map(l => l.name), ['Soon Co']); assert.equal(o.licences.due[0].id, soon.id);
+  assert.equal(o.licences.due[0].code, undefined, 'codes stay on the Licence codes page');
+  // Downloads: installers only (not update checks), drafts left out, and cached.
+  let d = (await req('GET', '/api/overview/downloads')).json;
+  assert.deepEqual(d.totals, { installs: 45, windows: 42, mac: 2, linux: 1 });
+  assert.equal(d.releases[0].updateChecks, 300); assert.equal(d.releases.length, 2);
+  await req('GET', '/api/overview/downloads');
+  assert.equal(calls, 1, 'GitHub is asked at most every 10 minutes');
+  // GitHub not answering: a message, not an error page.
+  fail = true;
+  const s2 = await start({ dataDir: tmp(), now: () => at, releasesFetch });
+  d = (await s2.req('GET', '/api/overview/downloads')).json;
+  assert.match(d.error, /Couldn’t get the download counts/);
+});

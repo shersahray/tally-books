@@ -225,9 +225,9 @@ function renderUserBox(){
   const box=$('#userBox');if(!box)return;
   if(!ME){box.innerHTML='';return}
   box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span><span>${roleLabel(ME)}</span>${ME.firmName&&ME.role!=='client'?` · <span translate="no">${esc(ME.firmName)}</span>`:''}</span></div>
-    <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}${ME.platformAdmin?'<button class="link" data-firms>Firms</button>':''}${typeof LIC!=='undefined'&&LIC&&LIC.canEnter?'<button class="link" data-licence>Licence</button>':''}${typeof LIC!=='undefined'&&LIC&&LIC.canIssue?'<button class="link" data-licences>Licence codes</button>':''}<button class="link" data-signout>Sign out</button></div>
+    <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}${ME.platformAdmin?'<button class="link" data-overview>Overview</button><button class="link" data-firms>Firms</button>':''}${typeof LIC!=='undefined'&&LIC&&LIC.canEnter?'<button class="link" data-licence>Licence</button>':''}${typeof LIC!=='undefined'&&LIC&&LIC.canIssue?'<button class="link" data-licences>Licence codes</button>':''}<button class="link" data-signout>Sign out</button></div>
     <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;align-items:flex-start">${langSwitch()}${TallyTheme.html()}</div>`;
-  box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))myAccountForm();if(b.hasAttribute('data-users'))showUsers();if(b.hasAttribute('data-firms'))showFirms();if(b.hasAttribute('data-licence'))licenceDialog();if(b.hasAttribute('data-licences'))showLicences()};
+  box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))myAccountForm();if(b.hasAttribute('data-users'))showUsers();if(b.hasAttribute('data-firms'))showFirms();if(b.hasAttribute('data-overview'))showOverview();if(b.hasAttribute('data-licence'))licenceDialog();if(b.hasAttribute('data-licences'))showLicences()};
 }
 function passwordPrompt(title,msg,ok){
   return new Promise(res=>{
