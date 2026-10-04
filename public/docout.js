@@ -261,7 +261,8 @@ function invoiceDetailsPanel(){
     </div><div><button class="btn primary" type="submit">Save</button></div></form></div>`;
 }
 function mailPanel(){
-  if(!ME||ME.readOnly)return '';
+  // Only the bookkeeper's team sets up the mailbox (the server refuses it for client logins).
+  if(!ME||ME.readOnly||ME.role==='client')return '';
   const m=MAILCFG;
   if(!m)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Email</h3><div class="pad muted">Loading…</div></div>`;
   const preset=Object.entries(MAIL_PRESETS).find(([k,p])=>p.host&&p.host===m.host)?.[0]||(m.configured?'other':'gmail');
