@@ -69,7 +69,7 @@ test('the seller makes a licence key and codes in their own Sumlora', async () =
   const read = L.readCode(code, [pub]);
   assert.ok(read.at >= at.getTime() - 1000 && read.at < at.getTime() + 60000, 'when it was made, signed with it');
   delete read.at;
-  assert.deepEqual(read, { id: codeRec.id, name: 'Maple Dental', plan: 'essentials', until: '2027-10-01', issued: '2026-10-02' });
+  assert.deepEqual(read, { id: codeRec.id, name: 'Maple Dental', plan: 'essentials', kind: 'firm', until: '2027-10-01', issued: '2026-10-02' });
   const list = (await req('GET', '/api/licences')).json;
   assert.equal(list.issued.length, 1); assert.equal(list.licensing, false);
   // A copy of the key, to keep safe.
@@ -311,4 +311,30 @@ test('the Overview page: firms, licences sold, renewals due, downloads from GitH
   const s2 = await start({ dataDir: tmp(), now: () => at, releasesFetch });
   d = (await s2.req('GET', '/api/overview/downloads')).json;
   assert.match(d.error, /Couldn’t get the download counts/);
+});
+
+test('licence types: a firm licence has any number of companies; a single-business licence has one', async () => {
+  const at = new Date(2026, 9, 4, 9);
+  assert.equal((await seller.req('POST', '/api/licences', { name: 'X', plan: 'plus', until: '2027-10-01', kind: 'family' })).status, 400);
+  const biz = (await seller.req('POST', '/api/licences', { name: 'Harbour Yoga', plan: 'essentials', until: '2027-10-01', kind: 'business' })).json.licence;
+  const firm = (await seller.req('POST', '/api/licences', { name: 'Birch Bookkeeping', plan: 'plus', until: '2027-10-01', kind: 'firm' })).json.licence;
+  assert.equal(biz.kind, 'business'); assert.equal(L.readCode(biz.code, [pub]).kind, 'business');
+  assert.equal(L.readCode(firm.code, [pub]).kind, 'firm');
+  assert.equal(L.readCode(code, [pub]).kind, 'firm', 'codes made before types existed are firm licences');
+
+  // One business: its first company is fine, a second is refused.
+  let c = await start({ dataDir: tmp(), licenceDir: tmp(), licenceKeys: [pub], now: () => at });
+  assert.equal((await c.req('PUT', '/api/licence', { code: biz.code })).json.kind, 'business');
+  assert.equal((await c.req('POST', '/api/companies', { name: 'Harbour Yoga', province: 'ON' })).status, 200);
+  const r = await c.req('POST', '/api/companies', { name: 'Second Co', province: 'ON' });
+  assert.equal(r.status, 403); assert.match(r.json.error, /one business/);
+  assert.equal((await c.req('POST', '/api/companies', { name: 'Copy', copyFrom: 'x' })).status, 403, 'not by copying either');
+
+  // A firm licence: as many as they need.
+  c = await start({ dataDir: tmp(), licenceDir: tmp(), licenceKeys: [pub], now: () => at });
+  await c.req('PUT', '/api/licence', { code: firm.code });
+  for (const n of ['A', 'B', 'C']) assert.equal((await c.req('POST', '/api/companies', { name: n, province: 'ON' })).status, 200);
+  // The overview counts each type.
+  const o = (await seller.req('GET', '/api/overview')).json;
+  assert.ok(o.licences.byKind.business >= 1 && o.licences.byKind.firm >= 1);
 });

@@ -49,6 +49,7 @@ function vOverview(){
     :Li.noKey?'<div class="muted">You haven’t created your licence key yet. Go to Licence codes to set it up.</div><div><button class="btn sm" data-ov="licences">Licence codes</button></div>'
     :`<div><span>Active:</span> <b>${ovNum(Li.active)}</b> · <span>Ending in 30 days:</span> <b>${ovNum(Li.endingSoon)}</b> · <span>Ended:</span> <b>${ovNum(Li.ended)}</b></div>
       <div><span>Active licences by plan:</span> ${ovPlans(Li.byPlan)}</div>
+      ${Li.byKind?`<div><span>Firms:</span> <b>${ovNum(Li.byKind.firm)}</b> · <span>Single businesses:</span> <b>${ovNum(Li.byKind.business)}</b></div>`:''}
       <div><span>Codes made in total:</span> <b>${ovNum(Li.made)}</b></div>
       <div class="muted" style="font-size:12.5px">Desktop copies don’t report back, so this counts the licences you’ve sold, not who’s using them right now.</div>
       <div><button class="btn sm" data-ov="licences">Licence codes</button></div>`}</div></div>`;

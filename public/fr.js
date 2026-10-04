@@ -1564,3 +1564,16 @@ addFr({
   'Couldn’t get the download counts from GitHub right now. Try again later.':'Impossible d’obtenir les téléchargements auprès de GitHub pour l’instant. Réessayez plus tard.',
   'Pre-release':'Préversion',
 });
+
+/* ---------- licence types ---------- */
+addFr({
+  'Who it’s for':'Pour qui','A bookkeeping firm: as many client companies as they need':'Un cabinet de tenue de livres : autant d’entreprises clientes que nécessaire',
+  'One business: its own company only':'Une seule entreprise : la sienne seulement','Single business':'Entreprise unique','Firm licence':'Licence de cabinet','One business':'Une entreprise',
+  'It covers one business: the books of one company.':'Elle couvre une seule entreprise : les livres d’une entreprise.',
+  'It’s a firm licence: you can keep the books of as many client companies as you need.':'C’est une licence de cabinet : vous pouvez tenir les livres d’autant d’entreprises clientes que nécessaire.',
+  'Your licence is for one business.':'Votre licence est pour une seule entreprise.',
+  'It keeps the books of one company. For more companies, ask for a firm licence.':'Elle tient les livres d’une entreprise. Pour plus d’entreprises, demandez une licence de cabinet.',
+  'This licence is for one business, so it has one company. To keep books for more companies, ask for a firm licence.':'Cette licence est pour une seule entreprise, alors elle a une seule entreprise. Pour tenir les livres de plus d’entreprises, demandez une licence de cabinet.',
+  'Choose who the licence is for: a firm or one business.':'Choisissez à qui est la licence : un cabinet ou une seule entreprise.',
+  'Firms:':'Cabinets :','Single businesses:':'Entreprises uniques :',
+});

@@ -218,13 +218,14 @@ For clients who keep their books on their own computer, you sell a licence for a
 
 **Free trial or code from the start:** by default a new install has a 30-day free trial, and the client can paste their code when they create their account or any time later. To require a code from the start, add a GitHub variable `SUMLORA_TRIAL_DAYS` set to `0` (or another number of days for a shorter or longer trial) and publish a release.
 
-**When a client buys or renews:** on **Licence codes**, enter the client's business name, the plan (Essentials or Plus) and the last day, and click **Make code** (or **Renew** on an existing row, which picks the next year). Copy the code or the ready-made email and send it. The client clicks **Licence** (bottom left, or the button in the yellow bar) and pastes it.
+**When a client buys or renews:** on **Licence codes**, enter the client's business name, who it's for (**a bookkeeping firm**, with as many client companies as they need, or **one business**, with its own company only), the plan (Essentials or Plus) and the last day, and click **Make code** (or **Renew** on an existing row, which picks the next year). Copy the code or the ready-made email and send it. The client clicks **Licence** (bottom left, or the button in the yellow bar) and pastes it.
 
 **What the client sees:**
 - When the client creates their account, the first screen asks for the licence code: a valid code activates Sumlora straight away (a wrong one is refused before the account is made). With the trial on, they can leave it empty and get 30 days with everything included.
 - A licence shows "Licensed to …", and the plan in the code decides the features (Essentials or Plus).
 - In the last 30 days, a bar reminds them to renew. After the last day, they have 14 more days.
 - After that, or after the trial, the books are **view only**: they can still open, print, export, email and back up everything, but not change anything until they enter a new code. Nothing is ever deleted or locked away.
+- A single-business licence keeps one company: once it's created, **+ New company** and **Bring over from QuickBooks or Sage** are hidden and the server refuses another. Codes made before licence types existed are firm licences.
 - The newest code always wins, so if you make a mistake (a wrong year), send a corrected code and it replaces the first one.
 
 Codes are checked on the client's computer without the internet. The computer remembers the latest date it has seen, so turning its clock back doesn't bring an ended licence back. A code isn't tied to one computer: the client's name shows in the app, which discourages sharing. Someone determined enough to change the program itself could get around any offline licence; the codes stop ordinary copying, not that.

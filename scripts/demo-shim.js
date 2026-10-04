@@ -95,8 +95,8 @@
   ];
   // Licence codes: a made-up key and codes that don't turn anything on (the demo has no private key).
   const demoLic = { key: { publicKey: 'DEMO-public-key-shown-here-in-your-own-copy', created: Date.now() - 30 * day }, issued: [
-    { id: 'd1', name: 'Harbour Yoga (example)', email: 'owner@example.com', plan: 'plus', until: new Date(Date.now() + 200 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 165 * day).toISOString().slice(0, 10), note: '', code: 'TB1-DEMO.example-code-not-real' },
-    { id: 'd2', name: 'Birch Cafe (example)', email: '', plan: 'essentials', until: new Date(Date.now() + 12 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 353 * day).toISOString().slice(0, 10), note: 'Paid by e-transfer', code: 'TB1-DEMO.example-code-not-real' },
+    { id: 'd1', name: 'Harbour Yoga (example)', email: 'owner@example.com', plan: 'plus', kind: 'business', until: new Date(Date.now() + 200 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 165 * day).toISOString().slice(0, 10), note: '', code: 'TB1-DEMO.example-code-not-real' },
+    { id: 'd2', name: 'Birch Bookkeeping (example)', email: '', plan: 'essentials', kind: 'firm', until: new Date(Date.now() + 12 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 353 * day).toISOString().slice(0, 10), note: 'Paid by e-transfer', code: 'TB1-DEMO.example-code-not-real' },
   ] };
   let auditSeq = 0;
   function route(url, method, body) {
@@ -112,7 +112,7 @@
           byPlan: { essentials: act.filter(f => f.plan === 'essentials').length, plus: act.filter(f => f.plan === 'plus').length },
           recent: demoFirms.filter(f => !f.main).map(f => ({ name: f.name, created: f.created })) },
         ai: { totalUsd: 6.4, top: [{ name: 'Coast Accounting (example)', usd: 6.4 }] },
-        licences: { made: demoLic.issued.length, active: 2, endingSoon: 1, ended: 0, byPlan: { essentials: 1, plus: 1 },
+        licences: { made: demoLic.issued.length, active: 2, endingSoon: 1, ended: 0, byPlan: { essentials: 1, plus: 1 }, byKind: { firm: 1, business: 1 },
           due: demoLic.issued.filter(l => l.until <= iso(Date.now() + 30 * day)).map(({ id, name, email, plan, until }) => ({ id, name, email, plan, until })) } };
     }
     if (path === '/api/overview/downloads') return { repo: 'example', releases: [{ tag: 'v1.3.1', published: new Date(Date.now() - 3 * day).toISOString(), installs: 41, windows: 37, mac: 3, linux: 1 }, { tag: 'v1.3.0', published: new Date(Date.now() - 20 * day).toISOString(), installs: 63, windows: 58, mac: 4, linux: 1 }], totals: { installs: 104, windows: 95, mac: 7, linux: 2 } };
@@ -120,7 +120,7 @@
     if (path === '/api/licences' && method === 'GET') return { ...demoLic, issued: demoLic.issued.slice().reverse(), licensing: false, inBuild: null };
     if (path === '/api/licences' && method === 'POST') {
       if (!String(body.name || '').trim()) throw new ApiError(400, 'Enter who the licence is for (the client’s business name).');
-      const rec = { id: 'd' + (demoLic.issued.length + 1), name: String(body.name).trim(), email: body.email || '', plan: body.plan, until: body.until, issued: new Date().toISOString().slice(0, 10), note: body.note || '', code: 'TB1-DEMO.example-code-not-real-made-in-your-own-copy', ...(body.renews ? { renews: body.renews } : {}) };
+      const rec = { id: 'd' + (demoLic.issued.length + 1), name: String(body.name).trim(), email: body.email || '', plan: body.plan, kind: body.kind || 'firm', until: body.until, issued: new Date().toISOString().slice(0, 10), note: body.note || '', code: 'TB1-DEMO.example-code-not-real-made-in-your-own-copy', ...(body.renews ? { renews: body.renews } : {}) };
       demoLic.issued.push(rec);
       return { licence: rec };
     }

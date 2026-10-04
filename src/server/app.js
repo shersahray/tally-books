@@ -626,8 +626,9 @@ function createApp(opts) {
             made: info.issued.length,
             active: count(current, l => l.until >= today), endingSoon: count(current, l => l.until >= today && l.until <= soon), ended: count(current, l => l.until < today),
             byPlan: Object.fromEntries(Object.keys(PLANS.PLANS).map(k => [k, count(current, l => l.until >= today && l.plan === k)])),
+            byKind: { firm: count(current, l => l.until >= today && (l.kind || 'firm') === 'firm'), business: count(current, l => l.until >= today && l.kind === 'business') },
             due: current.filter(l => l.until <= soon && l.until >= longAgo).sort((a, b) => a.until.localeCompare(b.until))
-              .map(({ id, name, email, plan, until }) => ({ id, name, email, plan, until })),
+              .map(({ id, name, email, plan, kind, until }) => ({ id, name, email, plan, kind: kind || 'firm', until })),
           };
         } else out.licences = { noKey: true };
       }
@@ -672,8 +673,8 @@ function createApp(opts) {
     ['POST', /^\/api\/licences$/, async (req, m, res, user) => {
       canIssue(user);
       const b = await readJson(req);
-      const rec = issuer.make({ name: b.name, email: b.email, plan: b.plan, until: b.until, note: b.note, renews: b.renews });
-      auth.log('licence-made', { by: user.username, licence: rec.id, name: rec.name, plan: rec.plan, until: rec.until });
+      const rec = issuer.make({ name: b.name, email: b.email, plan: b.plan, kind: b.kind || 'firm', until: b.until, note: b.note, renews: b.renews });
+      auth.log('licence-made', { by: user.username, licence: rec.id, name: rec.name, plan: rec.plan, kind: rec.kind, until: rec.until });
       return { licence: rec };
     }],
     // The signed-in person's firm: owners can rename it.
@@ -720,6 +721,11 @@ function createApp(opts) {
       ...(user.platformAdmin ? { pendingFirms: auth.data.firms.filter(f => f.status === 'pending').length } : {}) })],
     ['POST', /^\/api\/companies$/, async (req, m, res, user) => {
       ownerOnly(user);
+      // A single-business licence (desktop app) keeps one company; a firm licence has no limit.
+      if (licence.on) {
+        const st = licence.status();
+        if (st.kind === 'business' && reg.list().length >= 1) throw new ValidationError('This licence is for one business, so it has one company. To keep books for more companies, ask for a firm licence.', 403);
+      }
       const entry = createCompany(await readJson(req), user);
       return { ok: true, company: summary(entry) };
     }],
