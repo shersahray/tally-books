@@ -45,7 +45,7 @@ async function actDetail(seq){
   let r;try{r=await api('GET','/api/audit/'+seq)}catch(e){return toast(e.message,true)}
   const b=r.before||{},a=r.after||{};
   const show=v=>{if(v===undefined)return '<span class="muted">—</span>';if(v&&typeof v==='object')return `<code class="json">${esc(JSON.stringify(v,null,1)).slice(0,1500)}</code>`;return esc(String(v))};
-  const label=k=>({terms:'Payment terms (days)',fyStart:'Fiscal year starts (month)',taxName:'Sales tax name',taxRate:'Sales tax rate',qstRate:'QST rate',filingFreq:'Sales tax filing',bn:'Business number',province:'Province',currency:'Currency',payroll:'Payroll settings',lines:'Lines',date:'Date',ref:'Number / reference',memo:'Memo',contactId:'Customer or vendor',name:'Name',amount:'Amount',total:'Total',status:'Status',type:'Type',account:'Account',desc:'Description'})[k]||k;
+  const label=k=>({terms:'Payment terms (days)',fyStart:'Fiscal year starts (month)',taxName:'Sales tax name',taxRate:'Sales tax rate',qstRate:'QST rate',pstRate:'PST rate',pstName:'PST name',pstFreq:'PST filing',filingFreq:'Sales tax filing',bn:'Business number',province:'Province',currency:'Currency',payroll:'Payroll settings',lines:'Lines',date:'Date',ref:'Number / reference',memo:'Memo',contactId:'Customer or vendor',name:'Name',amount:'Amount',total:'Total',status:'Status',type:'Type',account:'Account',desc:'Description'})[k]||k;
   const keys=[...new Set([...Object.keys(b),...Object.keys(a)])].filter(k=>k!=='created'&&JSON.stringify(b[k])!==JSON.stringify(a[k]));
   const target=r.collection==='entries'&&S.entries.find(x=>x.id===r.record_id)||r.collection==='docs'&&S.docs.find(x=>x.id===r.record_id);
   const f=openModal(`${ACT_ACTION[r.action]||r.action}: ${ACT_COL[r.collection]||r.collection||''}`,`

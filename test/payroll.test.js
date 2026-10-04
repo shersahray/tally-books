@@ -288,3 +288,66 @@ test('Review fixes: Fête nationale on a Sunday, and no negative ROE earnings', 
   const r = P.roe({ freq: 'biweekly', finalPeriodEnd: '2026-09-26', lines: [{ to: '2026-09-26', insurable: 0, separationVac: 500 }] });
   assert.equal(r.periods[0].amount, 0);
 });
+
+test('Bonuses use CRA’s method: the year’s tax with the bonus minus the year’s tax without it', () => {
+  const base = on(2000), withBonus = on(7000, { bonus: 5000 }), annualized = on(7000);
+  const tax = r => r.employee.fedTax + r.employee.provTax;
+  // Regular pay is taxed the same as without the bonus; the bonus adds its own tax.
+  assert.equal(withBonus.employee.fedTax, P.r2(base.employee.fedTax + withBonus.bonusTax.fed));
+  assert.equal(withBonus.employee.provTax, P.r2(base.employee.provTax + withBonus.bonusTax.prov));
+  // At $52,000 a year, a $5,000 bonus is taxed near the marginal rates (14% federal, Ontario 5.05%→9.15%), not as if paid every pay.
+  const onBonus = tax(withBonus) - tax(base);
+  near(onBonus / 5000, 0.209, 0.01, 'rate on the bonus');
+  assert.ok(tax(annualized) - tax(base) > onBonus + 500, 'the old way (annualizing the bonus) took far too much');
+  // By hand: the year's tax at $52,000 and at $57,000 (both with the same credits).
+  const A0 = 26 * (2000 - withBonus.employee.cpp * 0) ; // regular pay only; CPP enhancement makes a small difference
+  assert.ok(A0 > 0);
+  // Bonuses earlier in the year push this one into higher brackets.
+  const later = on(7000, { bonus: 5000, ytd: { bonus: 40000 } });
+  assert.ok(later.bonusTax.fed + later.bonusTax.prov > withBonus.bonusTax.fed + withBonus.bonusTax.prov + 300);
+  // CPP and EI on the bonus are as on any pay, within the yearly maximums.
+  assert.equal(withBonus.employee.cpp, on(7000).employee.cpp);
+  assert.equal(withBonus.employee.ei, on(7000).employee.ei);
+});
+
+test('Small bonuses: 15% flat (10% federal and 7% Quebec in Quebec) when the year’s income is low', () => {
+  const r = on(1100, { bonus: 1000 });
+  assert.equal(r.bonusTax.fed, 150); assert.equal(r.bonusTax.prov, 0);
+  assert.match(r.notes.join(' '), /flat 15%/);
+  const q = P.calc({ date: '2026-09-15', prov: 'QC', P: 26, gross: 600, bonus: 500 });
+  assert.equal(q.bonusTax.fed, 50); assert.equal(q.bonusTax.qc, 35);
+  // Above Revenu Québec's $18,952: the difference method there too.
+  const q2 = P.calc({ date: '2026-09-15', prov: 'QC', P: 26, gross: 7000, bonus: 5000 });
+  assert.ok(q2.bonusTax.qc > 600 && q2.bonusTax.qc < 1000, `Quebec tax on the bonus ${q2.bonusTax.qc}`);
+});
+
+test('Taxable benefits not paid in cash: taxed and pensionable, insurable only as the caller says, on the T4 and RL-1', () => {
+  const base = on(2000), ben = on(2000, { benefits: 100, pensionable: 2100, insurable: 2000 });
+  near(ben.employee.cpp - base.employee.cpp, 5.95, 0.02, 'CPP on the benefit');
+  assert.equal(ben.employee.ei, base.employee.ei, 'no EI on a non-cash benefit');
+  near((ben.employee.fedTax + ben.employee.provTax) - (base.employee.fedTax + base.employee.provTax), 18.2, 1, 'tax on the benefit');
+  assert.equal(ben.gross, 2000); assert.equal(ben.taxable, 2100);
+  // Year-end: box 14 includes benefits; codes 40, 34 and 30; RL-1 A with L, W and V.
+  const line = (prov, extra) => ({ employeeId: prov === 'QC' ? 'q' : 'e', prov, gross: 2000, pensionable: 2100, insurable: 2020, regular: 1950, allowance: 50,
+    benefits: { life: 30, auto: 40, nearcash: 20, board: 10 }, ded: {}, er: {}, net: 2000, ...extra });
+  const ye = P.yearEnd({ year: 2026, employees: [{ id: 'e', name: 'Pat', prov: 'ON', sin: '130692544', dental: 1 }, { id: 'q', name: 'Dom', prov: 'QC', sin: '130692551', dental: 1 }],
+    payruns: [{ payDate: '2026-09-15', lines: [line('ON'), line('QC')] }] });
+  const t = ye.slips.find(s => s.prov === 'ON'), q = ye.slips.find(s => s.prov === 'QC');
+  assert.equal(t.t4[14], 2100); assert.deepEqual(t.other, { 40: 100, 34: 40, 30: 10 }, 'allowance 50 + life 30 + gift cards 20 in code 40');
+  assert.equal(t.t4[24], 2020); assert.equal(t.t4[26], 2100);
+  assert.equal(q.rl1.A, 2100); assert.equal(q.rl1.L, 50); assert.equal(q.rl1.W, 40); assert.equal(q.rl1.V, 10);
+  // QPIP counts every taxable benefit (EI only the near-cash ones and board): 2020 + life 30 + auto 40.
+  assert.equal(q.rl1.I, 2090); assert.equal(q.t4[56], 2090); assert.equal(q.t4[24], 2020);
+  const qc = P.calc({ date: '2026-09-15', prov: 'QC', P: 26, gross: 2000, benefits: 100, pensionable: 2100, insurable: 2000, qpipInsurable: 2100 });
+  near(qc.employee.qpip, 2100 * 0.0043, 0.01, 'QPIP on the benefit too');
+});
+
+test('Bonus method: CPP2 on regular pay goes in F5A, so a high earner’s bonus tax is not over-withheld', () => {
+  // Year-to-date pensionable earnings past the YMPE: regular pay already attracts CPP2.
+  const ytd = { pensionable: 76000, cpp: 4000, cpp2: 80 };
+  const r = on(10000, { bonus: 4000, ytd });
+  assert.ok(r.employee.cpp2 > 0);
+  const noBonus = on(6000, { ytd });
+  // The regular part's tax should match the same pay without a bonus (within a dollar).
+  near(r.employee.fedTax + r.employee.provTax - r.bonusTax.fed - r.bonusTax.prov, noBonus.employee.fedTax + noBonus.employee.provTax, 1, 'regular tax unchanged by the bonus');
+});

@@ -47,6 +47,17 @@ const TAX_LINES={
     ['211','Other credits and rebates','m:211'],
     ['213','Balance (positive: amount owing, negative: refund)','=209-210-211'],
   ],
+  /* Provincial sales tax (BC, Saskatchewan) and retail sales tax (Manitoba). Lines are lettered here; the
+     provinces' online returns ask for the same amounts. Nothing is claimed back on purchases. */
+  pst:[
+    ['A','Sales with PST charged (before tax)','sPst'],
+    ['B','PST collected or collectible','collected'],
+    ['C','Adjustments to be added','addAdj'],
+    ['D','PST due on your own purchases and leases (self-assessed)','m:D'],
+    ['E','Adjustments to be deducted','dedAdj'],
+    ['F','Commission (as shown on the return)','m:F'],
+    ['G','Balance (positive: amount owing, negative: refund)','=B+C+D-E-F'],
+  ],
 };
 /* Quick Method: tax is remitted as a percentage of sales including the tax, instead of tax collected minus ITCs.
    Input tax credits are still claimed on capital purchases (accounts marked "Capital asset"). Lines starting with x are
@@ -118,7 +129,7 @@ function entryTaxRate(e,accId){
   const taxIds=taxAcctIds();
   const tax=(e.lines||[]).filter(l=>l.account===accId).reduce((t,l)=>t+(+l.debit||0)-(+l.credit||0),0);
   const cost=(e.lines||[]).filter(l=>!taxIds.has(l.account)&&!COST_SKIP.includes(acct(l.account)?.detail));
-  const taxed=cost.filter(l=>(l.taxCode||'std')==='std');
+  const taxed=cost.filter(l=>['std','gst'].includes(l.taxCode||'std'));
   const net=(taxed.length?taxed:cost).reduce((t,l)=>t+(+l.debit||0)-(+l.credit||0),0);
   const r=Math.abs(net)>0.005?Math.abs(tax/net)*100:null,known=[5,13,14,15];
   const near=r==null?null:known.reduce((b,x)=>Math.abs(x-r)<Math.abs(b-r)?x:b,known[0]);
@@ -140,6 +151,7 @@ function psbRebate(k,items,accId,provPct){
 /** How a period's return is worked out: as filed, or from the settings now. */
 function methodFor(k,from,filed){
   if(filed)return filed.method||'regular';
+  if(k==='pst')return 'regular'; // no Quick Method or charity rules for PST
   // The Quick Method and the charity/non-profit calculations are a plan feature (plans.js).
   if(typeof feat==='function'&&!feat('specialTax'))return 'regular';
   if(qmOn(k,from))return 'quick';
@@ -158,19 +170,29 @@ function npoLines(k,rebate){
   return rebate?withRebate(l,k==='qst'?'211':'111',k==='qst'?'Other credits and rebates':'Total GST/HST rebates'):l;
 }
 function linesOf(k,method,rebate){return method==='quick'?QM_LINES[k]:method==='charity'?CHARITY_LINES[k]:method==='npo'?npoLines(k,rebate):TAX_LINES[k]}
-const BAL_LINE={gst:'113C',qst:'213'};
+const BAL_LINE={gst:'113C',qst:'213',pst:'G'};
+const NET_LINE={gst:'109',qst:'209',pst:'G'};
+const LIST_LINES={gst:['103','106'],qst:['203','206'],pst:['B','F']};
 // In Quebec, Revenu Québec administers the GST as well as the QST for most businesses.
-const AGENCY={get gst(){return S.company.province==='QC'?'Revenu Québec':'CRA'},qst:'Revenu Québec'};
+const PST_AGENCY={BC:'BC Ministry of Finance',SK:'Saskatchewan Ministry of Finance',MB:'Manitoba Finance'};
+const AGENCY={get gst(){return S.company.province==='QC'?'Revenu Québec':'CRA'},qst:'Revenu Québec',get pst(){return PST_AGENCY[S.company.province]||'the province'}};
+const PST_ONLINE={BC:'eTaxBC',SK:'Saskatchewan Taxpayer Access Point',MB:'Manitoba TAXcess'};
 const SALE_TYPES=new Set(['invoice','deposit','payment','credit']),BUY_TYPES=new Set(['bill','expense','billpayment','vcredit']);
 
-const taxesInUse=()=>byDetail('qst')&&+S.company.qstRate>0?['gst','qst']:['gst'];
-const taxLabel=k=>k==='qst'?'QST':(taxesInUse().length>1?'GST':(S.company.taxName||'GST/HST'));
-const taxAcctFor=k=>k==='qst'?byDetail('qst'):byDetail('tax');
-const taxAcctIds=()=>new Set(S.accounts.filter(a=>a.detail==='tax'||a.detail==='qst').map(a=>a.id));
+const taxesInUse=()=>byDetail('qst')&&+S.company.qstRate>0?['gst','qst']:byDetail('pst')&&+S.company.pstRate>0?['gst','pst']:['gst'];
+const pstName=()=>S.company.pstName||'PST';
+const taxLabel=k=>k==='qst'?'QST':k==='pst'?pstName():(taxesInUse().length>1?'GST':(S.company.taxName||'GST/HST'));
+const returnName=k=>k==='qst'?'QST return':k==='pst'?`${pstName()} return`:'GST/HST return';
+const taxAcctFor=k=>k==='qst'?byDetail('qst'):k==='pst'?byDetail('pst'):byDetail('tax');
+const taxAcctIds=()=>new Set(S.accounts.filter(a=>a.detail==='tax'||a.detail==='qst'||a.detail==='pst').map(a=>a.id));
+// Line labels name the province's tax (RST in Manitoba).
+const lineLabel=(k,label)=>k==='pst'?label.replace(/\bPST\b/g,pstName()):label;
 
 /* ---------- periods ---------- */
-function filingPeriods(){
-  const step={monthly:1,quarterly:3,annual:12}[S.company.filingFreq||'quarterly']||3;
+function filingPeriods(k){
+  const freq=k==='pst'?S.company.pstFreq:S.company.filingFreq;
+  const step={monthly:1,quarterly:3,semiannual:6,annual:12}[freq||'quarterly']||3;
+  const mb=k==='pst'&&['MB','SK'].includes(S.company.province); // Manitoba RST and Saskatchewan PST are due on the 20th of the next month
   const ids=taxAcctIds();
   let first=today();
   // Opening balances brought over from other software aren't sales tax activity in Sumlora.
@@ -179,7 +201,7 @@ function filingPeriods(){
   const out=[];let d=pd(fyStartOf(first));const end=pd(today());
   while(d<=end&&out.length<400){
     const to=new Date(d.getFullYear(),d.getMonth()+step,0);
-    const due=new Date(to.getFullYear(),to.getMonth()+(step===12?4:2),0); // 1 month after (3 for annual filers)
+    const due=mb?new Date(to.getFullYear(),to.getMonth()+1,20):k==='pst'?new Date(to.getFullYear(),to.getMonth()+2,0):new Date(to.getFullYear(),to.getMonth()+(step===12?4:2),0); // 1 month after (3 for annual GST/HST filers)
     if(iso(to)>=first)out.push({from:iso(d),to:iso(to),due:iso(due)}); // skip periods before the first activity
     d=new Date(d.getFullYear(),d.getMonth()+step,1);
   }
@@ -199,7 +221,7 @@ function scan(k,from,to){
   if(scanCache.stamp!==stamp){scanCache.stamp=stamp;scanCache.map.clear()}
   if(scanCache.map.has(key))return scanCache.map.get(key);
   const a=taxAcctFor(k);
-  const keys=['collected','addAdj','itc','dedAdj','instal','sales','s90','s91','sExport','sExempt','sOther','sStd','itcCap','itcOps','capSaleTax','other'];
+  const keys=['collected','addAdj','itc','dedAdj','instal','sales','s90','s91','sExport','sExempt','sOther','sStd','sPst','itcCap','itcOps','capSaleTax','other'];
   const v={},src={};for(const x of keys){v[x]=0;src[x]=[]}
   const push=(key,e,amt)=>{if(!amt)return;v[key]+=amt;src[key].push({e,amt})};
   const income=new Set(S.accounts.filter(x=>x.type==='Income').map(x=>x.id)),taxIds=taxAcctIds();
@@ -208,7 +230,7 @@ function scan(k,from,to){
   const capShare=(e,side,legacy)=>{
     const lines=(e.lines||[]).filter(x=>!taxIds.has(x.account)&&!COST_SKIP.includes(acct(x.account)?.detail));
     const amt=x=>side*((+x.debit||0)-(+x.credit||0));
-    const taxed=lines.filter(x=>(x.taxCode||legacy)==='std');
+    const taxed=lines.filter(x=>['std','gst'].includes(x.taxCode||legacy));
     const use=taxed.length?taxed:lines;
     const all=use.reduce((t,x)=>t+amt(x),0),cap=use.filter(x=>isCapitalAcct(x.account)).reduce((t,x)=>t+amt(x),0);
     if(Math.abs(all)<0.005)return lines.some(x=>isCapitalAcct(x.account))?1:0;
@@ -237,7 +259,8 @@ function scan(k,from,to){
     if(inc)push('sales',e,inc);
     for(const[code,amt]of Object.entries(byCode)){
       if(!amt)continue;
-      if(code==='std'||code==='zero'){push('s90',e,amt);if(code==='std')push('sStd',e,amt)}
+      // "gst": GST only (no PST), taxable for the GST return.
+      if(code==='std'||code==='gst'||code==='zero'){push('s90',e,amt);if(code!=='zero')push('sStd',e,amt);if(code==='std')push('sPst',e,amt)}
       else{push('s91',e,amt);push(code==='export'?'sExport':code==='exempt'?'sExempt':'sOther',e,amt)}
     }
   }
@@ -249,7 +272,7 @@ function scan(k,from,to){
 function qmUsedBefore(k,from){
   const cfg=qmCfg();if(!cfg)return 0;
   const fy=fyStartOf(from),start=fy>cfg.from?fy:cfg.from;let used=0;
-  for(const p of filingPeriods()){
+  for(const p of filingPeriods(k)){
     if(p.from<start||p.to>=from)continue;
     const f=filingFor(k,p.from,p.to);
     if(f)used+=f.method==='quick'?(+f.lines[k==='qst'?'x1':'101']||0):0; // a return filed the regular way used no credit
@@ -309,7 +332,9 @@ function worksheet(k,from,to){
     else if(how.startsWith('=')){const parts=how.slice(1).split(/(?=[+-])/);vals[no]=r2(parts.reduce((s,p)=>{const sign=p[0]==='-'?-1:1;return s+sign*vals[p.replace(/^[+-]/,'')]},0))}
     else vals[no]=r2(v[how]);
   }
-  return{account:a,vals:filed?filed.lines:vals,live:vals,src,filed,quick,special,method,lines,rebate:rebateOn};
+  const fv=filed?filed.lines:vals;
+  const pst=k==='pst'?{self:r2(+fv.D||0),commission:r2(+fv.F||0)}:null;
+  return{account:a,vals:fv,live:vals,src,filed,quick,special,method,lines,rebate:rebateOn,pst};
 }
 function periodStatus(k,p){
   const f=filingFor(k,p.from,p.to);
@@ -320,39 +345,41 @@ function periodStatus(k,p){
   if(daysBetween(t,p.due)<=14)return{k:'partial',label:`Due ${fmtDate(p.due)}`};
   return{k:'open',label:'Ready to file'};
 }
-function overdueReturns(){let n=0;for(const k of taxesInUse())for(const p of filingPeriods())if(periodStatus(k,p).k==='overdue'){const w=worksheet(k,p.from,p.to);if(w&&Object.values(w.live).some(x=>x))n++}return n}
+function overdueReturns(){let n=0;for(const k of taxesInUse())for(const p of filingPeriods(k))if(periodStatus(k,p).k==='overdue'){const w=worksheet(k,p.from,p.to);if(w&&Object.values(w.live).some(x=>x))n++}return n}
 
 /* ---------- views ---------- */
 function vSalesTax(){
   const T=S.stax,taxes=taxesInUse();if(!taxes.includes(T.tax))T.tax='gst';
-  const freq={monthly:'monthly',quarterly:'quarterly',annual:'annual'}[S.company.filingFreq||'quarterly'];
+  const freq={monthly:'monthly',quarterly:'quarterly',semiannual:'every six months',annual:'annual'}[(T.tax==='pst'?S.company.pstFreq:S.company.filingFreq)||'quarterly'];
   const q=qmCfg();
   let h=head('Sales tax',`Files ${freq}${q?` · <span>Quick Method from ${fmtDate(q.from)}</span>`:''}${S.company.bn?` · BN ${esc(S.company.bn)}`:''} · <button class="link" data-go="settings">Change in Settings</button>`,
     `${feat('specialTax')?'<button class="btn" data-stact="quick">Quick Method</button>':''}<button class="btn" data-stact="instalment">Record instalment</button>`);
   if(q){const big=qmOverLimit();if(big)h+=`<div class="banner err"><span>Sales including tax were ${money(big.total)} in the 12 months to ${fmtDate(big.to)}, over the $400,000 limit for the Quick Method. Check whether you can still use it.</span></div>`}
   if(S.company.province==='QC'&&!byDetail('qst'))h+=`<div class="banner"><span><b>Track GST and QST separately?</b> This Quebec company records both taxes in one account. Split them to get a separate QST return worksheet.</span><button class="btn sm" data-stact="split-qst">Set up QST account</button></div>`;
+  if(PST_AGENCY[S.company.province]&&!(+S.company.pstRate>0))h+=`<div class="banner"><span><b>Registered for ${S.company.province==='MB'?'RST':'PST'}?</b> Turn it on in Settings to charge it on invoices separately from GST and get its own return worksheet.</span><button class="btn sm" data-go="settings">Settings</button></div>`;
   if(!taxAcctFor('gst'))return h+`<div class="panel"><div class="empty"><b>No sales tax account</b>Add a Liability account with the detail “Sales tax payable” in Chart of accounts.</div></div>`;
-  if(taxes.length>1)h+=`<div class="tabs" role="tablist">${taxes.map(k=>`<button role="tab" data-sttax="${k}" aria-selected="${T.tax===k}">${k==='qst'?'QST (Revenu Québec)':`GST (${AGENCY.gst})`}</button>`).join('')}</div>`;
+  if(taxes.length>1)h+=`<div class="tabs" role="tablist">${taxes.map(k=>`<button role="tab" data-sttax="${k}" aria-selected="${T.tax===k}">${k==='qst'?'QST (Revenu Québec)':k==='pst'?`${esc(pstName())} (${AGENCY.pst})`:`GST (${AGENCY.gst})`}</button>`).join('')}</div>`;
   if(T.period){const[from,to]=T.period.split('|');return h+vWorksheet(T.tax,from,to)}
-  const k=T.tax,periods=filingPeriods();
+  const k=T.tax,periods=filingPeriods(k);
   const bal=r2(-rawBal(taxAcctFor(k).id));
   h+=`<div class="chips"><div class="chip"><div class="lbl">${esc(taxLabel(k))} account balance today</div><div class="val">${mcell(bal)}</div><div class="lbl">${bal>=0?`Owing to ${AGENCY[k]} if positive`:`Refund due from ${AGENCY[k]}`}</div></div>
     <div class="chip"><div class="lbl">Returns overdue</div><div class="val ${overdueReturns()?'neg':''}">${overdueReturns()}</div></div></div>`;
-  return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Period</th><th>Due</th><th class="n">${qmCfg()||npoCfg()?'Collected or to remit':'Collected'}</th><th class="n">${qmCfg()||npoCfg()?'Credits (ITCs) claimed':'Credits (ITCs)'}</th><th class="n">Net tax</th><th>Status</th><th></th></tr></thead><tbody>${periods.length?periods.map(p=>{
-    const w=worksheet(k,p.from,p.to),st=periodStatus(k,p),net=w.vals[k==='qst'?'209':'109'];
-    const ln=k==='qst'?['203','206']:['103','106'];
+  return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Period</th><th>Due</th><th class="n">${k!=='pst'&&(qmCfg()||npoCfg())?'Collected or to remit':'Collected'}</th><th class="n">${k==='pst'?'Commission':qmCfg()||npoCfg()?'Credits (ITCs) claimed':'Credits (ITCs)'}</th><th class="n">${k==='pst'?'Balance':'Net tax'}</th><th>Status</th><th></th></tr></thead><tbody>${periods.length?periods.map(p=>{
+    const w=worksheet(k,p.from,p.to),st=periodStatus(k,p),net=w.vals[NET_LINE[k]];
+    const ln=LIST_LINES[k];
     return `<tr class="click" data-stperiod="${p.from}|${p.to}"><td style="white-space:nowrap"><b>${fmtDate(p.from)} – ${fmtDate(p.to)}</b></td><td style="white-space:nowrap" class="${st.k==='overdue'?'neg':'muted'}">${fmtDate(p.due)}</td><td class="n">${money(w.vals[ln[0]])}</td><td class="n">${money(w.vals[ln[1]])}</td><td class="n"><b>${mcell(net)}</b></td><td><span class="pill ${st.k}">${st.label}</span></td><td class="n"><button class="btn sm" data-stperiod="${p.from}|${p.to}">${w.filed?'View':'Open worksheet'}</button></td></tr>`}).join(''):emptyRow(7,'No periods yet','Periods appear once there are transactions with sales tax.')}</tbody></table></div></div>
-    <div class="muted" style="font-size:13px;margin-top:12px">Periods follow your fiscal year-end and filing frequency. A return is due one month after the period ends (three months for annual filers). These figures help you file; submit the return on ${k==='qst'||AGENCY.gst!=='CRA'?'Revenu Québec’s My Account for businesses':'CRA My Business Account or GST/HST NETFILE'}.</div>`;
+    <div class="muted" style="font-size:13px;margin-top:12px">${k==='pst'?`<span>Periods follow your fiscal year-end and ${esc(pstName())} filing frequency. A return is due ${['MB','SK'].includes(S.company.province)?'on the 20th of the month':'by the end of the month'} after the period ends.</span> <span>These figures help you file; submit the return on ${PST_ONLINE[S.company.province]||'the province’s website'}.</span>`:`Periods follow your fiscal year-end and filing frequency. A return is due one month after the period ends (three months for annual filers). These figures help you file; submit the return on ${k==='qst'||AGENCY.gst!=='CRA'?'Revenu Québec’s My Account for businesses':'CRA My Business Account or GST/HST NETFILE'}.`}</div>`;
 }
 
 function vWorksheet(k,from,to){
   const w=worksheet(k,from,to),T=S.stax,bl=BAL_LINE[k],bal=w.vals[bl];
-  const filed=w.filed,st=periodStatus(k,filingPeriods().find(p=>p.from===from)||{from,to,due:to});
+  const filed=w.filed,st=periodStatus(k,filingPeriods(k).find(p=>p.from===from)||{from,to,due:to});
   const LINES=w.lines;
   const changed=filed&&LINES.some(([no,,how,sub])=>!sub&&!how.startsWith('m:')&&no in filed.lines&&Math.abs((w.live[no]||0)-(filed.lines[no]||0))>0.004);
-  const drillable={sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1,qmBase:1,itcCap:1,addQ:1,ch103:1,itcNpo:1,itcCh:1};
+  const drillable={sPst:1,sales:1,collected:1,addAdj:1,itc:1,dedAdj:1,instal:1,s90:1,s91:1,sExport:1,sExempt:1,sOther:1,qmBase:1,itcCap:1,addQ:1,ch103:1,itcNpo:1,itcCh:1};
   let rows='';
-  for(const[no,label,how,sub]of LINES){
+  for(const[no,label0,how,sub]of LINES){
+    const label=lineLabel(k,label0);
     if(sub){const val=w.vals['·'+how]||0;if(!val&&how!=='sExport')continue;
       rows+=`<tr class="subline"><td></td><td>${label}</td><td class="n">${val?`<button class="link" data-stdrill="${how}">${money(val)}</button>`:`<span class="muted">${money(0)}</span>`}</td></tr>`;
       if(T.drill===how)rows+=`<tr><td></td><td colspan="2">${drillTable(w.src[how])}</td></tr>`;continue}
@@ -368,12 +395,12 @@ function vWorksheet(k,from,to){
   const pay=filed&&filed.entryId?S.entries.find(e=>e.id===filed.entryId):null;
   return `<button class="btn ghost sm" data-stback style="margin-bottom:8px">← All periods</button>
   <div class="panel report" style="max-width:820px">
-    ${rh(`${k==='qst'?'QST return':'GST/HST return'} worksheet`,`${fmtDate(from)} – ${fmtDate(to)}${S.company.bn?` · BN ${esc(S.company.bn)}`:''}`)}
+    ${rh(`${returnName(k)} worksheet`,`${fmtDate(from)} – ${fmtDate(to)}${S.company.bn?` · BN ${esc(S.company.bn)}`:''}`)}
     <div class="pad" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center"><span class="pill ${st.k}">${st.label}</span>${pay?`<span class="muted">${pay.taxKind==='refund'?'Refund received':'Paid'} ${fmtDate(pay.date)} · ${money(entryTotal(pay))}</span>`:''}</div>
-    ${changed?`<div class="banner err" style="margin:0 16px 12px"><span>Transactions in this period changed after it was filed. The figures below are what you filed; the books now show net tax of ${money(w.live[k==='qst'?'209':'109'])}. You may need to file an amended return.</span></div>`:''}
+    ${changed?`<div class="banner err" style="margin:0 16px 12px"><span>Transactions in this period changed after it was filed. The figures below are what you filed; the books now show ${k==='pst'?'a balance':'net tax'} of ${money(w.live[NET_LINE[k]])}. You may need to file an amended return.</span></div>`:''}
     <div class="tbl-wrap"><table class="ws">${rows}</table></div>
     <div class="pad" style="text-align:center">${outcome}</div>
-    ${w.quick?qmBox(k,w,filed):w.special&&(w.special.kind==='charity'||w.special.paid||w.special.rebate)?npoBox(k,w,filed):''}
+    ${k==='pst'?pstBox(w,filed):w.quick?qmBox(k,w,filed):w.special&&(w.special.kind==='charity'||w.special.paid||w.special.rebate)?npoBox(k,w,filed):''}
     <div class="toolbar" style="border-top:1px solid var(--line);border-bottom:0;justify-content:flex-end">
       <button class="btn sm" data-stact="export">Export CSV</button>
       ${filed?`${!filed.entryId&&Math.abs(filed.lines[bl])>0.004?`<button class="btn sm" data-stact="pay-later">Record ${filed.lines[bl]>0?'payment':'refund'}</button>`:''}<button class="btn sm danger" data-stact="unfile">Undo filing</button>`
@@ -381,7 +408,8 @@ function vWorksheet(k,from,to){
         :`<button class="btn sm primary" data-stact="file">Mark as filed${Math.abs(bal)>0.004?` and record ${bal>0?'payment':'refund'}`:''}</button>`}
     </div>
   </div>
-  ${k==='qst'?'<div class="muted" style="font-size:13px;margin-top:10px">QST line numbers follow Revenu Québec’s FPZ-500 return. Check them against the current form before filing.</div>':''}`;
+  ${k==='qst'?'<div class="muted" style="font-size:13px;margin-top:10px">QST line numbers follow Revenu Québec’s FPZ-500 return. Check them against the current form before filing.</div>':''}
+  ${k==='pst'?`<div class="muted" style="font-size:13px;margin-top:10px">The letters are Sumlora’s; ${PST_ONLINE[S.company.province]||'the province’s online return'} asks for the same amounts under its own names.</div>`:''}`;
 }
 function drillTable(items){
   if(!items.length)return '';
@@ -404,8 +432,8 @@ async function stClick(ev,t,d){
     case 'pay-later':fileForm(T.tax,from,to,false);return true;
     case 'unfile':await unfile(T.tax,from,to);return true;
     case 'quick':if(feat('specialTax'))quickForm();return true;
-    case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...w.lines.map(([no,label,how,sub])=>sub?['',`  of line 91: ${label}`,w.vals['·'+how]||0]:[no.startsWith('x')?'':no,label,w.vals[no]])];
-      saveFile(`${T.tax==='qst'?'qst':'gst-hst'}-return_${from}_${to}.csv`,new Blob(['﻿'+rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:v).join(',')).join('\r\n')],{type:'text/csv'}));return true}
+    case 'export':{const w=worksheet(T.tax,from,to);const rows=[['Line','Description','Amount'],...w.lines.map(([no,label,how,sub])=>sub?['',`  of line 91: ${label}`,w.vals['·'+how]||0]:[no.startsWith('x')?'':no,lineLabel(T.tax,label),w.vals[no]])];
+      saveFile(`${T.tax==='qst'?'qst':T.tax==='pst'?pstName().toLowerCase():'gst-hst'}-return_${from}_${to}.csv`,new Blob(['﻿'+rows.map(r=>r.map(v=>/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:v).join(',')).join('\r\n')],{type:'text/csv'}));return true}
   }
   return false;
 }
@@ -423,7 +451,7 @@ function fileForm(k,from,to,filing){
   const w=worksheet(k,from,to),bl=BAL_LINE[k],bal=filing?w.vals[bl]:w.filed.lines[bl],kind=bal<0?'refund':'payment';
   const banks=sortAccts(S.accounts.filter(a=>a.detail==='bank'&&a.active!==false));
   const needMoney=Math.abs(bal)>0.004;
-  const f=openModal(filing?`File ${k==='qst'?'QST':'GST/HST'} return`:`Record ${kind}`,`
+  const f=openModal(filing?`File ${returnName(k)}`:`Record ${kind}`,`
     <div class="muted">${fmtDate(from)} – ${fmtDate(to)} · ${needMoney?(kind==='refund'?`refund of <b>${money(-bal)}</b> from ${AGENCY[k]}`:`<b>${money(bal)}</b> owing to ${AGENCY[k]}`):'nothing owing'}</div>
     <div class="fields">
       ${filing?fld('fOn','Date filed',`<input type="date" id="fOn" value="${today()}">`):''}
@@ -433,6 +461,7 @@ function fileForm(k,from,to,filing){
     </div>
     ${needMoney&&filing?`<label class="check"><input type="checkbox" id="fNow" ${kind==='payment'?'checked':''}> Record the ${kind} now ${kind==='refund'?'(leave unticked until the refund arrives)':''}</label>`:''}
     ${filing&&w.special&&(w.special.gain||w.special.ops)?`<div class="muted" style="font-size:13px">${w.special.gain?`Filing also posts an adjustment on ${fmtDate(to)}: ${money(w.special.gain)} of the tax charged becomes income, and ${money(w.special.ops)} of tax paid that isn’t recovered becomes an expense.`:`Filing also posts an adjustment on ${fmtDate(to)}: ${money(w.special.ops)} of tax paid that isn’t recovered becomes an expense.`}</div>`:''}
+    ${filing&&w.pst&&(w.pst.self||w.pst.commission)?`<div class="muted" style="font-size:13px">Filing also posts an adjustment on ${fmtDate(to)}:${w.pst.self?` ${money(w.pst.self)} of ${esc(pstName())} self-assessed on purchases becomes an expense.`:''}${w.pst.commission?` ${money(w.pst.commission)} of commission becomes income.`:''}</div>`:''}
     ${filing&&w.quick&&(w.quick.gain||w.quick.itcOps)?`<div class="muted" style="font-size:13px">Under the Quick Method, filing also posts an adjustment on ${fmtDate(to)}: ${money(w.quick.gain)} of the tax charged to customers becomes income, and ${money(w.quick.itcOps)} of tax paid on expenses becomes part of the expenses.</div>`:''}
     <div class="muted" style="font-size:13px">${filing?'Filing saves a copy of these figures. If transactions in this period change later, the worksheet warns you.':''} The ${kind} is recorded as a sales tax payment that clears the ${esc(taxAcctFor(k).name)} account.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${filing?'Mark as filed':'Record '+kind}</button>`);
@@ -447,6 +476,7 @@ function fileForm(k,from,to,filing){
     let qmEntryId='';
     if(filing&&w.quick&&w.quick.rate==null)return f.err('Enter the Quick Method remittance rate first (Sales tax → Quick Method).');
     if(filing&&(w.quick||w.special)){const adj=qmAdjustment(k,from,to,w);if(adj){writes.push(...adj.writes);qmEntryId=adj.id}}
+    if(filing&&w.pst){const adj=pstAdjustment(from,to,w);if(adj){writes.push(...adj.writes);qmEntryId=adj.id}}
     if(filing)writes.push({op:'set',collection:'filings',id:uid(),data:{tax:k,from,to,lines:w.vals,filedOn:$('#fOn',f).value||today(),entryId,qmEntryId,method:w.method,...(w.quick?{qmRate:w.quick.rate}:{}),...(w.special?{rebate:w.rebate,capComm:w.special.capComm,psbProv:w.special.provPct??null,...(w.special.kind==='npo'?{itcPct:w.special.pct}:{})}:{}),created:Date.now()}});
     else writes.push({op:'set',collection:'filings',id:w.filed.id,data:{...w.filed,entryId}});
     if(await batch(writes)){closeModal();toast(filing?'Return marked as filed':`${kind==='refund'?'Refund':'Payment'} recorded`)}
@@ -461,7 +491,7 @@ async function unfile(k,from,to){
   if(await batch(w))toast('Filing undone');
 }
 function instalmentForm(){
-  const banks=sortAccts(S.accounts.filter(a=>a.detail==='bank'&&a.active!==false)),taxes=taxesInUse();
+  const banks=sortAccts(S.accounts.filter(a=>a.detail==='bank'&&a.active!==false)),taxes=taxesInUse().filter(k=>k!=='pst');
   const f=openModal('Record instalment',`<div class="fields">
     ${taxes.length>1?fld('iTax','Tax',`<select id="iTax">${taxes.map(k=>`<option value="${k}">${k==='qst'?'QST':'GST'}</option>`).join('')}</select>`):''}
     ${fld('iDate','Date paid',`<input type="date" id="iDate" value="${today()}">`)}${fld('iAmt','Amount',`<input type="number" id="iAmt" step="0.01">`)}
@@ -605,4 +635,34 @@ function npoBox(k,w,filed){
     ${X.journals?`<div class="banner" style="margin:8px 0 0"><span>${money(X.journals)} of tax was posted by journal entries. It’s on lines ${k==='qst'?'204 and 207':'104 and 107'} in full, without the rules for non-profits. Record purchases and sales as bills, expenses, invoices or deposits so the rules apply.</span></div>`:''}
     <div class="muted" style="font-size:13px;margin-top:8px">${w.rebate?`<span>Claim the rebate with form ${form} and include it on line ${k==='qst'?'211':'111'}.</span> `:''}${X.capComm?'<span>Credits on capital property assume it’s used mainly (more than 50%) in taxable activities. Change this in Settings if it isn’t.</span> ':''}${adj?`<span>Posted on ${fmtDate(adj.date)} when this return was filed.</span>`:'<span>When you mark the return as filed, Sumlora posts the tax kept to income and the tax not recovered to expenses, so the sales tax account matches the return.</span>'}</div>
   </div>`;
+}
+
+/* ---------- PST / RST ---------- */
+const PST_ACCTS={commission:['4970','commission','Commission de taxe de vente provinciale','Income'],self:['6970','paid on own purchases (self-assessed)','Taxe de vente provinciale autocotisée','Expense']};
+/** Under the PST worksheet: what lines D and F are, and what filing posts. */
+function pstBox(w,filed){
+  const n=esc(pstName()),adj=filed&&filed.qmEntryId?S.entries.find(e=>e.id===filed.qmEntryId):null,bc=S.company.province==='BC';
+  return `<div class="pad" style="border-top:1px solid var(--line);font-size:13px">
+    <div class="muted" style="margin-bottom:6px"><b>Line D:</b> <span>${n} you owe on things you bought or leased for your own use without being charged ${n} (from a seller outside the province, for example), or took from stock you bought to resell.</span></div>
+    <div class="muted" style="margin-bottom:6px"><b>Line F:</b> <span>The commission the province lets you keep when the return is filed and paid on time. Enter the amount the online return works out${bc?' (in British Columbia, up to $198 a period)':''}.</span></div>
+    <div class="muted">${adj?`<span>Posted on ${fmtDate(adj.date)} when this return was filed.</span>`:`<span>${n} paid on purchases isn’t claimed back, so it’s already part of the expenses and isn’t on this return.</span> <span>When you mark the return as filed, Sumlora posts line D to expenses and line F to income, so the ${n} account matches the return.</span>`}</div>
+  </div>`;
+}
+/** The journal entry for lines D and F: self-assessed tax to expenses, commission to income. */
+function pstAdjustment(from,to,w){
+  const P=w.pst,n=pstName();if(Math.abs(P.self)<0.005&&Math.abs(P.commission)<0.005)return null;
+  const writes=[],ids={},by=`Added by ${n} returns`;
+  for(const[key,[code,en,fr,type]]of Object.entries(PST_ACCTS)){
+    if(Math.abs(P[key])<0.005)continue;
+    const name=S.company.lang==='fr'?fr:`${n} ${en}`;
+    let a=S.accounts.find(x=>x.type===type&&x.name===name)||S.accounts.find(x=>x.type===type&&x.desc===by&&x.code===code);
+    if(!a){const id=uid();writes.push({op:'set',collection:'accounts',id,data:{code:S.accounts.some(x=>x.code===code)?'':code,name,type,detail:'',desc:by,active:true}});a={id}}
+    ids[key]=a.id;
+  }
+  const tax=w.account.id,lines=[],dc=(acc,v,memo,debit)=>({account:acc,debit:debit?(v>0?v:0):(v<0?-v:0),credit:debit?(v<0?-v:0):(v>0?v:0),memo});
+  if(ids.self){const m=`${n} self-assessed on purchases`;lines.push(dc(ids.self,P.self,m,true),dc(tax,P.self,m,false))}
+  if(ids.commission){const m=`${n} commission`;lines.push(dc(tax,P.commission,m,true),dc(ids.commission,P.commission,m,false))}
+  const id=uid();
+  writes.push({op:'set',collection:'entries',id,data:{type:'qmadjust',tax:'pst',period:{from,to},date:to,ref:'',memo:`${n} return adjustment, ${fmtDate(from)} – ${fmtDate(to)}`,contactId:'',lines,created:Date.now()}});
+  return{writes,id};
 }

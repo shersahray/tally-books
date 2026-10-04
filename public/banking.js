@@ -43,8 +43,8 @@ function historyFor(b){
 }
 function suggest(b){
   const m=matchesFor(b);if(m.length)return{choice:m[0].value,contactId:'',tax:false,why:'match'};
-  const r=ruleFor(b);if(r)return{choice:'a:'+r.account,contactId:r.contactId||'',tax:!!r.tax,why:'rule',rule:r};
-  const h=historyFor(b);if(h)return{choice:'a:'+h.account,contactId:h.contactId||'',tax:!!h.tax,why:'history'};
+  const r=ruleFor(b);if(r)return{choice:'a:'+r.account,contactId:r.contactId||'',tax:r.tax==='gst'?'gst':!!r.tax,why:'rule',rule:r};
+  const h=historyFor(b);if(h)return{choice:'a:'+h.account,contactId:h.contactId||'',tax:h.tax==='gst'?'gst':!!h.tax,why:'history'};
   const x=typeof aiSuggestion==='function'&&aiSuggestion(b);if(x)return x;
   return{choice:'',contactId:'',tax:false,why:''};
 }
@@ -82,7 +82,8 @@ function reviewRow(b){
   const m=matchesFor(b);
   const cat=`<select data-bcat="${b.id}" aria-label="Category or match"><option value="">Choose category…</option>${m.length?`<optgroup label="Matches">${m.map(x=>`<option value="${x.value}" ${sel.choice===x.value?'selected':''}>${esc(x.label)}</option>`).join('')}</optgroup>`:''}${acctOptions(catId,x=>x.id!==b.account&&catFilter(x)).replace(/value="/g,'value="a:')}</select>`;
   const payee=isMatch||transfer?'<span class="muted">—</span>':`<select data-bpayee="${b.id}" aria-label="Payee"><option value="">None</option>${S.contacts.slice().sort((x,y)=>x.name.localeCompare(y.name)).map(c=>`<option value="${c.id}" ${c.id===sel.contactId?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`;
-  const tax=isMatch||transfer||!(+S.company.taxRate)?'':`<input type="checkbox" data-btax="${b.id}" ${sel.tax?'checked':''} aria-label="Amount includes ${esc(S.company.taxName)}" title="Amount includes ${esc(S.company.taxName)}">`;
+  // Companies with PST pick between GST and PST, GST only, or no tax.
+  const tax=isMatch||transfer||!(+S.company.taxRate)?'':pstOn()?`<select data-btax="${b.id}" aria-label="Sales tax included" style="max-width:130px">${[['','No tax'],['std',S.company.taxName],['gst','GST only']].map(([k,v])=>`<option value="${k}" ${(sel.tax==='gst'?'gst':sel.tax?'std':'')===k?'selected':''}>${esc(v)}</option>`).join('')}</select>`:`<input type="checkbox" data-btax="${b.id}" ${sel.tax?'checked':''} aria-label="Amount includes ${esc(S.company.taxName)}" title="Amount includes ${esc(S.company.taxName)}">`;
   const chk=S.bank.checked.has(b.id);
   return `<tr data-brow="${b.id}" class="${chk?'picked':''}"><td><input type="checkbox" data-bcheck="${b.id}" ${chk?'checked':''} aria-label="Select line"></td><td style="white-space:nowrap">${fmtDate(b.date)}</td><td class="desc"><div title="${esc(b.desc)}">${esc(b.desc||'(no description)')}</div>${hint}</td><td class="n">${b.amount<0?money(-b.amount):''}</td><td class="n">${b.amount>0?money(b.amount):''}</td><td>${cat}</td><td>${payee}</td><td style="text-align:center">${tax}</td><td><div class="acts"><button class="btn sm primary" data-badd="${b.id}" ${sel.choice?'':'disabled'}>${isMatch?'Match':'Add'}</button><button class="btn sm ghost" data-bexclude="${b.id}">Exclude</button><button class="btn sm ghost" data-brule="${b.id}" title="Make a rule from this line">Rule</button></div></td></tr>`;
 }
@@ -151,18 +152,22 @@ function buildWrites(b,sel){
     entry={type:'transfer',date:b.date,ref:'',memo:b.desc,form:into?{from:cat.id,to:a.id,amount:amt}:{from:a.id,to:cat.id,amount:amt},
       lines:into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:amt}]:[{account:cat.id,debit:amt,credit:0},{account:a.id,debit:0,credit:amt}]};
   }else{
-    const rate=+S.company.taxRate||0,useTax=sel.tax&&rate>0;
-    const net=useTax?r2(amt/(1+rate/100)):amt,parts=useTax?splitTaxTotal(r2(amt-net)):[];
+    // "gst": GST only, on a company that also charges PST.
+    const gstOnly=sel.tax==='gst'&&pstOn(),rate=gstOnly?r2((+S.company.taxRate||0)-(+S.company.pstRate||0)):+S.company.taxRate||0,useTax=!!sel.tax&&rate>0;
+    const pre=useTax?r2(amt/(1+rate/100)):amt;let net=pre,parts=useTax?splitTaxTotal(r2(amt-pre)):[];
+    if(gstOnly&&parts.length){const t=r2(amt-pre);parts=taxParts().filter(p=>p.key==='gst').map(p=>({...p,amount:t}))}
+    // PST paid can't be recovered: it stays part of the expense.
+    if(!into){net=r2(net+parts.filter(p=>p.recoverable===false).reduce((s,p)=>s+p.amount,0));parts=parts.filter(p=>p.recoverable!==false)}
     if(parts.some(p=>!p.account))throw new Error(`Add a “${parts.find(p=>!p.account).name} payable” account first.`);
     const tax=r2(parts.reduce((s,p)=>s+p.amount,0));
-    const code=useTax?'std':'none';
+    const code=useTax?(gstOnly?'gst':'std'):'none';
     const lines=into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:net,taxCode:code}]:[{account:cat.id,debit:net,credit:0,taxCode:code}];
     parts.forEach(p=>lines.push(into?{account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}:{account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));
     if(!into)lines.push({account:a.id,debit:0,credit:amt});
-    entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:sel.contactId||'',form:{bank:a.id,lines:[{account:cat.id,desc:b.desc,amount:net,taxCode:code,tax:!!tax}]},lines};
+    entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:sel.contactId||'',form:{bank:a.id,lines:[{account:cat.id,desc:b.desc,amount:pre,taxCode:code,tax:!!tax}]},lines};
   }
   entry.clear={[a.id]:'c'};entry.created=Date.now();
-  return[{op:'set',collection:'entries',id,data:entry},{op:'set',collection:'bankTxns',id:b.id,data:{...b,status:'added',entryId:id,made:true,cat:{account:cat.id,contactId:sel.contactId||'',tax:!!sel.tax}}}];
+  return[{op:'set',collection:'entries',id,data:entry},{op:'set',collection:'bankTxns',id:b.id,data:{...b,status:'added',entryId:id,made:true,cat:{account:cat.id,contactId:sel.contactId||'',tax:sel.tax==='gst'?'gst':!!sel.tax}}}];
 }
 async function addLines(ids){
   const writes=[],used=new Set();let n=0,skipped=0;
@@ -255,7 +260,7 @@ function bindBanking(m){
       const cur={...selFor(b),user:true,why:''};
       if(d.bcat)cur.choice=t.value;
       if(d.bpayee)cur.contactId=t.value;
-      if(d.btax)cur.tax=t.checked;
+      if(d.btax)cur.tax=t.type==='checkbox'?t.checked:t.value==='gst'?'gst':t.value==='std';
       if(d.bcat&&cur.choice)B.checked.add(id);
       B.sel[id]=cur;
       const tr=t.closest('tr');tr.outerHTML=reviewRow(b);
@@ -277,7 +282,7 @@ function ruleForm(rule,preset){
     ${fld('ruDir','For',`<select id="ruDir"><option value="out" ${r.direction==='out'?'selected':''}>Money out</option><option value="in" ${r.direction==='in'?'selected':''}>Money in</option><option value="any" ${r.direction==='any'?'selected':''}>Money in or out</option></select>`)}
     ${fld('ruAcct','Suggest this category',`<select id="ruAcct"><option value="">Choose account…</option>${acctOptions(r.account,a=>catFilter(a)&&!isBankAcct(a))}</select>`)}
     ${fld('ruPayee','Payee (optional)',`<select id="ruPayee"><option value="">None</option>${S.contacts.slice().sort((x,y)=>x.name.localeCompare(y.name)).map(c=>`<option value="${c.id}" ${c.id===r.contactId?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`)}
-    </div>${+S.company.taxRate?`<label class="check"><input type="checkbox" id="ruTax" ${r.tax?'checked':''}> Amount includes ${esc(S.company.taxName)} (${+S.company.taxRate}%)</label>`:''}
+    </div>${!+S.company.taxRate?'':pstOn()?fld('ruTax','Sales tax in the amount',`<select id="ruTax">${[['','No tax'],['std',`${S.company.taxName} (${+S.company.taxRate}%)`],['gst',`GST only (${r2(S.company.taxRate-S.company.pstRate)}%)`]].map(([k,v])=>`<option value="${k}" ${(r.tax==='gst'?'gst':r.tax?'std':'')===k?'selected':''}>${esc(v)}</option>`).join('')}</select>`):`<label class="check"><input type="checkbox" id="ruTax" ${r.tax?'checked':''}> Amount includes ${esc(S.company.taxName)} (${+S.company.taxRate}%)</label>`}
     <div class="muted" style="font-size:13px">Matching ignores upper and lower case. Pick text that appears in every statement line from this payee, like a company name, and leave out store numbers or dates.</div>`,saveFoot(!!rule));
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this rule?',`Lines containing “${rule.text}” won’t get a suggested category any more.`))return;await del('rules',rule.id);closeModal();toast('Rule deleted')};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
@@ -285,7 +290,7 @@ function ruleForm(rule,preset){
     if(!text)return f.err('Enter the text to look for.');if(!account)return f.err('Choose the category to suggest.');
     const id=rule?.id||uid();
     const n=S.bankTxns.filter(b=>b.status==='new'&&b.desc.toLowerCase().includes(text.toLowerCase())).length;
-    if(await put('rules',id,{...(rule||{created:Date.now()}),text,direction:$('#ruDir',f).value,account,contactId:$('#ruPayee',f).value,tax:!!$('#ruTax',f)?.checked})){
+    if(await put('rules',id,{...(rule||{created:Date.now()}),text,direction:$('#ruDir',f).value,account,contactId:$('#ruPayee',f).value,tax:(()=>{const x=$('#ruTax',f);return !x?false:x.tagName==='SELECT'?(x.value==='gst'?'gst':x.value==='std'):x.checked})()})){
       // let the new rule re-suggest lines the user hasn't touched
       S.bankTxns.forEach(b=>{if(S.bank.sel[b.id]&&!S.bank.sel[b.id].user)delete S.bank.sel[b.id]});
       closeModal();toast(`Rule saved${n?` · applies to ${n} line${n===1?'':'s'} waiting for review`:''}`);

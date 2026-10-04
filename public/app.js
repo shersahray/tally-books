@@ -17,7 +17,7 @@ function money(n,o={}){n=r2(n);const s=Math.abs(n).toLocaleString(LOC(),{minimum
 const mcell=n=>`<span class="${r2(n)<0?'neg':''}">${money(n)}</span>`;
 
 const TYPES=['Asset','Liability','Equity','Income','Cost of Goods Sold','Expense'];
-const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts receivable'],['capital','Capital asset (equipment, vehicles, buildings)']],Liability:[['','Other liability'],['card','Credit card'],['ap','Accounts payable'],['tax','Sales tax payable (GST/HST)'],['qst','QST payable']],Equity:[['','Other equity'],['ob','Opening balance equity']],Income:[['','Income']],'Cost of Goods Sold':[['','Cost of goods sold']],Expense:[['','Expense']]};
+const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts receivable'],['capital','Capital asset (equipment, vehicles, buildings)']],Liability:[['','Other liability'],['card','Credit card'],['ap','Accounts payable'],['tax','Sales tax payable (GST/HST)'],['qst','QST payable'],['pst','PST or RST payable (BC, Saskatchewan, Manitoba)']],Equity:[['','Other equity'],['ob','Opening balance equity']],Income:[['','Income']],'Cost of Goods Sold':[['','Cost of goods sold']],Expense:[['','Expense']]};
 const detailLabel=a=>(DETAILS[a.type]||[]).find(d=>d[0]===(a.detail||''))?.[1]||'';
 const debitNormal=t=>t==='Asset'||t==='Expense'||t==='Cost of Goods Sold';
 const isPL=t=>t==='Income'||t==='Expense'||t==='Cost of Goods Sold';
@@ -393,8 +393,10 @@ function featuresPanel(){
     <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, banking, invoices and bills, GST/HST and QST returns and the standard reports are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>
     ${rows}</div></div>`;
 }
+/* Provincial sales tax charged on top of GST (not harmonized). Quebec's QST is set up from the Sales tax page. */
+const PST_PROV={BC:{name:'PST',rate:7},SK:{name:'PST',rate:6},MB:{name:'RST',rate:7}};
 function vSettings(){
-  const c=S.company,np=c.nonprofit||{};
+  const c=S.company,np=c.nonprofit||{},pst=+c.pstRate||0,pp=PST_PROV[c.province]||{name:'PST',rate:7},pn=pst?c.pstName||'PST':pp.name;
   return head('Settings','Company details and defaults used on new transactions')+`<div class="panel" style="max-width:640px"><form class="pad" id="setForm" style="display:flex;flex-direction:column;gap:14px">
   <div class="fields">
     <div class="field" style="grid-column:1/-1"><label for="sName">Business name</label><input type="text" id="sName" value="${esc(c.name)}" required></div>
@@ -402,11 +404,21 @@ function vSettings(){
     <div class="field"><label for="sFreq">Sales tax filing</label><select id="sFreq">${[['monthly','Monthly'],['quarterly','Quarterly'],['annual','Annual']].map(([k,v])=>`<option value="${k}" ${(c.filingFreq||'quarterly')===k?'selected':''}>${v}</option>`).join('')}</select></div>
     <div class="field"><label for="sProv">Province or territory</label><select id="sProv">${provinceOptions(c.province)}</select><span class="hint">Changing it fills in the sales tax below</span></div>
     <div class="field"><label for="sTerms">Payment terms (days)</label><input type="number" id="sTerms" min="0" step="1" value="${esc(c.terms)}"></div>
-    <div class="field"><label for="sTaxName">Sales tax name</label><input type="text" id="sTaxName" value="${esc(c.taxName)}"><span class="hint">For example HST, GST or VAT</span></div>
-    <div class="field"><label for="sTaxRate">Sales tax rate (%)</label><input type="number" id="sTaxRate" min="0" step="0.001" value="${esc(c.taxRate)}"></div>
+    <div class="field"><label for="sTaxName">Sales tax name</label><input type="text" id="sTaxName" value="${esc(pst?'GST':c.taxName)}"><span class="hint">For example HST, GST or VAT</span></div>
+    <div class="field"><label for="sTaxRate">Sales tax rate (%)</label><input type="number" id="sTaxRate" min="0" step="0.001" value="${esc(pst?r2(c.taxRate-pst):c.taxRate)}"><span class="hint" data-pstonly>GST only. Provincial sales tax is set below.</span></div>
     <div class="field"><label for="sCur">Currency symbol</label><input type="text" id="sCur" maxlength="4" value="${esc(c.currency)}"></div>
     <div class="field"><label for="sBn">Business / tax number</label><input type="text" id="sBn" value="${esc(c.bn||'')}"><span class="hint">Shown for your reference</span></div>
     <div class="field"><label for="sOrg">Organization type</label><select id="sOrg">${ORG_TYPES.map(([k,v])=>`<option value="${k}" ${(c.orgType||'business')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Non-profits get non-profit report names and sales tax rules</span></div>
+  </div>
+  <div data-pstbox style="display:flex;flex-direction:column;gap:12px">
+    <h3 class="fsec" style="margin:0" data-pstname-h>Provincial sales tax</h3>
+    <label class="check"><input type="checkbox" id="sPst" ${pst?'checked':''}> <span>Registered to collect provincial sales tax (PST in British Columbia and Saskatchewan, RST in Manitoba)</span></label>
+    <div class="fields" data-pstonly>
+      <div class="field"><label for="sPstName">Name</label><select id="sPstName">${['PST','RST'].map(n=>`<option ${pn===n?'selected':''}>${n}</option>`).join('')}</select></div>
+      <div class="field"><label for="sPstRate">Rate (%)</label><input type="number" id="sPstRate" min="0" max="20" step="0.001" value="${esc(pst||pp.rate)}"></div>
+      <div class="field"><label for="sPstFreq">Return filing</label><select id="sPstFreq">${[['monthly','Monthly'],['quarterly','Quarterly'],['semiannual','Every six months'],['annual','Annual']].map(([k,v])=>`<option value="${k}" ${(c.pstFreq||'quarterly')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">As set by the province when you registered</span></div>
+    </div>
+    <div class="muted" style="font-size:13px" data-pstonly>Invoices charge GST and ${esc(pn)} separately, and ${esc(pn)} collected goes to its own payable account with its own return worksheet. ${esc(pn)} paid on purchases can’t be claimed back, so it’s added to the cost of the expense. Use the tax code “GST only” for items with no ${esc(pn)}, such as most services.</div>
   </div>
   <div data-npo style="display:flex;flex-direction:column;gap:12px">
     <h3 class="fsec" style="margin:0">Non-profit and charity</h3>
@@ -513,12 +525,26 @@ function bindMain(m){
     const charityMethod=t==='charity'&&$('#sNetTax',m).value!=='regular';$$('[data-itc]',m).forEach(x=>x.style.display=npo&&!charityMethod?'':'none');
     $$('[data-rebate]',m).forEach(x=>x.style.display=t==='charity'||(t==='npo'&&$('#sQual',m).checked)?'':'none')};
     so.onchange=$('#sNetTax',m).onchange=$('#sQual',m).onchange=sync;sync()}
-  const sp=$('#sProv',m);if(sp)sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}};
+  const sp=$('#sProv',m);
+  const pstSync=()=>{const box=$('[data-pstbox]',m);if(!box)return;const pv=PST_PROV[sp.value],on=$('#sPst',m).checked;
+    box.style.display=pv||+S.company.pstRate>0?'flex':'none';$$('[data-pstonly]',m).forEach(x=>x.style.display=on&&(pv||+S.company.pstRate>0)?'':'none')};
+  if(sp){sp.onchange=()=>{const p=PROVS[sp.value];if(p){$('#sTaxName').value=p.taxName;$('#sTaxRate').value=p.taxRate}const pv=PST_PROV[sp.value];if(pv){$('#sPstName').value=pv.name;$('#sPstRate').value=pv.rate}else $('#sPst').checked=false;pstSync()};
+    $('#sPst',m).onchange=pstSync;pstSync()}
   $$('[data-feat]',m).forEach(cb=>cb.onchange=async()=>{const k=cb.dataset.feat,features={...(S.company.features||{})};if(cb.checked)delete features[k];else features[k]=false;
     if(await putCompany({...strip(S.company),features})){toast(cb.checked?`${T(TallyPlans.FEATURES[k].label)}: on for this company`:`${T(TallyPlans.FEATURES[k].label)}: off for this company`)}else cb.checked=!cb.checked});
   const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value,
-    orgType:$('#sOrg').value,nonprofit:{...(S.company.nonprofit||{}),charityNo:$('#sCharNo').value.trim(),netTax:$('#sNetTax').value,itcPct:$('#sItc').value===''?'':Math.max(0,Math.min(100,+$('#sItc').value||0)),qualifying:$('#sQual').checked,rebate:$('#sRebate').checked,capitalItc:$('#sCapItc').checked}};
-    if(data.orgType!=='business'&&S.company.quickMethod?.on&&(data.orgType==='charity'||data.nonprofit.qualifying)&&!await confirmBox('Turn off the Quick Method?','Registered charities and qualifying non-profits can’t use the Quick Method. Saving turns it off; returns already filed stay as they were.','Save'))return;if(await putCompany(data))toast('Settings saved')};
+    ...pstSettings(),orgType:$('#sOrg').value,nonprofit:{...(S.company.nonprofit||{}),charityNo:$('#sCharNo').value.trim(),netTax:$('#sNetTax').value,itcPct:$('#sItc').value===''?'':Math.max(0,Math.min(100,+$('#sItc').value||0)),qualifying:$('#sQual').checked,rebate:$('#sRebate').checked,capitalItc:$('#sCapItc').checked}};
+    if(data.orgType!=='business'&&S.company.quickMethod?.on&&(data.orgType==='charity'||data.nonprofit.qualifying)&&!await confirmBox('Turn off the Quick Method?','Registered charities and qualifying non-profits can’t use the Quick Method. Saving turns it off; returns already filed stay as they were.','Save'))return;if(data.pstRate>0&&!byDetail('pst')){const id=acct('a2220')?uid():'a2220';
+      if(!await batch([{op:'set',collection:'accounts',id,data:{code:S.accounts.some(a=>a.code==='2220')?'':'2220',name:S.company.lang==='fr'?`${data.pstName==='RST'?'TVD':'TVP'} à payer`:`${data.pstName} payable`,type:'Liability',detail:'pst',desc:'',active:true}}]))return}
+    if(await putCompany(data))toast('Settings saved')};
+}
+/* PST settings from the form. The company's sales tax rate is GST plus PST, and its name "GST/PST" (or GST/RST). */
+function pstSettings(){
+  const on=$('#sPst')?.checked&&$('[data-pstbox]')?.style.display!=='none',gst=Math.max(0,+$('#sTaxRate').value||0);
+  if(!on)return{pstRate:0};
+  const name=$('#sPstName').value==='RST'?'RST':'PST',rate=Math.max(0,Math.min(20,+$('#sPstRate').value||0));
+  if(!rate)return{pstRate:0};
+  return{pstRate:rate,pstName:name,pstFreq:$('#sPstFreq').value,taxName:`GST/${name}`,taxRate:r2(gst+rate)};
 }
 /* ---------- company code ---------- */
 function codePanel(){
@@ -751,10 +777,14 @@ const taxLbl=()=>`${esc(S.company.taxName||'Tax')} ${+S.company.taxRate||0}%`;
 function totalsHTML(){return `<div class="totals" data-totals><div>Subtotal</div><div data-t="sub">0.00</div><div>${taxLbl()}</div><div data-t="tax">0.00</div><div class="big">Total</div><div class="big" data-t="tot">0.00</div></div>`}
 function setTotals(f,c){$('[data-t=sub]',f).textContent=money(c.sub);$('[data-t=tax]',f).textContent=money(c.tax);$('[data-t=tot]',f).textContent=money(c.total)}
 /* Sales tax parts. Most provinces have one (GST or HST). Quebec companies that track QST separately
-   have two: GST at (taxRate - qstRate) and QST at qstRate, each posted to its own account. */
+   have two: GST at (taxRate - qstRate) and QST at qstRate, each posted to its own account.
+   British Columbia, Saskatchewan and Manitoba companies registered for PST (RST in Manitoba) also have two: GST and PST.
+   PST paid on purchases can't be recovered, so on bills and expenses it becomes part of the cost (recoverable: false). */
+const pstOn=()=>+S.company.pstRate>0&&!!byDetail('pst');
 function taxParts(){
-  const rate=+S.company.taxRate||0,q=+S.company.qstRate||0,main=byDetail('tax'),qst=byDetail('qst');
+  const rate=+S.company.taxRate||0,q=+S.company.qstRate||0,p=+S.company.pstRate||0,main=byDetail('tax'),qst=byDetail('qst'),pst=byDetail('pst');
   if(q>0&&qst)return[{key:'gst',account:main&&main.id,rate:r2(rate-q),name:'GST'},{key:'qst',account:qst.id,rate:q,name:'QST'}];
+  if(p>0&&pst)return[{key:'gst',account:main&&main.id,rate:r2(rate-p),name:'GST'},{key:'pst',account:pst.id,rate:p,name:S.company.pstName||'PST',recoverable:false}];
   return[{key:'gst',account:main&&main.id,rate,name:S.company.taxName||'Sales tax'}];
 }
 // Tax on a taxable amount, one figure per part.
@@ -764,13 +794,36 @@ function splitTaxTotal(total){const ps=taxParts(),sum=ps.reduce((s,p)=>s+p.rate,
 function taxReady(parts){if(parts.every(p=>p.account))return true;toast(`Add a “${parts.find(p=>!p.account).name} payable” account in Chart of accounts first.`,true);return false}
 /* Tax codes on each line. Only "std" charges tax; the others are 0% but are kept apart so the
    GST/HST return can report taxable sales (line 90) separately from exports, exempt and other revenue (line 91). */
-const TAX_CODES=[['std',null],['zero','Zero-rated in Canada (0%)'],['export','Zero-rated export (0%)'],['exempt','Exempt'],['none','No tax']];
-const taxCodeLabel=c=>c==='std'?`${S.company.taxName||'Tax'} ${+S.company.taxRate||0}%`:(TAX_CODES.find(t=>t[0]===c)||[,'No tax'])[1];
+const TAX_CODES=[['std',null],['gst',null],['zero','Zero-rated in Canada (0%)'],['export','Zero-rated export (0%)'],['exempt','Exempt'],['none','No tax']];
+// "gst": GST only, for items with no PST (most services in BC, for example). Offered when the company charges PST.
+const taxCodeLabel=c=>c==='std'?`${S.company.taxName||'Tax'} ${+S.company.taxRate||0}%`:c==='gst'?`GST only ${r2((+S.company.taxRate||0)-(+S.company.pstRate||0))}% (no ${S.company.pstName||'PST'})`:(TAX_CODES.find(t=>t[0]===c)||[,'No tax'])[1];
 const taxCodeOf=l=>l.taxCode||(l.tax?'std':'none'); // older lines only had a tick box
-const taxCodeOptions=sel=>TAX_CODES.map(([k])=>`<option value="${k}" ${sel===k?'selected':''}>${esc(taxCodeLabel(k))}</option>`).join('');
-function calcLines(rows,amt){const ls=rows.map(r=>({...r,taxCode:taxCodeOf(r),net:r2(amt(r))})).filter(r=>r.account&&r.net);const sub=r2(ls.reduce((s,r)=>s+r.net,0));const parts=splitTax(ls.filter(r=>r.taxCode==='std').reduce((s,r)=>s+r.net,0));const tax=r2(parts.reduce((s,p)=>s+p.amount,0));return{ls,sub,tax,parts,total:r2(sub+tax)}}
+const taxCodeOptions=sel=>TAX_CODES.filter(([k])=>k!=='gst'||pstOn()||sel==='gst').map(([k])=>`<option value="${k}" ${sel===k?'selected':''}>${esc(taxCodeLabel(k))}</option>`).join('');
+/* Lines, subtotal and tax. "std" lines carry every tax part; "gst" lines only the GST part.
+   On purchases (purchase=true), tax parts that can't be recovered (PST) are shared out over the taxed lines and
+   added to their cost (l.post), and left out of parts, so only recoverable tax is posted to a tax account.
+   all: every tax part with its amount, for the totals and the PDF. */
+function calcLines(rows,amt,purchase){
+  const ls=rows.map(r=>({...r,taxCode:taxCodeOf(r),net:r2(amt(r))})).filter(r=>r.account&&r.net);
+  const sub=r2(ls.reduce((s,r)=>s+r.net,0));
+  if(!pstOn())ls.forEach(l=>{if(l.taxCode==='gst')l.taxCode='std'}); // PST turned off: GST-only lines are just taxed lines
+  const base=c=>ls.filter(r=>r.taxCode===c).reduce((s,r)=>s+r.net,0),std=base('std'),gstOnly=base('gst');
+  const allStd=taxParts().map(p=>({...p,amount:r2((p.key==='pst'?std:std+gstOnly)*p.rate/100)})).filter(p=>p.amount);
+  const tax=r2(allStd.reduce((s,p)=>s+p.amount,0));
+  let parts=allStd;
+  if(purchase){
+    const keep=allStd.filter(p=>p.recoverable!==false),cost=r2(allStd.filter(p=>p.recoverable===false).reduce((s,p)=>s+p.amount,0));
+    if(cost){
+      // Shared over the lines going the same way as the total (a discount line keeps its own amount).
+      const all=ls.filter(l=>l.taxCode==='std'),same=all.filter(l=>Math.sign(l.net)===Math.sign(cost)),taxed=same.length?same:all,tb=taxed.reduce((s,l)=>s+l.net,0)||1;let left=cost;
+      taxed.forEach((l,i)=>{const a=i===taxed.length-1?left:r2(cost*l.net/tb);left=r2(left-a);l.post=r2(l.net+a)});
+      parts=keep;
+    }
+  }
+  return{ls,sub,tax,parts,all:allStd,total:r2(sub+tax)};
+}
 // Total per account and tax code, so each posting line remembers its tax code for the sales tax return.
-function groupBy(ls){const m={};ls.forEach(l=>{const k=l.account+'|'+taxCodeOf(l);m[k]=r2((m[k]||0)+l.net)});return m}
+function groupBy(ls){const m={};ls.forEach(l=>{const k=l.account+'|'+taxCodeOf(l);m[k]=r2((m[k]||0)+(l.post??l.net))});return m}
 const gLine=(k,v,side)=>{const[account,taxCode]=k.split('|');return side==='credit'?(v>=0?{account,debit:0,credit:v,taxCode}:{account,debit:-v,credit:0,taxCode}):(v>=0?{account,debit:v,credit:0,taxCode}:{account,debit:0,credit:-v,taxCode})};
 const delBtn=show=>show?`<button type="button" class="btn danger left" data-del>Delete</button>`:'<span class="left"></span>';
 const saveFoot=(del,label='Save')=>`${delBtn(del)}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${label}</button>`;
@@ -826,8 +879,8 @@ function docForm(kind,doc,preset){
   let rows=[];const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:sale?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:sale?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
   const contactCode=()=>contact($('#dC',f).value)?.taxCode||'';
   cols.defaults=()=>({qty:1,taxCode:contactCode()||'std',account:defA});
-  const totalNow=()=>calcLines(rows,x=>(+x.qty||0)*(+x.rate||0)).total;
-  const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{rows=r;setTotals(f,calcLines(r,x=>(+x.qty||0)*(+x.rate||0)))});
+  const totalNow=()=>calcLines(rows,x=>(+x.qty||0)*(+x.rate||0),!sale).total;
+  const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{rows=r;setTotals(f,calcLines(r,x=>(+x.qty||0)*(+x.rate||0),!sale))});
   // Credits: which open invoices (or bills) of this customer (or vendor) the credit is used on.
   const mine=a=>(d.applied||[]).find(x=>x.docId===a)?.amount||0;
   const drawApply=()=>{
@@ -850,7 +903,7 @@ function docForm(kind,doc,preset){
     if(!await confirmBox(`Delete this ${lc}?`,cred&&paid?'Its posting to the ledger is removed too, and the invoices or bills it was used on show their balances again.':'Its posting to the ledger is removed too.'))return;
     if(!await batch([{op:'delete',collection:'entries',id:'d_'+doc.id},{op:'delete',collection:'docs',id:doc.id}]))return;closeModal();toast(L.del)};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
-    const c=calcLines(le.read(),x=>(+x.qty||0)*(+x.rate||0));
+    const c=calcLines(le.read(),x=>(+x.qty||0)*(+x.rate||0),!sale);
     if($('#dC',f).value===''||($('#dC',f).value==='__new'&&!$('#dCNew',f).value.trim()))return f.err(`Choose a ${ck}.`);
     if(!$('#dD',f).value)return f.err('Enter a date.');
     if(!c.ls.length)return f.err('Add at least one line with an account and an amount.');
@@ -873,7 +926,7 @@ function docForm(kind,doc,preset){
     else{Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ar.id,debit:0,credit:c.total})}
     const base={date:$('#dD',f).value,contactId:cid,memo:$('#dM',f).value.trim(),...(doc&&doc.example?{example:true}:{})};
     if(preset&&preset.receiptId)base.receiptId=preset.receiptId;
-    const dd={...(doc?strip(doc):{}),...base,kind,number:num,due:cred?'':$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'})),sub:c.sub,tax:c.tax,total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
+    const dd={...(doc?strip(doc):{}),...base,kind,number:num,due:cred?'':$('#dDue',f).value,lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0,created:doc?.created||Date.now()};
     if(cred)dd.applied=applied;
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:kind,ref:num,docId:id,lines,created:dd.created}}]))return;
     closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(L.saved);
@@ -967,10 +1020,10 @@ function moneyForm(kind,entry,preset){
   const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions}];
   const mCode=()=>contact($('#mC',f).value)?.taxCode||(out?'std':'none');
   cols.defaults=()=>({taxCode:mCode(),account:defA});
-  const le=lineEditor($('[data-le]',f),cols,(fm.lines||[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}]).map(l=>({...l,taxCode:taxCodeOf(l)})),r=>setTotals(f,calcLines(r,x=>+x.amount||0)));
+  const le=lineEditor($('[data-le]',f),cols,(fm.lines||[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}]).map(l=>({...l,taxCode:taxCodeOf(l)})),r=>setTotals(f,calcLines(r,x=>+x.amount||0,out)));
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox(`Delete this ${kind}?`,'It will be removed from your books.'))return;await del('entries',entry.id);closeModal();toast(`${out?'Expense':'Deposit'} deleted`)};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
-    const c=calcLines(le.read(),x=>+x.amount||0);const bank=$('#mBank',f).value;
+    const c=calcLines(le.read(),x=>+x.amount||0,out);const bank=$('#mBank',f).value;
     if(!bank)return f.err('Choose a bank or card account.');if(!c.ls.length)return f.err('Add at least one line with a category and amount.');
     if(c.tax&&!taxReady(c.parts))return;
     let cid=$('#mC',f).value;if(cid==='__new'){cid=await resolveContact(f,'mC',out?'vendor':'customer');if(!cid)return f.err('Enter a name for the new contact.')}
@@ -978,7 +1031,7 @@ function moneyForm(kind,entry,preset){
     if(out){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push(c.total>=0?{account:bank,debit:0,credit:c.total}:{account:bank,debit:-c.total,credit:0})}
     else{lines.push(c.total>=0?{account:bank,debit:c.total,credit:0}:{account:bank,debit:0,credit:-c.total});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}))}
     const id=entry?.id||uid();
-    if(await put('entries',id,{type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
+    if(await put('entries',id,{type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
   };
 }
 

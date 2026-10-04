@@ -73,6 +73,7 @@ function ytdFor(empId,until,inclusive){
     const before=runOrder(r,until)<0||(inclusive&&r.id===until.id);
     if(!before||(until.id&&r.id===until.id&&!inclusive))continue;
     for(const l of r.lines)if(l.employeeId===empId){
+      y.bonus=r2((y.bonus||0)+(+l.bonus||0));y.benefits=r2((y.benefits||0)+benTotal(l));
       y.gross=r2(y.gross+l.gross);y.pensionable=r2(y.pensionable+(l.cppExempt?0:(l.pensionable??l.gross)));y.insurable=r2(y.insurable+(l.insurable??l.gross));
       y.rrsp=r2(y.rrsp+(+l.rrsp||0));y.union=r2(y.union+(+l.union||0));y.net=r2(y.net+l.net);sumObj(y.ded,l.ded);sumObj(y.er,l.er);
       y.vac=r2((y.vac||0)+(+l.vacPay||0));y.hol=r2((y.hol||0)+(+l.holiday||0));
@@ -80,10 +81,13 @@ function ytdFor(empId,until,inclusive){
   }
   return y;
 }
-function calcFor(e,payDate,P,gross,ytd){
-  return PR.calc({date:payDate,prov:e.prov,P,gross,rrsp:e.rrsp,union:e.union,td1Fed:e.td1Fed,td1Prov:e.td1Prov,td1Qc:e.td1Qc,
+/** Taxable benefits on a pay line (not paid in cash), in total and the insurable part. */
+const benTotal=l=>r2(Object.values(l.benefits||{}).reduce((t,v)=>t+(+v||0),0));
+const benInsurable=l=>r2(PR.BENEFIT_KINDS.filter(b=>b.ei).reduce((t,b)=>t+(+(l.benefits||{})[b.k]||0),0));
+function calcFor(e,payDate,P,gross,ytd,x={}){
+  return PR.calc({date:payDate,prov:e.prov,P,gross,bonus:x.bonus,benefits:x.benefits,pensionable:x.pensionable,insurable:x.insurable,qpipInsurable:x.qpipInsurable,rrsp:e.rrsp,union:e.union,td1Fed:e.td1Fed,td1Prov:e.td1Prov,td1Qc:e.td1Qc,
     extraTax:e.extraTax,extraQcTax:e.extraQcTax,dependants:e.dependants,cppExempt:e.cppExempt,eiExempt:e.eiExempt,qpipExempt:e.qpipExempt,
-    hsfRate:payCfg().hsfRate,ytd:{pensionable:ytd.pensionable,cpp:ytd.ded.cpp,cpp2:ytd.ded.cpp2,qpp:ytd.ded.qpp,qpp2:ytd.ded.qpp2,ei:ytd.ded.ei,qpip:ytd.ded.qpip,erQpip:ytd.er.qpip}});
+    hsfRate:payCfg().hsfRate,ytd:{bonus:ytd.bonus||0,pensionable:ytd.pensionable,cpp:ytd.ded.cpp,cpp2:ytd.ded.cpp2,qpp:ytd.ded.qpp,qpp2:ytd.ded.qpp2,ei:ytd.ded.ei,qpip:ytd.ded.qpip,erQpip:ytd.er.qpip}});
 }
 const lineDed=l=>r2(DED_KEYS.reduce((s,k)=>s+(+l.ded?.[k]||0),0)+(+l.rrsp||0)+(+l.union||0));
 const lineEr=l=>r2(ER_KEYS.reduce((s,k)=>s+(+l.er?.[k]||0),0));
@@ -292,10 +296,14 @@ function payRunForm(){
         <div class="prl-sum"><span class="muted">Deductions</span><b data-s="ded">0.00</b></div><div class="prl-sum"><span class="muted">Net pay</span><b data-s="net">0.00</b></div>
         <button type="button" class="btn ghost sm" data-more aria-expanded="false">Details</button></div>
       <div class="prl-more" hidden>
-        <div class="fields" style="margin-bottom:10px"><div class="field"><label for="p_${e.id}_bonus">Bonus</label><input type="number" step="0.01" min="0" id="p_${e.id}_bonus" data-bonus><span class="hint">A bonus that doesn’t earn vacation pay</span></div>
+        <div class="fields" style="margin-bottom:10px"><div class="field"><label for="p_${e.id}_bonus">Bonus</label><input type="number" step="0.01" min="0" id="p_${e.id}_bonus" data-bonus><span class="hint">Taxed with CRA’s method for bonuses. Doesn’t earn vacation pay.</span></div>
+          <div class="field"><label for="p_${e.id}_allow">Taxable allowance</label><input type="number" step="0.01" min="0" id="p_${e.id}_allow" data-allow><span class="hint">Paid with this pay, for example a car or phone allowance</span></div>
           ${vacMode(e)==='accrue'?`<div class="field"><label for="p_${e.id}_vacacc">Vacation pay set aside</label><input type="number" step="0.01" min="0" id="p_${e.id}_vacacc" data-vacacc><span class="hint" data-vachint></span></div>`:''}
           ${e.payType==='hourly'?`<div class="field" data-holhf hidden><label for="p_${e.id}_holhrs">Holiday hours</label><input type="number" step="0.01" min="0" id="p_${e.id}_holhrs" data-holhrs><span class="hint">Insurable hours for the record of employment</span></div>`:''}</div>
         <div data-holnote class="muted" style="font-size:12.5px;margin-bottom:10px" hidden></div>
+        <details style="margin-bottom:10px"><summary class="flabel" style="cursor:pointer">Taxable benefits not paid in cash</summary>
+          <div class="muted" style="font-size:12.5px;margin:6px 0">Added to taxable income and CPP${qc?'/QPP':''} earnings (and EI for gift cards and board and lodging), but not to the pay. They go on the T4${qc?' and RL-1':''}.</div>
+          <div class="fields">${PR.BENEFIT_KINDS.map(b=>`<div class="field"><label for="p_${e.id}_ben_${b.k}">${esc(b.label)}</label><input type="number" step="0.01" min="0" id="p_${e.id}_ben_${b.k}" data-ben="${b.k}"></div>`).join('')}</div></details>
         <label class="check" style="margin-bottom:10px"><input type="checkbox" data-final> <span>${vacMode(e)==='accrue'?'Final pay: this employee is leaving. All the vacation pay owed is paid out.':'Final pay: this employee is leaving.'}</span></label>
         <div class="flabel" style="margin-bottom:6px">Employee deductions</div>
         <div class="fields">${PR.EMPLOYEE_ITEMS.filter(([k])=>qc?!['cpp','cpp2','provTax'].includes(k):!['qpp','qpp2','qpip','qcTax'].includes(k)).map(([k,l])=>inp(k,l,'ded')).join('')}${inp('rrsp','RRSP / pension','x')}${inp('union','Union dues','x')}</div>
@@ -338,9 +346,11 @@ function payRunForm(){
       auto('[data-vac]',fin?Math.max(0,owed+val('[data-vacacc]')):0);
       q('[data-vachint]').textContent=`${vr}% · owed before this pay: ${money(owed)}`;
     }
-    const gross=r2(val('[data-reg]')+val('[data-hol]')+val('[data-other]')+val('[data-bonus]')+val('[data-vac]'));
+    const gross=r2(val('[data-reg]')+val('[data-hol]')+val('[data-other]')+val('[data-bonus]')+val('[data-allow]')+val('[data-vac]'));
+    const ben={};box.querySelectorAll('[data-ben]').forEach(x=>{if(+x.value)ben[x.dataset.ben]=r2(+x.value)});
+    const bl={benefits:ben},bt=benTotal(bl);
     const note=q('[data-note]');let res=null;
-    try{res=calcFor(e,date,P(),gross,ytdFor(e.id,{payDate:date+'~'},false));note.textContent=res.notes.join(' ')}
+    try{res=calcFor(e,date,P(),gross,ytdFor(e.id,{payDate:date+'~'},false),{bonus:val('[data-bonus]'),benefits:bt,pensionable:r2(gross+bt),insurable:r2(gross+benInsurable(bl)),qpipInsurable:r2(gross+bt)});note.innerHTML=res.notes.map(n=>`<span>${esc(n)}</span>`).join(' ')}
     catch(err){note.innerHTML=`<span class="neg">${esc(err.message)}</span> Enter the deductions yourself.`}
     const set=(el,v)=>{if(!el.dataset.ov)el.value=v?v.toFixed(2):''};
     box.querySelectorAll('[data-ded]').forEach(el=>res&&set(el,res.employee[el.dataset.ded]));
@@ -352,12 +362,15 @@ function payRunForm(){
   const readLine=box=>{const e=employee(box.dataset.emp);const g=k=>r2(+box.querySelector(k)?.value||0);
     const ded={},er={};box.querySelectorAll('[data-ded]').forEach(x=>ded[x.dataset.ded]=r2(+x.value||0));box.querySelectorAll('[data-er]').forEach(x=>er[x.dataset.er]=r2(+x.value||0));
     DED_KEYS.forEach(k=>ded[k]=ded[k]||0);ER_KEYS.forEach(k=>er[k]=er[k]||0);
-    const regular=g('[data-reg]'),holiday=g('[data-hol]'),other=g('[data-other]'),bonus=g('[data-bonus]'),vacPay=g('[data-vac]'),gross=r2(regular+holiday+other+bonus+vacPay);
+    const regular=g('[data-reg]'),holiday=g('[data-hol]'),other=g('[data-other]'),bonus=g('[data-bonus]'),allowance=g('[data-allow]'),vacPay=g('[data-vac]'),gross=r2(regular+holiday+other+bonus+allowance+vacPay);
+    const benefits={};box.querySelectorAll('[data-ben]').forEach(x=>{const v=r2(+x.value||0);if(v)benefits[x.dataset.ben]=v});
     const vm=vacMode(e),from=$('#rFrom',f).value,to=$('#rTo',f).value;
-    const l={employeeId:e.id,name:e.name,prov:e.prov,payType:e.payType,rate:+e.rate||0,hours:e.payType==='hourly'?g('[data-hours]'):(+e.hours||''),regular,other,gross,pensionable:gross,insurable:gross,cppExempt:!!e.cppExempt,eiExempt:!!e.eiExempt,qpipExempt:e.prov==='QC'&&!!e.qpipExempt,
+    const l={employeeId:e.id,name:e.name,prov:e.prov,payType:e.payType,rate:+e.rate||0,hours:e.payType==='hourly'?g('[data-hours]'):(+e.hours||''),regular,other,gross,pensionable:r2(gross+benTotal({benefits})),insurable:r2(gross+benInsurable({benefits})),cppExempt:!!e.cppExempt,eiExempt:!!e.eiExempt,qpipExempt:e.prov==='QC'&&!!e.qpipExempt,
       rrsp:g('[data-x=rrsp]'),union:g('[data-x=union]'),ded,er,overridden:[...box.querySelectorAll('[data-ov]')].map(x=>x.dataset.ded||x.dataset.er||x.dataset.x||x.dataset.ovk||'').filter(Boolean)};
     if(holiday){l.holiday=holiday;l.holHours=g('[data-holhrs]');l.holidays=(e.payType==='hourly'&&from&&to?PR.holidaysBetween(e.prov,from,to):[]).map(h=>({date:h.date,name:h.name}))}
     if(bonus)l.bonus=bonus;
+    if(allowance)l.allowance=allowance;
+    if(Object.keys(benefits).length)l.benefits=benefits;
     if(vm!=='salary'){l.vacMode=vm;l.vacRate=vacRateFor(e,$('#rDate',f).value).rate;l.vacPay=vacPay;if(vm==='accrue')l.vacAccrued=g('[data-vacacc]')}
     if(box.querySelector('[data-final]').checked)l.final=true;
     l.net=r2(gross-lineDed(l));return l};
@@ -439,9 +452,11 @@ function stubHTML(run,l){
     <table><thead><tr><th>Earnings</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>
       ${l.payType==='hourly'&&l.hours?row(`Regular, ${l.hours} h × ${money(l.rate)}`,l.regular,null):row('Regular pay',l.regular??l.gross,null)}
       ${l.holiday?row(`Holiday pay${(l.holidays||[]).length?` (${l.holidays.map(h=>(typeof tr==='function'&&tr(h.name))||h.name).join(', ')})`:''}`,l.holiday,y.hol||0):''}
-      ${l.other?row('Other pay',l.other,null):''}${l.bonus?row('Bonus',l.bonus,null):''}
+      ${l.other?row('Other pay',l.other,null):''}${l.bonus?row('Bonus',l.bonus,null):''}${l.allowance?row('Taxable allowance',l.allowance,null):''}
       ${l.vacPay||y.vac?row(l.vacMode==='accrue'?'Vacation pay paid out':`Vacation pay (${l.vacRate}%)`,l.vacPay||0,y.vac||0):''}</tbody>
       <tfoot><tr><td><b>Gross pay</b></td><td class="n"><b>${money(l.gross)}</b></td><td class="n"><b>${money(y.gross)}</b></td></tr></tfoot></table>
+    ${l.benefits||y.benefits?`<table><thead><tr><th>Taxable benefits (not paid to you)</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${PR.BENEFIT_KINDS.filter(b=>(l.benefits||{})[b.k]).map(b=>row(b.label,l.benefits[b.k],null)).join('')}</tbody>
+      <tfoot><tr><td><b>Total taxable benefits</b></td><td class="n"><b>${money(benTotal(l))}</b></td><td class="n"><b>${money(y.benefits||0)}</b></td></tr></tfoot></table><div class="muted" style="font-size:12px;margin:-4px 0 8px">${(l.prov||e.prov)==='QC'?'Included in your taxable income and on your T4 and RL-1. Tax on them is taken from your pay.':'Included in your taxable income and on your T4. Tax on them is taken from your pay.'}</div>`:''}
     <table><thead><tr><th>Deductions</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${ded||'<tr><td colspan="3" class="muted">None</td></tr>'}</tbody>
       <tfoot><tr><td><b>Total deductions</b></td><td class="n"><b>${money(lineDed(l))}</b></td><td class="n"><b>${money(r2(y.gross-y.net))}</b></td></tr></tfoot></table>
     <div class="stub-net"><span>Net pay</span><b>${money(l.net)}</b></div>

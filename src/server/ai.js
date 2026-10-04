@@ -229,7 +229,7 @@ class AI {
     if (!/^[A-Za-z0-9+/]+=*$/.test(data)) throw new ValidationError('That file couldn’t be read.');
     if (data.length * 0.75 > 10 * 1024 * 1024) throw new ValidationError('That file is over 10 MB. Try a smaller photo or a shorter PDF.');
 
-    const accounts = store.list('accounts').filter(a => a.active !== false && !['ar', 'ap', 'bank', 'card', 'tax', 'qst'].includes(a.detail) && a.type !== 'Income');
+    const accounts = store.list('accounts').filter(a => a.active !== false && !['ar', 'ap', 'bank', 'card', 'tax', 'qst', 'pst'].includes(a.detail) && a.type !== 'Income');
     const byId = new Map(accounts.map(a => [a.id, a]));
     const vendors = store.list('contacts').filter(c => c.kind !== 'customer').slice(0, 400);
     const vIds = new Set(vendors.map(c => c.id));

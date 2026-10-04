@@ -436,7 +436,7 @@ function createApp(opts) {
       case 'bankTxns': return `${d.date} ${amt(d.amount)} ${String(d.desc || '').slice(0, 50)} (${d.status})`;
       case 'rules': return `when "${d.text}"`;
       case 'recons': return `statement ${d.statementDate} ending ${amt(d.endingBalance)}`;
-      case 'filings': return `${d.tax === 'qst' ? 'QST' : 'GST/HST'} ${d.from} to ${d.to}`;
+      case 'filings': return `${d.tax === 'qst' ? 'QST' : d.tax === 'pst' ? 'PST' : 'GST/HST'} ${d.from} to ${d.to}`;
       case 'payruns': return `pay date ${d.payDate}, ${(d.lines || []).length} employee(s)`;
       default: return '';
     }

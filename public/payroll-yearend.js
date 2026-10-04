@@ -10,7 +10,12 @@ const T4_BOXES=[[10,'Province of employment'],[12,'Social insurance number'],[14
   [17,'Employee’s QPP contributions'],['17A','Employee’s second QPP contributions'],[18,'Employee’s EI premiums'],[20,'RPP contributions'],[22,'Income tax deducted'],
   [24,'EI insurable earnings'],[26,'CPP/QPP pensionable earnings'],[28,'Exempt'],[44,'Union dues'],[45,'Employer-offered dental benefits'],[50,'RPP registration number'],[52,'Pension adjustment'],[55,'Employee’s PPIP premiums'],[56,'PPIP insurable earnings']];
 const RL1_BOXES=[['A','Employment income'],['B.A','QPP contributions (base and first additional)'],['B.B','QPP contributions (second additional)'],['C','EI premiums'],['D','RPP contributions'],
-  ['E','Quebec income tax withheld'],['F','Union dues'],['G','Pensionable salary under the QPP'],['H','QPIP premiums'],['I','Salary insurable under the QPIP']];
+  ['E','Quebec income tax withheld'],['F','Union dues'],['G','Pensionable salary under the QPP'],['H','QPIP premiums'],['I','Salary insurable under the QPIP'],
+  ['L','Other benefits'],['V','Meals and lodging'],['W','Use of a motor vehicle for personal purposes']];
+// T4 "other information" codes Sumlora fills in (amounts also included in box 14).
+const T4_CODES=[[30,'Board and lodging'],[34,'Personal use of employer’s automobile'],[40,'Other taxable allowances and benefits']];
+/** The "Other information" part of a T4: codes with amounts. */
+const yeCodes=s=>T4_CODES.filter(([k])=>s.other&&s.other[k]).map(([k,l])=>[k,l,s.other[k]]);
 const DENTAL={1:'Not eligible',2:'Employee only',3:'Employee, spouse and dependent children',4:'Employee and spouse',5:'Employee and dependent children'};
 
 function yeYears(){
@@ -110,8 +115,9 @@ function yeSlipModal(i){
   const f=openModal(`T4${s.rl1?' and RL-1':''} · ${s.name} · ${Y.year}`,`
     ${s.checks.length?`<div class="banner ${s.checks.some(c=>c.level==='error')?'err':''}" style="margin:0"><span>${s.checks.map(c=>esc(checkText(c))).join('<br>')}</span></div>`:''}
     <div class="grid2" style="gap:16px">
-      <div><div class="flabel" style="margin-bottom:6px">T4 · ${esc(s.prov)}</div><div class="tbl-wrap"><table class="boxes"><tbody>${yeBoxes(s).map(([k,l])=>`<tr><td class="mono" translate="no">${k}</td><td>${esc(l)}</td><td class="n">${boxVal(k,s.t4[k],s)}</td></tr>`).join('')}</tbody></table></div></div>
-      ${s.rl1?`<div><div class="flabel" style="margin-bottom:6px">RL-1</div><div class="tbl-wrap"><table class="boxes"><tbody>${RL1_BOXES.map(([k,l])=>`<tr><td class="mono" translate="no">${k}</td><td>${esc(l)}</td><td class="n">${k==='G'||k==='I'?money(s.rl1[k],{sym:false}):s.rl1[k]?money(s.rl1[k],{sym:false}):''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
+      <div><div class="flabel" style="margin-bottom:6px">T4 · ${esc(s.prov)}</div><div class="tbl-wrap"><table class="boxes"><tbody>${yeBoxes(s).map(([k,l])=>`<tr><td class="mono" translate="no">${k}</td><td>${esc(l)}</td><td class="n">${boxVal(k,s.t4[k],s)}</td></tr>`).join('')}</tbody></table></div>
+        ${yeCodes(s).length?`<div class="flabel" style="margin:10px 0 6px">Other information (included in box 14)</div><div class="tbl-wrap"><table class="boxes"><tbody>${yeCodes(s).map(([k,l,v])=>`<tr><td class="mono" translate="no">${k}</td><td>${esc(l)}</td><td class="n">${money(v,{sym:false})}</td></tr>`).join('')}</tbody></table></div>`:''}</div>
+      ${s.rl1?`<div><div class="flabel" style="margin-bottom:6px">RL-1</div><div class="tbl-wrap"><table class="boxes"><tbody>${RL1_BOXES.filter(([k])=>!['L','V','W'].includes(k)||s.rl1[k]).map(([k,l])=>`<tr><td class="mono" translate="no">${k}</td><td>${esc(l)}</td><td class="n">${k==='G'||k==='I'?money(s.rl1[k],{sym:false}):s.rl1[k]?money(s.rl1[k],{sym:false}):''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     </div>
     ${rpp&&last?`<div class="fields" data-yepa style="align-items:end">${fld('yePa',`Pension adjustment for ${Y.year} (box 52)`,`<input type="number" id="yePa" step="0.01" min="0" value="${(emp.paByYear||{})[Y.year]||''}"><span class="hint">From the pension plan administrator. Goes on this employee’s last slip only.</span>`)}<div><button class="btn" type="button" data-yepasave>Save</button></div></div>`:''}
     <div class="muted" style="font-size:12.5px">Boxes with nothing in them stay blank on the slip, except 24, 26${s.prov==='QC'?' and 56':''}, which show 0.00 when there are no earnings. Box 54 (your payroll account number) goes on your copy and CRA’s, not the employee’s.</div>`,
@@ -128,7 +134,8 @@ function yeWorksheet(s,Y){
     <div style="text-align:right"><b>Year-end worksheet ${Y.year}</b><div class="muted">For filing: not an official slip</div></div></header>
     <div class="stub-emp"><b translate="no">${esc(s.name)}</b>${s.address?`<div class="muted" style="white-space:pre-line" translate="no">${esc(s.address)}</div>`:''}</div>
     <table><thead><tr><th style="width:12%">T4</th><th>Box</th><th class="n">Amount</th></tr></thead><tbody>${t4.map(([k,l])=>`<tr><td translate="no">${k}</td><td>${esc(l)}</td><td class="n">${boxVal(k,s.t4[k],s)}</td></tr>`).join('')}</tbody></table>
-    ${s.rl1?`<table><thead><tr><th style="width:12%">RL-1</th><th>Box</th><th class="n">Amount</th></tr></thead><tbody>${RL1_BOXES.map(([k,l])=>`<tr><td translate="no">${k}</td><td>${esc(l)}</td><td class="n">${k==='G'||k==='I'?money(s.rl1[k],{sym:false}):s.rl1[k]?money(s.rl1[k],{sym:false}):''}</td></tr>`).join('')}</tbody></table>`:''}
+    ${yeCodes(s).length?`<table><thead><tr><th style="width:12%">Code</th><th>Other information (included in box 14)</th><th class="n">Amount</th></tr></thead><tbody>${yeCodes(s).map(([k,l,v])=>`<tr><td translate="no">${k}</td><td>${esc(l)}</td><td class="n">${money(v,{sym:false})}</td></tr>`).join('')}</tbody></table>`:''}
+    ${s.rl1?`<table><thead><tr><th style="width:12%">RL-1</th><th>Box</th><th class="n">Amount</th></tr></thead><tbody>${RL1_BOXES.filter(([k])=>!['L','V','W'].includes(k)||s.rl1[k]).map(([k,l])=>`<tr><td translate="no">${k}</td><td>${esc(l)}</td><td class="n">${k==='G'||k==='I'?money(s.rl1[k],{sym:false}):s.rl1[k]?money(s.rl1[k],{sym:false}):''}</td></tr>`).join('')}</tbody></table>`:''}
   </section>`;
 }
 function yePrint(slips,Y){
@@ -141,10 +148,10 @@ function yePrint(slips,Y){
 }
 function yeCSV(){
   const Y=yeData();if(!Y)return;
-  const head=['Employee','SIN','Province (10)','Box 14','Box 16','Box 16A','Box 17','Box 17A','Box 18','Box 20','Box 22','Box 24','Box 26','Box 28 exempt','Box 44','Box 45','Box 50','Box 52','Box 55','Box 56','RL-1 A','RL-1 B.A','RL-1 B.B','RL-1 C','RL-1 D','RL-1 E','RL-1 F','RL-1 G','RL-1 H','RL-1 I'];
+  const head=['Employee','SIN','Province (10)','Box 14','Box 16','Box 16A','Box 17','Box 17A','Box 18','Box 20','Box 22','Box 24','Box 26','Box 28 exempt','Box 44','Box 45','Box 50','Box 52','Box 55','Box 56','RL-1 A','RL-1 B.A','RL-1 B.B','RL-1 C','RL-1 D','RL-1 E','RL-1 F','RL-1 G','RL-1 H','RL-1 I','Code 30','Code 34','Code 40','RL-1 L','RL-1 V','RL-1 W'];
   const rows=Y.slips.map(s=>{const t=s.t4,r=s.rl1||{};const ex=[t[28].cppQpp?'CPP/QPP':'',t[28].ei?'EI':'',t[28].ppip?'PPIP':''].filter(Boolean).join(' ');
-    return [s.name,t[12],t[10],t[14],t[16],t['16A'],t[17],t['17A'],t[18],t[20],t[22],t[24],t[26],ex,t[44],t[45],t[50],t[52],t[55],t[56],r.A??'',r['B.A']??'',r['B.B']??'',r.C??'',r.D??'',r.E??'',r.F??'',r.G??'',r.H??'',r.I??'']});
-  const headFr=['Employé','NAS','Province (10)','Case 14','Case 16','Case 16A','Case 17','Case 17A','Case 18','Case 20','Case 22','Case 24','Case 26','Case 28 exemption','Case 44','Case 45','Case 50','Case 52','Case 55','Case 56','RL-1 A','RL-1 B.A','RL-1 B.B','RL-1 C','RL-1 D','RL-1 E','RL-1 F','RL-1 G','RL-1 H','RL-1 I'];
+    return [s.name,t[12],t[10],t[14],t[16],t['16A'],t[17],t['17A'],t[18],t[20],t[22],t[24],t[26],ex,t[44],t[45],t[50],t[52],t[55],t[56],r.A??'',r['B.A']??'',r['B.B']??'',r.C??'',r.D??'',r.E??'',r.F??'',r.G??'',r.H??'',r.I??'',(s.other||{})[30]??'',(s.other||{})[34]??'',(s.other||{})[40]??'',r.L??'',r.V??'',r.W??'']});
+  const headFr=['Employé','NAS','Province (10)','Case 14','Case 16','Case 16A','Case 17','Case 17A','Case 18','Case 20','Case 22','Case 24','Case 26','Case 28 exemption','Case 44','Case 45','Case 50','Case 52','Case 55','Case 56','RL-1 A','RL-1 B.A','RL-1 B.B','RL-1 C','RL-1 D','RL-1 E','RL-1 F','RL-1 G','RL-1 H','RL-1 I','Code 30','Code 34','Code 40','RL-1 L','RL-1 V','RL-1 W'];
   const text=[isFr()?headFr:head,...rows].map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
   saveFile(`t4-rl1_${Y.year}.csv`,new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'}));
 }

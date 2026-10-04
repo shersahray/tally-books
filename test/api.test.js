@@ -317,8 +317,20 @@ test('sales tax filings are validated and cannot overlap', async () => {
   assert.equal((await call('PUT', '/api/records/filings/f1', filing)).status, 200);
   assert.equal((await call('PUT', '/api/records/filings/f2', { ...filing, from: '2026-09-01', to: '2026-11-30' })).status, 409, 'overlap');
   assert.equal((await call('PUT', '/api/records/filings/f1', { ...filing, filedOn: '2026-10-16' })).status, 200, 'editing itself is fine');
-  assert.equal((await call('PUT', '/api/records/filings/f3', { ...filing, tax: 'pst' })).status, 400);
+  assert.equal((await call('PUT', '/api/records/filings/f3', { ...filing, tax: 'hst' })).status, 400);
   assert.equal((await call('PUT', '/api/records/filings/f4', { ...filing, tax: 'qst', entryId: 'missing' })).status, 400);
+  // PST (BC, Saskatchewan) and RST (Manitoba) returns and settings.
+  assert.equal((await call('PUT', '/api/records/filings/f5', { ...filing, tax: 'pst', lines: { G: 70 } })).status, 200);
+  assert.equal((await call('PUT', '/api/records/accounts/a2220', { code: '2220', name: 'RST payable', type: 'Liability', detail: 'pst' })).status, 200);
+  const co0 = (await call('GET', '/api/state')).json.company;
+  assert.equal((await call('PUT', '/api/settings', { ...co0, province: 'MB', taxName: 'GST/RST', taxRate: 12, qstRate: 0, pstRate: 7, pstName: 'RST', pstFreq: 'semiannual' })).status, 200);
+  const coP = (await call('GET', '/api/state')).json.company;
+  assert.deepEqual([coP.pstRate, coP.pstName, coP.pstFreq, coP.taxRate], [7, 'RST', 'semiannual', 12]);
+  assert.equal((await call('PUT', '/api/settings', { ...coP, pstName: 'XYZ', pstFreq: 'weekly' })).status, 200);
+  assert.deepEqual([(await call('GET', '/api/state')).json.company.pstName, (await call('GET', '/api/state')).json.company.pstFreq], ['PST', 'quarterly']);
+  assert.equal((await call('PUT', '/api/settings', { ...coP, qstRate: 9.975, taxRate: 21.975 })).status, 400, 'QST and PST together');
+  assert.equal((await call('PUT', '/api/settings', { ...coP, taxRate: 7 })).status, 400, 'PST must be on top of GST');
+  assert.equal((await call('PUT', '/api/settings', { ...co0 })).status, 200);
   // a sales tax payment is a valid transaction type
   const r = await call('PUT', '/api/records/entries/tp1', entry([{ account: 'a2200', debit: 100 }, { account: 'a1000', credit: 100 }], { type: 'taxpayment', tax: 'gst', taxKind: 'payment' }));
   assert.equal(r.status, 200, r.text);
@@ -489,6 +501,12 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   const parts2 = await call('POST', '/api/batch', { writes: [entry,
     { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, regular: 1500, other: 100 }] } }] });
   assert.equal(parts2.status, 400, 'regular + other must add up too');
+  // Taxable benefits: known kinds, zero or more; pensionable and insurable earnings no more than pay plus benefits.
+  for (const [extra, msg] of [[{ benefits: { yacht: 5 } }, /unknown taxable benefit/], [{ benefits: { life: -5 } }, /zero or more/], [{ benefits: 'x' }, /aren’t valid/],
+    [{ benefits: { life: 30 }, pensionable: 2100 }, /more than pay plus taxable benefits/], [{ regular: 1950, allowance: 40 }, /add up to gross/]]) {
+    const r = await call('POST', '/api/batch', { writes: [entry, { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, ...extra }] } }] });
+    assert.equal(r.status, 400, JSON.stringify(extra)); assert.match(r.json.error, msg);
+  }
   const roe = await call('PUT', '/api/records/employees/e1', { ...emp, roes: [{ reason: 'E', calc: { type: '<img src=x onerror=alert(1)>', hours: '<b>', periods: [{ n: '<i>', amount: 5 }] } }] });
   assert.equal(roe.status, 200);
   const roeCalc = (await call('GET', '/api/state')).json.employees.find(x => x.id === 'e1').roes[0].calc;

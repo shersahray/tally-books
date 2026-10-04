@@ -102,7 +102,10 @@
    *   dependants: Ontario tax reduction dependants (default 0),
    *   extraTax: additional federal tax requested (TD1), extraQcTax: additional Quebec tax (TP-1015.3),
    *   cppExempt, eiExempt, qpipExempt: true when not deducted,
-   *   ytd: { pensionable, cpp, cpp2, qpp, qpp2, ei, qpip, erQpip } before this pay,
+   *   bonus: the part of gross that is a bonus or other non-periodic payment (taxed with CRA's bonus method),
+   *   benefits: taxable benefits not paid in cash (group life insurance, automobile, gift cards…): taxed and,
+   *     as the caller passes in pensionable/insurable, subject to CPP/QPP and EI/QPIP,
+   *   ytd: { pensionable, cpp, cpp2, qpp, qpp2, ei, qpip, erQpip, bonus } before this pay,
    *   hsfRate: Quebec Health Services Fund employer rate in % (default 1.65)
    * }
    */
@@ -118,8 +121,13 @@
     const qc = prov === 'QC';
     const P = input.P || FREQUENCIES[input.freq] || 26;
     const gross = r2(num(input.gross));
-    const PI = input.pensionable == null ? gross : r2(num(input.pensionable));
+    const benefits = r2(num(input.benefits));
+    const taxable = r2(gross + benefits); // pay plus taxable benefits not paid in cash
+    const bonus = r2(Math.min(Math.max(0, num(input.bonus)), gross));
+    const PI = input.pensionable == null ? taxable : r2(num(input.pensionable));
     const IE = input.insurable == null ? gross : r2(num(input.insurable));
+    // QPIP: all taxable benefits are insurable (not only the near-cash ones EI takes), so its base can be larger.
+    const QI = input.qpipInsurable == null ? IE : r2(num(input.qpipInsurable));
     const F = r2(num(input.rrsp));
     const U1 = r2(num(input.union));
     const ytd = input.ytd || {};
@@ -143,29 +151,40 @@
     const EI = input.eiExempt ? 0 : r2(Math.max(0, Math.min(eiMax - num(ytd.ei), eiRate * IE)));
     let QPIP = 0, erQPIP = 0;
     if (qc && !input.qpipExempt) {
-      QPIP = r2(Math.max(0, Math.min(t.qpip.max - num(ytd.qpip), t.qpip.rate * IE)));
-      erQPIP = r2(Math.max(0, Math.min(t.qpip.erMax - num(ytd.erQpip), t.qpip.erRate * IE)));
+      QPIP = r2(Math.max(0, Math.min(t.qpip.max - num(ytd.qpip), t.qpip.rate * QI)));
+      erQPIP = r2(Math.max(0, Math.min(t.qpip.erMax - num(ytd.erQpip), t.qpip.erRate * QI)));
     }
 
-    // ---- Federal income tax ----
+    // ---- Income tax ----
+    // Regular pay is annualized (× pay periods). A bonus is taxed with CRA's method for non-periodic
+    // payments (T4127, Option 1): the year's tax with the bonus minus the year's tax without it.
     const F5 = r2(C * ((qc ? t.qpp.rate - t.qpp.baseRate : t.cpp.rate - t.cpp.baseRate) / pp.rate) + C2);
-    const A = pos(P * (gross - F - F5 - U1));
-    const fb = bracket(A, t.fed.A, t.fed.R, t.fed.K);
+    const regular = r2(taxable - bonus);
+    // CPP, EI and QPIP on regular pay alone: they give the credits and the CPP enhancement deduction (F5A)
+    // for regular pay; what the bonus adds is F5B.
+    const Creg = bonus > 0 && !input.cppExempt ? Math.max(0, Math.min(pp.max - num(qc ? ytd.qpp : ytd.cpp), pp.rate * (PI - bonus - exemption))) : C;
+    const EIreg = bonus > 0 ? Math.max(0, Math.min(EI, eiRate * Math.max(0, IE - bonus))) : EI;
+    const QPIPreg = bonus > 0 ? Math.max(0, Math.min(QPIP, t.qpip.rate * Math.max(0, QI - bonus))) : QPIP;
+    // CPP2/QPP2 on regular pay alone (the second additional contribution is fully deductible, so it belongs in F5A).
+    const C2reg = bonus > 0 && !input.cppExempt ? Math.max(0, Math.min(C2, (Math.min(num(ytd.pensionable) + PI - bonus, t.cpp2.yampe) - Math.max(num(ytd.pensionable), pp.ympe)) * t.cpp2.rate)) : C2;
+    const F5A = bonus > 0 ? r2(Creg * ((qc ? t.qpp.rate - t.qpp.baseRate : t.cpp.rate - t.cpp.baseRate) / pp.rate) + C2reg) : F5;
+    const F5B = r2(Math.max(0, F5 - F5A));
     const lowFed = t.fed.R[0];
     const tdFed = optNum(input.td1Fed);
-    const K1 = lowFed * (tdFed == null ? federalBpa(t, A) : tdFed);
-    const cppCredit = Math.min(P * C * (pp.baseRate / pp.rate), pp.baseMaxCredit);
-    const eiCredit = Math.min(P * EI, eiMax);
-    const qpipCredit = qc ? Math.min(P * QPIP, t.qpip.max) : 0;
-    const K2 = lowFed * (cppCredit + eiCredit + qpipCredit);
-    const K4 = Math.min(lowFed * A, lowFed * t.fed.cea);
-    const T3 = pos(fb.rate * A - fb.k - K1 - K2 - K4);
-    const T1 = qc ? T3 - t.fed.qcAbatement * T3 : T3;
-    const fedTax = r2(T1 / P + num(input.extraTax));
-
-    // ---- Provincial income tax (outside Quebec) ----
-    let provTax = 0, qcTax = 0;
-    if (!qc) {
+    const cppCredit = Math.min(P * Creg * (pp.baseRate / pp.rate), pp.baseMaxCredit);
+    const eiCredit = Math.min(P * EIreg, eiMax);
+    const qpipCredit = qc ? Math.min(P * QPIPreg, t.qpip.max) : 0;
+    /** Federal tax for a year at annual taxable income A (T1, after the Quebec abatement). */
+    const fedYear = A => {
+      const fb = bracket(A, t.fed.A, t.fed.R, t.fed.K);
+      const K1 = lowFed * (tdFed == null ? federalBpa(t, A) : tdFed);
+      const K2 = lowFed * (cppCredit + eiCredit + qpipCredit);
+      const K4 = Math.min(lowFed * A, lowFed * t.fed.cea);
+      const T3 = pos(fb.rate * A - fb.k - K1 - K2 - K4);
+      return qc ? T3 - t.fed.qcAbatement * T3 : T3;
+    };
+    /** Provincial tax for a year at A (T2, outside Quebec), with Ontario's surtax and health premium and BC's reduction. */
+    const provYear = A => {
       const p = t.prov[prov];
       const pb = bracket(A, p.A, p.V, p.K);
       const low = p.V[0];
@@ -194,35 +213,79 @@
         else if (A <= 44952) S = Math.min(T4, pos(805 - (A - 25570) * 0.0356));
         T2 = pos(T4 - S);
       }
-      provTax = r2(T2 / P);
+      return T2;
+    };
+    const A = pos(P * (regular - F - F5A - U1));          // regular pay, annualized
+    const B1 = r2(num(ytd.bonus));                        // bonuses already paid this year
+    let fedBonus = 0, provBonus = 0, qcBonus = 0, bonusFlat = false;
+    if (bonus > 0) {
+      const Awo = A + B1, Aw = Awo + pos(bonus - F5B);
+      if (Aw <= 5000) {
+        bonusFlat = true;
+        fedBonus = r2(bonus * (qc ? 0.10 : 0.15));          // CRA: 15% (10% in Quebec) when the year's income is $5,000 or less
+      } else {
+        fedBonus = r2(pos(fedYear(Aw) - fedYear(Awo)));
+        if (!qc) provBonus = r2(pos(provYear(Aw) - provYear(Awo)));
+      }
+    }
+    const fedTax = r2(fedYear(A) / P + fedBonus + num(input.extraTax));
+
+    let provTax = 0, qcTax = 0;
+    if (!qc) {
+      provTax = r2(provYear(A) / P + provBonus);
     } else {
       // ---- Quebec income tax (Revenu Québec TP-1015.F) ----
       const q = t.qc;
       const CSA = C * ((t.qpp.rate - t.qpp.baseRate) / t.qpp.rate) + C2;
-      const H = Math.min(q.employmentDeduction.rate * P * gross, q.employmentDeduction.max);
-      const I = pos(P * (gross - F - CSA) - H);
-      const qb = bracket(I, q.A, q.T, q.K);
+      const CSAreg = bonus > 0 ? Creg * ((t.qpp.rate - t.qpp.baseRate) / t.qpp.rate) : CSA, CSAb = Math.max(0, CSA - CSAreg);
       const tdQc = optNum(input.td1Qc);
       const E = tdQc == null ? q.bpa : tdQc;
-      qcTax = r2(pos((qb.rate * I - qb.k - q.creditRate * E) / P) + num(input.extraQcTax));
+      /** Quebec tax for a year: I is net income before the employment deduction; the deduction is worked out on the year's pay. */
+      const qcYear = (income, pay) => {
+        const H = Math.min(q.employmentDeduction.rate * pay, q.employmentDeduction.max);
+        const I = pos(income - H);
+        const qb = bracket(I, q.A, q.T, q.K);
+        return pos(qb.rate * I - qb.k - q.creditRate * E);
+      };
+      const regIncome = P * (regular - F - CSAreg);
+      qcTax = r2(qcYear(regIncome, P * regular) / P + num(input.extraQcTax));
+      if (bonus > 0) {
+        // Revenu Québec: 7% when the year's pay with the bonus is $18,952 or less; otherwise the difference.
+        const yearPay = P * regular + B1 + bonus;
+        qcBonus = yearPay <= 18952 ? r2(bonus * 0.07)
+          : r2(pos(qcYear(regIncome + B1 + bonus - CSAb, yearPay) - qcYear(regIncome + B1, P * regular + B1)));
+        qcTax = r2(qcTax + qcBonus);
+      }
       notes.push('Quebec income tax follows Revenu Québec’s formula but hasn’t been checked against WebRAS yet. Compare with WebRAS before your first Quebec pay run.');
     }
+    if (bonus > 0) notes.push(bonusFlat ? `The bonus is taxed at the flat ${qc ? '10%' : '15%'} rate, because the year’s income is $5,000 or less.` : 'The bonus is taxed with CRA’s method for bonuses: the year’s tax with the bonus minus the year’s tax without it.');
 
     // ---- Employer contributions ----
     const erCPP = C, erCPP2 = C2;
     const erEI = r2(EI * t.ei.employer);
     const hsfRate = qc ? (input.hsfRate == null ? 1.65 : num(input.hsfRate)) : 0;
-    const HSF = qc ? r2(gross * hsfRate / 100) : 0;
+    const HSF = qc ? r2(taxable * hsfRate / 100) : 0;
 
     const employee = { cpp: qc ? 0 : C, cpp2: qc ? 0 : C2, qpp: qc ? C : 0, qpp2: qc ? C2 : 0, ei: EI, qpip: QPIP, fedTax, provTax, qcTax };
     const employer = { cpp: qc ? 0 : erCPP, cpp2: qc ? 0 : erCPP2, qpp: qc ? erCPP : 0, qpp2: qc ? erCPP2 : 0, ei: erEI, qpip: erQPIP, hsf: HSF };
     return {
       table: t.label, prov, P, quebec: qc,
-      gross, pensionable: PI, insurable: IE, rrsp: F, union: U1,
+      gross, benefits, taxable, bonus, pensionable: PI, insurable: IE, rrsp: F, union: U1,
       employee, employer,
-      annualTaxable: r2(A), notes
+      annualTaxable: r2(A), bonusTax: { fed: fedBonus, prov: provBonus, qc: qcBonus }, notes
     };
   }
+
+  /* Taxable benefits not paid in cash (CRA T4130; Revenu Québec). All are taxable and pensionable (CPP/QPP).
+     EI: only near-cash benefits (gift cards) and board and lodging are insurable. T4 "other information" code
+     and RL-1 box for each; all of them are also in T4 box 14 and RL-1 box A. */
+  const BENEFIT_KINDS = [
+    { k: 'life', label: 'Group term life insurance premiums', t4: 40, rl1: 'L', ei: false },
+    { k: 'auto', label: 'Automobile benefit (standby charge and operating benefit)', t4: 34, rl1: 'W', ei: false },
+    { k: 'nearcash', label: 'Gift cards and other near-cash gifts', t4: 40, rl1: 'L', ei: true },
+    { k: 'board', label: 'Board and lodging', t4: 30, rl1: 'V', ei: true },
+    { k: 'other', label: 'Other non-cash benefits', t4: 40, rl1: 'L', ei: false },
+  ];
 
   // Split a pay's deductions between CRA and Revenu Québec. Works on (possibly overridden) amounts.
   function remitSplit(employee, employer) {
@@ -306,7 +369,7 @@
     const add = (o, k, v) => { o[k] = r2((o[k] || 0) + num(v)); };
     const bucket = (id, prov, date) => {
       const k = id + '|' + prov;
-      if (!acc.has(k)) acc.set(k, { employeeId: id, prov, first: date, gross: 0, pi: 0, ie: 0, qi: 0, rrsp: 0, union: 0, ded: {}, er: {},
+      if (!acc.has(k)) acc.set(k, { employeeId: id, prov, first: date, gross: 0, pi: 0, ie: 0, qi: 0, rrsp: 0, union: 0, ded: {}, er: {}, allowance: 0, ben: {},
         pays: 0, exC: 0, exE: 0, exQ: 0 });
       const b = acc.get(k); if (date < b.first) b.first = date; return b;
     };
@@ -337,8 +400,11 @@
         const exC = flag('cppExempt'), exE = flag('eiExempt'), exQ = flag('qpipExempt');
         b.pays++; if (exC) b.exC++; if (exE) b.exE++; if (exQ) b.exQ++;
         const ie = l.insurable ?? l.gross;
-        add(b, 'gross', l.gross); add(b, 'pi', exC ? 0 : (l.pensionable ?? l.gross)); add(b, 'ie', exE ? 0 : ie); add(b, 'qi', exQ ? 0 : ie);
-        add(b, 'rrsp', l.rrsp); add(b, 'union', l.union);
+        // QPIP (box 56, RL-1 I) also counts the benefits EI leaves out.
+        const qi = r2(ie + BENEFIT_KINDS.filter(k => !k.ei).reduce((t, k) => t + num((l.benefits || {})[k.k]), 0));
+        add(b, 'gross', l.gross); add(b, 'pi', exC ? 0 : (l.pensionable ?? l.gross)); add(b, 'ie', exE ? 0 : ie); add(b, 'qi', exQ ? 0 : qi);
+        add(b, 'rrsp', l.rrsp); add(b, 'union', l.union); add(b, 'allowance', l.allowance);
+        for (const [k, v] of Object.entries(l.benefits || {})) add(b.ben, k, v);
         for (const [k, v] of Object.entries(l.ded || {})) add(b.ded, k, v);
         for (const [k, v] of Object.entries(l.er || {})) add(b.er, k, v);
       }
@@ -359,6 +425,16 @@
       const empSlips = [];
       for (const b of list) {
         const qc = b.prov === 'QC', d = k => r2(b.ded[k] || 0);
+        // Taxable benefits not paid in cash: in box 14 (RL-1 box A), and broken down by "other information" code.
+        const benAll = r2(Object.values(b.ben).reduce((t, v) => t + num(v), 0));
+        const codes = {}, rlCodes = {};
+        if (b.allowance) codes[40] = r2(b.allowance);
+        for (const kind of BENEFIT_KINDS) {
+          const v = num(b.ben[kind.k]);
+          if (!v) continue;
+          codes[kind.t4] = r2((codes[kind.t4] || 0) + v);
+          rlCodes[kind.rl1] = r2((rlCodes[kind.rl1] || 0) + v);
+        }
         const rpp = e.pensionType === 'rpp' ? r2(b.rrsp) : 0;
         const box24 = slice(cumIE, b.ie, L.eiMax), box26 = slice(cumPI, b.pi, L.yampe);
         const box56 = qc ? slice(cumQI, b.qi, L.qpipMax) : 0;
@@ -367,7 +443,7 @@
         const ex28 = { cppQpp: b.pays > 0 && b.exC === b.pays && !c && !c2, ei: b.pays > 0 && b.exE === b.pays && !d('ei'),
           ppip: qc && b.pays > 0 && b.exQ === b.pays && !d('qpip') };
         const t4 = {
-          10: b.prov, 12: String(e.sin || '').replace(/\D/g, ''), 14: r2(b.gross),
+          10: b.prov, 12: String(e.sin || '').replace(/\D/g, ''), 14: r2(b.gross + benAll),
           16: qc ? 0 : c, '16A': qc ? 0 : c2, 17: qc ? c : 0, '17A': qc ? c2 : 0,
           18: d('ei'), 20: rpp, 22: r2(d('fedTax') + (qc ? 0 : d('provTax'))),
           24: ex28.ei ? 0 : box24, 26: ex28.cppQpp ? 0 : box26, 28: ex28,
@@ -376,7 +452,7 @@
           55: qc ? d('qpip') : 0, 56: qc ? (ex28.ppip ? 0 : box56) : 0,
         };
         const rl1 = qc ? {
-          A: r2(b.gross), 'B.A': d('qpp'), 'B.B': d('qpp2'), C: d('ei'), D: rpp, E: d('qcTax'), F: r2(b.union),
+          A: r2(b.gross + benAll), 'B.A': d('qpp'), 'B.B': d('qpp2'), C: d('ei'), D: rpp, E: d('qcTax'), F: r2(b.union),
           G: ex28.cppQpp ? 0 : slice(cumPI, b.pi, c2 > 0 ? L.yampe : L.ympe),
           H: d('qpip'), I: ex28.ppip ? 0 : box56,
         } : null;
@@ -401,7 +477,8 @@
         if (!t4[45]) checks.push({ level: 'error', code: 'dental' });
         if (rpp > 0 && !String(e.rppNo || '').trim()) checks.push({ level: 'error', code: 'rpp-no' });
         if (rpp > 0) t4[50] = String(e.rppNo || '').replace(/\D/g, '');
-        const s = { employeeId: id, name: e.name || '', address: e.address || '', prov: b.prov, t4, rl1, er: { ...b.er }, checks };
+        if (rl1) Object.assign(rl1, rlCodes);
+        const s = { employeeId: id, name: e.name || '', address: e.address || '', prov: b.prov, t4, other: codes, rl1, er: { ...b.er }, checks };
         empSlips.push(s); slips.push(s);
       }
       // The pension adjustment goes on one slip (the last one), and the employee-wide checks with it.
@@ -622,7 +699,7 @@
     ['M', 'Dismissal or suspension'], ['N', 'Leave of absence'], ['P', 'Parental'], ['Z', 'Compassionate care / family caregiver'],
   ];
 
-  return { calc, remitSplit, remittanceDue, tableFor, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
+  return { calc, remitSplit, remittanceDue, tableFor, BENEFIT_KINDS, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
     yearEnd, sinProblem, slipsDue, hsfRateFor, YEAR_LIMITS,
     holidays, holidaysBetween, holidayWindow, holidayPay, vacationRate, serviceYears, roe, roePeriods, ROE_PERIODS, ROE_REASONS, addDays: addD, daysBetween };
 });

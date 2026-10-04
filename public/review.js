@@ -91,7 +91,7 @@ const questionsWaiting=()=>ME&&ME.role==='client'?S.questions.filter(q=>q.status
 /* ---------- bulk reclassify ----------
    Move amounts from one account to another on many transactions at once: the transaction lines, and the
    expense, deposit, invoice or bill they came from, so reopening one shows the new account. */
-const SYS_DETAILS=['bank','card','ar','ap','tax','qst','payroll_cra','payroll_rq','payroll_other','vacation_payable','ob','wages','payroll_tax'];
+const SYS_DETAILS=['bank','card','ar','ap','tax','qst','pst','payroll_cra','payroll_rq','payroll_other','vacation_payable','ob','wages','payroll_tax'];
 const reclassOk=a=>a&&!SYS_DETAILS.includes(a.detail);
 const NO_RECLASS=new Set(['payrun','payremit','taxpayment','qmadjust']);
 function reclassForm(){

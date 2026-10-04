@@ -72,7 +72,9 @@ async function docPdf(doc){
   }
   // Totals
   const rows=[[dl('sub'),dmoney(doc.sub)]];
-  if(+doc.tax)for(const p of splitTaxTotal(+doc.tax))rows.push([`${p.name} ${p.rate}%`,dmoney(p.amount)]);
+  // Older documents have no saved parts: split by today's parts only if the rate hasn't changed since.
+  const oldRate=doc.taxRate!=null&&Math.abs(+doc.taxRate-(+S.company.taxRate||0))>0.0001;
+  if(+doc.tax)for(const p of (doc.taxParts&&doc.taxParts.length?doc.taxParts:oldRate?[{name:dlang()==='fr'?'Taxes':'Tax',rate:+doc.taxRate,amount:+doc.tax}]:splitTaxTotal(+doc.tax)))rows.push([`${p.name} ${p.rate}%`,dmoney(p.amount)]);
   rows.push([dl('total'),dmoney(doc.total),true]);
   if(!cred){
     const credits=r2(S.docs.filter(c=>c.applied).reduce((s,c)=>s+c.applied.filter(a=>a.docId===doc.id).reduce((t,a)=>t+(+a.amount||0),0),0));

@@ -884,7 +884,7 @@
     if (d === 'bank') return /petty|petite caisse|cash on hand|fonds de caisse/i.test(a.name || '') ? '1001' : '1002';
     if (d === 'ar') return '1060';
     if (d === 'ap' || d === 'card' || d === 'vacation_payable') return '2620';
-    if (d === 'tax' || d === 'qst') return '2680';
+    if (d === 'tax' || d === 'qst' || d === 'pst') return '2680';
     if (d === 'payroll_cra' || d === 'payroll_rq' || d === 'payroll_other') return '2627';
     if (d === 'ob') return '';
     if (d === 'wages') return '9060';

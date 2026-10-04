@@ -6,7 +6,7 @@ const PLANS = require('../../public/plans.js');
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
   Asset: ['', 'bank', 'ar', 'capital'],
-  Liability: ['', 'card', 'ap', 'tax', 'qst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable'],
+  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
@@ -186,7 +186,7 @@ function validateRule(data, store) {
   if (!a) throw new ValidationError('Choose the account this rule should use.');
   if (a.detail === 'bank' || a.detail === 'card') throw new ValidationError('A rule can’t categorize into a bank or card account; use a transfer instead.');
   if (data.contactId && !store.get('contacts', data.contactId)) throw new ValidationError('The payee on this rule doesn’t exist.');
-  return { ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: !!data.tax, contactId: data.contactId || '' };
+  return { ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: data.tax === 'gst' ? 'gst' : !!data.tax, contactId: data.contactId || '' };
 }
 
 function validateRecon(data, store) {
@@ -198,7 +198,7 @@ function validateRecon(data, store) {
 }
 
 function validateFiling(data, store) {
-  if (!['gst', 'qst'].includes(data.tax)) throw new ValidationError('A filing must be for GST/HST or QST.');
+  if (!['gst', 'qst', 'pst'].includes(data.tax)) throw new ValidationError('A filing must be for GST/HST, QST or PST.');
   if (!isDate(data.from) || !isDate(data.to) || data.from > data.to) throw new ValidationError('A filing needs a valid period.');
   if (!isDate(data.filedOn)) throw new ValidationError('Enter the date the return was filed.');
   if (!isObj(data.lines)) throw new ValidationError('A filing must include its return lines.');
@@ -281,6 +281,7 @@ function validateEmployee(data) {
   return out;
 }
 
+const BENEFIT_KEYS = ['life', 'auto', 'nearcash', 'board', 'other']; // see BENEFIT_KINDS in payroll-calc.js
 const PAY_KEYS = ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'fedTax', 'provTax', 'qcTax'];
 const ER_KEYS = ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'hsf'];
 function validatePayrun(data, store) {
@@ -308,16 +309,33 @@ function validatePayrun(data, store) {
     net += n;
     // Earnings broken down (regular, holiday, other, bonus, vacation pay): they have to add up to gross pay.
     const parts = {};
-    for (const k of ['regular', 'holiday', 'other', 'bonus', 'vacPay', 'vacAccrued', 'holHours', 'hours', 'vacRate']) {
+    for (const k of ['regular', 'holiday', 'other', 'bonus', 'allowance', 'vacPay', 'vacAccrued', 'holHours', 'hours', 'vacRate']) {
       if (l[k] === undefined || l[k] === '') continue;
-      parts[k] = amt(l[k], { regular: 'regular pay', holiday: 'holiday pay', other: 'other pay', bonus: 'bonus', vacPay: 'vacation pay', vacAccrued: 'vacation pay set aside', holHours: 'holiday hours', hours: 'hours', vacRate: 'vacation pay rate' }[k]) / 100;
+      parts[k] = amt(l[k], { regular: 'regular pay', holiday: 'holiday pay', other: 'other pay', bonus: 'bonus', allowance: 'taxable allowance', vacPay: 'vacation pay', vacAccrued: 'vacation pay set aside', holHours: 'holiday hours', hours: 'hours', vacRate: 'vacation pay rate' }[k]) / 100;
     }
-    if (parts.regular !== undefined && ['holiday', 'other', 'bonus', 'vacPay'].some(k => parts[k] !== undefined)) {
-      const sum = ['regular', 'holiday', 'other', 'bonus', 'vacPay'].reduce((t, k) => t + cents(parts[k] || 0), 0);
-      if (sum !== gross) throw new ValidationError(`${emp.name}: regular, holiday, other, bonus and vacation pay don’t add up to gross pay.`);
+    if (parts.regular !== undefined && ['holiday', 'other', 'bonus', 'allowance', 'vacPay'].some(k => parts[k] !== undefined)) {
+      const sum = ['regular', 'holiday', 'other', 'bonus', 'allowance', 'vacPay'].reduce((t, k) => t + cents(parts[k] || 0), 0);
+      if (sum !== gross) throw new ValidationError(`${emp.name}: regular, holiday, other, bonus, allowance and vacation pay don’t add up to gross pay.`);
+    }
+    // Taxable benefits not paid in cash: known kinds only, amounts zero or more.
+    let benefits;
+    if (l.benefits !== undefined) {
+      if (!isObj(l.benefits)) throw new ValidationError(`${emp.name}: the taxable benefits aren’t valid.`);
+      benefits = {};
+      for (const [k, v] of Object.entries(l.benefits)) {
+        if (!BENEFIT_KEYS.includes(k)) throw new ValidationError(`${emp.name}: unknown taxable benefit “${str(k, 30)}”.`);
+        const c = amt(v, 'taxable benefits');
+        if (c) benefits[k] = c / 100;
+      }
+    }
+    const benCents = Object.values(benefits || {}).reduce((t, v) => t + cents(v), 0);
+    for (const k of ['pensionable', 'insurable']) {
+      if (l[k] === undefined) continue;
+      const c = amt(l[k], k === 'pensionable' ? 'pensionable earnings' : 'insurable earnings');
+      if (c > gross + benCents) throw new ValidationError(`${emp.name}: ${k === 'pensionable' ? 'pensionable' : 'insurable'} earnings are more than pay plus taxable benefits.`);
     }
     if (parts.vacRate !== undefined && parts.vacRate > 100) throw new ValidationError(`${emp.name}: the vacation pay rate is a percentage, 100 or less.`);
-    const extra = { ...parts };
+    const extra = { ...parts, ...(benefits ? { benefits } : {}) };
     if (l.vacMode !== undefined) { if (!['accrue', 'each'].includes(l.vacMode)) throw new ValidationError(`${emp.name}: unknown vacation pay method.`); extra.vacMode = l.vacMode; }
     if (extra.vacAccrued && l.vacMode !== 'accrue') throw new ValidationError(`${emp.name}: vacation pay is only set aside for employees whose vacation pay is set aside.`);
     if (l.holidays !== undefined) {
@@ -451,6 +469,10 @@ function validateCompany(data) {
     bn: str(data.bn, 40).trim(),
     province: /^[A-Z]{2}$/.test(data.province || '') ? data.province : '',
     qstRate: Math.max(0, Math.min(100, Number(data.qstRate) || 0)),
+    // Provincial sales tax (BC PST, Manitoba RST, Saskatchewan PST): charged on sales with GST, not recoverable on purchases.
+    pstRate: Math.max(0, Math.min(20, Number(data.pstRate) || 0)),
+    pstName: ['PST', 'RST'].includes(data.pstName) ? data.pstName : 'PST',
+    pstFreq: ['monthly', 'quarterly', 'semiannual', 'annual'].includes(data.pstFreq) ? data.pstFreq : 'quarterly',
     filingFreq: ['monthly', 'quarterly', 'annual'].includes(data.filingFreq) ? data.filingFreq : 'quarterly',
     lang: data.lang === 'fr' ? 'fr' : 'en',
     ai: !!data.ai,
@@ -475,6 +497,8 @@ function validateCompany(data) {
       from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: true } : {}),
     })).filter(r => r.id && r.name),
   };
+  if (out.qstRate > 0 && out.pstRate > 0) throw new ValidationError('A company charges QST or PST, not both.');
+  if (out.pstRate > 0 && out.pstRate >= out.taxRate) throw new ValidationError('The sales tax rate must include GST plus PST.');
   // Registered charities and qualifying non-profits can't use the Quick Method.
   if (out.quickMethod.on && (out.orgType === 'charity' || (out.orgType === 'npo' && out.nonprofit.qualifying))) out.quickMethod = { ...out.quickMethod, on: false };
   return out;
