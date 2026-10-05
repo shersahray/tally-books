@@ -1741,3 +1741,6 @@ addFr({
 addFr({'Working trial balance (with adjustments)':'Balance de vérification de travail (avec redressements)','Adjusting entries':'Écritures de redressement',
   'Unadjusted debit':'Débit non redressé','Unadjusted credit':'Crédit non redressé','Adjustments debit':'Débit des redressements','Adjustments credit':'Crédit des redressements','Adjusted debit':'Débit redressé','Adjusted credit':'Crédit redressé',
   'AJE {0}':'ER {0}','No adjusting entries':'Aucune écriture de redressement','Mark a journal entry as adjusting when you enter it (+ New → Journal entry).':'Marquez une écriture de journal comme écriture de redressement en la saisissant (+ Nouveau → Écriture de journal).'});
+addFr({'Showing {0} of {1}.':'{0} sur {1} affichées.','Show {0} more':'En afficher {0} de plus','Or pick dates to find older ones.':'Ou choisissez des dates pour trouver les plus anciennes.',
+  'Or search, or pick dates.':'Ou faites une recherche, ou choisissez des dates.','Pick one account to see all of it. Export CSV and PDF include every line.':'Choisissez un compte pour le voir en entier. Les exportations CSV et PDF contiennent toutes les lignes.'
+});

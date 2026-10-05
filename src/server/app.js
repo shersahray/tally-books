@@ -1,4 +1,5 @@
 'use strict';
+const zlib = require('node:zlib');
 // HTTP server: JSON API + static files. No third-party dependencies.
 
 const http = require('node:http');
@@ -1519,7 +1520,11 @@ function send(res, status, body, headers = {}) {
   res.end(body);
 }
 function sendJson(res, status, obj) {
-  send(res, status, JSON.stringify(obj), { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
+  const body = JSON.stringify(obj), headers = { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store', Vary: 'Accept-Encoding' };
+  // Big answers (a company's whole books can be several MB) are compressed, which matters over the internet.
+  const ae = (res.req && res.req.headers['accept-encoding']) || '';
+  if (body.length < 16384 || !/\bgzip\b/.test(ae)) return send(res, status, body, headers);
+  zlib.gzip(body, { level: 5 }, (err, gz) => err ? send(res, status, body, headers) : send(res, status, gz, { ...headers, 'Content-Encoding': 'gzip' }));
 }
 
 function serveStatic(dir, pathname, req, res) {
