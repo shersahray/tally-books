@@ -36,6 +36,14 @@ if [ ${#SETUP_CODE} -lt 10 ] || [ "$SETUP_CODE" = "choose a phrase only you know
 fi
 
 timedatectl set-timezone America/Toronto || true
+
+# A 2 GB swap file, so a small server (1 GiB of memory) doesn't run out during the nightly update.
+if ! swapon --show | grep -q /swapfile; then
+  if fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile; then
+    grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  else echo "Couldn't add a swap file; carrying on without it."; rm -f /swapfile; fi
+  sysctl -w vm.swappiness=10 >/dev/null; echo 'vm.swappiness=10' > /etc/sysctl.d/90-tally-swap.conf
+fi
 apt-get update
 apt-get -y -o Dpkg::Options::=--force-confold upgrade
 apt-get install -y git curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https unattended-upgrades
