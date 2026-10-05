@@ -47,7 +47,7 @@ Search for **Virtual machines** and choose **+ Create → Azure virtual machine*
 **Advanced tab**
 1. Open [`setup.sh`](setup.sh), copy the whole file, and paste it into **Custom data**.
 2. Before moving on, edit the three lines near the top, in the Custom data box:
-   - **`DOMAIN`**: pick a short name for your address, such as `sher-books`. Your address becomes `sher-books.canadacentral.cloudapp.azure.com`. You'll enter the same name in step 4.
+   - **`DOMAIN`**: pick a short name, such as `sher-books`, and put the **whole address** between the quotes: `sher-books.canadacentral.cloudapp.azure.com`. You'll enter just the short name (`sher-books`) in step 4.
    - **`EMAIL`**: your email address, for notices about the HTTPS certificate.
    - **`SETUP_CODE`**: a phrase only you know, at least 10 characters, such as `purple canoe 1987`. You'll type it once, when you create your owner account.
 
