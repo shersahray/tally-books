@@ -309,7 +309,7 @@ function vReports(){
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
   const pointInTime=R.tab!=='pl'&&R.tab!=='gl';
   const saved=adv?savedReports():[],staff=ME&&ME.role!=='client',cur=saved.find(x=>x.id===S.rep.savedId&&savedMatches(x));
-  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff&&adv?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
+  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff&&adv?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}${ME&&ME.role!=='client'&&!ME.readOnly?'<button class="btn" data-act="yearpkg">Year-end package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
     ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
@@ -448,7 +448,7 @@ function vSettings(){
   ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
     <span class="muted">A backup is a single file with every account, contact, invoice, bill and transaction. Keep one somewhere safe, and restore it here or on another computer.</span>
-    <div class="actions"><button class="btn" data-act="backup">Download backup</button><button class="btn" data-act="restore">Restore from backup…</button><input type="file" id="restoreFile" accept=".json,application/json" hidden></div>
+    <div class="actions"><button class="btn" data-act="backup">Download backup</button><button class="btn" data-act="restore">Restore from backup…</button>${ME&&ME.role!=='client'?'<button class="btn" data-act="yearpkg">Year-end package for your accountant</button>':''}<input type="file" id="restoreFile" accept=".json,application/json" hidden></div>
   </div></div>
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Example data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">${hasExamples()?'Sample customers, vendors and transactions are marked “Example”. Clearing removes only those; your chart of accounts stays.':'Load a few sample customers, vendors and transactions to explore. They’re marked “Example” and can be cleared in one click.'}</span>${hasExamples()?'<button class="btn danger" data-act="clear-examples">Clear example data</button>':'<button class="btn" data-act="load-examples">Load example data</button>'}</div></div>`;
 }
@@ -491,6 +491,7 @@ function bindMain(m){
     if(d.act==='repsave')return saveReport();
     if(d.act==='repunsave')return deleteSaved(S.rep.savedId);
     if(d.act==='reppkg')return packageForm();
+    if(d.act==='yearpkg')return yearEndPackageForm();
     if(d.act==='retry')return load();
     if(d.act==='activity')return showActivity();
     if(d.act==='caseware')return casewareForm();
@@ -669,20 +670,24 @@ function casewareForm(){
     $('[data-cwwarn]',f).innerHTML=[nocode?`<div>${nocode} account${nocode===1?' has':'s have'} a balance but no account number. CaseWare needs one, so ${nocode===1?'it gets':'they get'} a temporary number (TB-1, TB-2…). Add numbers in the chart of accounts to keep them steady.</div>`:'',nogifi?`<div>${nogifi} account${nogifi===1?' has':'s have'} a balance but no GIFI code. <button type="button" class="link" data-cwgifi>Fill in GIFI codes</button></div>`:'',notClosed?`<div>The books aren’t closed through ${fmtDate(e)} yet, so the figures can still change. Close them in Settings once the year-end is final.</div>`:''].filter(Boolean).map(x=>`<div class="banner" style="margin:0">${x}</div>`).join('');const g=$('[data-cwgifi]',f);if(g)g.onclick=()=>{closeModal();gifiForm()}};
   $('#cwEnd',f).onchange=()=>{$('#cwCustom',f).hidden=$('#cwEnd',f).value!=='custom';warn()};$('#cwCustom',f).onchange=warn;warn();
   f.onsubmit=e=>{e.preventDefault();const ye=end();if(!ye)return f.err('Choose the year-end.');
-    const prior=$('#cwPrior',f).checked,pe=addDays(fyStartOf(ye),-1);
-    const cur=casewareRows(ye),pri=prior?casewareRows(pe):null;
-    const pv=id=>{if(!pri)return 0;const x=pri.rows.find(y=>y.a.id===id);return x?x.v:0};
-    const head=['Account number','Description','Map number','GIFI code','Account type','Current year'].concat(prior?['Prior year']:[]);
-    const out=[head];let n=0,tc=0,tp=0;
-    for(const{a,v}of cur.rows){const p=pv(a.id);if(Math.abs(v)<0.005&&Math.abs(p)<0.005)continue;const code=a.code||`TB-${++n}`;tc+=v;tp+=p;out.push([code,a.name,a.cwMap||'',a.gifi||'',a.type,v.toFixed(2)].concat(prior?[p.toFixed(2)]:[]))}
-    const pre=pri?pri.re:0;
-    if(Math.abs(cur.re)>=0.005||Math.abs(pre)>=0.005){tc+=cur.re;tp+=pre;out.push(['RE-OPEN','Retained earnings, beginning of year (earnings of earlier years)','','3600','Equity',cur.re.toFixed(2)].concat(prior?[pre.toFixed(2)]:[]))}
-    if(Math.abs(r2(tc))>=0.01||(prior&&Math.abs(r2(tp))>=0.01)){f.err('The trial balance doesn’t add up to zero. Check for unbalanced entries before exporting.');return}
-    const text=out.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
+    let text;try{text=casewareCsv(ye,$('#cwPrior',f).checked)}catch(err){return f.err(err.message)}
     const safe=(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();
     saveFile(`caseware-tb_${safe}_${ye}.csv`,new Blob(['\ufeff'+text],{type:'text/csv;charset=utf-8'}));
     closeModal();toast('CaseWare trial balance downloaded');
   };
+}
+/** The CaseWare trial balance for a year-end as CSV text (throws when it doesn't balance). */
+function casewareCsv(ye,prior){
+  const pe=addDays(fyStartOf(ye),-1);
+  const cur=casewareRows(ye),pri=prior?casewareRows(pe):null;
+  const pv=id=>{if(!pri)return 0;const x=pri.rows.find(y=>y.a.id===id);return x?x.v:0};
+  const head=['Account number','Description','Map number','GIFI code','Account type','Current year'].concat(prior?['Prior year']:[]);
+  const out=[head];let n=0,tc=0,tp=0;
+  for(const{a,v}of cur.rows){const p=pv(a.id);if(Math.abs(v)<0.005&&Math.abs(p)<0.005)continue;const code=a.code||`TB-${++n}`;tc+=v;tp+=p;out.push([code,a.name,a.cwMap||'',a.gifi||'',a.type,v.toFixed(2)].concat(prior?[p.toFixed(2)]:[]))}
+  const pre=pri?pri.re:0;
+  if(Math.abs(cur.re)>=0.005||Math.abs(pre)>=0.005){tc+=cur.re;tp+=pre;out.push(['RE-OPEN','Retained earnings, beginning of year (earnings of earlier years)','','3600','Equity',cur.re.toFixed(2)].concat(prior?[pre.toFixed(2)]:[]))}
+  if(Math.abs(r2(tc))>=0.01||(prior&&Math.abs(r2(tp))>=0.01))throw new Error('The trial balance doesn’t add up to zero. Check for unbalanced entries before exporting.');
+  return out.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
 }
 function exportCSV(){
   const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:()=>R.tbAdj?rTBAdj():rTB(),gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();

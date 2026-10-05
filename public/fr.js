@@ -1716,3 +1716,25 @@ addFr({'Type of business':'Type d’entreprise','Adds or renames {0} accounts, s
   'Accounts for a type of business…':'Comptes pour un type d’entreprise…','Accounts for a type of business':'Comptes pour un type d’entreprise',
   'Adds the accounts a type of business usually needs, like food cost and delivery app commissions for a restaurant. Accounts you already have are left as they are.':'Ajoute les comptes dont un type d’entreprise a habituellement besoin, comme le coût de la nourriture et les commissions des applications de livraison pour un restaurant. Les comptes existants restent tels quels.',
   'Add accounts':'Ajouter les comptes','Nothing to add':'Rien à ajouter','These books already have all of these accounts.':'Ces livres ont déjà tous ces comptes.','Added {0} account':'{0} compte ajouté','Added {0} accounts':'{0} comptes ajoutés'});
+/* Year-end package for the accountant, and opening a client's books (yearend.js). */
+addFr({
+  'Year-end package':'Dossier de fin d’exercice','Year-end package for your accountant':'Dossier de fin d’exercice pour votre comptable',
+  'One file with everything your accountant needs for the year-end and tax return. Send it by email or upload it to your accountant’s portal.':'Un seul fichier avec tout ce dont votre comptable a besoin pour la fin d’exercice et la déclaration de revenus. Envoyez-le par courriel ou déposez-le sur le portail de votre comptable.',
+  'Fiscal year ending':'Exercice se terminant le','Included':'Inclus',
+  'Your books (a Sumlora backup your accountant can open)':'Vos livres (une sauvegarde Sumlora que votre comptable peut ouvrir)',
+  'Financial statements (PDF): income statement, balance sheet, cash flow and trial balance':'États financiers (PDF) : état des résultats, bilan, flux de trésorerie et balance de vérification',
+  'General ledger and a trial balance for CaseWare (spreadsheets)':'Grand livre et balance de vérification pour CaseWare (tableurs)',
+  'Sales tax return figures for the year':'Chiffres des déclarations de taxes de vente de l’exercice',
+  'Include receipts and attachments on the year’s transactions':'Inclure les reçus et pièces jointes des opérations de l’exercice',
+  'This fiscal year hasn’t ended yet. The package shows the books as they are today.':'Cet exercice n’est pas encore terminé. Le dossier montre les livres tels qu’ils sont aujourd’hui.',
+  'Tip: close the books through the year-end first (Settings → Close the books), so nothing changes after you send it.':'Conseil : fermez d’abord les livres jusqu’à la fin d’exercice (Paramètres → Fermer les livres), pour que rien ne change après l’envoi.',
+  '{0} bank line from this year is still waiting for review in Banking.':'{0} ligne bancaire de cet exercice attend encore d’être vérifiée dans Banque.','{0} bank lines from this year are still waiting for review in Banking.':'{0} lignes bancaires de cet exercice attendent encore d’être vérifiées dans Banque.',
+  'Download package':'Télécharger le dossier','Preparing…':'Préparation…','Year-end package downloaded':'Dossier de fin d’exercice téléchargé',
+  'Package downloaded. {0} file couldn’t be added.':'Dossier téléchargé. {0} fichier n’a pas pu être ajouté.','Package downloaded. {0} files couldn’t be added.':'Dossier téléchargé. {0} fichiers n’ont pas pu être ajoutés.',
+  'Open a client’s books':'Ouvrir les livres d’un client','The books of':'Les livres de','{0} transactions, saved {1}.':'{0} opérations, enregistrées le {1}.','{0} transaction, saved {1}.':'{0} opération, enregistrée le {1}.',
+  'They’re added as a new company. Nothing else changes.':'Ils sont ajoutés comme une nouvelle entreprise. Rien d’autre ne change.',
+  'Receipt photos aren’t inside the books file. If they came in a year-end package, they’re in its “Receipts and attachments” folder.':'Les photos des reçus ne sont pas dans le fichier des livres. Si elles sont arrivées dans un dossier de fin d’exercice, elles sont dans son dossier « Receipts and attachments ».',
+  'Open the books':'Ouvrir les livres','Opening…':'Ouverture…','{s} is open':'{s} est ouverte',
+  'There are no Sumlora books in that zip file.':'Ce fichier zip ne contient pas de livres Sumlora.','That file isn’t a Sumlora backup or year-end package.':'Ce fichier n’est pas une sauvegarde Sumlora ni un dossier de fin d’exercice.',
+  'That isn’t a zip file.':'Ce n’est pas un fichier zip.','That zip file is damaged.':'Ce fichier zip est endommagé.','The books couldn’t be read. Try again.':'Les livres n’ont pas pu être lus. Réessayez.',
+});
