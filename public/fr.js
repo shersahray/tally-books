@@ -1738,3 +1738,6 @@ addFr({
   'There are no Sumlora books in that zip file.':'Ce fichier zip ne contient pas de livres Sumlora.','That file isn’t a Sumlora backup or year-end package.':'Ce fichier n’est pas une sauvegarde Sumlora ni un dossier de fin d’exercice.',
   'That isn’t a zip file.':'Ce n’est pas un fichier zip.','That zip file is damaged.':'Ce fichier zip est endommagé.','The books couldn’t be read. Try again.':'Les livres n’ont pas pu être lus. Réessayez.',
 });
+addFr({'Working trial balance (with adjustments)':'Balance de vérification de travail (avec redressements)','Adjusting entries':'Écritures de redressement',
+  'Unadjusted debit':'Débit non redressé','Unadjusted credit':'Crédit non redressé','Adjustments debit':'Débit des redressements','Adjustments credit':'Crédit des redressements','Adjusted debit':'Débit redressé','Adjusted credit':'Crédit redressé',
+  'AJE {0}':'ER {0}','No adjusting entries':'Aucune écriture de redressement','Mark a journal entry as adjusting when you enter it (+ New → Journal entry).':'Marquez une écriture de journal comme écriture de redressement en la saisissant (+ Nouveau → Écriture de journal).'});

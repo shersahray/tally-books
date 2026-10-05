@@ -71,7 +71,7 @@ It runs two ways from the same code:
   - **Bank reconciliation report** for each finished reconciliation: what cleared, deposits in transit, outstanding cheques, and the books' balance, as a PDF or CSV.
 - **Accountant tools:**
   - **Reclassify** many transactions from one account to another at once (the expenses, invoices and bills they came from change too).
-  - **Adjusting entries**, and **reversing entries** that post the opposite entry on a chosen date.
+  - **Adjusting entries**, and **reversing entries** that post the opposite entry on a chosen date. On the Trial balance report, **Show** switches between the trial balance, the **working trial balance** (unadjusted, adjustments and adjusted balance, each as debit and credit), and the list of **adjusting entries** for the year (AJE 1, AJE 2… with each line's debit and credit), all exportable to CSV and PDF.
   - **Attachments**: PDFs and photos on any transaction, invoice or bill.
   - **Review**: amounts in uncategorized or suspense accounts, possible duplicates, and bank lines waiting more than 30 days.
   - **Questions to the client** on a transaction. The client answers under Questions; the team marks them resolved.

@@ -185,12 +185,12 @@ async function saveReport(){
     <div class="muted" style="font-size:13px">Saves the report, its period and comparison so you can open it again in one click. The dates move with the period: “This fiscal year” is always the current one.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`);
   f.onsubmit=async e=>{e.preventDefault();const name=$('#srName',f).value.trim();if(!name)return f.err('Give it a name.');
-    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:!!R.tbAdj};
+    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:R.tbAdj==='aje'?'aje':!!R.tbAdj};
     if(await putCompany({...strip(S.company),savedReports:[...savedReports().filter(x=>x.name!==name),item].slice(-30)})){S.rep.savedId=item.id;closeModal();toast('Report saved')}};
 }
-function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:!!x.tbAdj});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
+function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:x.tbAdj==='aje'?'aje':!!x.tbAdj});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
 /** Is the report on screen still the saved one (same report, period and options)? */
-const savedMatches=x=>{const R=S.rep;return x.tab===R.tab&&x.period===R.period&&(x.compare||'')===(R.compare||'')&&(x.acct||'')===(R.acct||'')&&!!x.tbAdj===!!R.tbAdj&&(x.period!=='custom'||(x.from===R.from&&x.to===R.to))};
+const savedMatches=x=>{const R=S.rep;return x.tab===R.tab&&x.period===R.period&&(x.compare||'')===(R.compare||'')&&(x.acct||'')===(R.acct||'')&&(x.tbAdj==='aje'?'aje':!!x.tbAdj)===(R.tbAdj==='aje'?'aje':!!R.tbAdj)&&(x.period!=='custom'||(x.from===R.from&&x.to===R.to))};
 async function deleteSaved(id){const x=savedReports().find(r=>r.id===id);if(!x||!await confirmBox('Delete this saved report?',x.name,'Delete'))return;if(await putCompany({...strip(S.company),savedReports:savedReports().filter(r=>r.id!==id)})){S.rep.savedId='';toast('Saved report deleted');renderMain()}}
 
 /* ---------- PDFs ---------- */
@@ -265,7 +265,7 @@ function reportsPdf(reports,{cover}={}){
   return doc.output();
 }
 const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging'};
-function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:()=>S.rep.tbAdj?rTBAdj():rTB(),gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
+function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
 
 /* ---------- report package: several reports for a period, as one PDF ---------- */
 function packageForm(){
@@ -325,24 +325,47 @@ function reconReport(r){
 }
 
 /* ---------- working trial balance: before adjustments, adjusting entries, after ---------- */
+/* Working (adjusted) trial balance: for each account, the balance before adjustments, the adjusting entries and the
+   adjusted balance, each as a debit or a credit. Adjusting entries are journal entries marked "Adjusting" in the year. */
 function rTBAdj(){
   const to=S.rep.to,fy=fyStartOf(to),isAdj=e=>e.adjusting&&!e.reversalOf&&e.date>=fy&&e.date<=to,adjIds=new Set(S.entries.filter(isAdj).map(e=>e.id));
   const sums=new Map();
   for(const p of postings()){
     const a=acct(p.account);if(!a)continue;
     const from=isPL(a.type)?fy:null;if((from&&p.date<from)||p.date>to)continue;
-    const x=sums.get(p.account)||{u:0,j:0};if(adjIds.has(p.e.id))x.j+=p.debit-p.credit;else x.u+=p.debit-p.credit;sums.set(p.account,x);
+    // Adjustments keep their debits and credits apart, so an account adjusted both ways shows both.
+    const x=sums.get(p.account)||{u:0,jd:0,jc:0};if(adjIds.has(p.e.id)){x.jd+=p.debit;x.jc+=p.credit}else x.u+=p.debit-p.credit;sums.set(p.account,x);
   }
-  const rows=[],tot=[0,0,0];
+  const dc=v=>v>=0?[r2(v),0]:[0,r2(-v)];
+  const rows=[],tot=[0,0,0,0,0,0];
+  const add=(label,u,jd,jc,acctId)=>{const t=r2(u+jd-jc),vals=[...dc(u),r2(jd),r2(jc),...dc(t)];vals.forEach((v,i)=>tot[i]+=v);rows.push({cls:'item',label,vals:vals.map(v=>Math.abs(v)<0.005?null:v),acct:acctId})};
   for(const a of sortAccts(S.accounts)){
-    const x=sums.get(a.id);if(!x)continue;const u=r2(x.u),j=r2(x.j),t=r2(u+j);if(Math.abs(u)<0.005&&Math.abs(j)<0.005)continue;
-    rows.push({cls:'item',label:(a.code?a.code+' ':'')+a.name,vals:[u,j,t],acct:a.id});tot[0]+=u;tot[1]+=j;tot[2]+=t;
+    const x=sums.get(a.id);if(!x)continue;const u=r2(x.u);if(Math.abs(u)<0.005&&Math.abs(x.jd)<0.005&&Math.abs(x.jc)<0.005)continue;
+    add((a.code?a.code+' ':'')+a.name,u,x.jd,x.jc,a.id);
   }
-  const re=-fNet(null,addDays(fy,-1));
-  if(Math.abs(re)>=0.005){rows.push({cls:'item',label:W('Retained earnings'),vals:[r2(re),0,r2(re)]});tot[0]+=re;tot[2]+=re}
-  rows.push({cls:'grand',label:'Total (debits less credits)',vals:tot.map(r2)});
+  const re=r2(-fNet(null,addDays(fy,-1)));
+  if(Math.abs(re)>=0.005)add(W('Retained earnings'),re,0,0);
+  rows.push({cls:'grand',label:'Total',vals:tot.map(r2)});
   const n=adjIds.size;
-  const r=colReport({title:'Working trial balance',sub:`As of ${fmtDate(to)} · income and expenses from ${fmtDate(fy)} · debits positive, credits negative`,C:{cols:[{label:'Before adjustments'},{label:'Adjustments'},{label:'Adjusted balance'}]},rows,name:`working-trial-balance_${to}`});
+  const r=colReport({title:'Working trial balance',sub:`As of ${fmtDate(to)} · income and expenses from ${fmtDate(fy)}`,C:{cols:[{label:'Unadjusted debit'},{label:'Unadjusted credit'},{label:'Adjustments debit'},{label:'Adjustments credit'},{label:'Adjusted debit'},{label:'Adjusted credit'}]},rows,name:`working-trial-balance_${to}`});
   r.html=r.html.replace(/<\/div>$/,`<div class="muted" style="font-size:12.5px;padding:8px 16px 14px">${n} adjusting entr${n===1?'y':'ies'}. Mark a journal entry as adjusting when you enter it.</div></div>`);
   return r;
+}
+/* Adjusting entries: each adjusting journal entry in the fiscal year, numbered (AJE 1, 2…), with its lines. */
+function rAJE(){
+  const to=S.rep.to,fy=fyStartOf(to);
+  const list=S.entries.filter(e=>e.adjusting&&!e.reversalOf&&e.date>=fy&&e.date<=to).sort((a,b)=>a.date.localeCompare(b.date)||(a.created||0)-(b.created||0));
+  const csv=[['No.','Date','Account','Memo','Debit','Credit']];let h='',td=0,tc=0;
+  list.forEach((e,i)=>{
+    const no=`AJE ${i+1}`,ls=(e.lines||[]).filter(l=>+l.debit||+l.credit).sort((x,y)=>(+y.debit||0)-(+x.debit||0));
+    h+=`<tr class="sec"><td colspan="4"><button class="link" data-entry="${e.id}"><b>${no}</b></button> <span class="muted">· ${fmtDate(e.date)}${e.ref?` · #${esc(e.ref)}`:''}</span>${e.memo?` · <span translate="no">${esc(e.memo)}</span>`:''}${e.reverseOn?` <span class="pill quiet">Reverses ${fmtDate(e.reverseOn)}</span>`:''}</td></tr>`;
+    for(const l of ls){const a=acct(l.account),d=r2(+l.debit||0),c=r2(+l.credit||0);td+=d;tc+=c;
+      h+=`<tr class="item"><td style="padding-left:${c&&!d?'40px':'20px'}" translate="no">${esc(a?(a.code?a.code+' ':'')+a.name:'(deleted account)')}</td><td class="muted" translate="no">${esc(l.memo||'')}</td><td class="n">${d?money(d):''}</td><td class="n">${c?money(c):''}</td></tr>`;
+      csv.push([no,e.date,a?(a.code?a.code+' ':'')+a.name:'',l.memo||'',d||'',c||''])}
+  });
+  csv.push(['','','Total','',r2(td),r2(tc)]);
+  const html=`<div class="report wide" style="max-width:none">${rh('Adjusting entries',`${fmtDate(fy)} – ${fmtDate(to)}`)}<div class="tbl-wrap"><table class="cmp"><thead><tr><th>Account</th><th>Memo</th><th class="n">Debit</th><th class="n">Credit</th></tr></thead><tbody>${list.length?h+`<tr class="grand"><td>Total</td><td></td><td class="n">${money(td)}</td><td class="n">${money(tc)}</td></tr>`:emptyRow(4,'No adjusting entries','Mark a journal entry as adjusting when you enter it (+ New → Journal entry).')}</tbody></table></div></div>`;
+  const rows=[];list.forEach((e,i)=>{rows.push({cls:'sec',label:`AJE ${i+1} · ${fmtDate(e.date)}${e.memo?' · '+e.memo:''}`});for(const l of (e.lines||[]).filter(l=>+l.debit||+l.credit)){const a=acct(l.account);rows.push({cls:'item',label:'   '+(a?(a.code?a.code+' ':'')+a.name:''),cells:[r2(+l.debit||0)||null,r2(+l.credit||0)||null]})}});
+  rows.push({cls:'grand',label:'Total',cells:[r2(td),r2(tc)]});
+  return{html,csv,name:`adjusting-entries_${to}`,title:'Adjusting entries',sub:`${fmtDate(fy)} – ${fmtDate(to)}`,head:['Debit','Credit'],rows};
 }

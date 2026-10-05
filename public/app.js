@@ -314,12 +314,14 @@ function vReports(){
     ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
     ${R.tab==='gl'?`<select id="repAcct" aria-label="Account"><option value="">All accounts</option>${acctOptions(R.acct||'')}</select>`:''}
-    ${R.tab==='tb'&&adv?`<label class="check"><input type="checkbox" id="repTbAdj" ${R.tbAdj?'checked':''}> Show adjusting entries</label>`:''}
+    ${R.tab==='tb'&&adv?`<label class="flabel" for="repTbAdj">Show</label><select id="repTbAdj">${[['','Trial balance'],['adj','Working trial balance (with adjustments)'],['aje','Adjusting entries']].map(([k,v])=>`<option value="${k}" ${(R.tbAdj==='aje'?'aje':R.tbAdj?'adj':'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
     ${['pl','bs','cf'].includes(R.tab)&&adv?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
     <span class="grow"></span>${R.tab==='tb'&&ME&&ME.role!=='client'?'<button class="btn sm" data-act="caseware">Export for CaseWare</button>':''}<button class="btn sm" data-act="export">Export CSV</button><button class="btn sm" data-act="reppdf">PDF</button>
   </div><div id="repBody">${reportBody()}</div></div>`;
 }
-function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:()=>S.rep.tbAdj?rTBAdj():rTB(),gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
+/** The trial balance tab: plain, working (with adjustments), or the list of adjusting entries. */
+const tbReport=()=>S.rep.tbAdj==='aje'?rAJE():S.rep.tbAdj?rTBAdj():rTB();
+function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
 const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font-weight:600;margin-top:2px">${t}</div><span>${sub}</span></div>`;
 const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}" translate="no">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
 function rTB(){
@@ -508,7 +510,7 @@ function bindMain(m){
   const rp=$('#repPeriod',m);if(rp)rp.onchange=()=>{S.rep.period=rp.value;renderMain()};
   const ra=$('#repAcct',m);if(ra)ra.onchange=()=>{S.rep.acct=ra.value;renderMain()};
   const rc=$('#repCmp',m);if(rc)rc.onchange=()=>{S.rep.compare=rc.value;renderMain()};
-  const rta=$('#repTbAdj',m);if(rta)rta.onchange=()=>{S.rep.tbAdj=rta.checked;renderMain()};
+  const rta=$('#repTbAdj',m);if(rta)rta.onchange=()=>{S.rep.tbAdj=rta.value==='aje'?'aje':rta.value==='adj';renderMain()};
   const rsv=$('#repSaved',m);if(rsv)rsv.onchange=()=>{if(rsv.value)openSaved(rsv.value)};
   ['repFrom','repTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.onchange=()=>{S.rep.period='custom';S.rep.from=($('#repFrom')||{}).value||S.rep.from;S.rep.to=$('#repTo').value;renderMain()}});
   const rf2=$('#restoreFile',m);if(rf2)rf2.onchange=()=>{const f=rf2.files[0];rf2.value='';if(f)restoreBackup(f)};
@@ -690,7 +692,7 @@ function casewareCsv(ye,prior){
   return out.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
 }
 function exportCSV(){
-  const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:()=>R.tbAdj?rTBAdj():rTB(),gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
+  const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
   // Column headings and report totals follow the screen language; account names stay as they are.
   const LBL=new Set([...Object.values(NPO_WORDS),'Total net assets','$ change','% change','Operating activities','Investing activities','Financing activities','Items not affecting cash','Changes in working capital','Cash from operating activities','Cash from investing activities','Cash from financing activities','Net change in cash','Cash at the beginning of the period','Cash at the end of the period','Assets','Liabilities','Expenses','Cost of goods sold','Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
   if(isFr())r.csv=r.csv.map((row,i)=>row.map(v=>typeof v==='string'&&(i===0||LBL.has(v))?T(v):v));
