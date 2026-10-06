@@ -7,3 +7,4 @@ data/
 .DS_Store
 Thumbs.db
 electron/build-info.json
+__pycache__/
