@@ -1,0 +1,42 @@
+CONTRAT DE LICENCE DE SUMLORA (VERSION PROVISOIRE)
+SUMLORA LICENCE AGREEMENT (DRAFT) — English follows the French.
+
+=====================================================================
+FRANÇAIS
+=====================================================================
+
+[Nom de la société] inc., une société constituée au Québec (« nous »), vous accorde, à vous et à votre entreprise (« vous »), le droit d’installer et d’utiliser Sumlora selon les conditions suivantes. En cliquant sur « J’accepte », vous les acceptez au nom de votre entreprise.
+
+1. Licence. Vous pouvez utiliser Sumlora pour tenir les livres de votre entreprise ou, si vous êtes un cabinet, de vos clients, dans les limites du code de licence qui vous a été remis (nombre d’entreprises, durée). Un code vaut pour l’entreprise à qui il a été remis. Ne le communiquez pas à l’extérieur de votre entreprise et n’essayez pas de contourner la licence. Après l’essai gratuit ou à la fin de la licence, les livres restent accessibles en consultation, en impression et en sauvegarde.
+
+2. Vos données. Lorsque Sumlora fonctionne sur cet ordinateur, vos livres restent sur cet ordinateur et dans le dossier de sauvegarde que vous choisissez. Nous ne les recevons pas. Les fonctions facultatives (IA, flux bancaires, paiements en ligne, courriel) transmettent des renseignements à des fournisseurs seulement si vous les activez, comme l’explique la Politique de confidentialité. L’application vérifie les mises à jour sur GitHub.
+
+3. Un outil, pas un conseil. Sumlora calcule les taxes, les retenues et les rapports à partir de ce que vous saisissez. Vous êtes responsable de vérifier les déclarations, la paie et les rapports avant de les produire ou de vous y fier, et de les produire à temps. Gardez vos propres sauvegardes.
+
+4. Garantie et responsabilité. Sumlora est fourni tel quel. Nous ne sommes pas responsables des pertes indirectes, comme les profits perdus ou les pénalités et intérêts d’une autorité fiscale. Notre responsabilité totale est limitée au prix payé pour la licence dans les 12 derniers mois. Rien ne limite notre responsabilité lorsque la loi ne le permet pas, notamment en cas de faute intentionnelle ou lourde.
+
+5. Conditions d’utilisation et confidentialité. Les Conditions d’utilisation et la Politique de confidentialité de Sumlora s’appliquent aussi; Sumlora vous demandera de les accepter à la première utilisation. Elles sont accessibles dans l’application (liens « Conditions » et « Confidentialité »).
+
+6. Lois applicables. Le présent contrat est régi par les lois du Québec et les lois fédérales du Canada qui s’y appliquent.
+
+Pour nous joindre : shersahray@outlook.com
+
+=====================================================================
+ENGLISH
+=====================================================================
+
+[Corporation name] inc., a corporation incorporated in Quebec ("we"), gives you and your business ("you") the right to install and use Sumlora on the following terms. By clicking "I Agree", you accept them on behalf of your business.
+
+1. Licence. You may use Sumlora to keep the books of your business or, if you are a firm, of your clients, within the limits of the licence code you were given (number of companies, length of time). A code is for the business it was issued to. Don't share it outside your business or try to get around the licence. After the free trial or when a licence ends, the books stay available to read, print and back up.
+
+2. Your data. When Sumlora runs on this computer, your books stay on this computer and in the backup folder you choose. We don't receive them. Optional features (AI, bank feeds, online payments, email) send information to service providers only if you turn them on, as the Privacy policy explains. The app checks GitHub for updates.
+
+3. A tool, not advice. Sumlora calculates taxes, deductions and reports from what you enter. You are responsible for checking returns, payroll and reports before you file or rely on them, and for filing them on time. Keep your own backups.
+
+4. Warranty and responsibility. Sumlora is provided as it is. We are not responsible for indirect losses, such as lost profits or a tax authority's penalties and interest. Our total responsibility is limited to what you paid for the licence in the last 12 months. Nothing limits our responsibility where the law does not allow it, including for intentional or gross fault.
+
+5. Terms of service and privacy. Sumlora's Terms of service and Privacy policy also apply; Sumlora asks you to agree to them when you first use it. They're in the app ("Terms" and "Privacy" links).
+
+6. Law. This agreement is governed by the laws of Quebec and the federal laws of Canada that apply there. The French version was provided first; you expressly chose to also receive this English version.
+
+Contact: shersahray@outlook.com

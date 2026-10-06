@@ -13,6 +13,7 @@ const { AI } = require('./ai');
 const mail = require('./mail');
 const stripe = require('./stripe');
 const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
+const { TERMS_VERSION, TERMS_DRAFT } = require('./legal');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
@@ -43,6 +44,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {object} [opts.plaid]     Plaid keys for bank feeds: { clientId, secret, env } (otherwise the administrator enters them in Settings).
  * @param {Function} [opts.plaidFetch] Tests only: answers in place of Plaid's API.
  * @param {boolean} [opts.autoFeeds] Sync bank feeds every few hours (default true; tests turn it off).
+ * @param {boolean} [opts.requireTerms] People must agree to the Terms of service and Privacy policy before using Sumlora (the server and the desktop app turn this on).
  * @param {string} [opts.licenceDir]  Where the licence is kept (the desktop app's own folder, so it stays with the computer, not the books).
  * @param {number} [opts.licenceTrialDays] Days of free trial before a code is needed (default 30; 0 = a code from the start).
  * @param {string[]} [opts.licenceKeys] Public keys that sign licence codes (the installed desktop app): turns licensing on.
@@ -106,6 +108,10 @@ function createApp(opts) {
     if (f.id !== auth.mainFirmId && ai.firmSpent(f.id) >= (f.aiCapUsd ?? 10)) throw new ValidationError(`Your firm’s AI limit for this month, $${Number(f.aiCapUsd ?? 10).toFixed(2)}, has been reached. The server’s administrator can raise it.`, 429);
   };
   const chargeFirm = (cid, usd) => { const c = reg.get(cid); if (c) ai.addFirmUsage(c.firmId, usd); };
+  // Terms of service and Privacy policy: has this person agreed to the current version?
+  const requireTerms = !!opts.requireTerms;
+  const termsOk = u => !requireTerms || !!(u && u.terms && u.terms.v === TERMS_VERSION);
+  const needAgreement = body => { if (requireTerms && body.acceptTerms !== true) throw new ValidationError('Tick the box to agree to the Terms of service and Privacy policy.'); };
   const notClient = u => { if (u.role === 'client') throw new ValidationError('Only your bookkeeper can do that.', 403); };
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
@@ -542,10 +548,20 @@ function createApp(opts) {
       if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode, signups: auth.signups !== 'off' && !auth.needsSetup() ? auth.signups : '',
         ...(auth.needsSetup() && licence.on ? { licenceSetup: { required: licence.trialDays === 0, trialDays: licence.trialDays } } : {}) });
       const { token, ...u } = user;
-      return { user: u, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.policy2fa, licence: licenceInfo(u) };
+      return { user: u, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.policy2fa, licence: licenceInfo(u),
+        terms: requireTerms ? { version: TERMS_VERSION, draft: TERMS_DRAFT, accepted: termsOk(u), before: !!(u.terms && u.terms.v) } : null };
+    }],
+    // Agree to the current Terms of service and Privacy policy (asked once per version).
+    ['POST', /^\/api\/auth\/terms$/, async (req, m, res, user) => {
+      const body = await readJson(req);
+      if (body.version !== TERMS_VERSION) throw new ValidationError('The terms have changed since this page opened. Reload the page to read the current version.', 409);
+      needAgreement({ acceptTerms: body.accept });
+      auth.acceptTerms(user.id, TERMS_VERSION, clientIp(req));
+      return { ok: true, version: TERMS_VERSION };
     }],
     ['POST', /^\/api\/auth\/setup$/, async (req, m, res) => {
       const body = await readJson(req);
+      needAgreement(body);
       if (opts.setupCode && auth.needsSetup()) {
         const ip = clientIp(req);
         ipCheck(ip);
@@ -559,6 +575,7 @@ function createApp(opts) {
         else if (licence.trialDays === 0) throw new ValidationError('Enter the licence code you received with Sumlora.', 400);
       }
       const u = auth.setup(body);
+      if (body.acceptTerms === true) auth.acceptTerms(u.id, TERMS_VERSION, clientIp(req));
       reg.adoptFirm(auth.mainFirmId);
       if (licence.on && code) {
         const lic = licence.enter(code);
@@ -573,6 +590,7 @@ function createApp(opts) {
       const body = await readJson(req);
       const ip = clientIp(req);
       ipCheck(ip);
+      needAgreement(body);
       const day = new Date().toISOString().slice(0, 10), k = `${ip}|${day}`;
       if ((signupsByIp.get(k) || 0) >= 5) throw new AuthError('Too many sign-up attempts from your network today. Try again tomorrow.', 429);
       signupsByIp.set(k, (signupsByIp.get(k) || 0) + 1); // every try counts, so sign-up can't be used to test which emails have accounts
@@ -583,6 +601,7 @@ function createApp(opts) {
         throw e;
       }
       const { user: u, firm } = out;
+      if (body.acceptTerms === true) auth.acceptTerms(u.id, TERMS_VERSION, ip);
       if (signupsByIp.size > 5000) for (const key of signupsByIp.keys()) if (!key.endsWith(day)) signupsByIp.delete(key);
       if (firm.status !== 'active') return { ok: true, pending: true };
       return signIn(req, res, meta => auth.login(u.username, body.password, meta));
@@ -603,7 +622,12 @@ function createApp(opts) {
     }],
     ['POST', /^\/api\/auth\/link\/accept$/, async (req, m, res) => {
       const body = await readJson(req);
-      return signIn(req, res, async meta => auth.login(auth.acceptLink(body.token, body.password).username, body.password, meta));
+      return signIn(req, res, async meta => {
+        if (auth.peekLink(body.token).kind === 'invite') needAgreement(body); // a password reset doesn't ask again
+        const u = auth.acceptLink(body.token, body.password);
+        if (body.acceptTerms === true) auth.acceptTerms(u.id, TERMS_VERSION, meta.ip);
+        return auth.login(u.username, body.password, meta);
+      });
     }],
     ['PUT', /^\/api\/auth\/prefs$/, async (req, m, res, user) => ({ ok: true, user: auth.setPrefs(user, await readJson(req)) })],
     ['POST', /^\/api\/auth\/2fa\/start$/, async (req, m, res, user) => auth.start2fa(user, (await readJson(req)).password)],
@@ -1471,6 +1495,7 @@ function createApp(opts) {
           if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup() });
           if (user.mustChange && !['/api/auth/password', '/api/auth/prefs', '/api/events'].includes(url.pathname)) throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
           if (user.mustEnroll && !/^\/api\/(auth\/(password|prefs|2fa\/start|2fa\/confirm)|events)$/.test(url.pathname)) throw new AuthError('Set up two-step sign-in before continuing.', 403, { mustEnroll: true });
+          if (!termsOk(user) && !/^\/api\/(auth\/.*|events)$/.test(url.pathname)) throw new AuthError('Read and agree to the Terms of service and Privacy policy to continue.', 403, { mustAgree: true });
         }
         // Licence ended (desktop): the books stay open to read, print, export and back up, but not to change.
         if (user && licence.on && req.method !== 'GET' && !/^\/api\/(auth\/.*|licence|licences\/key\/restore|backups\/(run|open)|c\/[^/]+\/(code\/check|mail\/send))$/.test(url.pathname)) {
@@ -1516,7 +1541,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}), ...(err.licenceSetup ? { licenceSetup: err.licenceSetup } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.mustAgree ? { mustAgree: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}), ...(err.licenceSetup ? { licenceSetup: err.licenceSetup } : {}) });
     }
   });
 

@@ -68,7 +68,7 @@ async function startLocal() {
   // Licence codes: the installed app checks them with the seller's public key, written into the build (see licence.js).
   const licenceKeys = app.isPackaged ? (buildInfo().licenceKeys || []) : [];
   const trial = app.isPackaged ? buildInfo().licenceTrialDays : undefined;
-  server = createApp({ dataDir: dataDir(), licenceDir: appDir(), licenceKeys, licenceTrialDays: Number.isInteger(trial) ? trial : undefined });
+  server = createApp({ dataDir: dataDir(), licenceDir: appDir(), licenceKeys, requireTerms: true, licenceTrialDays: Number.isInteger(trial) ? trial : undefined });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve); // random free port, reachable only from this computer
@@ -120,6 +120,8 @@ async function start() {
     if (/^https:\/\//i.test(target) && /^https:\/\/cdn\.plaid\.com\//i.test((referrer && referrer.url) || '')) {
       return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 760, autoHideMenuBar: true, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } } };
     }
+    // The Terms of service and Privacy policy open in the normal browser, to read alongside the app.
+    if (inside(target) && /\/legal\/[a-z-]+\.html$/.test(new URL(target).pathname)) { shell.openExternal(target); return { action: 'deny' }; }
     if (!inside(target) && /^(https?|mailto):/i.test(target)) shell.openExternal(target);
     return { action: 'deny' };
   });

@@ -59,7 +59,8 @@
       "allowToChangeInstallationDirectory": true,
       "artifactName": "Sumlora-Setup-${version}.${ext}",
       "shortcutName": "Sumlora",
-      "uninstallDisplayName": "Sumlora"
+      "uninstallDisplayName": "Sumlora",
+      "license": "build/license.txt"
     },
     "mac": {
       "target": "dmg",

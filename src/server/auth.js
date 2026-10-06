@@ -272,7 +272,7 @@ class Auth {
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
       firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: (this.planOverride && this.planOverride()) || (f ? PLANS.planOf(f.plan) : 'plus'), platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
-      linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '' };
+      linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '', terms: u.terms ? { v: u.terms.v, at: u.terms.at } : null };
   }
   list(firmId) { return this.data.users.filter(u => u.firmId === firmId).map(u => this.publicUser(u)); }
   /** A user in the same firm as the person asking (anyone else counts as not existing). */
@@ -339,6 +339,14 @@ class Auth {
     const u = this.data.users.find(x => x.invite && x.invite.hash.length === h.length && crypto.timingSafeEqual(Buffer.from(x.invite.hash), Buffer.from(h)));
     if (!u || u.disabled || u.invite.expires < Date.now()) throw new AuthError('This link has expired or was already used. Ask for a new one.', 410);
     return u;
+  }
+  /** Someone agreed to the Terms of service and Privacy policy: keep which version, when, and from where. */
+  acceptTerms(id, version, ip) {
+    const u = this.byId(id);
+    if (!u) return;
+    u.terms = { v: String(version), at: Date.now(), ip: String(ip || '').slice(0, 64) };
+    this.save();
+    this.log('terms-accepted', { username: u.username, version: String(version), ip: String(ip || '').slice(0, 64) });
   }
   peekLink(token) { const u = this.userForLink(token); return { name: u.name, username: u.username, kind: u.invite.kind }; }
   /** Set the password from a link. Returns the user (sign-in continues as with a password). */

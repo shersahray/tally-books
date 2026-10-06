@@ -29,8 +29,13 @@ async function afterSignIn(){
   if(syncAccountLang(me.user))return;
   if(me.user.mustChange){ME=me.user;return renderLock('password')}
   if(me.user.mustEnroll){ME=me.user;return renderLock('enroll')}
+  if(me.terms&&!me.terms.accepted){ME=me.user;return renderLock('terms',me.terms)}
   unlocked(me.user,me.idleMinutes);
 }
+/* Terms of service and Privacy policy: the pages, and the box people tick to agree. */
+const legalUrl=k=>`/legal/${k}${I18N.lang==='fr'?'-fr':''}.html`;
+const termsBox=id=>`<label class="check" style="align-items:flex-start;font-size:13.5px"><input type="checkbox" id="${id}" style="margin-top:3px"> <span><span>I agree to the</span> <a href="${legalUrl('terms')}" target="_blank" rel="noopener">Terms of service</a> <span>and the</span> <a href="${legalUrl('privacy')}" target="_blank" rel="noopener">Privacy policy</a><span>.</span></span></label>`;
+const termsTicked=id=>{const b=$('#'+id);if(b&&!b.checked)throw new Error('Tick the box to agree to the Terms of service and Privacy policy.');return true};
 const pwHint='At least 10 characters. A short phrase of a few unrelated words works well, for example “maple river copper lamp”.';
 const lockCard=(title,sub,body,submit,extra='')=>`<div class="lock"><form class="lock-card" novalidate>
     <div class="lock-brand"><span class="logo" aria-label="Sumlora">${LOGO_SVG}</span></div>
@@ -58,14 +63,16 @@ function renderLock(mode,opt=''){
       ${fld('suUser','Username or email',`<input type="text" id="suUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('suPass','Password',`<input type="password" id="suPass" autocomplete="new-password">`,true)}
       ${fld('suPass2','Type the password again',`<input type="password" id="suPass2" autocomplete="new-password">`,true)}
-      <div class="hint muted" style="font-size:12.5px">${pwHint} Write it down somewhere safe: only an owner can reset a password.</div>`,'Create owner account');
+      <div class="hint muted" style="font-size:12.5px">${pwHint} Write it down somewhere safe: only an owner can reset a password.</div>
+      ${termsBox('suTerms')}`,'Create owner account');
   else if(mode==='signup')html=lockCard('Create your firm’s account','For bookkeeping and accounting firms. You’ll be the owner: you add your staff and your clients’ companies. Other firms on this server never see your books.',`
       ${fld('sgFirm','Firm name',`<input type="text" id="sgFirm" autocomplete="organization">`,true)}
       ${fld('sgName','Your name',`<input type="text" id="sgName" autocomplete="name">`,true)}
       ${fld('sgUser','Your email (your username)',`<input type="email" id="sgUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('sgPass','Password',`<input type="password" id="sgPass" autocomplete="new-password">`,true)}
       ${fld('sgPass2','Type the password again',`<input type="password" id="sgPass2" autocomplete="new-password">`,true)}
-      <div class="hint muted" style="font-size:12.5px"><span>${pwHint}</span>${SIGNUPS==='approval'?' <span>New firms are approved by the server’s administrator before they can sign in.</span>':''}</div>`,'Create firm account',
+      <div class="hint muted" style="font-size:12.5px"><span>${pwHint}</span>${SIGNUPS==='approval'?' <span>New firms are approved by the server’s administrator before they can sign in.</span>':''}</div>
+      ${termsBox('sgTerms')}`,'Create firm account',
       '<button type="button" class="btn ghost block" data-lockback>Back to sign in</button>');
   else if(mode==='pending')html=lockCard('Thanks! Your firm is waiting for approval','The server’s administrator approves new firms. Once your firm is approved, sign in with the email and password you just chose.','','','<button type="button" class="btn primary block" data-lockback>Back to sign in</button>');
   else if(mode==='code')html=lockCard('Enter your code','Open your authenticator app (Microsoft Authenticator, Google Authenticator, 1Password…) and enter the 6-digit code for Sumlora.',`
@@ -77,6 +84,9 @@ function renderLock(mode,opt=''){
       ${fld('npPass','New password',`<input type="password" id="npPass" autocomplete="new-password">`,true)}
       ${fld('npPass2','Type it again',`<input type="password" id="npPass2" autocomplete="new-password">`,true)}
       <div class="hint muted" style="font-size:12.5px">${pwHint}</div>`,'Save new password','<button type="button" class="btn ghost block" data-lockout>Sign out</button>');
+  else if(mode==='terms')html=lockCard(opt&&opt.before?'We’ve updated our terms':'Before you continue',opt&&opt.before?'Sumlora’s Terms of service or Privacy policy changed since you last agreed. Please read them and agree to continue.':'Please read Sumlora’s Terms of service and Privacy policy, and agree to them to continue.',`
+      ${opt&&opt.draft?'<div class="muted" style="font-size:12.5px">These are draft documents, still being reviewed.</div>':''}
+      ${termsBox('tmAgree')}`,'Agree and continue','<button type="button" class="btn ghost block" data-lockout>Sign out</button>');
   else if(mode==='link')html=lockCard('Checking your link…','','','');
   else if(mode==='enroll')html=lockCard('Set up two-step sign-in','Loading…','','');
   $('#lockRoot').innerHTML=html;
@@ -88,6 +98,7 @@ function renderLock(mode,opt=''){
   if(mode==='pending')return;
   if(mode==='link')return linkScreen(f);
   if(mode==='enroll')return enrollScreen(f,opt);
+  if(mode==='terms'&&!(opt&&opt.version)){api('GET','/api/auth/me').then(me=>{if(me.terms)renderLock('terms',me.terms)}).catch(()=>{});return}
   f.onsubmit=async e=>{e.preventDefault();err('');btn.disabled=true;
     try{
       if(mode==='signin'){
@@ -101,14 +112,20 @@ function renderLock(mode,opt=''){
         if($('#suPass').value!==$('#suPass2').value)throw new Error('The two passwords don’t match.');
         const lic=($('#suLic')||{}).value||'';
         if(opt&&opt.licence&&opt.licence.required&&!lic.trim())throw new Error('Paste the licence code you received with Sumlora.');
-        await api('POST','/api/auth/setup',{firmName:$('#suFirm').value,name:$('#suName').value,username:$('#suUser').value,password:$('#suPass').value,setupCode:($('#suCode')||{}).value,licenceCode:lic});
+        termsTicked('suTerms');
+        await api('POST','/api/auth/setup',{acceptTerms:true,firmName:$('#suFirm').value,name:$('#suName').value,username:$('#suUser').value,password:$('#suPass').value,setupCode:($('#suCode')||{}).value,licenceCode:lic});
         await afterSignIn();toast(lic.trim()?'Owner account created and Sumlora is activated':'Owner account created');
       }else if(mode==='signup'){
         if($('#sgPass').value!==$('#sgPass2').value)throw new Error('The two passwords don’t match.');
-        const r=await api('POST','/api/auth/signup',{firmName:$('#sgFirm').value,name:$('#sgName').value,username:$('#sgUser').value,password:$('#sgPass').value});
+        termsTicked('sgTerms');
+        const r=await api('POST','/api/auth/signup',{acceptTerms:true,firmName:$('#sgFirm').value,name:$('#sgName').value,username:$('#sgUser').value,password:$('#sgPass').value});
         if(r.pending)return renderLock('pending');
         if(r.needCode)return renderLock('code',{ticket:r.ticket});
         await afterSignIn();toast('Your firm’s account is ready');
+      }else if(mode==='terms'){
+        termsTicked('tmAgree');
+        await api('POST','/api/auth/terms',{version:opt.version,accept:true});
+        await afterSignIn();toast('Thank you');
       }else{
         if($('#npPass').value!==$('#npPass2').value)throw new Error('The two passwords don’t match.');
         await api('POST','/api/auth/password',{current:$('#npCur').value,password:$('#npPass').value});
@@ -136,13 +153,15 @@ async function linkScreen(f){
     ${fld('lkPass','Password',`<input type="password" id="lkPass" autocomplete="new-password">`,true)}
     ${fld('lkPass2','Type it again',`<input type="password" id="lkPass2" autocomplete="new-password">`,true)}
     <input type="text" autocomplete="username" value="${esc(info.username)}" hidden>
-    <div class="hint muted" style="font-size:12.5px">${pwHint}</div>`,invite?'Create my account':'Save new password');
+    <div class="hint muted" style="font-size:12.5px">${pwHint}</div>
+    ${invite?termsBox('lkTerms'):''}`,invite?'Create my account':'Save new password');
   const g=$('#lockRoot form'),btn=g.querySelector('button[type=submit]'),err=m=>{$('[data-lockerr]',g).textContent=m||''};
   setTimeout(()=>$('#lkPass').focus(),30);
   g.onsubmit=async e=>{e.preventDefault();err('');
     if($('#lkPass').value!==$('#lkPass2').value)return err('The two passwords don’t match.');
+    if(invite&&!$('#lkTerms').checked)return err('Tick the box to agree to the Terms of service and Privacy policy.');
     btn.disabled=true;
-    try{const r=await api('POST','/api/auth/link/accept',{token,password:$('#lkPass').value});
+    try{const r=await api('POST','/api/auth/link/accept',{token,password:$('#lkPass').value,acceptTerms:invite?true:undefined});
       if(r.needCode)return renderLock('code',{ticket:r.ticket});
       await afterSignIn();toast(invite?'Your account is ready':'Password changed');
     }catch(ex){err(ex.message);btn.disabled=false}};
@@ -206,6 +225,7 @@ async function authStart(){
   if(syncAccountLang(me.user))return new Promise(()=>{});
   if(me.user.mustChange)return requireSignIn('password');
   if(me.user.mustEnroll)return requireSignIn('enroll');
+  if(me.terms&&!me.terms.accepted)return requireSignIn('terms',me.terms);
   unlocked(me.user,me.idleMinutes);
 }
 async function signOut(){
@@ -225,7 +245,7 @@ function renderUserBox(){
   const box=$('#userBox');if(!box)return;
   if(!ME){box.innerHTML='';return}
   box.innerHTML=`<div class="who"><b>${esc(ME.name)}</b><span><span>${roleLabel(ME)}</span>${ME.firmName&&ME.role!=='client'?` · <span translate="no">${esc(ME.firmName)}</span>`:''}</span></div>
-    <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}${ME.platformAdmin?'<button class="link" data-overview>Overview</button><button class="link" data-firms>Firms</button>':''}${typeof LIC!=='undefined'&&LIC&&LIC.canEnter?'<button class="link" data-licence>Licence</button>':''}${typeof LIC!=='undefined'&&LIC&&LIC.canIssue?'<button class="link" data-licences>Licence codes</button>':''}<button class="link" data-signout>Sign out</button></div>
+    <div class="who-actions"><button class="link" data-account>Account</button>${ME.role==='owner'?'<button class="link" data-users>Users &amp; security</button>':''}${ME.platformAdmin?'<button class="link" data-overview>Overview</button><button class="link" data-firms>Firms</button>':''}${typeof LIC!=='undefined'&&LIC&&LIC.canEnter?'<button class="link" data-licence>Licence</button>':''}${typeof LIC!=='undefined'&&LIC&&LIC.canIssue?'<button class="link" data-licences>Licence codes</button>':''}<button class="link" data-signout>Sign out</button><a class="link" href="${legalUrl('terms')}" target="_blank" rel="noopener">Terms</a><a class="link" href="${legalUrl('privacy')}" target="_blank" rel="noopener">Privacy</a></div>
     <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;align-items:flex-start">${langSwitch()}${TallyTheme.html()}</div>`;
   box.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-signout'))signOut();if(b.hasAttribute('data-account'))myAccountForm();if(b.hasAttribute('data-users'))showUsers();if(b.hasAttribute('data-firms'))showFirms();if(b.hasAttribute('data-overview'))showOverview();if(b.hasAttribute('data-licence'))licenceDialog();if(b.hasAttribute('data-licences'))showLicences()};
 }

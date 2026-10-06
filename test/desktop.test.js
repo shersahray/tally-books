@@ -114,7 +114,7 @@ test('choosing this computer runs the private server; earlier users keep their b
   assert.deepEqual(fileMenu(), ['Where the books are…', 'Show data folder']);
   // Books made here (an owner account), then switching to the office server stops the private one.
   const local = last();
-  const su = await fetch(local + 'api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: local.slice(0, -1) }, body: JSON.stringify({ name: 'Me', username: 'me@example.com', password: 'correct horse battery staple' }) });
+  const su = await fetch(local + 'api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: local.slice(0, -1) }, body: JSON.stringify({ name: 'Me', username: 'me@example.com', password: 'correct horse battery staple', acceptTerms: true }) });
   assert.equal(su.status, 200);
   await handlers['desktop:use-server'](fromPage, officeUrl);
   await assert.rejects(fetch(local + 'api/health'));
@@ -147,7 +147,7 @@ test('choosing a folder moves the books there, checked, and back again', async (
   await launch();
   await handlers['desktop:use-local'](fromPage);
   let local = last();
-  const su = await fetch(local + 'api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: local.slice(0, -1) }, body: JSON.stringify({ name: 'Me', username: 'me@example.com', password: 'correct horse battery staple' }) });
+  const su = await fetch(local + 'api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: local.slice(0, -1) }, body: JSON.stringify({ name: 'Me', username: 'me@example.com', password: 'correct horse battery staple', acceptTerms: true }) });
   assert.equal(su.status, 200);
   const before = fs.readFileSync(path.join(userData, 'users.json'), 'utf8');
 
@@ -180,7 +180,7 @@ test('choosing a folder moves the books there, checked, and back again', async (
   await assert.rejects(fetch(local + 'api/health'), 'the old private server stopped');
   local = last();
   assert.equal((await (await fetch(local + 'api/health')).json()).ok, true);
-  const again = await fetch(local + 'api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: local.slice(0, -1) }, body: JSON.stringify({ name: 'X', username: 'x@example.com', password: 'correct horse battery staple' }) });
+  const again = await fetch(local + 'api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: local.slice(0, -1) }, body: JSON.stringify({ name: 'X', username: 'x@example.com', password: 'correct horse battery staple', acceptTerms: true }) });
   assert.notEqual(again.status, 200, 'the owner account came along, so setup is already done');
   assert.equal((await handlers['desktop:info'](fromPage)).dataDir, moved);
 
@@ -209,7 +209,7 @@ test('choosing a folder moves the books there, checked, and back again', async (
   assert.ok(fs.existsSync(path.join(userData, 'users.json')), 'nothing moved');
   assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'desktop.json'), 'utf8')).dataDir, other);
   const opened2 = last();
-  const setupOther = await fetch(opened2 + 'api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: opened2.slice(0, -1) }, body: JSON.stringify({ name: 'Y', username: 'y@example.com', password: 'correct horse battery staple' }) });
+  const setupOther = await fetch(opened2 + 'api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: opened2.slice(0, -1) }, body: JSON.stringify({ name: 'Y', username: 'y@example.com', password: 'correct horse battery staple', acceptTerms: true }) });
   assert.equal(setupOther.status, 200, 'the server now serves the other folder (no owner there yet)');
   assert.ok(fs.existsSync(path.join(other, 'users.json')));
 

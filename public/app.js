@@ -65,6 +65,7 @@ async function api(method,url,body,retried){
     if(r.status===402&&j&&j.licence&&typeof licenceEnded==='function')licenceEnded();
     if(r.status===403&&j&&j.mustChange&&typeof renderLock==='function')renderLock('password');
     if(r.status===403&&j&&j.mustEnroll&&typeof renderLock==='function')renderLock('enroll');
+    if(r.status===403&&j&&j.mustAgree&&typeof renderLock==='function')renderLock('terms');
     throw err;
   }
   return j;

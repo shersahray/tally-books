@@ -1791,3 +1791,13 @@ addFr({'Bank feeds':'Flux bancaires','Bank feeds (Plaid)':'Flux bancaires (Plaid
   'Plaid couldn’t do that. Try again in a moment.':'Plaid n’a pas pu le faire. Réessayez dans un instant.','The bank was updating while Sumlora read it. Try again in a minute.':'La banque se mettait à jour pendant que Sumlora la lisait. Réessayez dans une minute.','Plaid: {s}':'Plaid : {s}',
   'Plaid couldn’t be reached, so the connection may still show in Plaid’s dashboard. Remove it there to stop its monthly charge.':'Impossible de joindre Plaid : la connexion peut encore figurer dans le tableau de bord de Plaid. Retirez-la là-bas pour arrêter ses frais mensuels.'
 });
+addFr({'I agree to the':'J’accepte les','Terms of service':'Conditions d’utilisation','and the':'et la','Privacy policy':'Politique de confidentialité',
+  'Tick the box to agree to the Terms of service and Privacy policy.':'Cochez la case pour accepter les Conditions d’utilisation et la Politique de confidentialité.',
+  'Before you continue':'Avant de continuer','We’ve updated our terms':'Nos conditions ont changé',
+  'Please read Sumlora’s Terms of service and Privacy policy, and agree to them to continue.':'Veuillez lire les Conditions d’utilisation et la Politique de confidentialité de Sumlora, et les accepter pour continuer.',
+  'Sumlora’s Terms of service or Privacy policy changed since you last agreed. Please read them and agree to continue.':'Les Conditions d’utilisation ou la Politique de confidentialité de Sumlora ont changé depuis votre dernière acceptation. Veuillez les lire et les accepter pour continuer.',
+  'These are draft documents, still being reviewed.':'Ces documents sont provisoires et en cours de révision.',
+  'Agree and continue':'Accepter et continuer','Thank you':'Merci','Terms':'Conditions','Privacy':'Confidentialité',
+  'Read and agree to the Terms of service and Privacy policy to continue.':'Lisez et acceptez les Conditions d’utilisation et la Politique de confidentialité pour continuer.',
+  'The terms have changed since this page opened. Reload the page to read the current version.':'Les conditions ont changé depuis l’ouverture de cette page. Rechargez la page pour lire la version actuelle.'
+});
