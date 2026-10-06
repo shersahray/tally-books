@@ -113,6 +113,7 @@ It runs two ways from the same code:
 - **Activity log:** every change to a company's books is recorded with who made it, when, and the record before and after. Filter by person or kind of record, open any change to see what was different, and export to CSV (Settings → Activity log).
 - **Online server:** [deploy/azure](deploy/azure/README.md) puts Sumlora on a small Azure server in Toronto with HTTPS, nightly tested updates, automatic security patches, and off-site backups to Azure Storage in Canada.
 - **Automatic backups:** every company is backed up once a day while the app is open. On a server, each day's backup is also copied to Azure Blob Storage. Backups go to OneDrive by default, or any folder you pick, such as Google Drive. Each day gets its own dated folder, and backups older than the keep period (30 days unless you change it) are removed. Each file restores through **Settings → Restore from backup**. Settings and the company list show backup status, with **Back up now**, **Change folder** and **Open backup folder**.
+- **Bank feeds (Plaid):** on an online server, a bookkeeper connects a client's bank once (**Banking → Bank feeds → Connect a bank**), signing in through Plaid's own window, so Sumlora never sees the bank password. Each bank account is matched to a bank or credit card account in the chart of accounts, with a date to start from. Posted transactions then arrive in **For review** every 4 hours, when Banking is opened, or on **Sync now**: never twice, never while pending, and changes or removals by the bank update lines still waiting (reviewed lines are left alone). A connection that needs a new bank sign-in says so, with **Sign in again**. **Disconnect** removes it at Plaid, which stops its monthly charge. The server's administrator enters the Plaid keys in **Settings → Bank feeds** (Sandbox for test banks, Production for real ones), or sets `PLAID_CLIENT_ID`, `PLAID_SECRET` and `PLAID_ENV`. The keys and each bank's access token are kept in `plaid.json` in the data folder (readable only by the server's account), and never go to a browser, into a company's books, a backup or a year-end package. Clients can't connect banks. Bank feeds need the server: a desktop copy running on its own computer keeps importing statement files.
 - **Journal entries:** manual entries with debit and credit lines. The server rejects any entry that doesn't balance.
 - **Chart of accounts:** set up for a Canadian small business charging HST (13%). The tax name, rate and fiscal year start are all in Settings.
 - **Reports:** profit and loss, balance sheet, trial balance, general ledger, A/R aging and A/P aging, for any date range. All of them export to CSV.
@@ -156,6 +157,7 @@ If you're upgrading from the single-company version, your existing `data/tally-b
 | `TRUST_PROXY` | *(off)* | `1` when running behind an HTTPS proxy such as Caddy, so sign-in limits use the visitor's real address. |
 | `BACKUP_FOLDER` | OneDrive, if found | Folder for the daily backups. |
 | `ANTHROPIC_API_KEY` | *(none)* | A Claude API key for AI suggestions. Without it, an owner can enter one in Settings. |
+| `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_ENV` | *(none)*, *(none)*, `production` | Plaid keys for bank feeds (`PLAID_ENV` is `sandbox` or `production`). Without them, the administrator can enter them in Settings. |
 | `BACKUP_BLOB_URL` | *(none)* | An Azure Blob Storage container URL with a SAS token. Each day's backup is also copied there. A write-only token (Create, Write) is safest, with an Azure lifecycle rule removing old days. If the token can also list and delete, Sumlora removes old days itself. |
 
 To put it on the internet for clients, follow [deploy/azure/README.md](deploy/azure/README.md) rather than opening a port: it adds HTTPS, two-step sign-in and off-site backups.
@@ -377,7 +379,7 @@ The tests start a real server against a temporary database. They cover the bookk
 
 ## Not built yet
 
-Live bank feeds (statement import is covered above), sending returns straight to CRA or Revenu Québec, filing T4 and RL-1 slips and records of employment electronically (XML), multiple currencies, and emailing invitations directly (for now you send the link yourself).
+Sending returns straight to CRA or Revenu Québec, filing T4 and RL-1 slips and records of employment electronically (XML), multiple currencies, and emailing invitations directly (for now you send the link yourself).
 
 ## License
 

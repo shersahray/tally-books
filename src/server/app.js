@@ -12,6 +12,7 @@ const { Backups } = require('./backups');
 const { AI } = require('./ai');
 const mail = require('./mail');
 const stripe = require('./stripe');
+const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
@@ -39,6 +40,9 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {boolean} [opts.mailInsecureTls] Tests only: accept the test mail server's certificate.
  * @param {boolean} [opts.mailAllowLocal]  Tests only: allow a mail server on this computer or the local network.
  * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
+ * @param {object} [opts.plaid]     Plaid keys for bank feeds: { clientId, secret, env } (otherwise the administrator enters them in Settings).
+ * @param {Function} [opts.plaidFetch] Tests only: answers in place of Plaid's API.
+ * @param {boolean} [opts.autoFeeds] Sync bank feeds every few hours (default true; tests turn it off).
  * @param {string} [opts.licenceDir]  Where the licence is kept (the desktop app's own folder, so it stays with the computer, not the books).
  * @param {number} [opts.licenceTrialDays] Days of free trial before a code is needed (default 30; 0 = a code from the start).
  * @param {string[]} [opts.licenceKeys] Public keys that sign licence codes (the installed desktop app): turns licensing on.
@@ -105,6 +109,35 @@ function createApp(opts) {
   const notClient = u => { if (u.role === 'client') throw new ValidationError('Only your bookkeeper can do that.', 403); };
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
+  // Plaid's keys and the banks' access tokens stay with this computer (the licence folder on desktop), never in a books folder that may be shared.
+  const plaid = new Plaid(opts.licenceDir || opts.dataDir, { env: opts.plaid || {}, fetch: opts.plaidFetch });
+  /** Bring one bank connection's new transactions into its company's "For review". */
+  async function syncFeed(cid, itemId, user) {
+    const it = plaid.item(itemId, cid);
+    const changes = await plaid.pull(itemId, cid);
+    if (!changes) return { added: 0, updated: 0, removed: 0, busy: true };
+    if (!plaid.data.items[itemId]) return { added: 0, updated: 0, removed: 0, gone: true }; // disconnected while it ran
+    const ctx = ctxFor(cid);
+    const r = ctx.store.transaction(() => {
+      const out = applyFeed(ctx.store, it, changes, it.institution);
+      if (out.added) ctx.store.audit(user || { username: 'bank feed', name: 'Bank feed' }, 'import', { collection: 'bankTxns', summary: `bank feed from ${it.institution}: ${out.added} new bank line(s)` });
+      return out;
+    });
+    plaid.commit(itemId, changes);
+    if (r.added || r.updated || r.removed) ctx.bump();
+    return r;
+  }
+  /** Every few hours: sync every connection of every company that isn't archived. One bad connection doesn't stop the rest. */
+  async function syncAllFeeds() {
+    if (!plaid.configured()) return;
+    if (licence.on && !licence.status().canChange) return; // the books are view only until the licence is renewed
+    for (const [id, it] of Object.entries(plaid.data.items)) {
+      if (closing) return;
+      const c = reg.get(it.companyId);
+      if (!c || c.archived || it.status === 'login') continue;
+      try { await syncFeed(it.companyId, id); } catch { /* kept on the connection as its status */ }
+    }
+  }
   // Receipts sent in are read by AI one at a time, in the order they arrive.
   const readQueue = [];
   let readBusy = false;
@@ -159,6 +192,12 @@ function createApp(opts) {
   let closing = false;
   if (opts.backupFolder) backups.update({ folder: opts.backupFolder });
   if (opts.autoBackup !== false) backups.start();
+  let feedTimer = null;
+  if (opts.autoFeeds !== false) {
+    setTimeout(() => syncAllFeeds().catch(() => {}), 2 * 60 * 1000).unref();
+    feedTimer = setInterval(() => syncAllFeeds().catch(() => {}), 4 * 60 * 60 * 1000);
+    feedTimer.unref();
+  }
   const publicDir = opts.publicDir || PUBLIC_DIR;
   const clients = new Set();
 
@@ -618,7 +657,7 @@ function createApp(opts) {
       // A firm sees its own people's sign-ins; the server's administrators see everything.
       if (user.platformAdmin) return { log: auth.readLog(1000) };
       const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
-      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
+      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
     }],
     // The administrator's overview: firms on this server, desktop licences sold, renewals due, AI use.
@@ -804,6 +843,18 @@ function createApp(opts) {
       const body = await readJson(req);
       const st = ai.update(body);
       auth.log('ai-settings', { username: user.username, ip: clientIp(req), change: body.apiKey !== undefined ? (body.apiKey ? 'API key changed' : 'API key removed') : 'settings changed' });
+      return st;
+    }],
+    // Bank feeds (Plaid): the keys are the server's, set by its administrator. Others only learn whether feeds are available.
+    ['GET', /^\/api\/plaid$/, (req, m, res, user) => {
+      if (user.role === 'owner' && user.platformAdmin) return { ...plaid.status(true), admin: true };
+      return { configured: plaid.configured() && user.role !== 'client' };
+    }],
+    ['PUT', /^\/api\/plaid$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const body = await readJson(req);
+      const st = plaid.update(body);
+      auth.log('plaid-settings', { username: user.username, ip: clientIp(req), change: body.secret !== undefined || body.clientId !== undefined ? 'Plaid keys changed' : 'settings changed' });
       return st;
     }],
     ['GET', /^\/api\/events$/, (req, m, res, user) => {
@@ -1106,6 +1157,52 @@ function createApp(opts) {
       ctx.store.audit(ctx.user, 'unlock', { collection: 'settings', id: 'closing', summary: `unlocked the books closed through ${cl.date} for 15 minutes` });
       return { ok: true, minutes: 15 };
     }],
+    // Bank feeds for this company. Only the bookkeeper's team connects banks (each connection costs money each month).
+    ['GET', /^\/feeds$/, ctx => { notClient(ctx.user); return { configured: plaid.configured(), items: plaid.list(ctx.id) }; }],
+    ['POST', /^\/feeds\/link$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const body = await readJson(req);
+      const company = ctx.store.getSetting('company') || {};
+      return { linkToken: await plaid.linkToken({ userId: ctx.user.id || ctx.user.username, lang: body.lang || company.lang, itemId: body.itemId ? String(body.itemId) : '', companyId: ctx.id }) };
+    }],
+    ['POST', /^\/feeds$/, async (ctx, req) => {
+      notClient(ctx.user);
+      const body = await readJson(req);
+      const c = reg.get(ctx.id);
+      const item = await plaid.connect({ publicToken: body.publicToken, institution: body.institution, companyId: ctx.id, firmId: c && c.firmId, userName: ctx.user.name || ctx.user.username });
+      ctx.store.audit(ctx.user, 'feed', { collection: 'settings', id: 'feeds', summary: `connected a bank feed: ${item.institution}` });
+      return { item };
+    }],
+    ['PUT', /^\/feeds\/([A-Za-z0-9_]+)$/, async (ctx, req, m) => {
+      notClient(ctx.user);
+      const body = await readJson(req);
+      const links = {};
+      for (const [k, v] of Object.entries(body.links || {})) {
+        if (!v) continue;
+        const a = ctx.store.get('accounts', String(v));
+        if (!a || (a.detail !== 'bank' && a.detail !== 'card')) throw new ValidationError('A bank account can only feed a bank or credit card account in your chart of accounts.');
+        links[k] = a.id;
+      }
+      const used = Object.values(links);
+      if (new Set(used).size !== used.length) throw new ValidationError('Each Sumlora account can be fed by one bank account only.');
+      for (const other of plaid.list(ctx.id)) if (other.id !== m[1]) for (const v of Object.values(other.links)) if (used.includes(v)) throw new ValidationError('That Sumlora account is already fed by another bank connection.');
+      const item = plaid.setLinks(m[1], ctx.id, links, body.starts);
+      ctx.store.audit(ctx.user, 'feed', { collection: 'settings', id: 'feeds', summary: `changed which accounts the ${item.institution} bank feed fills` });
+      return { item };
+    }],
+    ['POST', /^\/feeds\/([A-Za-z0-9_]+)\/sync$/, async (ctx, req, m) => {
+      notClient(ctx.user);
+      const r = await syncFeed(ctx.id, m[1], ctx.user);
+      return { ...r, item: plaid.data.items[m[1]] ? plaid.publicItem(m[1]) : null, rev: ctx.rev };
+    }],
+    ['POST', /^\/feeds\/([A-Za-z0-9_]+)\/reconnected$/, (ctx, req, m) => { notClient(ctx.user); return { item: plaid.reconnected(m[1], ctx.id) }; }],
+    ['DELETE', /^\/feeds\/([A-Za-z0-9_]+)$/, async (ctx, req, m) => {
+      notClient(ctx.user);
+      const name = plaid.item(m[1], ctx.id).institution;
+      const r = await plaid.remove(m[1], ctx.id);
+      ctx.store.audit(ctx.user, 'feed', { collection: 'settings', id: 'feeds', summary: `disconnected the ${name} bank feed` });
+      return { ok: true, ...r };
+    }],
     ['POST', /^\/bank\/import$/, async (ctx, req) => {
       const body = await readJson(req, 20 * 1024 * 1024);
       const result = ctx.store.transaction(() => {
@@ -1342,6 +1439,7 @@ function createApp(opts) {
       ctx.store.audit(ctx.user, 'restore', { summary: `restored a backup exported ${String(body.exportedAt || '').slice(0, 10) || 'on an unknown date'}` });
       reg.update(ctx.id, { name: company.name });
       broadcast({ companies: true, firmId: (reg.get(ctx.id) || {}).firmId });
+      plaid.resetCompany(ctx.id); // the bank feed reads its history again; lines already in are recognised
       return { ok: true, rev: ctx.bump(), skippedReceipts };
     }],
     // Audit log for this company (owners and staff).
@@ -1422,7 +1520,7 @@ function createApp(opts) {
     }
   });
 
-  server.on('close', () => { closing = true; backups.stop(); reg.closeAll(); });
+  server.on('close', () => { closing = true; backups.stop(); if (feedTimer) clearInterval(feedTimer); reg.closeAll(); });
   /** Stop accepting requests, end live-update streams, and close the databases. */
   server.shutdown = () => new Promise(resolve => {
     for (const res of clients) res.end();
@@ -1458,7 +1556,7 @@ function importBankRows(store, body) {
   const account = bankAccount(store, body.account);
   if (!Array.isArray(body.rows) || !body.rows.length) throw new ValidationError('The file has no transactions to import.');
   if (body.rows.length > 5000) throw new ValidationError('Import at most 5,000 transactions at a time.');
-  const seen = new Map();
+  const seen = new Map(), claimed = new Set();
   let added = 0, skipped = 0;
   const now = Date.now();
   body.rows.forEach((r, i) => {
@@ -1471,6 +1569,9 @@ function importBankRows(store, body) {
     if (!r.fitid && n > 1) key += '#' + n;
     const id = 'b_' + crypto.createHash('sha1').update(account.id + '\u0000' + key).digest('hex').slice(0, 24);
     if (store.get('bankTxns', id)) { skipped++; return; }
+    // Already brought in by the bank feed: keep the feed's line, and mark it so it isn't matched twice.
+    const twin = feedTwin(store, account.id, r.date, amount, claimed);
+    if (twin) { claimed.add(twin.id); store.put('bankTxns', twin.id, { ...twin, fileMatched: true }); skipped++; return; }
     store.put('bankTxns', id, { account: account.id, date: r.date, amount, desc, fitid: r.fitid ? String(r.fitid) : '', status: 'new', entryId: '', imported: now, file: String(body.fileName || '').slice(0, 200) });
     added++;
   });
@@ -1511,7 +1612,8 @@ function readJson(req, limit = 5 * 1024 * 1024) {
 }
 
 // Content Security Policy: scripts only from this server; fonts from Google Fonts.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
+// Plaid's bank sign-in window (bank feeds) is the only outside script and frame allowed, and only from Plaid's own address.
+const CSP = "default-src 'self'; script-src 'self' https://cdn.plaid.com; frame-src https://cdn.plaid.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://cdn.plaid.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 function send(res, status, body, headers = {}) {
   const https = res.req && (res.req.headers['x-forwarded-proto'] === 'https' || res.req.socket.encrypted);
   res.writeHead(status, { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': CSP,

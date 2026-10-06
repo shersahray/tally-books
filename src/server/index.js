@@ -37,6 +37,7 @@ const server = createApp({
   backupFolder: process.env.BACKUP_FOLDER || undefined,
   backupBlobUrl: process.env.BACKUP_BLOB_URL || undefined,
   aiKey: process.env.ANTHROPIC_API_KEY || undefined,
+  plaid: process.env.PLAID_CLIENT_ID ? { clientId: process.env.PLAID_CLIENT_ID, secret: process.env.PLAID_SECRET || '', env: process.env.PLAID_ENV || 'production' } : undefined,
   mailAllowLocal: process.env.MAIL_ALLOW_LOCAL === '1', // testing only
 });
 server.on('error', err => {

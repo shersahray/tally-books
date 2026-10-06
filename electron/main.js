@@ -115,7 +115,11 @@ async function start() {
 
   // Stay on the books' own address; anything else opens in the default browser.
   const inside = target => !!origin && (target === origin || target.startsWith(origin + '/'));
-  win.webContents.setWindowOpenHandler(({ url: target }) => {
+  win.webContents.setWindowOpenHandler(({ url: target, referrer }) => {
+    // Bank feeds: some banks sign in through a pop-up opened by Plaid's window. It has to stay in the app to report back.
+    if (/^https:\/\//i.test(target) && /^https:\/\/cdn\.plaid\.com\//i.test((referrer && referrer.url) || '')) {
+      return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 760, autoHideMenuBar: true, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } } };
+    }
     if (!inside(target) && /^(https?|mailto):/i.test(target)) shell.openExternal(target);
     return { action: 'deny' };
   });

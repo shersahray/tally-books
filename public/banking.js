@@ -53,7 +53,7 @@ function selFor(b){const s=S.bank.sel[b.id];return s&&s.user?s:suggest(b)}
 /* ---------- views ---------- */
 function vBanking(){
   const B=S.bank,accts=bankAccts();
-  let h=head('Banking','Import statements from your bank, review each line, then reconcile to the statement',`<button class="btn" data-bact="new-rule">Add rule</button><button class="btn primary" data-bact="import">Import statement</button>`);
+  let h=head('Banking','Import statements from your bank, review each line, then reconcile to the statement',`<button class="btn" data-bact="new-rule">Add rule</button>${typeof feedsButton==='function'?feedsButton():''}<button class="btn primary" data-bact="import">Import statement</button>`);
   if(!accts.length)return h+`<div class="panel"><div class="empty"><b>No bank or credit card accounts</b>Add one under Chart of accounts with the detail “Bank or cash” or “Credit card”.</div></div>`;
   const a=acct(curBankAcct());
   h+=`<div class="acct-cards">${accts.map(x=>{const n=S.bankTxns.filter(b=>b.account===x.id&&b.status==='new').length,last=lastRecon(x.id);

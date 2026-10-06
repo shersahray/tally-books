@@ -44,7 +44,7 @@ let CO=null; // id of the company whose books are open
 const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -460,6 +460,7 @@ function vSettings(){
   ${codePanel()}
   ${closingPanel()}
   ${aiPanel()}
+  ${typeof plaidPanel==='function'?plaidPanel():''}
   ${feat('payroll')?payrollSettingsPanel():''}
   ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
@@ -485,6 +486,8 @@ function bindMain(m){
     if(typeof salesExtraClick==='function'&&salesExtraClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
+    if(d.plact)return plaidAction(d.plact);
+    if(d.feed)return feedAction(d.feed);
     if(d.clact)return closingAction(d.clact);
     if(d.ccact)return codeAction(d.ccact);
     if(t.hasAttribute('data-mlstatements'))return statementsForm();
@@ -534,7 +537,7 @@ function bindMain(m){
   if(S.view==='convert')bindConvert(m);
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
-  bindAI(m);bindAIRead(m);
+  bindAI(m);bindAIRead(m);if(typeof bindFeeds==='function')bindFeeds();
   if(typeof bindDocout==='function')bindDocout(m);
   if(typeof bindPayPanel==='function')bindPayPanel(m);
   if(S.view==='users'||S.view==='signins')bindUsers(m);
