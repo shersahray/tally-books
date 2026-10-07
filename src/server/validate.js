@@ -433,6 +433,46 @@ function validateItem(data, store, id) {
   return out;
 }
 
+/* Budgets: an amount per income or expense account for each month of one fiscal year. */
+function validateBudget(data, store) {
+  const name = str(data.name, 80).trim();
+  if (!name) throw new ValidationError('Give the budget a name.');
+  if (!isDate(data.start) || data.start.slice(8) !== '01') throw new ValidationError('A budget starts on the first day of a fiscal year.');
+  if (!isObj(data.amounts)) throw new ValidationError('Budget amounts must be an object.');
+  const amounts = {};
+  for (const [acct, months] of Object.entries(data.amounts).slice(0, 1000)) {
+    const a = store.get('accounts', acct);
+    if (!a || !['Income', 'Expense', 'Cost of Goods Sold'].includes(a.type)) throw new ValidationError('Budgets are for income and expense accounts.');
+    if (!Array.isArray(months) || months.length !== 12) throw new ValidationError('Each account needs 12 months.');
+    const m = months.map(v => (v === '' || v === null ? 0 : Math.round(Number(v) * 100) / 100));
+    if (m.some(v => !Number.isFinite(v) || Math.abs(v) > 1e10)) throw new ValidationError('Budget amounts must be numbers.');
+    if (m.some(v => v)) amounts[acct] = m;
+  }
+  return { name, start: data.start, amounts, ...(data.created ? { created: Number(data.created) || 0 } : {}) };
+}
+/* Mileage: one business trip. A claim (entryId) records it as an expense, once. */
+function validateTrip(data, store) {
+  if (!isDate(data.date)) throw new ValidationError('Trip date must be YYYY-MM-DD.');
+  const km = Math.round(Number(data.km) * 10) / 10;
+  if (!(km > 0) || km > 5000) throw new ValidationError('Enter the kilometres driven (up to 5,000 for one trip).');
+  const purpose = str(data.purpose, 200).trim();
+  if (!purpose) throw new ValidationError('Enter the business purpose of the trip.');
+  if (data.contactId && !store.get('contacts', String(data.contactId))) throw new ValidationError('That customer or vendor doesn’t exist.');
+  return { date: data.date, km, purpose, from: str(data.from, 120).trim(), to: str(data.to, 120).trim(), vehicle: str(data.vehicle, 60).trim(), contactId: data.contactId ? String(data.contactId) : '', roundTrip: !!data.roundTrip, entryId: data.entryId ? str(data.entryId, 120) : '', ...(data.created ? { created: Number(data.created) || 0 } : {}) };
+}
+/* Purchase orders: not posted to the ledger. "Make bill" turns one into a bill and links them. */
+const PO_STATUS = ['open', 'closed'];
+function validatePo(data, store) {
+  if (!isDate(data.date)) throw new ValidationError('Purchase order date must be YYYY-MM-DD.');
+  if (data.expected && !isDate(data.expected)) throw new ValidationError('The expected date must be YYYY-MM-DD.');
+  const c = store.get('contacts', String(data.contactId || ''));
+  if (!c) throw new ValidationError('Choose the vendor for this purchase order.');
+  const lines = docLines(data.lines);
+  if (!lines.length) throw new ValidationError('Add at least one line.');
+  for (const l of lines) if (l.account && !store.get('accounts', l.account)) throw new ValidationError('An account on this purchase order doesn’t exist.');
+  return { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), shipTo: str(data.shipTo, 300), lines, status: PO_STATUS.includes(data.status) ? data.status : 'open', billId: data.billId ? String(data.billId) : '' };
+}
+
 function validateRecord(collection, id, data, store) {
   checkId(id);
   if (!isObj(data)) throw new ValidationError('Record body must be a JSON object.');
@@ -440,6 +480,9 @@ function validateRecord(collection, id, data, store) {
     case 'accounts': return validateAccount(data, store, id);
     case 'contacts': return validateContact(data);
     case 'items': return validateItem(data, store, id);
+    case 'budgets': return validateBudget(data, store);
+    case 'trips': return validateTrip(data, store);
+    case 'pos': return validatePo(data, store);
     case 'docs': return validateDoc(data, store, id);
     case 'entries': return validateEntry(data, store, id);
     case 'bankTxns': return validateBankTxn(data, store, id);
@@ -473,9 +516,12 @@ function checkDelete(collection, id, store) {
   if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines))) {
     throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
   }
+  if (collection === 'entries' && store.list('trips').some(t => t.entryId === id)) {
+    throw new ValidationError('This expense is a mileage claim. Undo the claim from Expenses → Mileage instead.', 409);
+  }
   if (collection === 'items') {
     const onIt = r => (r.lines || []).some(l => l.item === id);
-    if (store.list('docs').some(onIt) || store.list('estimates').some(onIt) || store.list('recurring').some(onIt)) throw new ValidationError('This product or service is on invoices, bills or estimates, so it can’t be deleted. Mark it inactive instead.', 409);
+    if (store.list('docs').some(onIt) || store.list('estimates').some(onIt) || store.list('recurring').some(onIt) || store.list('pos').some(onIt)) throw new ValidationError('This product or service is on invoices, bills or estimates, so it can’t be deleted. Mark it inactive instead.', 409);
   }
   if (collection === 'contacts' && (store.contactUsed(id) || store.list('rules').some(r => r.contactId === id))) {
     throw new ValidationError('This contact appears on transactions, so it can’t be deleted.', 409);
@@ -546,8 +592,15 @@ function validateCompany(data) {
     // Features switched off for this company (only "false" is stored: everything in the plan is on by default).
     features: Object.fromEntries(Object.keys(PLANS.FEATURES).filter(k => isObj(data.features) && data.features[k] === false).map(k => [k, false])),
     notDuplicates: (Array.isArray(data.notDuplicates) ? data.notDuplicates : []).slice(-500).map(x => str(x, 130)).filter(Boolean),
+    // How invoices, estimates, sales receipts and purchase orders look, and up to three fields of the company's own.
+    docStyle: { color: /^#[0-9a-fA-F]{6}$/.test(isObj(data.docStyle) ? data.docStyle.color : '') ? data.docStyle.color : '#0a7369', layout: ['classic', 'bold', 'minimal'].includes(isObj(data.docStyle) && data.docStyle.layout) ? data.docStyle.layout : 'classic' },
+    customFields: (Array.isArray(data.customFields) ? data.customFields : []).filter(isObj).slice(0, 3).map((f, i) => ({ id: 'f' + (i + 1), label: str(f.label, 30).trim(), sales: f.sales !== false, purchase: !!f.purchase })).filter(f => f.label),
+    lateFee: validateLateFee(data.lateFee),
+    // Classes: a way to sort income and expenses (branch, department, line of business). One per transaction.
+    classes: (() => { const seen = new Set(); return (Array.isArray(data.classes) ? data.classes : []).filter(isObj).slice(0, 200).map(c => ({ id: str(c.id, 40), name: str(c.name, 60).trim(), active: c.active !== false })).filter(c => c.id && c.name && !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase())); })(),
+    mileage: isObj(data.mileage) ? { expenseAccount: str(data.mileage.expenseAccount, 40), payAccount: str(data.mileage.payAccount, 40), territories: !!data.mileage.territories, rates: isObj(data.mileage.rates) ? Object.fromEntries(Object.entries(data.mileage.rates).filter(([y, v]) => /^\d{4}$/.test(y) && isObj(v)).slice(0, 20).map(([y, v]) => [y, { first: Math.max(0, Math.min(5, Number(v.first) || 0)), after: Math.max(0, Math.min(5, Number(v.after) || 0)) }])) : {} } : { expenseAccount: '', payAccount: '', territories: false, rates: {} },
     savedReports: (Array.isArray(data.savedReports) ? data.savedReports : []).slice(0, 30).filter(isObj).map(r => ({
-      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap', 'sc', 'si', 'ev'].includes(r.tab) ? r.tab : 'pl',
+      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap', 'sc', 'si', 'ev', 'bva'].includes(r.tab) ? r.tab : 'pl', ...(r.cls ? { cls: str(r.cls, 40) } : {}), ...(r.budget ? { budget: str(r.budget, 120) } : {}),
       period: ['month', 'lastmonth', 'quarter', 'ytd', 'fy', 'lastfy', 'all', 'custom'].includes(r.period) ? r.period : 'fy',
       from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: r.tbAdj === 'aje' ? 'aje' : true } : {}),
     })).filter(r => r.id && r.name),
@@ -557,6 +610,17 @@ function validateCompany(data) {
   // Registered charities and qualifying non-profits can't use the Quick Method.
   if (out.quickMethod.on && (out.orgType === 'charity' || (out.orgType === 'npo' && out.nonprofit.qualifying))) out.quickMethod = { ...out.quickMethod, on: false };
   return out;
+}
+/** Late fees on overdue invoices: a flat amount or a percentage of what's overdue, after some days of grace. */
+function validateLateFee(l) {
+  if (!isObj(l)) return { on: false, kind: 'flat', amount: 0, graceDays: 0, account: '' };
+  const kind = l.kind === 'percent' ? 'percent' : 'flat';
+  const amount = Math.round(Math.max(0, Number(l.amount) || 0) * 100) / 100;
+  if (kind === 'percent' && amount > 30) throw new ValidationError('A late fee percentage can be at most 30%.');
+  if (kind === 'flat' && amount > 10000) throw new ValidationError('A late fee can be at most $10,000.');
+  if (l.on && !(amount > 0)) throw new ValidationError('Enter the late fee amount.');
+  if (l.on && !l.account) throw new ValidationError('Choose the income account for late fees.');
+  return { on: !!l.on, kind, amount, graceDays: Math.max(0, Math.min(90, parseInt(l.graceDays, 10) || 0)), account: str(l.account, 40) };
 }
 /** Non-profit and charity settings. itcPct: share of tax paid on purchases used in taxable activities (blank = all). */
 function validateNonprofit(n) {

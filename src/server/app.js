@@ -1222,7 +1222,7 @@ function createApp(opts) {
       ctx.store.transaction(() => {
         for (const id of docIds) {
           const d = ctx.store.get('docs', id);
-          if (d) ctx.store.put('docs', id, { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: to.join(', '), by: ctx.user.name || ctx.user.username, what: ['invoice', 'reminder', 'statement', 'credit', 'sreceipt'].includes(body.what) ? body.what : 'document' }] });
+          if (d) ctx.store.put('docs', id, { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: to.join(', '), by: ctx.user.name || ctx.user.username, what: ['invoice', 'reminder', 'statement', 'credit', 'sreceipt', 'po'].includes(body.what) ? body.what : 'document' }] });
         }
         ctx.store.audit(ctx.user, 'email', { summary: `${m[1] === 'test' ? 'test email' : 'emailed'} “${subject.slice(0, 80)}” to ${to.join(', ').slice(0, 120)}` });
       });

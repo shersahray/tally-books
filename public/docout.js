@@ -4,8 +4,8 @@
    language the company keeps its books in. They're downloaded, or emailed from the company's own
    mailbox through the server (POST /api/mail/send). */
 const DL={
-  en:{sreceipt:'SALES RECEIPT',srNo:'Sales receipt no.',paidBy:'Paid',estimate:'ESTIMATE',estNo:'Estimate no.',until:'Good until',payHead:'How to pay',invoice:'INVOICE',credit:'CREDIT NOTE',statement:'STATEMENT',billTo:'Bill to',to:'To',invNo:'Invoice no.',crNo:'Credit note no.',date:'Date',due:'Due date',asOf:'As of',desc:'Description',qty:'Qty',rate:'Rate',amount:'Amount',sub:'Subtotal',total:'Total',paid:'Paid',credits:'Credits applied',bal:'Balance due',avail:'Credit available',page:'Page {0} of {1}',taxNo:'GST/HST no.',taxNoQc:'GST/QST no.',type:'Type',no:'No.',balance:'Balance',inv:'Invoice',cr:'Credit note',current:'Current',d30:'1–30 days',d60:'31–60 days',d90:'61–90 days',d90p:'Over 90 days',totalDue:'Total due',appliedTo:'Applied to invoice {0}: {1}'},
-  fr:{sreceipt:'REÇU DE VENTE',srNo:'N° de reçu de vente',paidBy:'Payé',estimate:'SOUMISSION',estNo:'N° de soumission',until:'Valide jusqu’au',payHead:'Comment payer',invoice:'FACTURE',credit:'NOTE DE CRÉDIT',statement:'RELEVÉ DE COMPTE',billTo:'Facturer à',to:'À',invNo:'N° de facture',crNo:'N° de note de crédit',date:'Date',due:'Échéance',asOf:'Au',desc:'Description',qty:'Qté',rate:'Prix',amount:'Montant',sub:'Sous-total',total:'Total',paid:'Payé',credits:'Crédits appliqués',bal:'Solde dû',avail:'Crédit disponible',page:'Page {0} de {1}',taxNo:'N° de TPS/TVH',taxNoQc:'N° de TPS/TVQ',type:'Type',no:'N°',balance:'Solde',inv:'Facture',cr:'Note de crédit',current:'Courant',d30:'1 à 30 jours',d60:'31 à 60 jours',d90:'61 à 90 jours',d90p:'Plus de 90 jours',totalDue:'Total dû',appliedTo:'Appliqué à la facture {0} : {1}'},
+  en:{po:'PURCHASE ORDER',poNo:'PO no.',expected:'Expected by',vendor:'Vendor',shipTo:'Ship to',sreceipt:'SALES RECEIPT',srNo:'Sales receipt no.',paidBy:'Paid',estimate:'ESTIMATE',estNo:'Estimate no.',until:'Good until',payHead:'How to pay',invoice:'INVOICE',credit:'CREDIT NOTE',statement:'STATEMENT',billTo:'Bill to',to:'To',invNo:'Invoice no.',crNo:'Credit note no.',date:'Date',due:'Due date',asOf:'As of',desc:'Description',qty:'Qty',rate:'Rate',amount:'Amount',sub:'Subtotal',total:'Total',paid:'Paid',credits:'Credits applied',bal:'Balance due',avail:'Credit available',page:'Page {0} of {1}',taxNo:'GST/HST no.',taxNoQc:'GST/QST no.',type:'Type',no:'No.',balance:'Balance',inv:'Invoice',cr:'Credit note',current:'Current',d30:'1–30 days',d60:'31–60 days',d90:'61–90 days',d90p:'Over 90 days',totalDue:'Total due',appliedTo:'Applied to invoice {0}: {1}'},
+  fr:{po:'BON DE COMMANDE',poNo:'N° de bon de commande',expected:'Prévu pour le',vendor:'Fournisseur',shipTo:'Livrer à',sreceipt:'REÇU DE VENTE',srNo:'N° de reçu de vente',paidBy:'Payé',estimate:'SOUMISSION',estNo:'N° de soumission',until:'Valide jusqu’au',payHead:'Comment payer',invoice:'FACTURE',credit:'NOTE DE CRÉDIT',statement:'RELEVÉ DE COMPTE',billTo:'Facturer à',to:'À',invNo:'N° de facture',crNo:'N° de note de crédit',date:'Date',due:'Échéance',asOf:'Au',desc:'Description',qty:'Qté',rate:'Prix',amount:'Montant',sub:'Sous-total',total:'Total',paid:'Payé',credits:'Crédits appliqués',bal:'Solde dû',avail:'Crédit disponible',page:'Page {0} de {1}',taxNo:'N° de TPS/TVH',taxNoQc:'N° de TPS/TVQ',type:'Type',no:'N°',balance:'Solde',inv:'Facture',cr:'Note de crédit',current:'Courant',d30:'1 à 30 jours',d60:'31 à 60 jours',d90:'61 à 90 jours',d90p:'Plus de 90 jours',totalDue:'Total dû',appliedTo:'Appliqué à la facture {0} : {1}'},
 };
 const dlang=()=>S.company.lang==='fr'?'fr':'en';
 const dl=(k,...a)=>DL[dlang()][k].replace(/\{(\d)\}/g,(m,i)=>a[i]);
@@ -20,15 +20,27 @@ async function logoBytes(){
 
 /* ---------- drawing ---------- */
 const M=50,RIGHT=562,GREY='#666666',ACC='#0a7369';
+/* The company's look for documents (Settings → Invoices and statements): an accent colour and a layout.
+   classic: coloured title, tinted table heads · bold: a colour band at the top, solid table heads · minimal: black and grey only. */
+function docLook(){
+  const ds=S.company.docStyle||{},acc=/^#[0-9a-f]{6}$/i.test(ds.color||'')?ds.color:ACC,layout=['bold','minimal'].includes(ds.layout)?ds.layout:'classic';
+  const mix=(hex,w)=>'#'+[1,3,5].map(i=>Math.round(parseInt(hex.slice(i,i+2),16)*(1-w)+255*w).toString(16).padStart(2,'0')).join('');
+  return{acc,layout,title:layout==='minimal'?'#222222':acc,headFill:layout==='bold'?acc:layout==='minimal'?'#f2f2f2':mix(acc,0.88),headInk:layout==='bold'?'#ffffff':'#222222'};
+}
+/** A table's head row in the company's look. cols: [[x, text, align]] */
+function tableHead(pdf,yy,cols){const L=docLook();pdf.rect(M,yy-12,RIGHT-M,18,{fill:L.headFill});for(const[x,t,al]of cols)pdf.text(x,yy,t,{size:9,bold:true,align:al||'left',color:L.headInk});return yy+20}
+/** The company's own fields with a value on this document (sale: invoices, estimates, receipts; purchase: purchase orders and bills). */
+const docFieldRows=(doc,purchase)=>(S.company.customFields||[]).filter(f=>(purchase?f.purchase:f.sales)&&doc.fields&&String(doc.fields[f.id]||'').trim()).map(f=>[f.label,String(doc.fields[f.id]).slice(0,60)]);
 // Company block (logo, name, address, contact, tax number) and the title on the right. Returns the y below it.
 function drawHeader(pdf,logo,title,meta){
-  const c=S.company;let y=40;
+  const c=S.company,L=docLook();let y=40;
+  if(L.layout==='bold')pdf.rect(0,0,612,12,{fill:L.acc});
   if(logo){const sz=pdf.image(logo,M,y,170,60);if(sz)y+=sz.h+10}
   pdf.text(M,y+12,c.name||'',{size:13,bold:true});y+=18;
   for(const line of String(c.address||'').split(/\r?\n/).filter(Boolean)){pdf.text(M,y+10,line,{size:9,color:GREY});y+=12}
   const contact=[c.phone,c.email,c.website].filter(Boolean).join('  ·  ');if(contact){pdf.text(M,y+10,contact,{size:9,color:GREY});y+=12}
   if(c.bn){pdf.text(M,y+10,`${+c.qstRate>0?dl('taxNoQc'):dl('taxNo')} ${c.bn}`,{size:9,color:GREY});y+=12}
-  pdf.text(RIGHT,58,title,{size:20,bold:true,align:'right',color:ACC});
+  pdf.text(RIGHT,58,title,{size:20,bold:true,align:'right',color:L.title});
   let my=80;
   for(const[k,v,b]of meta){pdf.text(RIGHT-120,my,k,{size:9,color:GREY,align:'right'});pdf.text(RIGHT,my,v,{size:9.5,bold:!!b,align:'right'});my+=14}
   return Math.max(y,my)+18;
@@ -52,15 +64,18 @@ function drawFooter(pdf,text){
 
 /** An invoice, credit note or estimate (kind 'estimate') as a PDF (Uint8Array). */
 async function docPdf(doc){
-  const pdf=TallyPDF.create(),logo=await logoBytes(),cred=doc.kind==='credit',est=doc.kind==='estimate',sr=doc.kind==='sreceipt';
+  const pdf=TallyPDF.create(),logo=await logoBytes(),cred=doc.kind==='credit',po=doc.kind==='po',est=doc.kind==='estimate'||po,sr=doc.kind==='sreceipt';
   const st=est?{bal:+doc.total||0}:docStatus(doc),paid=est?0:paidOn(doc.id);
-  const meta=[[sr?dl('srNo'):est?dl('estNo'):cred?dl('crNo'):dl('invNo'),doc.number||''],[dl('date'),ddate(doc.date)]];
-  if(est&&doc.expires)meta.push([dl('until'),ddate(doc.expires)]);
+  const meta=[[po?dl('poNo'):sr?dl('srNo'):est?dl('estNo'):cred?dl('crNo'):dl('invNo'),doc.number||''],[dl('date'),ddate(doc.date)]];
+  if(est&&!po&&doc.expires)meta.push([dl('until'),ddate(doc.expires)]);
+  if(po&&doc.expected)meta.push([dl('expected'),ddate(doc.expected)]);
   if(!cred&&!est&&doc.due)meta.push([dl('due'),ddate(doc.due)]);
+  meta.push(...docFieldRows(doc,po));
   meta.push(sr?[dl('paidBy'),dmoney(doc.total),true]:[est?dl('total'):cred?dl('avail'):dl('bal'),dmoney(st.bal),true]);
-  let y=drawHeader(pdf,logo,sr?dl('sreceipt'):est?dl('estimate'):cred?dl('credit'):dl('invoice'),meta);
-  y=drawParty(pdf,y,dl('billTo'),doc.contactId);
-  const head=yy=>{pdf.rect(M,yy-12,RIGHT-M,18,{fill:'#eef4f1'});pdf.text(M+6,yy,dl('desc'),{size:9,bold:true});pdf.text(380,yy,dl('qty'),{size:9,bold:true,align:'right'});pdf.text(470,yy,dl('rate'),{size:9,bold:true,align:'right'});pdf.text(RIGHT-6,yy,dl('amount'),{size:9,bold:true,align:'right'});return yy+20};
+  let y=drawHeader(pdf,logo,po?dl('po'):sr?dl('sreceipt'):est?dl('estimate'):cred?dl('credit'):dl('invoice'),meta);
+  y=drawParty(pdf,y,po?dl('vendor'):dl('billTo'),doc.contactId);
+  if(po&&doc.shipTo){pdf.text(M,y,dl('shipTo').toUpperCase(),{size:8,bold:true,color:GREY});y+=14;for(const l of String(doc.shipTo).split(/\r?\n/).filter(Boolean).slice(0,5)){pdf.text(M,y,l,{size:9.5});y+=12}y+=12}
+  const head=yy=>tableHead(pdf,yy,[[M+6,dl('desc')],[380,dl('qty'),'right'],[470,dl('rate'),'right'],[RIGHT-6,dl('amount'),'right']]);
   y=head(y);
   for(const l of doc.lines||[]){
     const desc=pdf.wrap(l.desc||acctName(l.account),300,9.5);
@@ -113,7 +128,7 @@ async function statementPdf(contactId,asOf,pdfIn){
   const total=r2(items.reduce((s,i)=>s+i.bal,0));
   let y=drawHeader(pdf,logo,dl('statement'),[[dl('asOf'),ddate(asOf)],[dl('totalDue'),dmoney(total),true]]);
   y=drawParty(pdf,y,dl('to'),contactId);
-  const head=yy=>{pdf.rect(M,yy-12,RIGHT-M,18,{fill:'#eef4f1'});[[M+6,dl('date')],[130,dl('type')],[230,dl('no')]].forEach(([x,t])=>pdf.text(x,yy,t,{size:9,bold:true}));pdf.text(380,yy,dl('due'),{size:9,bold:true,align:'right'});pdf.text(470,yy,dl('amount'),{size:9,bold:true,align:'right'});pdf.text(RIGHT-6,yy,dl('balance'),{size:9,bold:true,align:'right'});return yy+20};
+  const head=yy=>tableHead(pdf,yy,[[M+6,dl('date')],[130,dl('type')],[230,dl('no')],[380,dl('due'),'right'],[470,dl('amount'),'right'],[RIGHT-6,dl('balance'),'right']]);
   y=head(y);
   for(const i of items){
     if(y>690){pdf.addPage();y=head(60)}
@@ -146,7 +161,7 @@ function statementItems(contactId,asOf){
   return out.sort((a,b)=>a.d.date.localeCompare(b.d.date));
 }
 function agingOf(items,asOf){const a=[0,0,0,0,0];for(const i of items){const late=i.cr||!i.d.due?0:daysBetween(i.d.due,asOf);a[late<=0?0:late<=30?1:late<=60?2:late<=90?3:4]+=i.bal}return a.map(r2)}
-const pdfName=(kind,num)=>`${({sreceipt:dlang()==='fr'?'Recu-de-vente':'Sales-receipt',estimate:dlang()==='fr'?'Soumission':'Estimate',invoice:dlang()==='fr'?'Facture':'Invoice',credit:dlang()==='fr'?'Note-de-credit':'Credit-note',statement:dlang()==='fr'?'Releve':'Statement'})[kind]}-${String(num||'').replace(/[^A-Za-z0-9-]+/g,'')||today()}.pdf`;
+const pdfName=(kind,num)=>`${({po:dlang()==='fr'?'Bon-de-commande':'Purchase-order',sreceipt:dlang()==='fr'?'Recu-de-vente':'Sales-receipt',estimate:dlang()==='fr'?'Soumission':'Estimate',invoice:dlang()==='fr'?'Facture':'Invoice',credit:dlang()==='fr'?'Note-de-credit':'Credit-note',statement:dlang()==='fr'?'Releve':'Statement'})[kind]}-${String(num||'').replace(/[^A-Za-z0-9-]+/g,'')||today()}.pdf`;
 const toB64=bytes=>{let s='';for(let i=0;i<bytes.length;i+=0x8000)s+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000));return btoa(s)};
 
 /* ---------- email ---------- */
@@ -159,6 +174,7 @@ function templ(kind,v){
     reminder:fr?[`Rappel : facture ${v.num} en souffrance`,`Bonjour ${v.name},\n\nNous vous rappelons que la facture ${v.num}, d’un solde de ${v.amount}, était payable le ${v.due}. Si vous l’avez déjà réglée, merci et veuillez ne pas tenir compte de ce message.\n\nLa facture est jointe.\n\nMerci,\n${co}`]:[`Reminder: invoice ${v.num} is past due`,`Hello ${v.name},\n\nThis is a friendly reminder that invoice ${v.num}, with ${v.amount} still owing, was due on ${v.due}. If you’ve already paid, thank you, and please disregard this message.\n\nThe invoice is attached.\n\nThank you,\n${co}`],
     package:fr?[`Rapports financiers de ${co} : ${v.period}`,`Bonjour,\n\nVous trouverez ci-joints les rapports financiers de ${co} pour la période du ${v.period}.\n\nN’hésitez pas à me faire part de vos questions.\n\nMerci,`]:[`Financial reports for ${co}: ${v.period}`,`Hello,\n\nPlease find attached the financial reports for ${co} for ${v.period}.\n\nLet me know if you have any questions.\n\nThank you,`],
     estimate:fr?[`Soumission ${v.num} de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-jointe la soumission ${v.num} de ${v.amount}${v.due?`, valide jusqu’au ${v.due}`:''}. Faites-moi savoir si elle vous convient.\n\nMerci,\n${co}`]:[`Estimate ${v.num} from ${co}`,`Hello ${v.name},\n\nPlease find attached estimate ${v.num} for ${v.amount}${v.due?`, good until ${v.due}`:''}. Let me know if you’d like to go ahead.\n\nThank you,\n${co}`],
+    po:fr?[`Bon de commande ${v.num} de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-joint notre bon de commande ${v.num} de ${v.amount}${v.due?`, prévu pour le ${v.due}`:''}. Merci de confirmer la réception.\n\n${co}`]:[`Purchase order ${v.num} from ${co}`,`Hello ${v.name},\n\nPlease find attached purchase order ${v.num} for ${v.amount}${v.due?`, needed by ${v.due}`:''}. Please confirm you received it.\n\nThank you,\n${co}`],
     sreceipt:fr?[`Reçu de vente ${v.num} de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-joint le reçu de vente ${v.num} de ${v.amount}. Merci de votre achat.\n\n${co}`]:[`Sales receipt ${v.num} from ${co}`,`Hello ${v.name},\n\nPlease find attached sales receipt ${v.num} for ${v.amount}. Thank you for your business.\n\n${co}`],
     credit:fr?[`Note de crédit ${v.num} de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-jointe la note de crédit ${v.num} de ${v.amount}.\n\nMerci,\n${co}`]:[`Credit note ${v.num} from ${co}`,`Hello ${v.name},\n\nPlease find attached credit note ${v.num} for ${v.amount}.\n\nThank you,\n${co}`],
     statement:fr?[`Relevé de compte de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-joint votre relevé de compte au ${v.due}. Le solde dû est de ${v.amount}.\n\nMerci,\n${co}`]:[`Statement from ${co}`,`Hello ${v.name},\n\nPlease find attached your statement as of ${v.due}. The balance due is ${v.amount}.\n\nThank you,\n${co}`],
@@ -218,7 +234,7 @@ function bindDocActions(f,doc){
 }
 
 /* ---------- statements and reminders, from Sales ---------- */
-function salesMailButtons(){return '<button class="btn" data-mlstatements>Statements</button>'+(S.docs.some(d=>d.kind==='invoice'&&docStatus(d).k==='overdue')?'<button class="btn" data-mlreminders>Overdue reminders</button>':'')}
+function salesMailButtons(){return (S.company.lateFee&&S.company.lateFee.on&&ME&&ME.role!=='client'&&!ME.readOnly?`<button class="btn" data-latefees>Late fees${lateFeeDue().length?` <span class="pill overdue">${lateFeeDue().length}</span>`:''}</button>`:'')+'<button class="btn" data-mlstatements>Statements</button>'+(S.docs.some(d=>d.kind==='invoice'&&docStatus(d).k==='overdue')?'<button class="btn" data-mlreminders>Overdue reminders</button>':'')}
 async function bulkSend(items,label){
   await loadMail();
   if(!MAILCFG||!MAILCFG.configured){toast('Set up email for this company first (Settings → Email).',true);return 0}
@@ -278,7 +294,10 @@ function invoiceDetailsPanel(){
       ${fld('ivPhone','Phone',`<input type="text" id="ivPhone" value="${esc(c.phone||'')}">`)}${fld('ivEmail','Email',`<input type="email" id="ivEmail" value="${esc(c.email||'')}">`)}
       ${fld('ivWeb','Website',`<input type="text" id="ivWeb" value="${esc(c.website||'')}">`)}
       ${fld('ivNote','Note at the bottom',`<textarea id="ivNote" rows="3" placeholder="For example: Pay by e-Transfer to billing@example.com. Thank you for your business.">${esc(c.invoiceNote||'')}</textarea>`,true)}
-    </div><div><button class="btn primary" type="submit">Save</button></div></form></div>`;
+    </div>
+    ${docLookFields()}
+    ${lateFeeFields()}
+    <div class="actions" style="justify-content:flex-start"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" data-ivpreview>Preview an invoice</button></div></form></div>`;
 }
 function mailPanel(){
   // Only the bookkeeper's team sets up the mailbox (the server refuses it for client logins).
@@ -308,7 +327,14 @@ function bindDocout(m){
   if(S.view==='settings'&&Date.now()-mailTried>30000&&(mailTried=Date.now()))loadMail().then(()=>{if(S.view==='settings')renderMain()});
   const inv=$('#invSetForm',m);
   if(inv){
-    inv.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),address:$('#ivAddr',inv).value,phone:$('#ivPhone',inv).value,email:$('#ivEmail',inv).value,website:$('#ivWeb',inv).value,invoiceNote:$('#ivNote',inv).value}))toast('Invoice details saved')};
+    const look=()=>({docStyle:{color:$('#ivColor',inv).value,layout:$('#ivLayout',inv).value},customFields:[1,2,3].map(i=>({label:$('#ivF'+i,inv).value.trim(),sales:true,purchase:$('#ivFp'+i,inv).checked})).filter(f=>f.label)});
+    const fee=()=>({lateFee:{on:$('#lfOn',inv).checked,kind:$('#lfKind',inv).value,amount:+$('#lfAmt',inv).value||0,graceDays:+$('#lfGrace',inv).value||0,account:$('#lfAcct',inv).value}});
+    inv.addEventListener('click',e=>{const sw=e.target.closest('[data-swatch]');if(sw){$('#ivColor',inv).value=sw.dataset.swatch;$$('[data-swatch]',inv).forEach(b=>b.setAttribute('aria-pressed',b===sw))}});
+    const lfOn=$('#lfOn',inv);if(lfOn){const sync=()=>$('[data-lfbody]',inv).hidden=!lfOn.checked;lfOn.onchange=sync;sync()}
+    const pv=$('[data-ivpreview]',inv);if(pv)pv.onclick=async()=>{const keep=S.company;S.company={...keep,...look(),invoiceNote:$('#ivNote',inv).value};try{const d=S.docs.filter(x=>x.kind==='invoice').sort((a,b)=>b.date.localeCompare(a.date))[0]||{kind:'invoice',number:'1001',date:today(),due:addDays(today(),30),contactId:'',lines:[{desc:'Sample service',qty:2,rate:95,taxCode:'std'}],sub:190,tax:24.7,total:214.7,id:'preview'};
+      const ex={...d,fields:{...(d.fields||{}),...Object.fromEntries((S.company.customFields||[]).map(f=>[f.id,d.fields&&d.fields[f.id]||f.label+' value']))}};
+      saveFile('Invoice-preview.pdf',new Blob([await docPdf(ex)],{type:'application/pdf'}))}catch(err){toast(err.message,true)}finally{S.company=keep}};
+    inv.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),address:$('#ivAddr',inv).value,phone:$('#ivPhone',inv).value,email:$('#ivEmail',inv).value,website:$('#ivWeb',inv).value,invoiceNote:$('#ivNote',inv).value,...look(),...fee()}))toast('Invoice details saved')};
     const lf=$('#logoFile',inv);if(lf)lf.onchange=async()=>{const file=lf.files[0];lf.value='';if(!file)return;try{const jpg=await toJpeg(file,600);await api('PUT','/api/logo',{data:toB64(jpg)});await load();toast('Logo saved')}catch(err){toast(err.message,true)}};
     const ld=$('[data-logodel]',inv);if(ld)ld.onclick=async()=>{try{await api('DELETE','/api/logo');await load();toast('Logo removed')}catch(err){toast(err.message,true)}};
   }
@@ -329,4 +355,66 @@ async function toJpeg(file,maxW){
     const x=c.getContext('2d');x.fillStyle='#ffffff';x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);
     const blob=await new Promise(ok=>c.toBlob(ok,'image/jpeg',0.9));return new Uint8Array(await blob.arrayBuffer());
   }finally{URL.revokeObjectURL(url)}
+}
+
+/* ---------- the look of documents, the company's own fields, and late fees (Settings) ---------- */
+const DOC_COLORS=[['#0a7369','Teal'],['#1f4e8c','Navy'],['#6b3fa0','Purple'],['#b3261e','Red'],['#c26a00','Orange'],['#2f2f2f','Charcoal']];
+function docLookFields(){
+  const ds=S.company.docStyle||{},col=ds.color||ACC,cf=S.company.customFields||[];
+  return `<div class="subpanel"><div class="flabel">Look</div>
+    <div class="field"><span class="flabel" style="margin:0">Colour</span><div class="swatches">${DOC_COLORS.map(([h,n])=>`<button type="button" class="swatch" data-swatch="${h}" style="background:${h}" aria-pressed="${col.toLowerCase()===h}" aria-label="${esc(T(n))}" title="${esc(T(n))}"></button>`).join('')}<input type="color" id="ivColor" value="${esc(col)}" aria-label="Another colour"></div></div>
+    <div class="fields">${fld('ivLayout','Layout',`<select id="ivLayout">${[['classic','Classic: coloured title'],['bold','Bold: colour band and table heads'],['minimal','Minimal: black and grey']].map(([k,v])=>`<option value="${k}" ${(ds.layout||'classic')===k?'selected':''}>${esc(T(v))}</option>`).join('')}</select>`)}</div>
+    <div class="flabel" style="margin-top:6px">Your own fields</div>
+    <div class="muted" style="font-size:13px">Up to three, such as “PO number” or “Project”. Fill them in on invoices, estimates and sales receipts; they print under the date.</div>
+    ${[1,2,3].map(i=>{const f=cf[i-1]||{};return `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><input type="text" id="ivF${i}" maxlength="30" value="${esc(f.label||'')}" placeholder="${esc(T('Field name'))} ${i}" aria-label="${esc(T('Field name'))} ${i}" style="flex:1 1 200px"><label class="check"><input type="checkbox" id="ivFp${i}" ${f.purchase?'checked':''}> <span>Also on purchase orders</span></label></div>`}).join('')}</div>`;
+}
+function lateFeeFields(){
+  const l=S.company.lateFee||{},inc=sortAccts(S.accounts.filter(a=>a.type==='Income'&&a.active!==false));
+  const def=l.account||(inc.find(a=>/late|interest|frais de retard|intérêt/i.test(a.name))||inc[inc.length-1]||{}).id||'';
+  return `<div class="subpanel"><label class="check"><input type="checkbox" id="lfOn" ${l.on?'checked':''}> <b>Charge late fees on overdue invoices</b></label>
+    <div data-lfbody><div class="fields">
+      ${fld('lfKind','Fee',`<select id="lfKind"><option value="flat" ${l.kind!=='percent'?'selected':''}>${esc(T('A flat amount'))}</option><option value="percent" ${l.kind==='percent'?'selected':''}>${esc(T('A percentage of what’s overdue'))}</option></select>`)}
+      ${fld('lfAmt','Amount ($ or %)',`<input type="number" id="lfAmt" step="0.01" min="0" value="${esc(l.amount||'')}">`)}
+      ${fld('lfGrace','Days after the due date',`<input type="number" id="lfGrace" step="1" min="0" max="90" value="${esc(l.graceDays??0)}">`)}
+      ${fld('lfAcct','Income account',`<select id="lfAcct">${acctOptions(def,a=>a.type==='Income')}</select>`)}
+    </div><div class="muted" style="font-size:13px">Nothing is charged by itself. In Sales, “Late fees” lists the overdue invoices so you can check them, then makes a small fee invoice for each one, at most once every 30 days. No sales tax is added.</div></div></div>`;
+}
+/** Inputs for the company's own fields on a document form, and reading them back. */
+const ownFields=purchase=>(S.company.customFields||[]).filter(f=>purchase?f.purchase:f.sales);
+const fieldInputs=(doc,purchase)=>ownFields(purchase).map(f=>fld('cf_'+f.id,esc(f.label),`<input type="text" id="cf_${f.id}" maxlength="60" value="${esc(doc&&doc.fields&&doc.fields[f.id]||'')}">`)).join('');
+function readFields(f,purchase,prev){const o={...((prev&&prev.fields)||{})};for(const x of ownFields(purchase)){const i=$('#cf_'+x.id,f);if(i)o[x.id]=i.value.trim()}for(const k of Object.keys(o))if(!o[k])delete o[k];return o}
+
+/* ---------- late fees ----------
+   An overdue invoice past its grace days, with no late fee in the last 30 days, can be charged one: a small invoice
+   to the same customer, linked to it (lateFor), with no sales tax. Nothing is charged until someone checks the list. */
+function lateFeeDue(){
+  const l=S.company.lateFee;if(!l||!l.on)return [];
+  const t=today(),recent=addDays(t,-30);
+  return S.docs.filter(d=>d.kind==='invoice'&&!d.lateFor&&d.due&&addDays(d.due,+l.graceDays||0)<t&&docStatus(d).bal>0.004&&!S.docs.some(x=>x.lateFor===d.id&&x.date>recent))
+    .map(d=>{const bal=docStatus(d).bal;return{d,bal,fee:r2(l.kind==='percent'?bal*(+l.amount||0)/100:+l.amount||0)}}).filter(x=>x.fee>=0.01).sort((a,b)=>a.d.due.localeCompare(b.d.due));
+}
+function lateFeesForm(){
+  const l=S.company.lateFee,list=lateFeeDue();
+  const f=openModal('Late fees',`<div class="muted"><span>${l.kind==='percent'?`${l.amount}% of what’s overdue`:`${money(l.amount)} per invoice`}</span>${+l.graceDays?` · <span>${l.graceDays} days after the due date</span>`:''} · <span>at most once every 30 days for each invoice</span>.</div>
+    ${list.length?`<div class="tbl-wrap"><table><thead><tr><th><input type="checkbox" data-lfall checked aria-label="All"></th><th>Invoice</th><th>Customer</th><th>Due</th><th class="n">Overdue</th><th class="n">Fee</th></tr></thead><tbody>${list.map(x=>`<tr><td><input type="checkbox" data-lfpick="${x.d.id}" checked aria-label="Charge"></td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td class="neg" style="white-space:nowrap">${fmtDate(x.d.due)}</td><td class="n">${money(x.bal)}</td><td class="n"><input type="number" step="0.01" min="0" data-lffee="${x.d.id}" value="${x.fee.toFixed(2)}" style="max-width:100px"></td></tr>`).join('')}</tbody></table></div>
+    <div class="muted" style="font-size:13px">Each fee is its own small invoice to the customer, dated today, that mentions the late invoice. Email them from Sales like any invoice.</div>`:'<div class="empty"><b>No late fees to charge</b>No invoice is past its grace days without a fee in the last 30 days.</div>'}`,
+    `<button type="button" class="btn" data-close>${list.length?'Cancel':'Close'}</button>${list.length?'<button type="submit" class="btn primary">Charge late fees</button>':''}`,'wide');
+  const all=$('[data-lfall]',f);if(all)all.onchange=()=>$$('[data-lfpick]',f).forEach(c=>c.checked=all.checked);
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const ar=needAcct('ar','Accounts receivable');if(!ar)return;
+    if(!acct(l.account))return f.err('Choose the income account for late fees in Settings first.');
+    const picks=$$('[data-lfpick]',f).filter(c=>c.checked).map(c=>({x:list.find(y=>y.d.id===c.dataset.lfpick),fee:r2(+$(`[data-lffee="${c.dataset.lfpick}"]`,f).value||0)})).filter(p=>p.fee>=0.01);
+    if(!picks.length)return f.err('Pick at least one invoice with a fee above zero.');
+    const writes=[];let n=parseInt(nextNum('invoice'))||1001;
+    const fr=S.company.lang==='fr';
+    for(const{x,fee}of picks){
+      const id=uid(),num=String(n++),t=today();
+      const c=calcLines([{desc:fr?`Frais de retard, facture ${x.d.number||''}`.trim():`Late fee on invoice ${x.d.number||''}`.trim(),account:l.account,qty:1,rate:fee,taxCode:'none'}],r=>(+r.qty||0)*(+r.rate||0),false);
+      const base={date:t,contactId:x.d.contactId,memo:''};
+      const dd={...base,kind:'invoice',number:num,due:addDays(t,+S.company.terms||0),...docRecord(c),lateFor:x.d.id,created:Date.now()};
+      if(x.d.cls){dd.cls=x.d.cls;base.cls=x.d.cls}
+      writes.push({op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:'invoice',ref:num,docId:id,lines:docPostLines('invoice',c,ar.id),created:dd.created}});
+    }
+    if(await batch(writes)){closeModal();toast(`${picks.length} late fee${picks.length===1?'':'s'} charged`)}
+  };
 }

@@ -6,12 +6,14 @@
 
 /* Fast sums: each account's postings by date with running totals, so many columns stay quick. */
 let RIX=null;
+/** The class the P&L (or budget vs actual) is filtered to: '' all, '__none' transactions without a class. */
+const repCls=()=>['pl','bva'].includes(S.rep.tab)&&(S.company.classes||[]).length?S.rep.cls||'':'';
 function rix(){
-  const ps=postings();if(RIX&&RIX.ps===ps)return RIX;
+  const ps=postings(),cls=repCls();if(RIX&&RIX.ps===ps&&RIX.cls===cls)return RIX;
   const m=new Map();
-  for(const p of ps){let a=m.get(p.account);if(!a)m.set(p.account,a=[]);a.push([p.date,p.debit-p.credit])}
+  for(const p of ps){if(cls&&(cls==='__none'?!!p.e.cls:p.e.cls!==cls))continue;let a=m.get(p.account);if(!a)m.set(p.account,a=[]);a.push([p.date,p.debit-p.credit])}
   for(const a of m.values()){a.sort((x,y)=>x[0]<y[0]?-1:x[0]>y[0]?1:0);let c=0;a.cum=a.map(x=>c+=x[1])}
-  return RIX={ps,m};
+  return RIX={ps,m,cls};
 }
 const firstOnOrAfter=(a,d)=>{let lo=0,hi=a.length;while(lo<hi){const mid=(lo+hi)>>1;if(a[mid][0]<d)lo=mid+1;else hi=mid}return lo};
 function rawSum(id,from,to){
@@ -67,7 +69,7 @@ function dateCols(to,cmp){
 /* ---------- drawing a report with columns ---------- */
 const pct=(a,b)=>Math.abs(b)<0.005?null:r2((a-b)/Math.abs(b)*100);
 function colReport({title,sub,C,rows,name}){
-  const head=[...C.cols.map(c=>c.label),...(C.total?['Total']:[]),...(C.change?['$ change','% change']:[])];
+  const head=[...C.cols.map(c=>c.label),...(C.total?['Total']:[]),...(C.change?(C.changeLabels||['$ change','% change']):[])];
   const full=rows.map(r=>{
     if(!r.vals)return r;
     const extra=[];
@@ -108,7 +110,8 @@ function rPL(){
   if(cogs)rows.push({cls:'tot',label:W('Gross profit'),vals:inc.map((v,i)=>r2(v-cogs[i]))});
   const exp=sec('Expense','Expenses');
   rows.push({cls:'spacer'},{cls:'grand',label:W('Net income'),vals:inc.map((v,i)=>r2(v-(cogs||z)[i]-exp[i]))});
-  return colReport({title:W('Profit and loss'),sub:`${fmtDate(from)} – ${fmtDate(to)}`,C,rows,name:`profit-and-loss_${from}_${to}`});
+  const cl=repCls(),cn=cl==='__none'?T('No class'):cl?(clsName(cl)||''):'';
+  return colReport({title:W('Profit and loss')+(cn?` · ${cn}`:''),sub:`${fmtDate(from)} – ${fmtDate(to)}`,C,rows,name:`profit-and-loss_${from}_${to}`});
 }
 
 /* ---------- balance sheet ---------- */
@@ -185,10 +188,10 @@ async function saveReport(){
     <div class="muted" style="font-size:13px">Saves the report, its period and comparison so you can open it again in one click. The dates move with the period: “This fiscal year” is always the current one.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`);
   f.onsubmit=async e=>{e.preventDefault();const name=$('#srName',f).value.trim();if(!name)return f.err('Give it a name.');
-    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:R.tbAdj==='aje'?'aje':!!R.tbAdj};
+    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:R.tbAdj==='aje'?'aje':!!R.tbAdj,...(repCls()?{cls:R.cls}:{}),...(R.tab==='bva'&&R.budget?{budget:R.budget}:{})};
     if(await putCompany({...strip(S.company),savedReports:[...savedReports().filter(x=>x.name!==name),item].slice(-30)})){S.rep.savedId=item.id;closeModal();toast('Report saved')}};
 }
-function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:x.tbAdj==='aje'?'aje':!!x.tbAdj});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
+function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:x.tbAdj==='aje'?'aje':!!x.tbAdj,cls:x.cls||'',budget:x.budget||''});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
 /** Is the report on screen still the saved one (same report, period and options)? */
 const savedMatches=x=>{const R=S.rep;return x.tab===R.tab&&x.period===R.period&&(x.compare||'')===(R.compare||'')&&(x.acct||'')===(R.acct||'')&&(x.tbAdj==='aje'?'aje':!!x.tbAdj)===(R.tbAdj==='aje'?'aje':!!R.tbAdj)&&(x.period!=='custom'||(x.from===R.from&&x.to===R.to))};
 async function deleteSaved(id){const x=savedReports().find(r=>r.id===id);if(!x||!await confirmBox('Delete this saved report?',x.name,'Delete'))return;if(await putCompany({...strip(S.company),savedReports:savedReports().filter(r=>r.id!==id)})){S.rep.savedId='';toast('Saved report deleted');renderMain()}}
@@ -264,8 +267,8 @@ function reportsPdf(reports,{cover}={}){
   for(let i=0;i<pages;i++){doc.goto(i);doc.text(W0-M,H0-24,`${i+1} / ${pages}`,{size:8,align:'right',color:'#888888'})}
   return doc.output();
 }
-const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor'};
-function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
+const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor',bva:()=>'Budget vs actual'};
+function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
 
 /* ---------- report package: several reports for a period, as one PDF ---------- */
 function packageForm(){

@@ -32,7 +32,7 @@ function estimateForm(x){
   const f=openModal(x?`Estimate ${x.number?'#'+x.number:''}`:'New estimate',
     `${done?`<div class="banner" style="margin:0"><span>This estimate was turned into an invoice.</span> <button type="button" class="btn sm" data-estinv="${x.invoiceId}">View invoice</button></div>`:''}
     <div class="fields">${fld('eC','Customer',contactSelect('eC',d.contactId,'customer'))}${fld('eN','Estimate no.',`<input type="text" id="eN" value="${esc(d.number)}">`)}${fld('eD','Date',`<input type="date" id="eD" value="${esc(d.date)}">`)}${fld('eX','Good until',`<input type="date" id="eX" value="${esc(d.expires||'')}">`)}
-    ${x&&!done?fld('eS','Status',`<select id="eS">${Object.entries(EST_STATUS).map(([k,v])=>`<option value="${k}" ${d.status===k?'selected':''}>${v}</option>`).join('')}</select>`):''}</div>
+    ${typeof fieldInputs==='function'?fieldInputs(d,false):''}${x&&!done?fld('eS','Status',`<select id="eS">${Object.entries(EST_STATUS).map(([k,v])=>`<option value="${k}" ${d.status===k?'selected':''}>${v}</option>`).join('')}</select>`):''}</div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="eM">Message on estimate</label><textarea id="eM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>`,
     `${delBtn(!!x)}${x?'<button type="button" class="btn ghost" data-estpdf>PDF</button><button type="button" class="btn ghost" data-estmail>Email</button>':''}<button type="button" class="btn" data-close>Cancel</button>${!done&&!(x&&x.status==='declined')?'<button type="button" class="btn" data-estmakehere>Save and make invoice</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
@@ -50,6 +50,7 @@ function estimateForm(x){
     const id=x?x.id:uid();
     const r=docRecord(c);delete r.taxRate;
     const data={...(x?strip(x):{}),number:$('#eN',f).value.trim(),date:$('#eD',f).value,expires:$('#eX',f).value,contactId:cid,memo:$('#eM',f).value.trim(),status:$('#eS',f)?.value||d.status||'open',invoiceId:x?.invoiceId||'',...r,created:x?.created||Date.now()};
+    const fv=typeof readFields==='function'?readFields(f,false,x):{};if(Object.keys(fv).length)data.fields=fv;else delete data.fields;
     if(!await put('estimates',id,data))return null;
     return {...data,id};
   };
@@ -67,7 +68,7 @@ function estMail(x){
 function estOpenInvoice(id){const d=S.docs.find(y=>y.id===id);if(d){docForm('invoice',d);addExtras('docs',d.id)}}
 /** Open a new invoice filled in from the estimate; saving it links the two. */
 function estToInvoice(x){
-  docForm('invoice',null,{contactId:x.contactId,memo:x.memo||'',lines:x.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode})),
+  docForm('invoice',null,{contactId:x.contactId,memo:x.memo||'',fields:x.fields,lines:x.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode})),
     note:`<div class="banner" style="margin:0"><span>From estimate</span> <b class="mono">${esc(x.number||'')}</b><span>. Check the lines, then save the invoice.</span></div>`,
     onSaved:async id=>{const cur=S.estimates.find(y=>y.id===x.id)||x;await put('estimates',x.id,{...strip(cur),status:'accepted',invoiceId:id});toast('Invoice saved and linked to the estimate')}});
 }
