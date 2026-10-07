@@ -485,3 +485,13 @@ label.btn.disabled{opacity:.6;pointer-events:none}
 .fx-row label{font-weight:600;font-size:13px}
 .fx-home{font-size:13px;margin:0 0 6px}
 .fx-home:empty{display:none}
+.acclib{max-height:min(60vh,600px);overflow:auto;border:1px solid var(--line);border-radius:var(--r)}
+.acclib-sec{border-top:1px solid var(--line)}
+.acclib-sec:first-child{border-top:0}
+.acclib-head{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);font-size:13.5px}
+.acclib-head .btn{margin-left:auto}
+.acclib-row{display:grid;grid-template-columns:20px 52px 1fr;gap:8px;align-items:start;padding:6px 12px;border-top:1px solid var(--line);font-size:14px;cursor:pointer}
+.acclib-row:hover{background:var(--surface-2)}
+.acclib-row.have{opacity:.6;cursor:default}
+.acclib-row input{margin-top:3px}
+.acclib-hint{display:block;font-size:12px}

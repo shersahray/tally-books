@@ -50,7 +50,7 @@ ${body}
 <div class="demo-ribbon">Demo · example data · changes aren’t saved</div>
 <script>window.__TALLY_DEMO__=${safe(JSON.stringify(data))};</script>
 <script>${safe(fs.readFileSync(path.join(__dirname, 'demo-shim.js'), 'utf8'))}</script>
-${['i18n.js', 'fr.js', 'gifi.js', 'plans.js', 'industries.js', 'logo.js', 'bankparse.js', 'app.js', 'fx.js', 'banking.js', 'ai.js', 'receipts.js', 'convert-parse.js', 'convert.js', 'pdf.js', 'docout.js', 'sales-extras.js', 'items.js', 'inventory.js', 'budgets.js', 'purchasing.js', 'projects.js', 'assets.js', 'bankfeeds.js', 'billing.js', 'yearend.js', 'salestax.js', 'reports.js', 'review.js', 'payroll-calc.js', 'payroll.js', 'payroll-yearend.js', 'payroll-roe.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js', 'licence.js', 'overview.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
+${['i18n.js', 'fr.js', 'gifi.js', 'plans.js', 'industries.js', 'accountlib.js', 'logo.js', 'bankparse.js', 'app.js', 'fx.js', 'coa.js', 'banking.js', 'ai.js', 'receipts.js', 'convert-parse.js', 'convert.js', 'pdf.js', 'docout.js', 'sales-extras.js', 'items.js', 'inventory.js', 'budgets.js', 'purchasing.js', 'projects.js', 'assets.js', 'bankfeeds.js', 'billing.js', 'yearend.js', 'salestax.js', 'reports.js', 'review.js', 'payroll-calc.js', 'payroll.js', 'payroll-yearend.js', 'payroll-roe.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js', 'licence.js', 'overview.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
 `;
   fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'dist', 'demo.html'), html);
