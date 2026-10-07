@@ -89,6 +89,7 @@ function billingAdminPanel(){
     <div class="fields">
       ${fld('bsKey',a.configured?'Replace Stripe key':'Stripe secret or restricted key',`<input type="password" id="bsKey" autocomplete="off" spellcheck="false" placeholder="${a.configured?'Leave blank to keep it':'sk_live_… or rk_live_…'}" translate="no"><span class="hint">Restricted key permissions: Products, Prices, Customers, Checkout Sessions, Subscriptions (write) and Customer portal (write). Kept on this server, never shown again.</span>`,true)}
       ${Object.entries(TallyPlans.PLANS).map(([k,p])=>fld('bsAmt'+k,`${T(p.label)}: price per company, per month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}">`)).join('')}
+      ${Object.entries(TallyPlans.ADDONS).map(([k,p])=>fld('bsAmt'+k,`${p.label} add-on: price per company, per month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}"><span class="hint">Only for companies an owner adds it to, on either plan.</span>`)).join('')}
       ${fld('bsTrial','Free trial (days)',`<input type="number" id="bsTrial" min="0" max="60" step="1" value="${a.trialDays}"><span class="hint">Only the first time. 0 = no trial.</span>`)}
     </div>
     <div class="actions"><button class="btn primary" data-billsave>Save subscription settings</button>${a.configured?'<button class="btn ghost" data-billoff>Turn subscriptions off</button>':''}</div>
@@ -97,7 +98,7 @@ function billingAdminPanel(){
 async function billingAdminAction(b){
   try{
     if(b.hasAttribute('data-billsave')){
-      const body={amounts:{},trialDays:+$('#bsTrial').value};for(const k of Object.keys(TallyPlans.PLANS))body.amounts[k]=+$('#bsAmt'+k).value;
+      const body={amounts:{},trialDays:+$('#bsTrial').value};for(const k of [...Object.keys(TallyPlans.PLANS),...Object.keys(TallyPlans.ADDONS)])body.amounts[k]=+$('#bsAmt'+k).value;
       const k=$('#bsKey').value.trim();if(k)body.key=k;
       BILLADM=await api('PUT','/api/billing',body);loadBillMe();renderMain();toast('Subscription settings saved');return true;
     }

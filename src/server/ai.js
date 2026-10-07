@@ -40,7 +40,7 @@ class AI {
     this.file = path.join(dataDir, 'ai-settings.json');
     this.envKey = o.envKey || '';
     this.apiUrl = o.apiUrl || API_URL;
-    this.settings = { apiKey: '', model: DEFAULT_MODEL, capUsd: 20, usage: {} };
+    this.settings = { apiKey: '', model: DEFAULT_MODEL, capUsd: 20, assistantCap: 100, usage: {} };
     this.inflight = 0; this.reserved = 0;
     try { Object.assign(this.settings, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch { /* first run */ }
     if (!MODELS[this.settings.model]) this.settings.model = DEFAULT_MODEL;
@@ -79,7 +79,7 @@ class AI {
   /** What the browser may see. Never includes the key itself. */
   status(full) {
     const k = this.key(), m = this.settings.usage[this.month()] || { usd: 0, lines: 0 };
-    const out = { configured: !!k, model: this.settings.model, capUsd: this.settings.capUsd, spentUsd: Math.round(m.usd * 10000) / 10000, linesThisMonth: m.lines || 0 };
+    const out = { configured: !!k, model: this.settings.model, capUsd: this.settings.capUsd, assistantCap: this.settings.assistantCap, spentUsd: Math.round(m.usd * 10000) / 10000, linesThisMonth: m.lines || 0 };
     if (full) Object.assign(out, { source: this.envKey ? 'env' : k ? 'settings' : '', keyHint: k ? '…' + k.slice(-4) : '', models: Object.entries(MODELS).map(([id, v]) => ({ id, label: v.label })) });
     return out;
   }
@@ -98,6 +98,11 @@ class AI {
       const c = Number(body.capUsd);
       if (!Number.isFinite(c) || c < 0 || c > 10000) throw new ValidationError('The monthly limit must be between $0 and $10,000.');
       this.settings.capUsd = Math.round(c * 100) / 100;
+    }
+    if (body.assistantCap !== undefined) {
+      const n = Number(body.assistantCap);
+      if (!Number.isInteger(n) || n < 0 || n > 10000) throw new ValidationError('The AI assistant’s questions per company must be a whole number between 0 and 10,000 a month.');
+      this.settings.assistantCap = n;
     }
     this.save();
     return this.status(true);

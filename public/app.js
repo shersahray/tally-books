@@ -77,7 +77,7 @@ async function load(){
   if(!CO)return;
   const co=CO;
   loading=(async()=>{
-    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.rev=s.rev;S.connErr=false}
+    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.rev=s.rev;S.connErr=false}
     catch(e){S.connErr=true}
     S.loaded=true;scheduleRender();
   })();
@@ -173,6 +173,7 @@ function renderMain(){
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
   bindMain(main);
+  if(typeof syncAssistant==='function')syncAssistant();
   if(keepFocus){const el=document.getElementById(keepFocus);if(el){el.focus();if(el.setSelectionRange&&el.type==='search'){const n=el.value.length;el.setSelectionRange(n,n)}}}
 }
 function banners(){
@@ -472,6 +473,7 @@ function vSettings(){
   ${codePanel()}
   ${closingPanel()}
   ${aiPanel()}
+  ${assistantPanel()}
   ${typeof plaidPanel==='function'?plaidPanel():''}
   ${feat('payroll')?payrollSettingsPanel():''}
   ${backupPanel()}
@@ -561,7 +563,7 @@ function bindMain(m){
   if(S.view==='convert')bindConvert(m);
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
-  bindAI(m);bindAIRead(m);if(typeof bindFeeds==='function')bindFeeds();
+  bindAI(m);bindAIRead(m);bindAssistantSettings(m);if(typeof bindFeeds==='function')bindFeeds();
   if(typeof bindDocout==='function')bindDocout(m);
   if(S.view==='settings')bindClasses(m);
   if(typeof bindProjects==='function')bindProjects(m);
