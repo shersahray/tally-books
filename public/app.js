@@ -44,7 +44,7 @@ let CO=null; // id of the company whose books are open
 const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|billing(?:\/|$)|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -63,6 +63,7 @@ async function api(method,url,body,retried){
     if(r.status===401&&!url.startsWith('/api/auth/')&&typeof sessionEnded==='function')sessionEnded(j);
     // The licence ended (desktop app): the books turn view only.
     if(r.status===402&&j&&j.licence&&typeof licenceEnded==='function')licenceEnded();
+    if(r.status===402&&j&&j.billing&&typeof billingLockFromError==='function')billingLockFromError(j);
     if(r.status===403&&j&&j.mustChange&&typeof renderLock==='function')renderLock('password');
     if(r.status===403&&j&&j.mustEnroll&&typeof renderLock==='function')renderLock('enroll');
     if(r.status===403&&j&&j.mustAgree&&typeof renderLock==='function')renderLock('terms');

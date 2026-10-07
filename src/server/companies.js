@@ -68,6 +68,9 @@ class Registry {
     if (patch.name !== undefined) c.name = String(patch.name).slice(0, 120);
     if (patch.archived !== undefined) c.archived = !!patch.archived;
     if (patch.lastOpened !== undefined) c.lastOpened = patch.lastOpened;
+    if (patch.payer !== undefined) c.payer = patch.payer === 'client' ? 'client' : 'firm';   // who pays for Sumlora for this company
+    if (patch.billing !== undefined) c.billing = patch.billing;
+    if (patch.clientPlan !== undefined) c.clientPlan = patch.clientPlan;                     // the plan the client pays for                               // the client's subscription, when the client pays
     this.save();
     return c;
   }

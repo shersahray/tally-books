@@ -251,7 +251,7 @@ svg.chart .base{stroke:var(--line-strong);stroke-width:1}
 .lock-brand .logo{display:block;color:var(--logo-ink);line-height:0}
 .lock-brand .logo svg{height:34px;width:auto}
 .lock-card input{width:100%;padding:9px 11px}
-.lock-card input[type=checkbox]{width:auto;flex:none;padding:0}
+.lock-card input[type=checkbox],.lock-card input[type=radio]{width:auto;flex:none;padding:0}
 .report table.ws tr.subline td{font-size:13px;color:var(--muted);padding-top:2px;padding-bottom:2px}
 .report table.ws tr.subline td:nth-child(2){padding-left:32px}
 /* payroll */

@@ -78,4 +78,4 @@ async function paidSessions(cfg, fetchFn, linkId) {
     .map(s => ({ id: String(s.id), cents: Math.round(Number(s.amount_total) || 0), created: Number(s.created) || 0 }));
 }
 
-module.exports = { validKey, publicStripe, check, createLink, deactivate, paidSessions, StripeError, encode };
+module.exports = { validKey, publicStripe, check, createLink, deactivate, paidSessions, StripeError, encode, call };

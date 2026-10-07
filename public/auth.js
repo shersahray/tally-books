@@ -30,6 +30,7 @@ async function afterSignIn(){
   if(me.user.mustChange){ME=me.user;return renderLock('password')}
   if(me.user.mustEnroll){ME=me.user;return renderLock('enroll')}
   if(me.terms&&!me.terms.accepted){ME=me.user;return renderLock('terms',me.terms)}
+  if(typeof billingCheck==='function'&&await billingCheck(me.user))return;
   unlocked(me.user,me.idleMinutes);
 }
 /* Terms of service and Privacy policy: the pages, and the box people tick to agree. */
@@ -226,6 +227,7 @@ async function authStart(){
   if(me.user.mustChange)return requireSignIn('password');
   if(me.user.mustEnroll)return requireSignIn('enroll');
   if(me.terms&&!me.terms.accepted)return requireSignIn('terms',me.terms);
+  if(typeof billingCheck==='function'&&await billingCheck(me.user))return new Promise(res=>unlockWaiters.push(res));
   unlocked(me.user,me.idleMinutes);
 }
 async function signOut(){
@@ -263,6 +265,7 @@ function myAccountForm(){
     <div>${langSwitch()}</div>
     <h3 class="fsec">Appearance</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${TallyTheme.html()}<span class="muted" style="font-size:13px">Automatic follows this computer’s light or dark setting.</span></div>
+    ${typeof billingAccountHtml==='function'?billingAccountHtml():''}
     <h3 class="fsec">Two-step sign-in</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${two?`<span class="pill paid">On</span><span class="muted" style="font-size:13px">${ME.recoveryLeft} recovery code${ME.recoveryLeft===1?'':'s'} left</span>`:'<span class="pill quiet">Off</span><span class="muted" style="font-size:13px">Recommended: a code from your phone as well as your password.</span>'}</div>
     <div class="actions" style="justify-content:flex-start">${two?`<button type="button" class="btn sm" data-2fanew>New recovery codes</button>${required?'':'<button type="button" class="btn sm danger" data-2faoff>Turn off</button>'}`:'<button type="button" class="btn sm primary" data-2faon>Set up two-step sign-in</button>'}</div>
@@ -271,6 +274,7 @@ function myAccountForm(){
     <div class="hint muted" style="font-size:12.5px">At least 10 characters. A short phrase of unrelated words is strong and easy to remember.</div>`,
     `<button type="button" class="btn" data-close>Close</button><button type="submit" class="btn primary">Change password</button>`,'keep');
   const on=$('[data-2faon]',f);if(on)on.onclick=()=>{closeModal();document.body.classList.add('locked');renderLock('enroll',{optional:true})};
+  if(typeof bindBillingAccount==='function')bindBillingAccount(f);
   const nw=$('[data-2fanew]',f);if(nw)nw.onclick=async()=>{const r=await passwordPrompt('New recovery codes','Your old recovery codes will stop working.','Make new codes');if(!r)return;
     try{const x=await api('POST','/api/auth/2fa/recovery',{password:r.password});closeModal();showRecovery(x.recovery,true)}catch(ex){closeModal();toast(ex.message,true)}};
   const off=$('[data-2faoff]',f);if(off)off.onclick=async()=>{const r=await passwordPrompt('Turn off two-step sign-in?','Signing in will need only your password.','Turn off');if(!r)return;
@@ -281,7 +285,7 @@ function myAccountForm(){
 
 /* ---------- Users & security (owners) ---------- */
 let USERS=null,SIGNINS=null,SIGNUPS='';
-async function showUsers(){S.view='users';renderMain();try{USERS=await api('GET','/api/users');IDLE_MIN=USERS.idleMinutes}catch(e){toast(e.message,true)}if(S.view==='users')renderMain()}
+async function showUsers(){if(typeof loadBillMe==='function')loadBillMe();S.view='users';renderMain();try{USERS=await api('GET','/api/users');IDLE_MIN=USERS.idleMinutes}catch(e){toast(e.message,true)}if(S.view==='users')renderMain()}
 function vUsers(){
   if(!ME||ME.role!=='owner')return head('Users & security','')+'<div class="panel"><div class="empty"><b>Owners only</b>Ask an owner to change users or security settings.</div></div>';
   if(!USERS)return head('Users & security','Loading…');
@@ -339,6 +343,8 @@ function userForm(u){
     ${fld('usRole','Role',`<select id="usRole"><option value="client" ${role0==='client'?'selected':''}>Client: sees only their own company</option><option value="staff" ${role0==='staff'?'selected':''}>Staff: works in the companies below</option><option value="owner" ${role0==='owner'?'selected':''}>Owner: everything, including users and security</option></select>`,true)}
   </div>
   <label class="check" data-ro><input type="checkbox" id="usRO" ${u?(u.readOnly?'checked':''):'checked'}> View only: can see reports and transactions but can’t change anything</label>
+  ${!u&&typeof BILL!=='undefined'&&BILL&&BILL.configured?`<label class="check" data-pays style="align-items:flex-start"><input type="checkbox" id="usPays" checked style="margin-top:3px"> <span><span>They pay for Sumlora for this company, monthly</span>${BILL.offer.trialDays?` <span>after a ${BILL.offer.trialDays}-day free trial</span>`:''}<span>. They enter a card the first time they sign in.</span>
+    <select id="usPlan" aria-label="Plan they pay for" style="display:block;margin-top:6px">${Object.entries(BILL.plans).map(([k,p])=>`<option value="${k}" ${k==='essentials'?'selected':''}>${esc(T(p.label))}: ${planPrice(BILL,k)}</option>`).join('')}</select></span></label>`:''}
   ${ME.platformAdmin&&u?`<label class="check" data-adm><input type="checkbox" id="usAdm" ${u.platformAdmin?'checked':''}> Server administrator: manages firms, backups, the AI key and security for the whole server</label>`:''}
   <div data-cos><div class="flabel" style="margin-bottom:6px" data-coslabel>Companies this person can see</div>
     <label class="check" data-allrow><input type="checkbox" id="usAll" ${u&&u.role==='staff'&&!u.companies.length?'checked':''}> All companies, including new ones</label>
@@ -349,7 +355,7 @@ function userForm(u){
    :`<div class="muted" style="font-size:13px">You’ll get an invitation link to send them. They choose their own password${REQ2FA!=='off'?' and set up two-step sign-in':''}.</div>`}`,
   `${u&&u.id!==ME.id?`<button type="button" class="btn ${u.disabled?'':'danger'} left" data-usdis>${u.disabled?'Turn account back on':'Turn account off'}</button>`:'<span class="left"></span>'}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${u?'Save':'Add and get invitation link'}</button>`);
   const role=$('#usRole',f),all=$('#usAll',f);
-  const sync=()=>{const r=role.value;const adm=$('[data-adm]',f);if(adm)adm.hidden=r!=='owner';$('[data-cos]',f).hidden=r==='owner';$('[data-ro]',f).hidden=r==='owner';$('[data-allrow]',f).hidden=r!=='staff';$('[data-colist]',f).hidden=r==='staff'&&all.checked;$('[data-coslabel]',f).textContent=r==='client'?'Their company (or companies)':'Companies this person can see'};
+  const sync=()=>{const r=role.value;const adm=$('[data-adm]',f);if(adm)adm.hidden=r!=='owner';const pays=$('[data-pays]',f);if(pays)pays.hidden=r!=='client';$('[data-cos]',f).hidden=r==='owner';$('[data-ro]',f).hidden=r==='owner';$('[data-allrow]',f).hidden=r!=='staff';$('[data-colist]',f).hidden=r==='staff'&&all.checked;$('[data-coslabel]',f).textContent=r==='client'?'Their company (or companies)':'Companies this person can see'};
   role.onchange=all.onchange=sync;sync();
   const dis=$('[data-usdis]',f);if(dis)dis.onclick=async()=>{try{await api('PUT','/api/users/'+u.id,{disabled:!u.disabled});closeModal();await showUsers();toast(u.disabled?`${u.name} can sign in again`:`${u.name} is signed out and can’t sign in`)}catch(ex){f.err(ex.message)}};
   const ln=$('[data-uslink]',f);if(ln)ln.onclick=async()=>{try{const r=await api('POST',`/api/users/${u.id}/link`,{});closeModal();await showUsers();showLink(u,r.token,r.kind)}catch(ex){f.err(ex.message)}};
@@ -363,7 +369,7 @@ function userForm(u){
     const adm=$('#usAdm',f);if(adm&&r==='owner'&&adm.checked!==!!u.platformAdmin)body.platformAdmin=adm.checked;
     try{
       if(u){await api('PUT','/api/users/'+u.id,body);closeModal();await showUsers();toast('Saved')}
-      else{const x=await api('POST','/api/users',{...body,username:$('#usUser',f).value,invite:true});closeModal();await showUsers();showLink(x.user,x.user.link,'invite')}
+      else{const pays=$('#usPays',f);const x=await api('POST','/api/users',{...body,username:$('#usUser',f).value,invite:true,clientPays:r==='client'&&!!(pays&&pays.checked),clientPlan:($('#usPlan',f)||{}).value});closeModal();await showUsers();showLink(x.user,x.user.link,'invite')}
     }catch(ex){f.err(ex.message)}};
 }
 
@@ -384,7 +390,7 @@ function firmNameForm(){
 
 /* ---------- Firms on this server (the server's administrators) ---------- */
 let FIRMS=null;
-async function showFirms(){S.view='firms';FIRMS=null;renderMain();try{FIRMS=await api('GET','/api/firms')}catch(e){toast(e.message,true)}if(S.view==='firms')renderMain()}
+async function showFirms(){S.view='firms';FIRMS=null;renderMain();try{FIRMS=await api('GET','/api/firms');if(typeof loadBillingAdmin==='function')await loadBillingAdmin()}catch(e){toast(e.message,true)}if(S.view==='firms')renderMain()}
 const FIRM_STATUS={active:['paid','Active'],pending:['partial','Waiting for approval'],suspended:['overdue','Suspended']};
 function vFirms(){
   if(!ME||!ME.platformAdmin)return head('Firms','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Only the server’s administrator manages firms.</div></div>';
@@ -392,21 +398,24 @@ function vFirms(){
   const list=FIRMS.firms.slice().sort((a,b)=>(a.status==='pending'?0:1)-(b.status==='pending'?0:1)||b.created-a.created);
   const pending=list.filter(f=>f.status==='pending').length;
   return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Firms','Bookkeeping firms using this server. Each firm sees only its own people and companies.')+
+  (typeof billingAdminPanel==='function'?billingAdminPanel():'')+
   `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>New firms</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="field"><label for="fmSignups">Can new firms sign up from the sign-in screen?</label><select id="fmSignups">${[['off','No: only people you invite can sign in'],['approval','Yes, after I approve each one'],['open','Yes, straight away']].map(([k,v])=>`<option value="${k}" ${FIRMS.signups===k?'selected':''}>${v}</option>`).join('')}</select></div>
     <div class="field"><label for="fmDefPlan">Plan for firms that sign up</label><select id="fmDefPlan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${FIRMS.defaultPlan===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select><span class="hint">You can change each firm’s plan in the table below.</span></div>
     <div class="muted" style="font-size:13px">A firm that signs up gets its own owner account and starts with no companies. Firms don’t use AI suggestions until you turn them on, because AI is billed to your API key.</div>
   </div></div>
   ${pending?`<div class="banner"><span><b>${pending} firm${pending===1?' is':'s are'} waiting for approval.</b> Check who they are before approving.</span></div>`:''}
-  <div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Firm</th><th>Owner</th><th class="n">People</th><th class="n">Companies</th><th>Signed up</th><th>Last sign-in</th><th>Plan</th><th>AI</th><th>Status</th><th></th></tr></thead><tbody>${list.map(f=>{const st=FIRM_STATUS[f.status]||['quiet',f.status],mine=f.id===FIRMS.myFirm;
+  <div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Firm</th><th>Owner</th><th class="n">People</th><th class="n">Companies</th><th>Signed up</th><th>Last sign-in</th><th>Plan</th>${BILLADM&&BILLADM.configured?'<th>Subscription</th>':''}<th>AI</th><th>Status</th><th></th></tr></thead><tbody>${list.map(f=>{const st=FIRM_STATUS[f.status]||['quiet',f.status],mine=f.id===FIRMS.myFirm;
     return `<tr><td><b translate="no">${esc(f.name)}</b>${mine?' <span class="pill paid">Your firm</span>':''}</td><td><span translate="no">${f.owner?esc(f.owner.name):'—'}</span><div class="muted mono" style="font-size:12px" translate="no">${f.owner?esc(f.owner.username):''}</div></td><td class="n">${f.users}</td><td class="n">${f.companies}</td><td class="muted">${fmtWhen(f.created)}</td><td class="muted">${f.lastLogin?fmtWhen(f.lastLogin):'Never'}</td>
       <td><select data-firmplan="${f.id}" aria-label="Plan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${(f.plan||'plus')===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select></td>
+      ${BILLADM&&BILLADM.configured?`<td style="white-space:nowrap">${f.main?'<span class="muted">Your firm (free)</span>':({trialing:'<span class="pill paid">Free trial</span>',active:'<span class="pill paid">Paying</span>',pastdue:'<span class="pill overdue">Payment failed</span>',stopped:'<span class="pill overdue">Stopped</span>'})[f.subscription&&f.subscription.state]||'<span class="pill quiet">Not started</span>'}</td>`:''}
       <td style="white-space:nowrap"><label class="check"><input type="checkbox" data-firmai="${f.id}" ${f.ai?'checked':''} aria-label="AI suggestions"> On</label>${f.main?'<div class="muted" style="font-size:12px">Server limit</div>':`<div class="muted" style="font-size:12px;display:flex;gap:4px;align-items:center"><span translate="no">${money(f.aiSpentUsd||0)}</span> / $<input type="number" min="0" step="1" value="${f.aiCapUsd??10}" data-firmcap="${f.id}" aria-label="Monthly AI limit (US$)" style="width:64px;padding:2px 4px"></div>`}</td><td><span class="pill ${st[0]}">${st[1]}</span></td>
       <td style="white-space:nowrap">${f.status==='pending'?`<button class="btn sm primary" data-firmset="${f.id}" data-to="active">Approve</button>`:''}${f.status==='suspended'?`<button class="btn sm" data-firmset="${f.id}" data-to="active">Reactivate</button>`:''}${f.status!=='suspended'&&!mine?` <button class="btn sm ${f.status==='pending'?'ghost':'danger'}" data-firmset="${f.id}" data-to="suspended">${f.status==='pending'?'Decline':'Suspend'}</button>`:''}${f.status==='suspended'&&!f.companies&&!mine?` <button class="btn sm ghost" data-firmdel="${f.id}">Remove</button>`:''}</td></tr>`}).join('')}</tbody></table></div></div>`;
 }
 function bindFirms(m){
   m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
     if(b.hasAttribute('data-back-co'))return showCompanies();
+    if(typeof billingAdminAction==='function'&&await billingAdminAction(b))return;
     if(b.dataset.firmdel){const f=FIRMS.firms.find(x=>x.id===b.dataset.firmdel);if(!await confirmBox('Remove this firm?',`${f.name}: the firm and its ${f.users} account${f.users===1?'':'s'} are removed, and their emails can be used again. It has no companies, so no books are lost.`,'Remove'))return;
       try{await api('DELETE','/api/firms/'+encodeURIComponent(f.id));await showFirms();toast(`${f.name} removed`)}catch(ex){toast(ex.message,true)}return}
     const id=b.dataset.firmset;if(!id)return;const f=FIRMS.firms.find(x=>x.id===id),to=b.dataset.to;

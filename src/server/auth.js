@@ -340,6 +340,14 @@ class Auth {
     if (!u || u.disabled || u.invite.expires < Date.now()) throw new AuthError('This link has expired or was already used. Ask for a new one.', 410);
     return u;
   }
+  /** A firm's Sumlora subscription (see billing.js). */
+  setFirmBilling(id, rec, plan) {
+    const f = this.firm(id);
+    if (!f) return;
+    f.billing = rec;
+    if (plan && PLANS.PLANS[plan]) f.plan = plan;
+    this.save();
+  }
   /** Someone agreed to the Terms of service and Privacy policy: keep which version, when, and from where. */
   acceptTerms(id, version, ip) {
     const u = this.byId(id);

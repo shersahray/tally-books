@@ -14,6 +14,7 @@ const mail = require('./mail');
 const stripe = require('./stripe');
 const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
 const { TERMS_VERSION, TERMS_DRAFT } = require('./legal');
+const { Billing, paid: billingPaid, stale: billingStale, describe: billingDescribe } = require('./billing');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
@@ -44,6 +45,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {object} [opts.plaid]     Plaid keys for bank feeds: { clientId, secret, env } (otherwise the administrator enters them in Settings).
  * @param {Function} [opts.plaidFetch] Tests only: answers in place of Plaid's API.
  * @param {boolean} [opts.autoFeeds] Sync bank feeds every few hours (default true; tests turn it off).
+ * @param {Function} [opts.billingFetch] Tests only: answers in place of Stripe's API for Sumlora subscriptions.
  * @param {boolean} [opts.requireTerms] People must agree to the Terms of service and Privacy policy before using Sumlora (the server and the desktop app turn this on).
  * @param {string} [opts.licenceDir]  Where the licence is kept (the desktop app's own folder, so it stays with the computer, not the books).
  * @param {number} [opts.licenceTrialDays] Days of free trial before a code is needed (default 30; 0 = a code from the start).
@@ -108,6 +110,37 @@ function createApp(opts) {
     if (f.id !== auth.mainFirmId && ai.firmSpent(f.id) >= (f.aiCapUsd ?? 10)) throw new ValidationError(`Your firm’s AI limit for this month, $${Number(f.aiCapUsd ?? 10).toFixed(2)}, has been reached. The server’s administrator can raise it.`, 429);
   };
   const chargeFirm = (cid, usd) => { const c = reg.get(cid); if (c) ai.addFirmUsage(c.firmId, usd); };
+  /* ---------- Paying for Sumlora (online server; nothing changes until the administrator adds a Stripe key) ---------- */
+  const billing = new Billing(opts.licenceDir || opts.dataDir, { fetch: opts.billingFetch });
+  const firmExempt = fid => fid === auth.mainFirmId;            // the server owner's own firm doesn't pay itself
+  const firmNeedsPay = f => billing.configured() && !!f && f.status === 'active' && !firmExempt(f.id) && !billingPaid(f.billing);
+  const coNeedsPay = c => billing.configured() && !!c && c.payer === 'client' && !billingPaid(c.billing);
+  /** Companies a firm pays for: the ones it keeps that aren't archived and whose client doesn't pay. At least one. */
+  const firmCount = fid => Math.max(1, reg.list(fid).filter(c => !c.archived && c.payer !== 'client').length);
+  /** The address people come back to after Stripe's pages. */
+  const originOf = req => {
+    const proto = (opts.trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()) || (req.socket.encrypted ? 'https' : 'http');
+    const host = String(req.headers.host || '').replace(/[^A-Za-z0-9.:\[\]-]/g, '');
+    return `${proto === 'https' ? 'https' : 'http'}://${host}`;
+  };
+  /** Keep a firm's subscription at its number of companies (quietly: a Stripe hiccup is retried at the next change or check). */
+  async function syncFirmCount(fid) {
+    const f = auth.firm(fid);
+    if (!billing.configured() || !f || firmExempt(fid) || !f.billing || !billingPaid(f.billing)) return;
+    try { auth.setFirmBilling(fid, await billing.setQuantity(f.billing, firmCount(fid))); } catch (e) { console.error('Sumlora subscription: couldn’t update the number of companies:', e.message); }
+  }
+  /** Read subscriptions again from Stripe when they're a few hours old (or all of them, for the twice-daily check). */
+  async function refreshBilling(firmIds, companyIds, all) {
+    if (!billing.configured()) return;
+    for (const fid of firmIds) {
+      const f = auth.firm(fid);
+      if (f && f.billing && (all || billingStale(f.billing))) { try { auth.setFirmBilling(fid, await billing.refresh(f.billing)); } catch { /* try again later */ } }
+    }
+    for (const cid of companyIds) {
+      const c = reg.get(cid);
+      if (c && c.billing && (all || billingStale(c.billing))) { try { reg.update(cid, { billing: await billing.refresh(c.billing) }); } catch { /* try again later */ } }
+    }
+  }
   // Terms of service and Privacy policy: has this person agreed to the current version?
   const requireTerms = !!opts.requireTerms;
   const termsOk = u => !requireTerms || !!(u && u.terms && u.terms.v === TERMS_VERSION);
@@ -198,6 +231,12 @@ function createApp(opts) {
   let closing = false;
   if (opts.backupFolder) backups.update({ folder: opts.backupFolder });
   if (opts.autoBackup !== false) backups.start();
+  // Twice a day, read every subscription again from Stripe (trials ending, cards failing, cancellations).
+  let billTimer = null;
+  if (opts.autoFeeds !== false) {
+    billTimer = setInterval(() => refreshBilling(auth.data.firms.map(f => f.id), reg.list().filter(c => c.billing).map(c => c.id), true).catch(() => {}), 12 * 3600e3);
+    billTimer.unref();
+  }
   let feedTimer = null;
   if (opts.autoFeeds !== false) {
     setTimeout(() => syncAllFeeds().catch(() => {}), 2 * 60 * 1000).unref();
@@ -354,8 +393,10 @@ function createApp(opts) {
       else if (d.kind === 'vcredit') payable -= bal;
     }
     const recons = store.list('recons').map(r => r.statementDate).sort();
+    const { billing: bill, ...entry } = c;
     return {
-      ...c,
+      ...entry,
+      payer: c.payer === 'client' ? 'client' : 'firm', billing: c.payer === 'client' ? billingDescribe(bill) : undefined,
       name: settings.name,
       province: settings.province, taxName: settings.taxName, taxRate: settings.taxRate, fyStart: settings.fyStart,
       toReview: store.list('bankTxns').filter(b => b.status === 'new').length,
@@ -654,6 +695,12 @@ function createApp(opts) {
       if ((Array.isArray(b.companies) ? b.companies : []).some(id => !mine.has(String(id)))) throw new ValidationError('That company doesn’t exist.', 404);
       const u = auth.addUser({ ...b, mustChange: !b.invite, firmId: user.firmId, self: false });
       auth.log('user-added', { username: u.username, by: user.username, role: u.role });
+      // "They pay for Sumlora for this company": the client starts a subscription for it when they first sign in.
+      if (u.role === 'client' && b.clientPays === true) {
+        const plan = PLANS.PLANS[b.clientPlan] ? b.clientPlan : PLANS.planOf((auth.firm(user.firmId) || {}).plan);
+        for (const cid of u.companies || []) reg.update(cid, { payer: 'client', clientPlan: plan });
+        syncFirmCount(user.firmId);
+      }
       return { ok: true, user: u };
     }],
     ['PUT', /^\/api\/users\/([^/]+)$/, async (req, m, res, user) => {
@@ -782,7 +829,7 @@ function createApp(opts) {
       const firms = auth.data.firms.map(f => {
         const people = auth.firmUsers(f.id), owner = people.find(u => u.role === 'owner');
         return { ...f, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
-          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan) };
+          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan), billing: undefined, subscription: billingDescribe(f.billing) };
       });
       return { firms, signups: auth.signups, defaultPlan: auth.defaultPlan, myFirm: user.firmId, plans: PLANS.PLANS, features: PLANS.FEATURES };
     }],
@@ -815,20 +862,23 @@ function createApp(opts) {
       ownerOnly(user);
       checkCompanyLimit();
       const entry = createCompany(await readJson(req), user);
+      syncFirmCount(user.firmId);
       return { ok: true, company: summary(entry) };
     }],
     ['PUT', /^\/api\/companies\/([^/]+)$/, async (req, m, res, user) => {
       const body = await readJson(req);
       const id = decodeURIComponent(m[1]);
       if (!canSeeCo(user, id)) throw new ValidationError('That company doesn’t exist.', 404);
-      if (body.archived !== undefined) ownerOnly(user);
+      if (body.archived !== undefined || body.payer !== undefined) ownerOnly(user);
       const patch = {};
       if (body.archived !== undefined) patch.archived = !!body.archived;
+      if (body.payer !== undefined) patch.payer = body.payer === 'client' ? 'client' : 'firm';
       // Bringing an archived company back counts against a firm licence's limit.
       if (patch.archived === false && reg.get(id).archived) checkCompanyLimit({ restoring: true });
       if (body.opened) patch.lastOpened = Date.now();
       reg.update(id, patch);
       if (patch.archived !== undefined) broadcast({ companies: true, firmId: reg.get(id).firmId });
+      if (patch.archived !== undefined || patch.payer !== undefined) syncFirmCount(reg.get(id).firmId);
       return { ok: true, company: summary(reg.get(id)) };
     }],
     ['GET', /^\/api\/backups$/, (req, m, res, user) => {
@@ -880,6 +930,68 @@ function createApp(opts) {
       const st = plaid.update(body);
       auth.log('plaid-settings', { username: user.username, ip: clientIp(req), change: body.secret !== undefined || body.clientId !== undefined ? 'Plaid keys changed' : 'settings changed' });
       return st;
+    }],
+    // Sumlora subscriptions: the administrator's settings.
+    ['GET', /^\/api\/billing$/, (req, m, res, user) => { adminOnly(user); return billing.status(); }],
+    ['PUT', /^\/api\/billing$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const body = await readJson(req);
+      const st = await billing.update(body);
+      auth.log('billing-settings', { username: user.username, ip: clientIp(req), change: body.key !== undefined ? 'Stripe key changed' : 'prices or trial changed' });
+      return st;
+    }],
+    // What this person has to pay for (if anything), read fresh from Stripe when it's a few hours old.
+    ['GET', /^\/api\/billing\/me$/, async (req, m, res, user) => {
+      if (!billing.configured()) return { configured: false };
+      const mine = user.role === 'client' ? reg.list(user.firmId).filter(c => canSeeCo(user, c.id) && c.payer === 'client' && !c.archived) : [];
+      await refreshBilling([user.firmId], mine.map(c => c.id));
+      const f = auth.firm(user.firmId);
+      return { configured: true, offer: billing.offer(), plans: PLANS.PLANS,
+        firm: { exempt: firmExempt(user.firmId), needs: firmNeedsPay(f), plan: PLANS.planOf(f && f.plan), companies: firmCount(user.firmId), canPay: user.role === 'owner', ...billingDescribe(f && f.billing) },
+        companies: mine.map(c => ({ id: c.id, name: c.name, needs: coNeedsPay(c), plan: PLANS.planOf(c.clientPlan || (f && f.plan)), ...billingDescribe(c.billing) })) };
+    }],
+    // Start (or restart) a subscription on Stripe's page. The free trial is only the first time.
+    ['POST', /^\/api\/billing\/checkout$/, async (req, m, res, user) => {
+      const b = await readJson(req);
+      const f = auth.firm(user.firmId);
+      if (b.kind === 'firm') {
+        ownerOnly(user);
+        if (firmExempt(user.firmId)) throw new ValidationError('Your firm doesn’t pay for Sumlora on this server.');
+        if (billingPaid(f.billing)) throw new ValidationError('Your firm’s subscription is already running.');
+        const plan = PLANS.PLANS[b.plan] ? b.plan : PLANS.planOf(f.plan);
+        return { url: await billing.checkout({ kind: 'firm', id: f.id, plan, quantity: firmCount(f.id), email: user.username, customer: f.billing && f.billing.customer, trial: !(f.billing && f.billing.hadTrial), base: originOf(req) }) };
+      }
+      const c = reg.get(String(b.id || ''));
+      if (b.kind !== 'company' || !c || !canSeeCo(user, c.id) || c.payer !== 'client') throw new ValidationError('That company doesn’t exist.', 404);
+      if (billingPaid(c.billing)) throw new ValidationError('This company’s subscription is already running.');
+      return { url: await billing.checkout({ kind: 'company', id: c.id, plan: PLANS.planOf(c.clientPlan || (f && f.plan)), quantity: 1, email: user.username, customer: c.billing && c.billing.customer, trial: !(c.billing && c.billing.hadTrial), base: originOf(req) }) };
+    }],
+    // Back from Stripe's page: record the subscription.
+    ['POST', /^\/api\/billing\/finish$/, async (req, m, res, user) => {
+      const b = await readJson(req);
+      const r = await billing.finish(b.session);
+      if (r.kind === 'firm' && r.id === user.firmId && user.role === 'owner') {
+        auth.setFirmBilling(r.id, r.record, r.record.plan);
+        auth.log('subscription-started', { username: user.username, firm: r.id, status: r.record.status });
+        await syncFirmCount(r.id);
+        return { ok: true, kind: 'firm', ...billingDescribe(auth.firm(r.id).billing) };
+      }
+      const c = reg.get(r.id);
+      if (r.kind === 'company' && c && canSeeCo(user, c.id) && c.payer === 'client') {
+        reg.update(c.id, { billing: r.record });
+        auth.log('subscription-started', { username: user.username, company: c.id, status: r.record.status });
+        return { ok: true, kind: 'company', ...billingDescribe(r.record) };
+      }
+      throw new ValidationError('That payment belongs to someone else.', 403);
+    }],
+    // Stripe's page to change the card, see invoices or cancel.
+    ['POST', /^\/api\/billing\/portal$/, async (req, m, res, user) => {
+      const b = await readJson(req);
+      let rec = null;
+      if (b.kind === 'firm') { ownerOnly(user); rec = (auth.firm(user.firmId) || {}).billing; }
+      else { const c = reg.get(String(b.id || '')); if (c && canSeeCo(user, c.id) && c.payer === 'client' && user.role === 'client') rec = c.billing; }
+      if (!rec || !rec.customer) throw new ValidationError('There’s no subscription to manage yet.', 404);
+      return { url: await billing.portal(rec.customer, originOf(req)) };
     }],
     ['GET', /^\/api\/events$/, (req, m, res, user) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -1496,6 +1608,10 @@ function createApp(opts) {
           if (user.mustChange && !['/api/auth/password', '/api/auth/prefs', '/api/events'].includes(url.pathname)) throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
           if (user.mustEnroll && !/^\/api\/(auth\/(password|prefs|2fa\/start|2fa\/confirm)|events)$/.test(url.pathname)) throw new AuthError('Set up two-step sign-in before continuing.', 403, { mustEnroll: true });
           if (!termsOk(user) && !/^\/api\/(auth\/.*|events)$/.test(url.pathname)) throw new AuthError('Read and agree to the Terms of service and Privacy policy to continue.', 403, { mustAgree: true });
+          // A firm that hasn't started (or has stopped) paying for Sumlora: only signing in and paying work.
+          if (firmNeedsPay(auth.firm(user.firmId)) && !/^\/api\/(auth\/.*|billing(\/.*)?|events)$/.test(url.pathname)) {
+            throw new AuthError(user.role === 'owner' ? 'Start your firm’s Sumlora subscription to continue.' : user.role === 'client' ? 'Your bookkeeper’s Sumlora subscription needs attention. Ask them to sign in.' : 'Your firm’s Sumlora subscription needs attention. Ask your firm’s owner.', 402, { billing: 'firm' });
+          }
         }
         // Licence ended (desktop): the books stay open to read, print, export and back up, but not to change.
         if (user && licence.on && req.method !== 'GET' && !/^\/api\/(auth\/.*|licence|licences\/key\/restore|backups\/(run|open)|c\/[^/]+\/(code\/check|mail\/send))$/.test(url.pathname)) {
@@ -1512,6 +1628,8 @@ function createApp(opts) {
             throw new ValidationError('You don’t have access to that company.', 403);
           }
           if (user.readOnly && req.method !== 'GET' && cm[2] !== '/code/check') throw new ValidationError('Your account is view only, so you can’t make changes.', 403);
+          // A client who pays for this company opens it once their subscription is running. The bookkeeper's team isn't held up.
+          if (user.role === 'client' && coNeedsPay(reg.get(cid))) throw new AuthError('Start your Sumlora subscription for this company to open it.', 402, { billing: 'company', companyId: cid });
           const ctx = ctxFor(cid);
           ctx.user = user;
           if (req.method === 'POST' && cm[2] === '/code/check') return sendJson(res, 200, await checkCode(ctx, req));
@@ -1541,11 +1659,11 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.mustAgree ? { mustAgree: true } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}), ...(err.licenceSetup ? { licenceSetup: err.licenceSetup } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.mustAgree ? { mustAgree: true } : {}), ...(err.billing ? { billing: err.billing, companyId: err.companyId || '' } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}), ...(err.licenceSetup ? { licenceSetup: err.licenceSetup } : {}) });
     }
   });
 
-  server.on('close', () => { closing = true; backups.stop(); if (feedTimer) clearInterval(feedTimer); reg.closeAll(); });
+  server.on('close', () => { closing = true; backups.stop(); if (feedTimer) clearInterval(feedTimer); if (billTimer) clearInterval(billTimer); reg.closeAll(); });
   /** Stop accepting requests, end live-update streams, and close the databases. */
   server.shutdown = () => new Promise(resolve => {
     for (const res of clients) res.end();
