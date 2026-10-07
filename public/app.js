@@ -1135,7 +1135,7 @@ function journalForm(entry){
     if(await batch(w)){closeModal();toast(reverseOn?`Journal entry saved, reversing on ${fmtDate(reverseOn)}`:'Journal entry saved')}};
 }
 
-function accountForm(a){
+function accountForm(a,preset){
   const used=a?postings().some(p=>p.account===a.id):false;
   const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option value="${t}" ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`)}${fld('aMap','CaseWare map no.',`<input type="text" id="aMap" value="${esc(a?.cwMap||'')}" maxlength="20" translate="no"><span class="hint">Optional. Goes with the account in the CaseWare export.</span>`)}${fld('aGifi','GIFI code',`<input type="text" id="aGifi" value="${esc(a?.gifi||'')}" maxlength="4" inputmode="numeric" autocomplete="off" list="aGifiList" translate="no" placeholder="e.g. 8811"><datalist id="aGifiList"></datalist><span class="hint" data-gifihint></span>`)}<div data-cf style="display:contents">${fld('aCf','Cash flow statement',`<select id="aCf">${[['','Automatic'],['operating','Operating activities'],['investing','Investing activities'],['financing','Financing activities']].map(([k,v])=>`<option value="${k}" ${(a?.cf||'')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Which section changes in this account go in</span>`)}</div></div>
   <div data-ob ${a?'hidden':''} class="fields">${fld('aOb','Opening balance',`<input type="number" id="aOb" step="0.01" inputmode="decimal" placeholder="0.00">`)}${fld('aObD','As of',`<input type="date" id="aObD" value="${today()}">`)}</div>
@@ -1145,6 +1145,8 @@ function accountForm(a){
   const fillDet=()=>{de.innerHTML=(DETAILS[ty.value]||[]).map(([k,v])=>`<option value="${k}" ${(a?.detail||'')===k?'selected':''}>${v}</option>`).join('');ob.hidden=!!a||!(ty.value==='Asset'||ty.value==='Liability');$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none'};
   de.addEventListener('change',()=>{$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none'});
   ty.onchange=fillDet;fillDet();
+  // A new bank or credit card account from Banking: the type, detail, a name and the next free code filled in.
+  if(!a&&preset){ty.value=preset.type;fillDet();de.value=preset.detail;de.dispatchEvent(new Event('change'));$('#aName',f).value=preset.name||'';if(preset.code)$('#aCode',f).value=preset.code;setTimeout(()=>$('#aName',f).select(),40)}
   // GIFI code: the list for this account type, what the code means, and a suggestion from the name.
   const gi=$('#aGifi',f),gh=$('[data-gifihint]',f);let gTouched=!!a?.gifi;
   const gifiHint=()=>{const t=ty.value,v=gi.value.trim(),sug=TallyGIFI.suggest({name:$('#aName',f).value,type:t,detail:de.value});

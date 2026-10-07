@@ -53,8 +53,8 @@ function selFor(b){const s=S.bank.sel[b.id];return s&&s.user?s:suggest(b)}
 /* ---------- views ---------- */
 function vBanking(){
   const B=S.bank,accts=bankAccts();
-  let h=head('Banking','Import statements from your bank, review each line, then reconcile to the statement',`<button class="btn" data-bact="new-rule">Add rule</button>${typeof feedsButton==='function'?feedsButton():''}<button class="btn primary" data-bact="import">Import statement</button>`);
-  if(!accts.length)return h+`<div class="panel"><div class="empty"><b>No bank or credit card accounts</b>Add one under Chart of accounts with the detail “Bank or cash” or “Credit card”.</div></div>`;
+  let h=head('Banking','Import statements from your bank, review each line, then reconcile to the statement',`<button class="btn" data-bact="new-bank">+ Bank or card account</button><button class="btn" data-bact="new-rule">Add rule</button>${typeof feedsButton==='function'?feedsButton():''}<button class="btn primary" data-bact="import">Import statement</button>`);
+  if(!accts.length)return h+`<div class="panel"><div class="empty"><b>No bank or credit card accounts</b>Add the client’s chequing, savings or credit card account to start.<div style="margin-top:14px"><button class="btn primary" data-bact="new-bank">+ Bank or card account</button></div></div></div>`;
   const a=acct(curBankAcct());
   h+=`<div class="acct-cards">${accts.map(x=>{const n=S.bankTxns.filter(b=>b.account===x.id&&b.status==='new').length,last=lastRecon(x.id);
     return `<button class="acct-card" data-bacct="${x.id}" aria-pressed="${x.id===a.id}"><b>${esc(x.name)}</b><span class="val">${mcell(bal(x.id))}</span><span class="sub">${n?`<b style="color:var(--info)">${n} to review</b>`:'Nothing to review'} · ${last?`reconciled to ${fmtDate(last.statementDate)}`:'not reconciled yet'}</span></button>`}).join('')}</div>`;
@@ -238,6 +238,7 @@ async function bankClick(ev,t,d){
   switch(d.bact){
     case 'import':importForm();return true;
     case 'new-rule':ruleForm(null);return true;
+    case 'new-bank':newBankAccount();return true;
     case 'add-checked':await addLines([...B.checked]);return true;
     case 'ai-suggest':await aiSuggest(a);return true;
     case 'rec-start':{
@@ -388,4 +389,12 @@ function importForm(){
       toast(out.added?`Imported ${out.added} new line${out.added===1?'':'s'}${out.skipped?` · ${out.skipped} already imported`:''}`:`Nothing new: all ${out.skipped} lines were imported before`);
     }catch(err){f.err(err.message);goBtn.disabled=false;goBtn.textContent='Import'}
   };
+}
+
+/** Banking → "+ Bank or card account": a second chequing account, savings, a US-dollar account or a credit card, with the next free code. */
+function newBankAccount(){
+  const used=new Set(S.accounts.map(a=>String(a.code||'')));
+  const next=(from,to)=>{for(let c=from;c<=to;c+=10)if(!used.has(String(c)))return String(c);for(let c=from;c<=to;c++)if(!used.has(String(c)))return String(c);return ''};
+  const n=S.accounts.filter(a=>a.detail==='bank'&&/chequing|chèques/i.test(a.name)).length;
+  accountForm(null,{type:'Asset',detail:'bank',name:n?`${T('Chequing')} ${n+1}`:T('Chequing'),code:next(1000,1099)});
 }
