@@ -82,7 +82,7 @@ function vCompanies(){
     <td class="n">${c.receivable?money(c.receivable):'<span class="muted">—</span>'}</td>
     <td>${c.lastReconciled?fmtDate(c.lastReconciled):'<span class="muted">Never</span>'}</td>
     <td>${c.lastEntry?fmtDate(c.lastEntry):'<span class="muted">None yet</span>'}</td>
-    <td class="n" style="white-space:nowrap"><button class="btn sm primary" data-coopen="${c.id}">Open</button>${ME&&ME.role==='owner'?` <button class="btn sm ghost" data-coarch="${c.id}">${c.archived?'Restore':'Archive'}</button>`:''}</td></tr>`).join(''):emptyRow(7,'No companies match','Clear the search to see them all.')}
+    <td class="n" style="white-space:nowrap"><button class="btn sm primary" data-coopen="${c.id}">Open</button>${ME&&ME.role==='owner'?` <button class="btn sm ghost" data-coarch="${c.id}">${c.archived?'Restore':'Archive'}</button>`:''}${ME&&ME.role==='owner'&&!c.transactions?` <button class="btn sm ghost" data-codel="${c.id}" title="Only while it has no transactions">Remove</button>`:''}</td></tr>`).join(''):emptyRow(7,'No companies match','Clear the search to see them all.')}
   </tbody></table></div></div>
   ${backupPanel()}
   <div class="muted" style="font-size:13px;margin-top:12px">Archiving hides a company from this list without deleting anything. Its books stay in their own file and you can restore them any time.</div>`;
@@ -93,6 +93,13 @@ async function coClick(ev,t,d){
     ev.stopPropagation();
     const c=CO_LIST.find(x=>x.id===d.coarch);if(!c)return true;
     try{await api('PUT','/api/companies/'+encodeURIComponent(c.id),{archived:!c.archived});await loadCompanies();renderMain();toast(c.archived?`${c.name} restored`:`${c.name} archived`)}catch(e){toast(e.message,true)}
+    return true;
+  }
+  if(d.codel){
+    ev.stopPropagation();
+    const c=CO_LIST.find(x=>x.id===d.codel);if(!c)return true;
+    if(!await confirmBox('Remove this company?',`${c.name} is taken off the list, and anyone invited to it loses access to it. It has no transactions, so no books are lost.`,'Remove'))return true;
+    try{await api('DELETE','/api/companies/'+encodeURIComponent(c.id));if(c.id===CO){location.reload();return true}await loadCompanies();renderMain();toast(`${c.name} removed`)}catch(e){toast(e.message,true)}
     return true;
   }
   if(d.coopen){await openCompany(d.coopen);return true}

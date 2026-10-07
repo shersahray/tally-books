@@ -709,6 +709,11 @@ function createApp(opts) {
       if (b.companies !== undefined) { const mine = new Set(reg.list(user.firmId).map(c => c.id)); if ((Array.isArray(b.companies) ? b.companies : []).some(id => !mine.has(String(id)))) throw new ValidationError('That company doesn’t exist.', 404); }
       return { ok: true, user: auth.updateUser(decodeURIComponent(m[1]), b, user) };
     }],
+    ['DELETE', /^\/api\/users\/([^/]+)$/, (req, m, res, user) => {
+      ownerOnly(user);
+      auth.removeUser(decodeURIComponent(m[1]), user);
+      return { ok: true };
+    }],
     ['POST', /^\/api\/users\/([^/]+)\/link$/, (req, m, res, user) => {
       ownerOnly(user);
       const out = auth.issueLink(decodeURIComponent(m[1]), user);
@@ -880,6 +885,23 @@ function createApp(opts) {
       if (patch.archived !== undefined) broadcast({ companies: true, firmId: reg.get(id).firmId });
       if (patch.archived !== undefined || patch.payer !== undefined) syncFirmCount(reg.get(id).firmId);
       return { ok: true, company: summary(reg.get(id)) };
+    }],
+    // Remove a company created by mistake: only while it has no transactions or documents (otherwise archive it).
+    ['DELETE', /^\/api\/companies\/([^/]+)$/, async (req, m, res, user) => {
+      ownerOnly(user);
+      const id = decodeURIComponent(m[1]);
+      if (!canSeeCo(user, id)) throw new ValidationError('That company doesn’t exist.', 404);
+      const c = reg.get(id), store = reg.store(id);
+      const used = ['entries', 'docs', 'estimates', 'recurring', 'bankTxns', 'receipts', 'payruns', 'filings', 'attachments'].some(k => store.list(k).length);
+      if (used) throw new ValidationError('This company has transactions or documents, so it can’t be removed. Archive it instead to hide it from the list.', 409);
+      if (c.billing && billingPaid(c.billing)) throw new ValidationError('This company’s client has a Sumlora subscription running. Cancel it first (Stripe → Subscriptions), then remove the company.', 409);
+      await plaid.removeCompany(id).catch(() => {});
+      reg.remove(id);
+      auth.dropCompany(id);
+      auth.log('company-removed', { by: user.username, company: c.name });
+      broadcast({ companies: true, firmId: c.firmId });
+      syncFirmCount(c.firmId);
+      return { ok: true };
     }],
     ['GET', /^\/api\/backups$/, (req, m, res, user) => {
       if (user.role === 'client') return { enabled: true, hidden: true };

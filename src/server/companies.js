@@ -75,6 +75,23 @@ class Registry {
     return c;
   }
 
+  /** Take a company off the list. Its database file is moved to removed-companies/, not deleted, so it can be recovered. */
+  remove(id) {
+    const c = this.get(id);
+    if (!c) return;
+    const s = this.stores.get(id);
+    if (s) { s.close(); this.stores.delete(id); }
+    const src = path.join(this.dir, c.file);
+    if (fs.existsSync(src)) {
+      const dest = path.join(this.dir, 'removed-companies');
+      fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
+      fs.renameSync(src, path.join(dest, `${id}-${Date.now()}.db`));
+      for (const ext of ['-wal', '-shm']) if (fs.existsSync(src + ext)) fs.rmSync(src + ext, { force: true });
+    }
+    this.data.companies = this.data.companies.filter(x => x.id !== id);
+    this.save();
+  }
+
   closeAll() {
     for (const s of this.stores.values()) s.close();
     this.stores.clear();

@@ -340,6 +340,23 @@ class Auth {
     if (!u || u.disabled || u.invite.expires < Date.now()) throw new AuthError('This link has expired or was already used. Ask for a new one.', 410);
     return u;
   }
+  /** Remove someone who never signed in (an invitation sent to the wrong email, say). Anyone who has signed in is turned off instead, so the sign-in history stays complete. */
+  removeUser(id, actor) {
+    const u = this.inFirm(id, actor);
+    this.guardAdmin(u, actor);
+    if (u.id === actor.id) throw new AuthError('You can’t remove your own account.', 409);
+    if (u.lastLogin) throw new AuthError('This person has signed in before, so they can’t be removed. Turn their account off instead.', 409);
+    this.endSessionsFor(u.id);
+    this.data.users = this.data.users.filter(x => x.id !== u.id);
+    this.save();
+    this.log('user-removed', { username: u.username, by: actor.username });
+  }
+  /** A company was removed: take it off everyone's list of companies. */
+  dropCompany(cid) {
+    let changed = false;
+    for (const u of this.data.users) if ((u.companies || []).includes(cid)) { u.companies = u.companies.filter(x => x !== cid); changed = true; }
+    if (changed) this.save();
+  }
   /** A firm's Sumlora subscription (see billing.js). */
   setFirmBilling(id, rec, plan) {
     const f = this.firm(id);

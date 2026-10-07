@@ -1843,3 +1843,11 @@ addFr({'Subscriptions (Stripe)':'Abonnements (Stripe)',
   'Send the subscription settings as an object.':'Envoyez les réglages des abonnements sous forme d’objet.'
 });
 addFr({'Essentials: {0}':'Essentiel : {0}','Plus: {0}':'Plus : {0}'});
+addFr({'Remove':'Retirer','Only while it has no transactions':'Seulement tant qu’elle n’a aucune opération','Remove this company?':'Retirer cette entreprise?',
+  '{s} is taken off the list, and anyone invited to it loses access to it. It has no transactions, so no books are lost.':'{s} est retirée de la liste, et les personnes invitées n’y ont plus accès. Elle n’a aucune opération : aucun livre n’est perdu.',
+  '{s} removed':'{s} retirée','Remove this person?':'Retirer cette personne?',
+  '{s} has never signed in. Their invitation stops working and they’re taken off the list.':'{s} ne s’est jamais connecté. Son invitation cesse de fonctionner et cette personne est retirée de la liste.',
+  'This company has transactions or documents, so it can’t be removed. Archive it instead to hide it from the list.':'Cette entreprise a des opérations ou des documents : elle ne peut pas être retirée. Archivez-la plutôt pour la masquer de la liste.',
+  'This company’s client has a Sumlora subscription running. Cancel it first (Stripe → Subscriptions), then remove the company.':'Le client de cette entreprise a un abonnement Sumlora actif. Annulez-le d’abord (Stripe → Subscriptions), puis retirez l’entreprise.',
+  'This person has signed in before, so they can’t be removed. Turn their account off instead.':'Cette personne s’est déjà connectée : elle ne peut pas être retirée. Désactivez plutôt son compte.',
+  'You can’t remove your own account.':'Vous ne pouvez pas retirer votre propre compte.'});
