@@ -321,10 +321,17 @@ function bindUsers(m){
   const s2=$('#sec2fa',m);if(s2)s2.onchange=async()=>{try{await api('PUT','/api/security',{require2fa:s2.value});await showUsers();toast(s2.value==='off'?'Two-step sign-in is optional':'Saved. People without two-step sign-in will set it up the next time they sign in.')}catch(ex){toast(ex.message,true)}};
 }
 /* A link to send: invitation (new person chooses a password) or password reset. */
-function showLink(u,token,kind){
+function showLink(u,token,kind,o={}){
   const url=`${location.origin}${location.pathname}#link=${encodeURIComponent(token)}`;
   const invite=kind==='invite';
-  const mail=isFr()?`Bonjour ${u.name.split(' ')[0]},\n\n${invite?`J’ai créé votre compte Sumlora pour que vous puissiez consulter les livres de votre entreprise en ligne. Ouvrez ce lien pour choisir votre mot de passe (il fonctionne une fois, pendant 7 jours)`:`Voici un lien pour choisir un nouveau mot de passe Sumlora (il fonctionne une fois, pendant 24 heures)`} :\n\n${url}\n\nVotre nom d’utilisateur est ${u.username}.${REQ2FA!=='off'||invite?' Vous configurerez aussi une application de codes sur votre téléphone pour la connexion en deux étapes.':''}\n`:`Hi ${u.name.split(' ')[0]},\n\n${invite?`I've set up your Sumlora account so you can see your company's books online. Open this link to choose your password (it works once, for 7 days)`:`Here's a link to choose a new Sumlora password (it works once, for 24 hours)`}:\n\n${url}\n\nYour username is ${u.username}.${REQ2FA!=='off'||invite?' You’ll also set up a code app on your phone for two-step sign-in.':''}\n`;
+  // What the invitation says depends on who's invited: a firm's owner, a business that keeps its own books, or a client of the firm.
+  const trialFr=typeof BILL!=='undefined'&&BILL&&BILL.configured&&BILL.offer.trialDays?` (avec ${BILL.offer.trialDays} jours d’essai gratuit)`:'';
+  const trialEn=typeof BILL!=='undefined'&&BILL&&BILL.configured&&BILL.offer.trialDays?` (with a ${BILL.offer.trialDays}-day free trial)`:'';
+  const introFr=o.firm?`J’ai créé le compte Sumlora de votre cabinet, ${o.firm}. Vous y tiendrez les livres de vos clients en ligne${typeof BILL!=='undefined'&&BILL&&BILL.configured?`, et vous démarrerez votre abonnement${trialFr} à votre première connexion`:''}. Ouvrez ce lien pour choisir votre mot de passe (il fonctionne une fois, pendant 7 jours)`
+    :o.business?`J’ai créé ${o.business} dans Sumlora pour que vous teniez vos livres en ligne${o.pays?`. Vous démarrerez votre abonnement${trialFr} à votre première connexion`:''}. Ouvrez ce lien pour choisir votre mot de passe (il fonctionne une fois, pendant 7 jours)`:'';
+  const introEn=o.firm?`I've set up a Sumlora account for your firm, ${o.firm}, so you can keep your clients' books online${typeof BILL!=='undefined'&&BILL&&BILL.configured?`. You'll start your subscription${trialEn} the first time you sign in`:''}. Open this link to choose your password (it works once, for 7 days)`
+    :o.business?`I've set up ${o.business} in Sumlora so you can keep your books online${o.pays?`. You'll start your subscription${trialEn} the first time you sign in`:''}. Open this link to choose your password (it works once, for 7 days)`:'';
+  const mail=isFr()?`Bonjour ${u.name.split(' ')[0]},\n\n${invite&&introFr?introFr:invite?`J’ai créé votre compte Sumlora pour que vous puissiez consulter les livres de votre entreprise en ligne. Ouvrez ce lien pour choisir votre mot de passe (il fonctionne une fois, pendant 7 jours)`:`Voici un lien pour choisir un nouveau mot de passe Sumlora (il fonctionne une fois, pendant 24 heures)`} :\n\n${url}\n\nVotre nom d’utilisateur est ${u.username}.${REQ2FA!=='off'||invite?' Vous configurerez aussi une application de codes sur votre téléphone pour la connexion en deux étapes.':''}\n`:`Hi ${u.name.split(' ')[0]},\n\n${invite&&introEn?introEn:invite?`I've set up your Sumlora account so you can see your company's books online. Open this link to choose your password (it works once, for 7 days)`:`Here's a link to choose a new Sumlora password (it works once, for 24 hours)`}:\n\n${url}\n\nYour username is ${u.username}.${REQ2FA!=='off'||invite?' You’ll also set up a code app on your phone for two-step sign-in.':''}\n`;
   const f=openModal(invite?'Invitation link':'Password reset link',`
     <div class="muted">Send this link to <b>${esc(u.name)}</b> yourself, for example by email. Anyone with the link can set the password, so send it only to them. It works once and expires in ${invite?'7 days':'24 hours'}.</div>
     <div class="linkbox mono">${esc(url)}</div>
@@ -399,7 +406,7 @@ function vFirms(){
   if(!FIRMS)return head('Firms','Loading…');
   const list=FIRMS.firms.slice().sort((a,b)=>(a.status==='pending'?0:1)-(b.status==='pending'?0:1)||b.created-a.created);
   const pending=list.filter(f=>f.status==='pending').length;
-  return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Firms','Bookkeeping firms using this server. Each firm sees only its own people and companies.')+
+  return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Firms','Bookkeeping firms using this server. Each firm sees only its own people and companies.',`<button class="btn primary" data-firminvite>+ Invite a firm</button>`)+
   (typeof billingAdminPanel==='function'?billingAdminPanel():'')+
   `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>New firms</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="field"><label for="fmSignups">Can new firms sign up from the sign-in screen?</label><select id="fmSignups">${[['off','No: only people you invite can sign in'],['approval','Yes, after I approve each one'],['open','Yes, straight away']].map(([k,v])=>`<option value="${k}" ${FIRMS.signups===k?'selected':''}>${v}</option>`).join('')}</select></div>
@@ -417,6 +424,7 @@ function vFirms(){
 function bindFirms(m){
   m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
     if(b.hasAttribute('data-back-co'))return showCompanies();
+    if(b.hasAttribute('data-firminvite'))return inviteFirmForm(showFirms);
     if(typeof billingAdminAction==='function'&&await billingAdminAction(b))return;
     if(b.dataset.firmdel){const f=FIRMS.firms.find(x=>x.id===b.dataset.firmdel);if(!await confirmBox('Remove this firm?',`${f.name}: the firm and its ${f.users} account${f.users===1?'':'s'} are removed, and their emails can be used again. It has no companies, so no books are lost.`,'Remove'))return;
       try{await api('DELETE','/api/firms/'+encodeURIComponent(f.id));await showFirms();toast(`${f.name} removed`)}catch(ex){toast(ex.message,true)}return}

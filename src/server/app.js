@@ -757,7 +757,33 @@ function createApp(opts) {
         },
         ai: { totalUsd: Math.round(firms.reduce((t, f) => t + f.aiUsd, 0) * 100) / 100, top: firms.filter(f => f.aiUsd > 0).sort((a, b) => b.aiUsd - a.aiUsd).slice(0, 5).map(f => ({ name: f.name, usd: f.aiUsd })) },
         licences: null,
+        subs: null,
       };
+      // Online subscriptions (Stripe): firms that pay per company, and single businesses whose client pays.
+      if (billing.configured()) {
+        const amounts = billing.offer().amounts, week = now + 7 * 864e5;
+        const row = (kind, id, name, plan, rec, firm) => {
+          const d = billingDescribe(rec), state = d.state;
+          const qty = kind === 'firm' ? firmCount(id) : 1, monthly = (amounts[PLANS.planOf(plan)] || 0) * qty / 100;
+          const next = state === 'trialing' ? d.trialEnd : state === 'active' || state === 'pastdue' ? d.periodEnd : 0;
+          return { kind, id, name, firm: firm || '', plan: PLANS.planOf(plan), state, quantity: qty, monthly, next: next || 0, cancelAtEnd: !!d.cancelAtEnd, graceUntil: d.graceUntil || 0 };
+        };
+        const rows = [
+          ...auth.data.firms.filter(f => f.status === 'active' && !firmExempt(f.id)).map(f => row('firm', f.id, f.name, f.plan, f.billing)),
+          ...reg.list().filter(c => c.payer === 'client' && !c.archived).map(c => { const f = auth.firm(c.firmId) || {}; return row('company', c.id, c.name, c.clientPlan || f.plan, c.billing, f.id === user.firmId ? '' : f.name); }),
+        ];
+        const by = s => rows.filter(r => r.state === s);
+        const due = rows.filter(r => r.state === 'pastdue' || ((r.state === 'trialing' || r.state === 'active') && r.next && r.next <= week))
+          .sort((a, b) => (a.state === 'pastdue' ? 0 : 1) - (b.state === 'pastdue' ? 0 : 1) || a.next - b.next);
+        out.subs = {
+          total: rows.length, paying: by('active').length, trial: by('trialing').length, failed: by('pastdue').length, stopped: by('stopped').length, notStarted: by('none').length,
+          firms: rows.filter(r => r.kind === 'firm' && ['active', 'trialing', 'pastdue'].includes(r.state)).length,
+          companies: rows.filter(r => r.kind === 'company' && ['active', 'trialing', 'pastdue'].includes(r.state)).length,
+          monthly: Math.round(rows.filter(r => r.state === 'active' || r.state === 'pastdue').reduce((t, r) => t + r.monthly, 0) * 100) / 100,
+          trialMonthly: Math.round(by('trialing').reduce((t, r) => t + r.monthly, 0) * 100) / 100,
+          due, waiting: by('none').slice(0, 10), rows: rows.sort((a, b) => a.name.localeCompare(b.name)),
+        };
+      }
       // Desktop licences: only in the copy that makes the codes.
       if (!licence.on || licence.isIssuer()) {
         const info = issuer.info();
@@ -846,6 +872,13 @@ function createApp(opts) {
       auth.log('security-changed', { by: user.username, ...(b.signups !== undefined ? { signups: b.signups } : {}), ...(b.defaultPlan !== undefined ? { defaultPlan: b.defaultPlan } : {}) });
       return { ok: true, signups: auth.signups, defaultPlan: auth.defaultPlan };
     }],
+    // Invite a firm: it's active straight away, and its owner gets an invitation link to choose a password.
+    ['POST', /^\/api\/firms\/invite$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const b = await readJson(req);
+      const out = auth.inviteFirm({ firmName: b.firmName, name: b.name, username: b.email, plan: b.plan }, user);
+      return { ok: true, firm: out.firm, user: out.user };
+    }],
     ['PUT', /^\/api\/firms\/([^/]+)$/, async (req, m, res, user) => {
       adminOnly(user);
       const b = await readJson(req);
@@ -863,6 +896,29 @@ function createApp(opts) {
     }],
     ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list(user.firmId).filter(c => canSeeCo(user, c.id)).map(summary), provinces: PROVINCES,
       ...(user.platformAdmin ? { pendingFirms: auth.data.firms.filter(f => f.status === 'pending').length } : {}) })],
+    // Invite a single business in one step: its company, and its owner as a client who signs in to see it
+    // (and, when subscriptions are on, pays for it themselves). Returns the invitation link to send.
+    ['POST', /^\/api\/companies\/invite$/, async (req, m, res, user) => {
+      ownerOnly(user);
+      checkCompanyLimit();
+      const b = await readJson(req);
+      if (!String(b.name || '').trim()) throw new ValidationError('Enter the business’s name.');
+      if (!String(b.person || '').trim()) throw new ValidationError('Enter the name of the person to invite.');
+      const entry = createCompany({ name: b.name, province: b.province, lang: b.lang }, user);
+      let u;
+      try {
+        u = auth.addUser({ name: b.person, username: b.email, role: 'client', companies: [entry.id], readOnly: false, invite: true, firmId: user.firmId });
+      } catch (e) {
+        reg.remove(entry.id);
+        broadcast({ companies: true, firmId: entry.firmId });
+        throw e;
+      }
+      auth.log('user-added', { username: u.username, by: user.username, role: u.role });
+      const pays = billing.configured() && b.clientPays !== false;
+      if (pays) reg.update(entry.id, { payer: 'client', clientPlan: PLANS.PLANS[b.plan] ? b.plan : PLANS.planOf((auth.firm(user.firmId) || {}).plan) });
+      syncFirmCount(user.firmId);
+      return { ok: true, company: summary(reg.get(entry.id)), user: u, clientPays: pays };
+    }],
     ['POST', /^\/api\/companies$/, async (req, m, res, user) => {
       ownerOnly(user);
       checkCompanyLimit();

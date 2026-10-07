@@ -211,6 +211,20 @@ class Auth {
       throw e;
     }
   }
+  /** An administrator invites a firm: the firm is active straight away, and its owner gets an invitation link to choose a password. */
+  inviteFirm({ firmName, name, username, plan }, actor) {
+    firmName = String(firmName || '').trim();
+    if (!firmName) throw new AuthError('Enter the firm’s name.', 400);
+    const f = this.newFirm(firmName, 'active', false, PLANS.PLANS[plan] ? plan : this.defaultPlan);
+    try {
+      const u = this.addUser({ name, username, role: 'owner', firmId: f.id, invite: true });
+      this.log('firm-invited', { username: u.username, firm: f.name, by: actor && actor.username });
+      return { user: u, firm: f };
+    } catch (e) {
+      this.data.firms = this.data.firms.filter(x => x.id !== f.id);
+      throw e;
+    }
+  }
   /** An administrator changes a firm: approve or suspend it, rename it, allow AI. */
   updateFirm(id, patch, actor) {
     const f = this.firm(id);

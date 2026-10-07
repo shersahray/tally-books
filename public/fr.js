@@ -1852,3 +1852,24 @@ addFr({'Remove':'Retirer','Only while it has no transactions':'Seulement tant qu
   'This person has signed in before, so they can’t be removed. Turn their account off instead.':'Cette personne s’est déjà connectée : elle ne peut pas être retirée. Désactivez plutôt son compte.',
   'You can’t remove your own account.':'Vous ne pouvez pas retirer votre propre compte.'});
 addFr({'+ Bank or card account':'+ Compte bancaire ou de carte','Add the client’s chequing, savings or credit card account to start.':'Ajoutez le compte chèques, le compte d’épargne ou la carte de crédit du client pour commencer.','Chequing {0}':'Compte chèques {0}'});
+/* ---------- overview: subscriptions and invitations ---------- */
+addFr({'Good morning':'Bonjour','Good afternoon':'Bon après-midi','Good evening':'Bonsoir','Sumlora overview':'Aperçu de Sumlora',
+  'a month from paying subscriptions':'par mois des abonnements payants','No free trials running right now':'Aucun essai gratuit en cours',
+  'Online subscriptions are off. Add your Stripe key under Firms to charge firms and businesses monthly.':'Les abonnements en ligne sont désactivés. Ajoutez votre clé Stripe sous Cabinets pour facturer les cabinets et les entreprises chaque mois.',
+  'Invite a firm':'Inviter un cabinet','Invite a business':'Inviter une entreprise','+ Invite a firm':'+ Inviter un cabinet',
+  'Online subscriptions':'Abonnements en ligne','Paying now':'Payants','Due in the next 7 days':'À payer dans les 7 prochains jours','No failed payments':'Aucun paiement refusé',
+  'Subscriptions are off':'Abonnements désactivés','Due to pay soon':'Paiements à venir','Next 7 days and failed payments':'7 prochains jours et paiements refusés',
+  'Subscriptions at a glance':'Abonnements en un coup d’œil','Invited, not started yet':'Invités, pas encore commencés',
+  'They start their subscription (and free trial) the first time they sign in.':'Ils démarrent leur abonnement (et leur essai gratuit) à leur première connexion.',
+  'Nothing due in the next 7 days, and no failed payments.':'Rien à payer dans les 7 prochains jours, et aucun paiement refusé.',
+  'No subscriptions yet. Invite a firm or a business to get started.':'Aucun abonnement pour l’instant. Invitez un cabinet ou une entreprise pour commencer.',
+  'All online subscriptions':'Tous les abonnements en ligne','A month':'Par mois','Next payment':'Prochain paiement','Firm':'Cabinet','Business':'Entreprise',
+  'Paying':'Payant','Free trial':'Essai gratuit','Payment failed':'Paiement refusé','Not started':'Pas commencé','Stopped':'Arrêté','Cancelling':'Annulation prévue',
+  'Desktop licence renewals due':'Renouvellements de licences de bureau à venir','Waiting for approval':'En attente d’approbation','People':'Personnes','Companies':'Entreprises',
+  'Codes made':'Codes créés','All downloads':'Tous les téléchargements','Ending in 30 days':'Se terminent dans 30 jours','Ended':'Terminées','Active':'Actifs',
+  'Firm name':'Nom du cabinet','Owner’s name':'Nom du propriétaire','Owner’s email':'Courriel du propriétaire','Plan':'Forfait','Plan they pay for':'Forfait qu’ils paient',
+  'Business name':'Nom de l’entreprise','Province':'Province','Invite and get link':'Inviter et obtenir le lien',
+  'My firm pays for this one instead (they don’t pay Sumlora)':'Mon cabinet paie pour celle-ci (ils ne paient pas Sumlora)',
+  '{s} is set up':'{s} est configuré','Enter the firm’s name.':'Entrez le nom du cabinet.','Enter the business’s name.':'Entrez le nom de l’entreprise.',
+  'Enter the name of the person to invite.':'Entrez le nom de la personne à inviter.',
+  'No other firms yet. Use “Invite a firm” above to add one.':'Aucun autre cabinet pour l’instant. Utilisez « Inviter un cabinet » ci-dessus pour en ajouter un.'});
