@@ -166,6 +166,8 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-
 table.lines th,table.lines td{padding:6px 5px;border-bottom:1px solid var(--line)}
 table.lines td select,table.lines td input[type=text],table.lines td input[type=number]{width:100%}
 table.lines .c-acct{min-width:170px}
+table.lines .c-item{min-width:160px}
+table.lines .c-sel{min-width:120px}
 table.lines .c-text{min-width:150px}
 table.lines .c-num{width:110px;min-width:90px}
 table.lines .c-check{width:44px;text-align:center}
@@ -324,7 +326,7 @@ body.not-owner [data-act="restore"]{display:none!important}
   table.lines tr{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding:10px 0 12px;border-bottom:1px solid var(--line);position:relative}
   table.lines td{border:0;padding:0}
   table.lines td::before{content:attr(data-label);display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:3px}
-  table.lines td.c-text,table.lines td.c-acct{grid-column:1/-1}
+  table.lines td.c-text,table.lines td.c-acct,table.lines td.c-item{grid-column:1/-1}
   table.lines td.c-calc{text-align:left;align-self:end;font-weight:600;padding-bottom:7px}
   table.lines td.c-x{position:absolute;top:6px;right:0}
   table.lines td.c-x::before{content:none}
@@ -462,3 +464,4 @@ label.btn.disabled{opacity:.6;pointer-events:none}
 @media (max-width:980px){.ov-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.ov-grid-due{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:560px){.ov-kpis,.ov-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.ov-hero{padding:20px 18px}.ov-big{font-size:30px}.ov-hero-actions{width:100%}.ov-hero .btn.ov-cta{flex:1;justify-content:center}}
 @media (max-width:400px){.ov-kpis{grid-template-columns:minmax(0,1fr)}}
+.split-left{margin-top:8px;font-size:13.5px;text-align:right}

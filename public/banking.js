@@ -87,7 +87,7 @@ function reviewRow(b){
   // Companies with PST pick between GST and PST, GST only, or no tax.
   const tax=isMatch||transfer||!(+S.company.taxRate)?'':pstOn()?`<select data-btax="${b.id}" aria-label="Sales tax included" style="max-width:130px">${[['','No tax'],['std',S.company.taxName],['gst','GST only']].map(([k,v])=>`<option value="${k}" ${(sel.tax==='gst'?'gst':sel.tax?'std':'')===k?'selected':''}>${esc(v)}</option>`).join('')}</select>`:`<input type="checkbox" data-btax="${b.id}" ${sel.tax?'checked':''} aria-label="Amount includes ${esc(S.company.taxName)}" title="Amount includes ${esc(S.company.taxName)}">`;
   const chk=S.bank.checked.has(b.id);
-  return `<tr data-brow="${b.id}" class="${chk?'picked':''}"><td><input type="checkbox" data-bcheck="${b.id}" ${chk?'checked':''} aria-label="Select line"></td><td style="white-space:nowrap">${fmtDate(b.date)}</td><td class="desc"><div title="${esc(b.desc)}">${esc(b.desc||'(no description)')}</div>${hint}</td><td class="n">${b.amount<0?money(-b.amount):''}</td><td class="n">${b.amount>0?money(b.amount):''}</td><td>${cat}</td><td>${payee}</td><td style="text-align:center">${tax}</td><td><div class="acts"><button class="btn sm primary" data-badd="${b.id}" ${sel.choice?'':'disabled'}>${isMatch?'Match':'Add'}</button><button class="btn sm ghost" data-bexclude="${b.id}">Exclude</button><button class="btn sm ghost" data-brule="${b.id}" title="Make a rule from this line">Rule</button></div></td></tr>`;
+  return `<tr data-brow="${b.id}" class="${chk?'picked':''}"><td><input type="checkbox" data-bcheck="${b.id}" ${chk?'checked':''} aria-label="Select line"></td><td style="white-space:nowrap">${fmtDate(b.date)}</td><td class="desc"><div title="${esc(b.desc)}">${esc(b.desc||'(no description)')}</div>${hint}</td><td class="n">${b.amount<0?money(-b.amount):''}</td><td class="n">${b.amount>0?money(b.amount):''}</td><td>${cat}</td><td>${payee}</td><td style="text-align:center">${tax}</td><td><div class="acts"><button class="btn sm primary" data-badd="${b.id}" ${sel.choice?'':'disabled'}>${isMatch?'Match':'Add'}</button><button class="btn sm ghost" data-bsplit="${b.id}" title="Split this line across several categories">Split</button><button class="btn sm ghost" data-bexclude="${b.id}">Exclude</button><button class="btn sm ghost" data-brule="${b.id}" title="Make a rule from this line">Rule</button></div></td></tr>`;
 }
 
 function vRules(){
@@ -222,12 +222,55 @@ async function undoRecon(r){
 }
 
 /* ---------- events ---------- */
+/* ---------- Split one bank line across several categories ----------
+   Each part's amount includes its sales tax, like the bank line itself; the parts must add up to the line. */
+function taxedPart(amt,code,into){
+  const gstOnly=code==='gst'&&pstOn(),rate=gstOnly?r2((+S.company.taxRate||0)-(+S.company.pstRate||0)):+S.company.taxRate||0,useTax=(code==='std'||code==='gst')&&rate>0;
+  const pre=useTax?r2(amt/(1+rate/100)):amt;let net=pre,parts=useTax?splitTaxTotal(r2(amt-pre)):[];
+  if(gstOnly&&parts.length){const t=r2(amt-pre);parts=taxParts().filter(p=>p.key==='gst').map(p=>({...p,amount:t}))}
+  if(!into){net=r2(net+parts.filter(p=>p.recoverable===false).reduce((s,p)=>s+p.amount,0));parts=parts.filter(p=>p.recoverable!==false)}
+  return{pre,net,parts,code:useTax?(gstOnly?'gst':'std'):'none'};
+}
+function splitForm(b){
+  const a=acct(b.account),amt=Math.abs(b.amount),into=b.amount>0,sel=selFor(b);
+  const filter=x=>x.id!==b.account&&catFilter(x)&&!isBankAcct(x);
+  const taxOpts=v=>(+S.company.taxRate?[['none','No tax'],['std',`${S.company.taxName||'Tax'} included`],...(pstOn()?[['gst','GST only included']]:[])]:[['none','No tax']]).map(([k,l])=>`<option value="${k}" ${v===k?'selected':''}>${esc(l)}</option>`).join('');
+  const first=sel.choice.startsWith('a:')?sel.choice.slice(2):'',code=sel.tax==='gst'?'gst':sel.tax?'std':'none';
+  const f=openModal('Split bank line',`<div class="muted"><span>${fmtDate(b.date)}</span> · <span translate="no">${esc(b.desc||'')}</span> · <b>${money(amt)}</b> ${into?'<span>in</span>':'<span>out</span>'}</div>
+    <div class="fields">${fld('spPayee',into?'Received from':'Payee',`<select id="spPayee"><option value="">None</option>${S.contacts.slice().sort((x,y)=>x.name.localeCompare(y.name)).map(c=>`<option value="${c.id}" ${c.id===sel.contactId?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`,true)}</div>
+    <div data-le></div><div class="split-left" data-spleft></div>`,`<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Add split</button>`,'wide');
+  const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Sales tax',type:'sel',options:taxOpts}];
+  cols.defaults=()=>({taxCode:code,amount:''});
+  const left=rows=>r2(amt-rows.reduce((t,r)=>t+(+r.amount||0),0));
+  const show=rows=>{const l=left(rows),el=$('[data-spleft]',f);el.innerHTML=Math.abs(l)<0.005?'<span class="pos">Adds up to the bank line.</span>':`<span>${l>0?'Still to split:':'Over by:'}</span> <b class="${l<0?'neg':''}">${money(Math.abs(l))}</b>`};
+  const le=lineEditor($('[data-le]',f),cols,[{account:first,desc:'',amount:amt,taxCode:code},{account:'',desc:'',amount:'',taxCode:code}],show);
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const rows=le.read().filter(r=>r.account||+r.amount);
+    if(rows.length<2)return f.err('Use at least two lines, or add the line as it is.');
+    if(rows.some(r=>!r.account))return f.err('Choose a category on every line.');
+    if(rows.some(r=>!(+r.amount>0)))return f.err('Every line needs an amount above zero.');
+    if(Math.abs(left(rows))>=0.005)return f.err(`The lines have to add up to ${money(amt)}.`);
+    const parts=rows.map(r=>({r,...taxedPart(r2(+r.amount),r.taxCode,into)}));
+    const tax={};for(const p of parts)for(const t of p.parts){if(!t.account)return f.err(`Add a “${t.name} payable” account first.`);tax[t.account]=tax[t.account]||{...t,amount:0};tax[t.account].amount=r2(tax[t.account].amount+t.amount)}
+    const lines=[];if(into)lines.push({account:a.id,debit:amt,credit:0});
+    for(const p of parts)lines.push(into?{account:p.r.account,debit:0,credit:p.net,taxCode:p.code,memo:p.r.desc||''}:{account:p.r.account,debit:p.net,credit:0,taxCode:p.code,memo:p.r.desc||''});
+    for(const t of Object.values(tax))lines.push(into?{account:t.account,debit:0,credit:t.amount,memo:t.name+' collected'}:{account:t.account,debit:t.amount,credit:0,memo:t.name+' paid'});
+    if(!into)lines.push({account:a.id,debit:0,credit:amt});
+    // Rounding: the tax worked out per part can be a cent off the bank line. Put the difference on the first part.
+    const dr=r2(lines.reduce((s,l)=>s+l.debit,0)),cr=r2(lines.reduce((s,l)=>s+l.credit,0)),off=r2(dr-cr);
+    if(off){const l=lines.find(x=>x.account===parts[0].r.account);if(into)l.credit=r2(l.credit+off);else l.debit=r2(l.debit-off)}
+    const id=uid(),cid=$('#spPayee',f).value;
+    const entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:cid,split:true,form:{bank:a.id,lines:parts.map(p=>({account:p.r.account,desc:p.r.desc||'',amount:p.pre,taxCode:p.code,tax:p.code!=='none'}))},lines,clear:{[a.id]:'c'},created:Date.now()};
+    if(await batch([{op:'set',collection:'entries',id,data:entry},{op:'set',collection:'bankTxns',id:b.id,data:{...b,status:'added',entryId:id,made:true}}])){delete S.bank.sel[b.id];S.bank.checked.delete(b.id);closeModal();toast(`Split into ${rows.length} lines`)}
+  };
+}
 async function bankClick(ev,t,d){
   const B=S.bank,a=acct(curBankAcct());
   if(d.bacct){B.acct=d.bacct;B.checked.clear();if(B.rec&&B.rec.account!==d.bacct)B.rec=null;renderMain();return true}
   if(d.btab){B.tab=d.btab;renderMain();return true}
   if(d.bshow){B.show=d.bshow;renderMain();return true}
   if(d.badd){await addLines([d.badd]);return true}
+  if(d.bsplit){const b=S.bankTxns.find(x=>x.id===d.bsplit);if(b)splitForm(b);return true}
   if(d.bexclude){const b=S.bankTxns.find(x=>x.id===d.bexclude);if(b&&await put('bankTxns',b.id,{...b,status:'excluded'}))toast('Excluded');return true}
   if(d.brestore){const b=S.bankTxns.find(x=>x.id===d.brestore);if(b&&await put('bankTxns',b.id,{...b,status:'new',entryId:''}))toast('Moved back to For review');return true}
   if(d.bundo){ev.stopPropagation();const b=S.bankTxns.find(x=>x.id===d.bundo);if(b)await undoLine(b);return true}

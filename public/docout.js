@@ -4,8 +4,8 @@
    language the company keeps its books in. They're downloaded, or emailed from the company's own
    mailbox through the server (POST /api/mail/send). */
 const DL={
-  en:{estimate:'ESTIMATE',estNo:'Estimate no.',until:'Good until',payHead:'How to pay',invoice:'INVOICE',credit:'CREDIT NOTE',statement:'STATEMENT',billTo:'Bill to',to:'To',invNo:'Invoice no.',crNo:'Credit note no.',date:'Date',due:'Due date',asOf:'As of',desc:'Description',qty:'Qty',rate:'Rate',amount:'Amount',sub:'Subtotal',total:'Total',paid:'Paid',credits:'Credits applied',bal:'Balance due',avail:'Credit available',page:'Page {0} of {1}',taxNo:'GST/HST no.',taxNoQc:'GST/QST no.',type:'Type',no:'No.',balance:'Balance',inv:'Invoice',cr:'Credit note',current:'Current',d30:'1–30 days',d60:'31–60 days',d90:'61–90 days',d90p:'Over 90 days',totalDue:'Total due',appliedTo:'Applied to invoice {0}: {1}'},
-  fr:{estimate:'SOUMISSION',estNo:'N° de soumission',until:'Valide jusqu’au',payHead:'Comment payer',invoice:'FACTURE',credit:'NOTE DE CRÉDIT',statement:'RELEVÉ DE COMPTE',billTo:'Facturer à',to:'À',invNo:'N° de facture',crNo:'N° de note de crédit',date:'Date',due:'Échéance',asOf:'Au',desc:'Description',qty:'Qté',rate:'Prix',amount:'Montant',sub:'Sous-total',total:'Total',paid:'Payé',credits:'Crédits appliqués',bal:'Solde dû',avail:'Crédit disponible',page:'Page {0} de {1}',taxNo:'N° de TPS/TVH',taxNoQc:'N° de TPS/TVQ',type:'Type',no:'N°',balance:'Solde',inv:'Facture',cr:'Note de crédit',current:'Courant',d30:'1 à 30 jours',d60:'31 à 60 jours',d90:'61 à 90 jours',d90p:'Plus de 90 jours',totalDue:'Total dû',appliedTo:'Appliqué à la facture {0} : {1}'},
+  en:{sreceipt:'SALES RECEIPT',srNo:'Sales receipt no.',paidBy:'Paid',estimate:'ESTIMATE',estNo:'Estimate no.',until:'Good until',payHead:'How to pay',invoice:'INVOICE',credit:'CREDIT NOTE',statement:'STATEMENT',billTo:'Bill to',to:'To',invNo:'Invoice no.',crNo:'Credit note no.',date:'Date',due:'Due date',asOf:'As of',desc:'Description',qty:'Qty',rate:'Rate',amount:'Amount',sub:'Subtotal',total:'Total',paid:'Paid',credits:'Credits applied',bal:'Balance due',avail:'Credit available',page:'Page {0} of {1}',taxNo:'GST/HST no.',taxNoQc:'GST/QST no.',type:'Type',no:'No.',balance:'Balance',inv:'Invoice',cr:'Credit note',current:'Current',d30:'1–30 days',d60:'31–60 days',d90:'61–90 days',d90p:'Over 90 days',totalDue:'Total due',appliedTo:'Applied to invoice {0}: {1}'},
+  fr:{sreceipt:'REÇU DE VENTE',srNo:'N° de reçu de vente',paidBy:'Payé',estimate:'SOUMISSION',estNo:'N° de soumission',until:'Valide jusqu’au',payHead:'Comment payer',invoice:'FACTURE',credit:'NOTE DE CRÉDIT',statement:'RELEVÉ DE COMPTE',billTo:'Facturer à',to:'À',invNo:'N° de facture',crNo:'N° de note de crédit',date:'Date',due:'Échéance',asOf:'Au',desc:'Description',qty:'Qté',rate:'Prix',amount:'Montant',sub:'Sous-total',total:'Total',paid:'Payé',credits:'Crédits appliqués',bal:'Solde dû',avail:'Crédit disponible',page:'Page {0} de {1}',taxNo:'N° de TPS/TVH',taxNoQc:'N° de TPS/TVQ',type:'Type',no:'N°',balance:'Solde',inv:'Facture',cr:'Note de crédit',current:'Courant',d30:'1 à 30 jours',d60:'31 à 60 jours',d90:'61 à 90 jours',d90p:'Plus de 90 jours',totalDue:'Total dû',appliedTo:'Appliqué à la facture {0} : {1}'},
 };
 const dlang=()=>S.company.lang==='fr'?'fr':'en';
 const dl=(k,...a)=>DL[dlang()][k].replace(/\{(\d)\}/g,(m,i)=>a[i]);
@@ -52,13 +52,13 @@ function drawFooter(pdf,text){
 
 /** An invoice, credit note or estimate (kind 'estimate') as a PDF (Uint8Array). */
 async function docPdf(doc){
-  const pdf=TallyPDF.create(),logo=await logoBytes(),cred=doc.kind==='credit',est=doc.kind==='estimate';
+  const pdf=TallyPDF.create(),logo=await logoBytes(),cred=doc.kind==='credit',est=doc.kind==='estimate',sr=doc.kind==='sreceipt';
   const st=est?{bal:+doc.total||0}:docStatus(doc),paid=est?0:paidOn(doc.id);
-  const meta=[[est?dl('estNo'):cred?dl('crNo'):dl('invNo'),doc.number||''],[dl('date'),ddate(doc.date)]];
+  const meta=[[sr?dl('srNo'):est?dl('estNo'):cred?dl('crNo'):dl('invNo'),doc.number||''],[dl('date'),ddate(doc.date)]];
   if(est&&doc.expires)meta.push([dl('until'),ddate(doc.expires)]);
   if(!cred&&!est&&doc.due)meta.push([dl('due'),ddate(doc.due)]);
-  meta.push([est?dl('total'):cred?dl('avail'):dl('bal'),dmoney(st.bal),true]);
-  let y=drawHeader(pdf,logo,est?dl('estimate'):cred?dl('credit'):dl('invoice'),meta);
+  meta.push(sr?[dl('paidBy'),dmoney(doc.total),true]:[est?dl('total'):cred?dl('avail'):dl('bal'),dmoney(st.bal),true]);
+  let y=drawHeader(pdf,logo,sr?dl('sreceipt'):est?dl('estimate'):cred?dl('credit'):dl('invoice'),meta);
   y=drawParty(pdf,y,dl('billTo'),doc.contactId);
   const head=yy=>{pdf.rect(M,yy-12,RIGHT-M,18,{fill:'#eef4f1'});pdf.text(M+6,yy,dl('desc'),{size:9,bold:true});pdf.text(380,yy,dl('qty'),{size:9,bold:true,align:'right'});pdf.text(470,yy,dl('rate'),{size:9,bold:true,align:'right'});pdf.text(RIGHT-6,yy,dl('amount'),{size:9,bold:true,align:'right'});return yy+20};
   y=head(y);
@@ -78,6 +78,7 @@ async function docPdf(doc){
   if(+doc.tax)for(const p of (doc.taxParts&&doc.taxParts.length?doc.taxParts:oldRate?[{name:dlang()==='fr'?'Taxes':'Tax',rate:+doc.taxRate,amount:+doc.tax}]:splitTaxTotal(+doc.tax)))rows.push([`${p.name} ${p.rate}%`,dmoney(p.amount)]);
   rows.push([dl('total'),dmoney(doc.total),true]);
   if(est){}
+  else if(sr)rows.push([dl('paidBy'),dmoney(doc.total),true]);
   else if(!cred){
     const credits=r2(S.docs.filter(c=>c.applied).reduce((s,c)=>s+c.applied.filter(a=>a.docId===doc.id).reduce((t,a)=>t+(+a.amount||0),0),0));
     const pays=r2(paid-credits);
@@ -145,7 +146,7 @@ function statementItems(contactId,asOf){
   return out.sort((a,b)=>a.d.date.localeCompare(b.d.date));
 }
 function agingOf(items,asOf){const a=[0,0,0,0,0];for(const i of items){const late=i.cr||!i.d.due?0:daysBetween(i.d.due,asOf);a[late<=0?0:late<=30?1:late<=60?2:late<=90?3:4]+=i.bal}return a.map(r2)}
-const pdfName=(kind,num)=>`${({estimate:dlang()==='fr'?'Soumission':'Estimate',invoice:dlang()==='fr'?'Facture':'Invoice',credit:dlang()==='fr'?'Note-de-credit':'Credit-note',statement:dlang()==='fr'?'Releve':'Statement'})[kind]}-${String(num||'').replace(/[^A-Za-z0-9-]+/g,'')||today()}.pdf`;
+const pdfName=(kind,num)=>`${({sreceipt:dlang()==='fr'?'Recu-de-vente':'Sales-receipt',estimate:dlang()==='fr'?'Soumission':'Estimate',invoice:dlang()==='fr'?'Facture':'Invoice',credit:dlang()==='fr'?'Note-de-credit':'Credit-note',statement:dlang()==='fr'?'Releve':'Statement'})[kind]}-${String(num||'').replace(/[^A-Za-z0-9-]+/g,'')||today()}.pdf`;
 const toB64=bytes=>{let s='';for(let i=0;i<bytes.length;i+=0x8000)s+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000));return btoa(s)};
 
 /* ---------- email ---------- */
@@ -158,6 +159,7 @@ function templ(kind,v){
     reminder:fr?[`Rappel : facture ${v.num} en souffrance`,`Bonjour ${v.name},\n\nNous vous rappelons que la facture ${v.num}, d’un solde de ${v.amount}, était payable le ${v.due}. Si vous l’avez déjà réglée, merci et veuillez ne pas tenir compte de ce message.\n\nLa facture est jointe.\n\nMerci,\n${co}`]:[`Reminder: invoice ${v.num} is past due`,`Hello ${v.name},\n\nThis is a friendly reminder that invoice ${v.num}, with ${v.amount} still owing, was due on ${v.due}. If you’ve already paid, thank you, and please disregard this message.\n\nThe invoice is attached.\n\nThank you,\n${co}`],
     package:fr?[`Rapports financiers de ${co} : ${v.period}`,`Bonjour,\n\nVous trouverez ci-joints les rapports financiers de ${co} pour la période du ${v.period}.\n\nN’hésitez pas à me faire part de vos questions.\n\nMerci,`]:[`Financial reports for ${co}: ${v.period}`,`Hello,\n\nPlease find attached the financial reports for ${co} for ${v.period}.\n\nLet me know if you have any questions.\n\nThank you,`],
     estimate:fr?[`Soumission ${v.num} de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-jointe la soumission ${v.num} de ${v.amount}${v.due?`, valide jusqu’au ${v.due}`:''}. Faites-moi savoir si elle vous convient.\n\nMerci,\n${co}`]:[`Estimate ${v.num} from ${co}`,`Hello ${v.name},\n\nPlease find attached estimate ${v.num} for ${v.amount}${v.due?`, good until ${v.due}`:''}. Let me know if you’d like to go ahead.\n\nThank you,\n${co}`],
+    sreceipt:fr?[`Reçu de vente ${v.num} de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-joint le reçu de vente ${v.num} de ${v.amount}. Merci de votre achat.\n\n${co}`]:[`Sales receipt ${v.num} from ${co}`,`Hello ${v.name},\n\nPlease find attached sales receipt ${v.num} for ${v.amount}. Thank you for your business.\n\n${co}`],
     credit:fr?[`Note de crédit ${v.num} de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-jointe la note de crédit ${v.num} de ${v.amount}.\n\nMerci,\n${co}`]:[`Credit note ${v.num} from ${co}`,`Hello ${v.name},\n\nPlease find attached credit note ${v.num} for ${v.amount}.\n\nThank you,\n${co}`],
     statement:fr?[`Relevé de compte de ${co}`,`Bonjour ${v.name},\n\nVous trouverez ci-joint votre relevé de compte au ${v.due}. Le solde dû est de ${v.amount}.\n\nMerci,\n${co}`]:[`Statement from ${co}`,`Hello ${v.name},\n\nPlease find attached your statement as of ${v.due}. The balance due is ${v.amount}.\n\nThank you,\n${co}`],
   };
@@ -195,7 +197,7 @@ async function composeMail({kind,contactId,docIds,makePdf,fileName,vars}){
 /* ---------- buttons on invoices and credit notes ---------- */
 function docActions(doc){
   if(doc.kind==='bill')return '<span class="doc-acts"><button type="button" class="btn ghost" data-dorec>Make recurring</button></span>';
-  if(doc.kind!=='invoice'&&doc.kind!=='credit')return '';
+  if(doc.kind!=='invoice'&&doc.kind!=='credit'&&doc.kind!=='sreceipt')return '';
   const st=docStatus(doc),late=doc.kind==='invoice'&&st.k==='overdue';
   const sent=(doc.sent||[]).slice(-1)[0];
   const link=doc.kind==='invoice'&&st.bal>0.004&&typeof PAYCFG!=='undefined'&&PAYCFG&&PAYCFG.configured;
@@ -206,11 +208,11 @@ function bindDocActions(f,doc){
   const name=pdfName(doc.kind,doc.number);
   if(p)p.onclick=async()=>{try{if(doc.kind==='invoice'&&typeof opLinkFor==='function'&&PAYCFG&&PAYCFG.configured)await opLinkFor(doc);saveFile(name,new Blob([await docPdf(S.docs.find(x=>x.id===doc.id)||doc)],{type:'application/pdf'}))}catch(e){toast(e.message,true)}};
   const lk=$('[data-dolink]',f);if(lk)lk.onclick=async()=>{const url=await opLinkFor(doc);if(!url)return;try{await navigator.clipboard.writeText(url);toast('Pay link copied. Paste it in a message to the customer.')}catch(e){prompt('Copy this link:',url)}};
-  const rc=$('[data-dorec]',f);if(rc)rc.onclick=()=>{closeModal();recurringForm(null,doc.kind,{name:`${contactName(doc.contactId)} ${doc.kind==='invoice'?'invoice':'bill'}`.trim(),contactId:doc.contactId,memo:doc.memo||'',lines:doc.lines.map(l=>({desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode||(l.tax?'std':'none')})),next:recAfter({every:'month',n:1},doc.date),day:pd(doc.date).getDate()})};
+  const rc=$('[data-dorec]',f);if(rc)rc.onclick=()=>{closeModal();recurringForm(null,doc.kind,{name:`${contactName(doc.contactId)} ${doc.kind==='invoice'?'invoice':'bill'}`.trim(),contactId:doc.contactId,memo:doc.memo||'',lines:doc.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode||(l.tax?'std':'none')})),next:recAfter({every:'month',n:1},doc.date),day:pd(doc.date).getDate()})};
   if(m)m.onclick=()=>{
     const st=docStatus(doc),late=doc.kind==='invoice'&&st.k==='overdue';
     closeModal();
-    composeMail({kind:doc.kind==='credit'?'credit':late?'reminder':'invoice',contactId:doc.contactId,docIds:[doc.id],fileName:name,makePdf:()=>docPdf(S.docs.find(x=>x.id===doc.id)||doc),
+    composeMail({kind:doc.kind==='credit'?'credit':doc.kind==='sreceipt'?'sreceipt':late?'reminder':'invoice',contactId:doc.contactId,docIds:[doc.id],fileName:name,makePdf:()=>docPdf(S.docs.find(x=>x.id===doc.id)||doc),
       vars:{name:contactName(doc.contactId),num:doc.number||'',amount:dmoney(late?st.bal:doc.total),due:ddate(doc.due)}});
   };
 }

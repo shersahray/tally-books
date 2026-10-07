@@ -13,7 +13,7 @@ const DETAILS = {
   'Cost of Goods Sold': [''],
   Expense: ['', 'wages', 'payroll_tax'],
 };
-const ENTRY_TYPES = ['invoice', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust'];
+const ENTRY_TYPES = ['invoice', 'salesreceipt', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust'];
 const PAY_PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
 const PAY_FREQ = ['weekly', 'biweekly', 'semimonthly', 'monthly'];
 const ID_RE = /^[A-Za-z0-9_.:@+~-]{1,120}$/;
@@ -65,7 +65,7 @@ function validateContact(data) {
   return { ...data, name: str(data.name, 160).trim() };
 }
 
-const DOC_KINDS = ['invoice', 'bill', 'credit', 'vcredit'];
+const DOC_KINDS = ['invoice', 'sreceipt', 'bill', 'credit', 'vcredit'];
 // What a credit can be used against: a customer credit note against invoices, a vendor credit against bills.
 const CREDIT_FOR = { credit: 'invoice', vcredit: 'bill' };
 /** Amount already settled on a document: payments and refunds pointing at it, and credits used on it (or, for a credit, used from it). */
@@ -79,7 +79,12 @@ function settledOn(store, docId, exceptCreditId, exceptEntryId) {
   return Math.round(s * 100) / 100;
 }
 function validateDoc(data, store, id) {
-  if (!DOC_KINDS.includes(data.kind)) throw new ValidationError('Document kind must be invoice, bill, credit note or vendor credit.');
+  if (!DOC_KINDS.includes(data.kind)) throw new ValidationError('Document kind must be invoice, sales receipt, bill, credit note or vendor credit.');
+  // A sales receipt is paid on the spot: it says which bank or cash account the money went into.
+  if (data.kind === 'sreceipt') {
+    const b = store.get('accounts', String(data.depositTo || ''));
+    if (!b || (b.detail !== 'bank' && b.detail !== 'card' && !(b.type === 'Asset' && !b.detail))) throw new ValidationError('Choose the bank or cash account the money went into.');
+  }
   if (data.applied !== undefined) {
     const target = CREDIT_FOR[data.kind];
     if (!target) throw new ValidationError('Only credit notes and vendor credits can be applied to other documents.');
@@ -394,12 +399,47 @@ function validateReceipt(data, store, id) {
   return { ...base, status, note: str(data.note, 500), entryId, docId };
 }
 
+/* Products and services: saved once, picked on invoices, sales receipts, estimates and bills. */
+const ITEM_TYPES = ['service', 'product'];
+const TAX_CODE_LIST = ['std', 'gst', 'zero', 'export', 'exempt', 'none'];
+function validateItem(data, store, id) {
+  const name = str(data.name, 120).trim();
+  if (!name) throw new ValidationError('Give the product or service a name.');
+  if (store.list('items').some(i => i.id !== id && String(i.name || '').trim().toLowerCase() === name.toLowerCase())) throw new ValidationError('There’s already a product or service with that name.', 409);
+  const money = (v, label) => {
+    if (v === undefined || v === null || v === '') return '';
+    const n = Number(v);
+    if (!Number.isFinite(n) || Math.abs(n) > 1e9) throw new ValidationError(`${label} must be a number.`);
+    return Math.round(n * 10000) / 10000;
+  };
+  const acct = (v, types, label) => {
+    if (!v) return '';
+    const a = store.get('accounts', String(v));
+    if (!a || !types.includes(a.type)) throw new ValidationError(label);
+    return a.id;
+  };
+  const out = {
+    name, type: ITEM_TYPES.includes(data.type) ? data.type : 'service', sku: str(data.sku, 60).trim(),
+    desc: str(data.desc, 500), price: money(data.price, 'The sales price'), cost: money(data.cost, 'The purchase cost'),
+    incomeAccount: acct(data.incomeAccount, ['Income'], 'Choose an income account for the sales side.'),
+    expenseAccount: acct(data.expenseAccount, ['Expense', 'Cost of Goods Sold', 'Asset'], 'Choose an expense account for the purchase side.'),
+    taxCode: TAX_CODE_LIST.includes(data.taxCode) ? data.taxCode : 'std',
+    sold: data.sold !== false, bought: !!data.bought, active: data.active !== false,
+  };
+  if (!out.sold && !out.bought) throw new ValidationError('Tick whether you sell it, buy it, or both.');
+  if (out.sold && !out.incomeAccount) throw new ValidationError('Choose an income account for the sales side.');
+  if (out.bought && !out.expenseAccount) throw new ValidationError('Choose an expense account for the purchase side.');
+  if (data.example) out.example = true;
+  return out;
+}
+
 function validateRecord(collection, id, data, store) {
   checkId(id);
   if (!isObj(data)) throw new ValidationError('Record body must be a JSON object.');
   switch (collection) {
     case 'accounts': return validateAccount(data, store, id);
     case 'contacts': return validateContact(data);
+    case 'items': return validateItem(data, store, id);
     case 'docs': return validateDoc(data, store, id);
     case 'entries': return validateEntry(data, store, id);
     case 'bankTxns': return validateBankTxn(data, store, id);
@@ -432,6 +472,10 @@ function checkDelete(collection, id, store) {
   const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id;
   if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines))) {
     throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
+  }
+  if (collection === 'items') {
+    const onIt = r => (r.lines || []).some(l => l.item === id);
+    if (store.list('docs').some(onIt) || store.list('estimates').some(onIt) || store.list('recurring').some(onIt)) throw new ValidationError('This product or service is on invoices, bills or estimates, so it can’t be deleted. Mark it inactive instead.', 409);
   }
   if (collection === 'contacts' && (store.contactUsed(id) || store.list('rules').some(r => r.contactId === id))) {
     throw new ValidationError('This contact appears on transactions, so it can’t be deleted.', 409);
@@ -503,7 +547,7 @@ function validateCompany(data) {
     features: Object.fromEntries(Object.keys(PLANS.FEATURES).filter(k => isObj(data.features) && data.features[k] === false).map(k => [k, false])),
     notDuplicates: (Array.isArray(data.notDuplicates) ? data.notDuplicates : []).slice(-500).map(x => str(x, 130)).filter(Boolean),
     savedReports: (Array.isArray(data.savedReports) ? data.savedReports : []).slice(0, 30).filter(isObj).map(r => ({
-      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap'].includes(r.tab) ? r.tab : 'pl',
+      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap', 'sc', 'si', 'ev'].includes(r.tab) ? r.tab : 'pl',
       period: ['month', 'lastmonth', 'quarter', 'ytd', 'fy', 'lastfy', 'all', 'custom'].includes(r.period) ? r.period : 'fy',
       from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: r.tbAdj === 'aje' ? 'aje' : true } : {}),
     })).filter(r => r.id && r.name),
@@ -551,6 +595,7 @@ function docLines(lines) {
   return lines.map(l => {
     if (!isObj(l)) throw new ValidationError('Each line must be an object.');
     const out = { desc: str(l.desc, 500), account: String(l.account || ''), taxCode: ['std', 'gst', 'zero', 'export', 'exempt', 'none'].includes(l.taxCode) ? l.taxCode : 'none' };
+    if (l.item) out.item = str(l.item, 120);
     if (l.qty !== undefined) out.qty = Number(l.qty) || 0;
     if (l.rate !== undefined) out.rate = Number(l.rate) || 0;
     if (l.amount !== undefined) out.amount = Number(l.amount) || 0;

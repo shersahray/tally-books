@@ -264,8 +264,8 @@ function reportsPdf(reports,{cover}={}){
   for(let i=0;i<pages;i++){doc.goto(i);doc.text(W0-M,H0-24,`${i+1} / ${pages}`,{size:8,align:'right',color:'#888888'})}
   return doc.output();
 }
-const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging'};
-function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
+const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor'};
+function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
 
 /* ---------- report package: several reports for a period, as one PDF ---------- */
 function packageForm(){
@@ -368,4 +368,41 @@ function rAJE(){
   const rows=[];list.forEach((e,i)=>{rows.push({cls:'sec',label:`AJE ${i+1} · ${fmtDate(e.date)}${e.memo?' · '+e.memo:''}`});for(const l of (e.lines||[]).filter(l=>+l.debit||+l.credit)){const a=acct(l.account);rows.push({cls:'item',label:'   '+(a?(a.code?a.code+' ':'')+a.name:''),cells:[r2(+l.debit||0)||null,r2(+l.credit||0)||null]})}});
   rows.push({cls:'grand',label:'Total',cells:[r2(td),r2(tc)]});
   return{html,csv,name:`adjusting-entries_${to}`,title:'Adjusting entries',sub:`${fmtDate(fy)} – ${fmtDate(to)}`,head:['Debit','Credit'],rows};
+}
+
+/* ---------- Sales by customer, sales by product or service, expenses by vendor ----------
+   Amounts are before sales tax. Sales by customer and expenses by vendor come from the ledger (income, or
+   expense and cost of goods sold accounts, by the name on each transaction), so they agree with the profit
+   and loss. Sales by product or service comes from the lines of invoices, sales receipts and credit notes. */
+function nameReport({title,col,rows,cols,name,empty,note}){
+  const{from,to}=S.rep;
+  const tot=cols.map((c,i)=>c.sum===false?null:r2(rows.reduce((t,r)=>t+(+r.vals[i]||0),0)));
+  const csv=[[col,...cols.map(c=>c.label)],...rows.map(r=>[r.label,...r.vals.map(v=>typeof v==='number'?r2(v):v===null?'':v)]),['Total',...tot.map(v=>v===null?'':v)]];
+  const cell=(v,c)=>v===null||v===undefined?'<span class="muted">—</span>':c.kind==='qty'?(+v||0).toLocaleString(LOC(),{maximumFractionDigits:2}):c.kind==='pct'?`${(+v||0).toLocaleString(LOC(),{maximumFractionDigits:1})}%`:mcell(v);
+  const body=rows.map(r=>`<tr>${r.contact?`<td><button class="link" data-contact="${esc(r.contact)}" translate="no">${esc(r.label)}</button></td>`:r.item?`<td><button class="link" data-item="${esc(r.item)}" translate="no">${esc(r.label)}</button></td>`:`<td>${esc(r.label)}</td>`}${r.vals.map((v,i)=>`<td class="n">${cell(v,cols[i])}</td>`).join('')}</tr>`).join('');
+  return{html:`<div class="report" style="max-width:none">${rh(esc(title),`${fmtDate(from)} – ${fmtDate(to)} · before sales tax`)}<div class="tbl-wrap"><table><thead><tr><th>${esc(col)}</th>${cols.map(c=>`<th class="n">${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${cols.length+1}" class="muted" style="padding:16px">${esc(empty)}</td></tr>`}</tbody>${rows.length?`<tfoot><tr class="grand"><td>Total</td>${tot.map((v,i)=>`<td class="n">${v===null?'':cell(v,cols[i])}</td>`).join('')}</tr></tfoot>`:''}</table></div>${note?`<div class="muted" style="font-size:12.5px;padding:10px 12px 12px">${esc(note)}</div>`:''}</div>`,csv,name:`${name}_${from}_${to}`};
+}
+function byContactOn(types){
+  const{from,to}=S.rep,by={};
+  for(const e of S.entries){if(e.date<from||e.date>to||e.opening)continue;let amt=0;
+    for(const l of e.lines||[]){const a=acct(l.account);if(!a||!types.includes(a.type))continue;amt+=types.includes('Income')?(+l.credit||0)-(+l.debit||0):(+l.debit||0)-(+l.credit||0)}
+    if(Math.abs(amt)<0.005)continue;const k=e.contactId||'';const o=by[k]=by[k]||{amt:0,n:0};o.amt+=amt;o.n++}
+  return by;
+}
+function rSalesByCustomer(){
+  const by=byContactOn(['Income']),all=Object.values(by).reduce((t,o)=>t+o.amt,0)||1;
+  const rows=Object.entries(by).map(([k,o])=>({label:k?contactName(k):T('No customer'),contact:k||'',vals:[o.n,r2(o.amt),r2(o.amt/all*100)]})).sort((a,b)=>b.vals[1]-a.vals[1]);
+  return nameReport({title:'Sales by customer',col:'Customer',name:'sales-by-customer',rows,cols:[{label:'Transactions',kind:'qty'},{label:'Sales'},{label:'% of sales',kind:'pct',sum:false}],empty:'No sales in this period.'});
+}
+function rExpensesByVendor(){
+  const by=byContactOn(['Expense','Cost of Goods Sold']),all=Object.values(by).reduce((t,o)=>t+o.amt,0)||1;
+  const rows=Object.entries(by).map(([k,o])=>({label:k?contactName(k):T('No vendor'),contact:k||'',vals:[o.n,r2(o.amt),r2(o.amt/all*100)]})).sort((a,b)=>b.vals[1]-a.vals[1]);
+  return nameReport({title:'Expenses by vendor',col:'Vendor',name:'expenses-by-vendor',rows,cols:[{label:'Transactions',kind:'qty'},{label:'Expenses'},{label:'% of expenses',kind:'pct',sum:false}],empty:'No expenses in this period.'});
+}
+function rSalesByItem(){
+  const{from,to}=S.rep,by={};
+  for(const d of S.docs){if(!['invoice','sreceipt','credit'].includes(d.kind)||d.date<from||d.date>to)continue;const sg=d.kind==='credit'?-1:1;
+    for(const l of d.lines||[]){const k=l.item&&S.items.some(i=>i.id===l.item)?l.item:'';const o=by[k]=by[k]||{qty:0,amt:0};o.qty+=sg*(+l.qty||0);o.amt+=sg*r2((+l.qty||0)*(+l.rate||0))}}
+  const rows=Object.entries(by).map(([k,o])=>({label:k?S.items.find(i=>i.id===k).name:T('Not linked to a product or service'),item:k||'',vals:[r2(o.qty),r2(o.amt),k&&o.qty?r2(o.amt/o.qty):null]})).filter(r=>Math.abs(r.vals[1])>=0.005).sort((a,b)=>(a.item?0:1)-(b.item?0:1)||b.vals[1]-a.vals[1]);
+  return nameReport({title:'Sales by product or service',col:'Product or service',name:'sales-by-product',rows,cols:[{label:'Quantity',kind:'qty',sum:false},{label:'Sales'},{label:'Average price',sum:false}],empty:'No invoices or sales receipts in this period.',note:'From invoices, sales receipts and credit notes. Deposits recorded without one aren’t included.'});
 }

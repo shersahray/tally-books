@@ -177,7 +177,7 @@ const LIST_LINES={gst:['103','106'],qst:['203','206'],pst:['B','F']};
 const PST_AGENCY={BC:'BC Ministry of Finance',SK:'Saskatchewan Ministry of Finance',MB:'Manitoba Finance'};
 const AGENCY={get gst(){return S.company.province==='QC'?'Revenu Québec':'CRA'},qst:'Revenu Québec',get pst(){return PST_AGENCY[S.company.province]||'the province'}};
 const PST_ONLINE={BC:'eTaxBC',SK:'Saskatchewan Taxpayer Access Point',MB:'Manitoba TAXcess'};
-const SALE_TYPES=new Set(['invoice','deposit','payment','credit']),BUY_TYPES=new Set(['bill','expense','billpayment','vcredit']);
+const SALE_TYPES=new Set(['invoice','salesreceipt','deposit','payment','credit']),BUY_TYPES=new Set(['bill','expense','billpayment','vcredit']);
 
 const taxesInUse=()=>byDetail('qst')&&+S.company.qstRate>0?['gst','qst']:byDetail('pst')&&+S.company.pstRate>0?['gst','pst']:['gst'];
 const pstName=()=>S.company.pstName||'PST';

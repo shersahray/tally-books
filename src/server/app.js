@@ -112,6 +112,12 @@ function createApp(opts) {
   const chargeFirm = (cid, usd) => { const c = reg.get(cid); if (c) ai.addFirmUsage(c.firmId, usd); };
   /* ---------- Paying for Sumlora (online server; nothing changes until the administrator adds a Stripe key) ---------- */
   const billing = new Billing(opts.licenceDir || opts.dataDir, { fetch: opts.billingFetch });
+  /* The server's own mailbox, for invitation and password reset emails (set by the administrator).
+     Kept in sysmail.json next to the server's other private settings, readable only by the server's account. */
+  const sysMailFile = path.join(opts.licenceDir || opts.dataDir, 'sysmail.json');
+  const sysMail = { get() { try { return JSON.parse(fs.readFileSync(sysMailFile, 'utf8')); } catch { return null; } },
+    set(m) { const tmp = sysMailFile + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(m || {}), { mode: 0o600 }); fs.renameSync(tmp, sysMailFile); try { fs.chmodSync(sysMailFile, 0o600); } catch { /* Windows */ } } };
+  const sysMailSent = new Map(); // firm|day -> emails sent through the server's mailbox
   const firmExempt = fid => fid === auth.mainFirmId;            // the server owner's own firm doesn't pay itself
   const firmNeedsPay = f => billing.configured() && !!f && f.status === 'active' && !firmExempt(f.id) && !billingPaid(f.billing);
   const coNeedsPay = c => billing.configured() && !!c && c.payer === 'client' && !billingPaid(c.billing);
@@ -720,6 +726,53 @@ function createApp(opts) {
       auth.log(out.kind === 'invite' ? 'invite-link' : 'reset-link', { username: auth.byId(decodeURIComponent(m[1])).username, by: user.username });
       return { ok: true, ...out };
     }],
+    // The server's mailbox: the administrator sets it up; everyone else only learns whether it's there.
+    ['GET', /^\/api\/sysmail$/, (req, m, res, user) => {
+      const cfg = sysMail.get();
+      if (user.role === 'owner' && user.platformAdmin) return { ...mail.publicMail(cfg), admin: true };
+      return { configured: !!(cfg && cfg.host) };
+    }],
+    ['PUT', /^\/api\/sysmail$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const body = (await readJson(req)) || {};
+      if (body.remove) { sysMail.set({}); auth.log('security-changed', { by: user.username, change: 'invitation email turned off' }); return mail.publicMail(null); }
+      const cfg = mail.validateMail(body, sysMail.get() || {}, { allowLocal: !!opts.mailAllowLocal });
+      sysMail.set(cfg);
+      auth.log('security-changed', { by: user.username, change: `invitation email set up for ${cfg.fromEmail}` });
+      return { ...mail.publicMail(cfg), admin: true };
+    }],
+    ['POST', /^\/api\/sysmail\/test$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const cfg = sysMail.get();
+      if (!cfg || !cfg.host) throw new ValidationError('Set up the mailbox first.', 409);
+      await mail.send(cfg, { to: [cfg.fromEmail], subject: 'Test email from Sumlora', text: 'This is a test. Sumlora can now email invitation and password reset links from this mailbox.' }, { insecureTls: !!opts.mailInsecureTls, allowLocal: !!opts.mailAllowLocal });
+      return { ok: true };
+    }],
+    // Email someone their invitation or password reset link, from the server's mailbox. The sender must hold the
+    // current link (the one just shown to them), it goes only to that person's own email, and the message has to contain it.
+    ['POST', /^\/api\/users\/([^/]+)\/email-link$/, async (req, m, res, user) => {
+      ownerOnly(user);
+      const cfg = sysMail.get();
+      if (!cfg || !cfg.host) throw new ValidationError('Invitation email isn’t set up on this server. Copy the link and send it yourself.', 409);
+      const b = (await readJson(req)) || {};
+      const target = auth.byId(decodeURIComponent(m[1]));
+      if (!target || (target.firmId !== user.firmId && !user.platformAdmin)) throw new ValidationError('That user doesn’t exist.', 404);
+      let holder;
+      try { holder = auth.userForLink(String(b.token || '')); } catch (e) { throw new ValidationError('This link has expired or was replaced. Make a new one first.', 410); }
+      if (holder.id !== target.id) throw new ValidationError('That link belongs to someone else.', 400);
+      if (!mail.EMAIL_RE.test(target.username)) throw new ValidationError('This person’s username isn’t an email address. Copy the link and send it yourself.', 400);
+      const text = String(b.text || '').slice(0, 5000), subject = String(b.subject || '').replace(/[\r\n]+/g, ' ').slice(0, 200).trim();
+      if (!subject || !text.includes(String(b.token))) throw new ValidationError('The message has to include the link.', 400);
+      const key = user.firmId + '|' + new Date().toISOString().slice(0, 10);
+      const n = sysMailSent.get(key) || 0;
+      if (n >= 100) throw new ValidationError('That’s 100 invitation emails today for your firm. Send the rest tomorrow, or copy the links.', 429);
+      sysMailSent.set(key, n + 1);
+      if (sysMailSent.size > 5000) sysMailSent.clear();
+      const replyTo = mail.EMAIL_RE.test(user.username) ? user.username : cfg.replyTo;
+      await mail.send({ ...cfg, replyTo }, { to: [target.username], subject, text }, { insecureTls: !!opts.mailInsecureTls, allowLocal: !!opts.mailAllowLocal });
+      auth.log(holder.invite && holder.invite.kind === 'reset' ? 'reset-link' : 'invite-link', { username: target.username, by: user.username, emailed: true });
+      return { ok: true, to: target.username };
+    }],
     ['PUT', /^\/api\/security$/, async (req, m, res, user) => {
       adminOnly(user);
       const b = await readJson(req);
@@ -1169,7 +1222,7 @@ function createApp(opts) {
       ctx.store.transaction(() => {
         for (const id of docIds) {
           const d = ctx.store.get('docs', id);
-          if (d) ctx.store.put('docs', id, { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: to.join(', '), by: ctx.user.name || ctx.user.username, what: ['invoice', 'reminder', 'statement', 'credit'].includes(body.what) ? body.what : 'document' }] });
+          if (d) ctx.store.put('docs', id, { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: to.join(', '), by: ctx.user.name || ctx.user.username, what: ['invoice', 'reminder', 'statement', 'credit', 'sreceipt'].includes(body.what) ? body.what : 'document' }] });
         }
         ctx.store.audit(ctx.user, 'email', { summary: `${m[1] === 'test' ? 'test email' : 'emailed'} “${subject.slice(0, 80)}” to ${to.join(', ').slice(0, 120)}` });
       });

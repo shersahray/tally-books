@@ -29,14 +29,14 @@ const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts
 const detailLabel=a=>(DETAILS[a.type]||[]).find(d=>d[0]===(a.detail||''))?.[1]||'';
 const debitNormal=t=>t==='Asset'||t==='Expense'||t==='Cost of Goods Sold';
 const isPL=t=>t==='Income'||t==='Expense'||t==='Cost of Goods Sold';
-const TLABEL={invoice:'Invoice',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Sales tax adjustment'};
+const TLABEL={invoice:'Invoice',salesreceipt:'Sales receipt',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Sales tax adjustment'};
 
 /* ---------- state + server API ---------- */
 const S={more:{},accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',fyStart:1,taxName:'HST',taxRate:13,terms:30,currency:'$'},
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','estimates','recurring','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
+const COLS=['accounts','entries','docs','contacts','items','estimates','recurring','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
@@ -44,7 +44,7 @@ let CO=null; // id of the company whose books are open
 const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|billing(?:\/|$)|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|billing(?:\/|$)|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -141,7 +141,7 @@ function paidOn(docId,exceptEntry){
   for(const c of S.docs){if(!c.applied)continue;for(const a of c.applied)if(c.id===docId||a.docId===docId)s+=+a.amount||0}
   return r2(s);
 }
-function docStatus(d){const b=r2((+d.total||0)-paidOn(d.id));if(isCreditKind(d.kind))return b<=0.004?{k:'paid',label:'Used',bal:0}:{k:'open',label:'Available',bal:b};if(b<=0.004)return{k:'paid',label:'Paid',bal:0};if(d.due&&d.due<today())return{k:'overdue',label:'Overdue',bal:b};if(b<r2(d.total))return{k:'partial',label:'Partial',bal:b};return{k:'open',label:'Open',bal:b}}
+function docStatus(d){if(d.kind==='sreceipt')return{k:'paid',label:'Paid',bal:0};const b=r2((+d.total||0)-paidOn(d.id));if(isCreditKind(d.kind))return b<=0.004?{k:'paid',label:'Used',bal:0}:{k:'open',label:'Available',bal:b};if(b<=0.004)return{k:'paid',label:'Paid',bal:0};if(d.due&&d.due<today())return{k:'overdue',label:'Overdue',bal:b};if(b<r2(d.total))return{k:'partial',label:'Partial',bal:b};return{k:'open',label:'Open',bal:b}}
 const entryTotal=e=>r2((e.lines||[]).reduce((s,l)=>s+(+l.debit||0),0));
 const hasExamples=()=>COLS.some(c=>S[c].some(x=>x.example));
 
@@ -234,12 +234,14 @@ function chart6(){
 
 function vDocs(kind){
   const inv=kind==='invoice',st=inv?S.sales:S.exp,ck=inv?'customer':'vendor';
-  const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button>${inv?`<button role="tab" data-dtab="estimates" aria-selected="${st.tab==='estimates'}">Estimates</button>`:''}<button role="tab" data-dtab="recurring" aria-selected="${st.tab==='recurring'}">Recurring</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button></div>`;
-  const actions=inv?`${typeof salesMailButtons==='function'?salesMailButtons():''}<button class="btn" data-new="credit">Credit note</button><button class="btn" data-new="payment">Receive payment</button><button class="btn primary" data-new="invoice">New invoice</button>`:`${typeof aiReceiptButton==='function'?aiReceiptButton():''}<button class="btn" data-new="vcredit">Vendor credit</button><button class="btn" data-new="billpayment">Pay bill</button><button class="btn" data-new="expense">Expense</button><button class="btn primary" data-new="bill">New bill</button>`;
+  const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button>${inv?`<button role="tab" data-dtab="estimates" aria-selected="${st.tab==='estimates'}">Estimates</button>`:''}<button role="tab" data-dtab="recurring" aria-selected="${st.tab==='recurring'}">Recurring</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button>${inv?`<button role="tab" data-dtab="items" aria-selected="${st.tab==='items'}">Products and services</button>`:''}</div>`;
+  const actions=inv?`${typeof salesMailButtons==='function'?salesMailButtons():''}<button class="btn" data-new="credit">Credit note</button><button class="btn" data-new="payment">Receive payment</button><button class="btn" data-new="sreceipt">Sales receipt</button><button class="btn primary" data-new="invoice">New invoice</button>`:`${typeof aiReceiptButton==='function'?aiReceiptButton():''}<button class="btn" data-new="vcredit">Vendor credit</button><button class="btn" data-new="billpayment">Pay bill</button><button class="btn" data-new="expense">Expense</button><button class="btn primary" data-new="bill">New bill</button>`;
   const h=head(inv?'Sales':'Expenses',inv?'Invoices you send and the customers who owe you':'Bills you receive and the vendors you pay',actions)+tabs;
   const ckind=inv?'credit':'vcredit';
   const docs=S.docs.filter(d=>d.kind===kind).map(d=>({d,s:docStatus(d)}));
   const credits=S.docs.filter(d=>d.kind===ckind).map(d=>({d,s:docStatus(d)}));
+  const receipts=inv?S.docs.filter(d=>d.kind==='sreceipt').map(d=>({d,s:docStatus(d)})):[];
+  if(st.tab==='items'&&inv)return h+vItems();
   if(st.tab==='estimates'&&inv)return h+vEstimates();
   if(st.tab==='recurring')return h+vRecurring(kind);
   if(st.tab==='contacts'){
@@ -250,9 +252,9 @@ function vDocs(kind){
   const t30=addDays(today(),-30);
   const paid30=r2(S.entries.filter(e=>e.type===(inv?'payment':'billpayment')&&e.date>=t30).reduce((s,e)=>s+(+e.amount||0),0));
   const chips=`<div class="chips"><div class="chip"><div class="lbl">Open</div><div class="val">${money(sum(x=>x.s.bal>0))}</div></div><div class="chip"><div class="lbl">Overdue</div><div class="val ${sum(x=>x.s.k==='overdue')?'neg':''}">${money(sum(x=>x.s.k==='overdue'))}</div></div><div class="chip"><div class="lbl">${inv?'Received':'Paid'}, last 30 days</div><div class="val">${money(paid30)}</div></div></div>`;
-  const list=docs.concat(credits).filter(x=>st.status==='all'||(st.status==='credits'?isCreditKind(x.d.kind):isCreditKind(x.d.kind)?false:(st.status==='unpaid'?x.s.bal>0:x.s.k===st.status))).sort((a,b)=>b.d.date.localeCompare(a.d.date)||String(b.d.number).localeCompare(String(a.d.number),undefined,{numeric:true}));
-  return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option></select><span class="grow"></span></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.slice(0,shownCount('docs',list.length)).map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:fmtDate(x.d.due)}</td><td class="n">${money(cr?-x.d.total:x.d.total)}</td><td class="n">${money(cr?-x.s.bal:x.s.bal)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,8):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
+  const list=docs.concat(credits,receipts).filter(x=>st.status==='all'||(st.status==='credits'?isCreditKind(x.d.kind):st.status==='receipts'?x.d.kind==='sreceipt':isCreditKind(x.d.kind)?false:(st.status==='unpaid'?x.s.bal>0:x.s.k===st.status))).sort((a,b)=>b.d.date.localeCompare(a.d.date)||String(b.d.number).localeCompare(String(a.d.number),undefined,{numeric:true}));
+  return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option>${inv?'<option value="receipts">Sales receipts</option>':''}</select><span class="grow"></span></div>
+  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.slice(0,shownCount('docs',list.length)).map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${money(cr?-x.d.total:x.d.total)}</td><td class="n">${money(cr?-x.s.bal:x.s.bal)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,8):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
 }
 
 function vTx(){
@@ -316,11 +318,11 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging']].filter(([k])=>adv||k!=='cf');
+  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor']].filter(([k])=>adv||k!=='cf');
   // Without advanced reports (plan or company setting): no comparisons, cash flow, saved reports, packages or working trial balance.
   if(!adv){if(R.tab==='cf')R.tab='pl';R.compare='';R.tbAdj=false;R.savedId=''}
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
-  const pointInTime=R.tab!=='pl'&&R.tab!=='gl';
+  const pointInTime=!['pl','gl','sc','si','ev'].includes(R.tab);
   const saved=adv?savedReports():[],staff=ME&&ME.role!=='client',cur=saved.find(x=>x.id===S.rep.savedId&&savedMatches(x));
   return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff&&adv?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}${ME&&ME.role!=='client'&&!ME.readOnly?'<button class="btn" data-act="yearpkg">Year-end package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
@@ -334,7 +336,7 @@ function vReports(){
 }
 /** The trial balance tab: plain, working (with adjustments), or the list of adjusting entries. */
 const tbReport=()=>S.rep.tbAdj==='aje'?rAJE():S.rep.tbAdj?rTBAdj():rTB();
-function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[S.rep.tab]().html}
+function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor})[S.rep.tab]().html}
 const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font-weight:600;margin-top:2px">${t}</div><span>${sub}</span></div>`;
 const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}" translate="no">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
 function rTB(){
@@ -504,6 +506,7 @@ function bindMain(m){
     if(d.doc){const doc=S.docs.find(x=>x.id===d.doc);if(doc){docForm(doc.kind,doc);addExtras('docs',doc.id)}return}
     if(d.contact)return contactForm(contact(d.contact));
     if(d.newcontact)return contactForm(null,d.newcontact);
+    if(d.item!==undefined&&typeof itemForm==='function')return itemForm(d.item?S.items.find(x=>x.id===d.item):null);
     if(d.dtab){(S.view==='sales'?S.sales:S.exp).tab=d.dtab;return renderMain()}
     if(d.rtab){S.rep.tab=d.rtab;return renderMain()}
     if(d.act==='clear-examples')return clearExamples();
@@ -523,6 +526,7 @@ function bindMain(m){
     if(d.act==='backup')return saveFile(`${(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase()}-backup-${today()}.json`,await fetch(coUrl('/api/backup')).then(r=>r.blob()));
     if(d.act==='restore')return $('#restoreFile').click();
   };
+  if(typeof bindItemsSearch==='function')bindItemsSearch(m);
   const ds=$('#docStatus',m);if(ds){const st=S.view==='sales'?S.sales:S.exp;ds.value=st.status;ds.onchange=()=>{st.status=ds.value;renderMain()}}
   const txU=()=>{S.tx={q:$('#txQ').value,type:$('#txType').value,from:$('#txFrom').value,to:$('#txTo').value};$('#txBody').innerHTML=txTable()};
   ['txQ','txType','txFrom','txTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.oninput=el.onchange=txU});
@@ -712,7 +716,7 @@ function casewareCsv(ye,prior){
   return out.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
 }
 function exportCSV(){
-  const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[R.tab]();
+  const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor})[R.tab]();
   // Column headings and report totals follow the screen language; account names stay as they are.
   const LBL=new Set([...Object.values(NPO_WORDS),'Total net assets','$ change','% change','Operating activities','Investing activities','Financing activities','Items not affecting cash','Changes in working capital','Cash from operating activities','Cash from investing activities','Cash from financing activities','Net change in cash','Cash at the beginning of the period','Cash at the end of the period','Assets','Liabilities','Expenses','Cost of goods sold','Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
   if(isFr())r.csv=r.csv.map((row,i)=>row.map(v=>typeof v==='string'&&(i===0||LBL.has(v))?T(v):v));
@@ -818,6 +822,7 @@ function lineEditor(el,cols,rows,onChange){
     case 'num':return `<input type="number" step="${c.step||'0.01'}" inputmode="decimal" data-k="${c.key}" value="${v===undefined||v===''||v===null?'':esc(v)}" aria-label="${c.label}">`;
     case 'check':return `<input type="checkbox" data-k="${c.key}" ${v?'checked':''} aria-label="${c.label}">`;
     case 'sel':return `<select data-k="${c.key}" aria-label="${c.label}">${c.options(v)}</select>`;
+    case 'item':return `<select data-k="${c.key}" aria-label="${c.label}">${itemOptions(v,c.sale)}</select>`;
     case 'calc':return `<span data-calc="${c.key}"></span>`;}};
   const rowHTML=r=>`<tr>${cols.map(c=>`<td class="c-${c.type}" data-label="${esc(c.label)}">${cell(c,r)}</td>`).join('')}<td class="c-x"><button type="button" class="icon-btn" data-rm aria-label="Remove line">×</button></td></tr>`;
   el.innerHTML=`<div class="tbl-wrap"><table class="lines"><thead><tr>${cols.map(c=>`<th class="c-${c.type}">${c.label}</th>`).join('')}<th></th></tr></thead><tbody>${rows.map(rowHTML).join('')}</tbody></table></div><button type="button" class="btn ghost sm" data-add style="margin-top:6px">+ Add line</button>`;
@@ -825,6 +830,12 @@ function lineEditor(el,cols,rows,onChange){
   const readRow=tr=>{const o={};tr.querySelectorAll('[data-k]').forEach(i=>o[i.dataset.k]=i.type==='checkbox'?i.checked:i.type==='number'?(i.value===''?'':+i.value):i.value);return o};
   const read=()=>[...tb.rows].map(readRow);
   const upd=()=>{[...tb.rows].forEach(tr=>{const o=readRow(tr);cols.filter(c=>c.type==='calc').forEach(c=>tr.querySelector(`[data-calc="${c.key}"]`).textContent=money(c.calc(o)))});onChange&&onChange(read())};
+  // Picking a product or service fills in its description, price, account and tax code.
+  const ic=cols.find(c=>c.type==='item');
+  if(ic)el.addEventListener('change',e=>{const t=e.target;if(t.dataset.k!==ic.key)return;const it=S.items.find(x=>x.id===t.value);if(!it)return;const tr=t.closest('tr');
+    const set=(k,v)=>{const i=tr.querySelector(`[data-k="${k}"]`);if(i&&v!==undefined&&v!=='')i.value=v};
+    set('desc',it.desc||it.name);set('rate',ic.sale?it.price:it.cost);set('account',ic.sale?it.incomeAccount:it.expenseAccount);if(!ic.keepTax||!ic.keepTax())set('taxCode',it.taxCode);
+    const q=tr.querySelector('[data-k="qty"]');if(q&&q.value==='')q.value=1},true);
   el.addEventListener('input',upd);el.addEventListener('change',upd);
   el.addEventListener('click',e=>{if(e.target.closest('[data-add]')){tb.insertAdjacentHTML('beforeend',rowHTML(cols.defaults?cols.defaults():{}));upd();tb.lastElementChild.querySelector('select,input').focus()}const rm=e.target.closest('[data-rm]');if(rm){if(tb.rows.length>1)rm.closest('tr').remove();else rm.closest('tr').querySelectorAll('input').forEach(i=>i.type==='checkbox'?i.checked=false:i.value='');upd()}});
   upd();return{read};
@@ -887,14 +898,14 @@ function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${l
 
 /* ---------- forms ---------- */
 function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false');
-  ({invoice:()=>docForm('invoice'),bill:()=>docForm('bill'),credit:()=>docForm('credit'),vcredit:()=>docForm('vcredit'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
+  ({invoice:()=>docForm('invoice'),sreceipt:()=>docForm('sreceipt'),bill:()=>docForm('bill'),credit:()=>docForm('credit'),vcredit:()=>docForm('vcredit'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
 async function openEntry(e){if(!e)return;
   if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id);if(r)return payRunView(r)}
   if(e.type==='payremit')return remitForm(e.agency+'|'+e.period,e);
   if(e.type==='qmadjust'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast('This adjustment was posted when the return was filed. To change it, undo the filing.');return}
   if(e.type==='taxpayment'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast(e.taxKind==='instalment'?'Instalments are listed in the Sales tax worksheets. To remove one, delete it from the account register.':'Sales tax payments are managed from the return they belong to.');return}
   if(Object.values(e.clear||{}).includes('r')&&!await confirmBox('This transaction is reconciled','Changing its amount or bank account will change a balance you already reconciled. Open it anyway?','Open'))return;
-  if(e.type==='invoice'||e.type==='bill'||e.type==='credit'||e.type==='vcredit'){const d=S.docs.find(x=>x.id===e.docId);if(d){docForm(d.kind,d);addExtras('docs',d.id);return}}
+  if(e.type==='invoice'||e.type==='salesreceipt'||e.type==='bill'||e.type==='credit'||e.type==='vcredit'){const d=S.docs.find(x=>x.id===e.docId);if(d){docForm(d.kind,d);addExtras('docs',d.id);return}}
   // A reversing entry is changed through the entry it reverses.
   if(e.reversalOf){const o=S.entries.find(x=>x.id===e.reversalOf);if(o){toast(`This entry reverses the journal entry of ${fmtDate(o.date)}. Change it there.`);journalForm(o);addExtras('entries',o.id);return}}
   if(e.type==='refund'||e.type==='vrefund'){const c=S.docs.find(x=>x.id===e.applyTo);if(c){refundForm(c,e);addExtras('entries',e.id);return}}
@@ -902,13 +913,15 @@ async function openEntry(e){if(!e)return;
 
 const DOCL={
   invoice:{t:'Invoice',n:'New invoice',num:'Invoice no.',date:'Invoice date',memo:'Message on invoice',saved:'Invoice saved',del:'Invoice deleted'},
+  sreceipt:{t:'Sales receipt',n:'New sales receipt',num:'Sales receipt no.',date:'Date',memo:'Message on sales receipt',saved:'Sales receipt saved',del:'Sales receipt deleted'},
   bill:{t:'Bill',n:'New bill',num:'Bill no.',date:'Bill date',memo:'Memo',saved:'Bill saved',del:'Bill deleted'},
   credit:{t:'Credit note',n:'New credit note',num:'Credit note no.',date:'Date',memo:'Message on credit note',saved:'Credit note saved',del:'Credit note deleted'},
   vcredit:{t:'Vendor credit',n:'New vendor credit',num:'Credit no.',date:'Date',memo:'Memo',saved:'Vendor credit saved',del:'Vendor credit deleted'}};
 const isCreditKind=k=>k==='credit'||k==='vcredit';
-const saleKind=k=>k==='invoice'||k==='credit';
+const saleKind=k=>k==='invoice'||k==='credit'||k==='sreceipt';
 function nextNum(kind){
   if(kind==='invoice'){const n=Math.max(1000,...S.docs.filter(d=>d.kind==='invoice').map(d=>parseInt(d.number)||0));return String(n+1)}
+  if(kind==='sreceipt'){const n=Math.max(1000,...S.docs.filter(d=>d.kind==='sreceipt').map(d=>parseInt(String(d.number).replace(/^SR-/i,''))||0));return 'SR-'+(n+1)}
   if(kind==='credit'){const n=Math.max(1000,...S.docs.filter(d=>d.kind==='credit').map(d=>parseInt(String(d.number).replace(/^CN-/i,''))||0));return 'CN-'+(n+1)}
   return'';
 }
@@ -917,33 +930,35 @@ const DOC_ACCT_FILTER=sale=>sale?a=>a.type==='Income':a=>a.type==='Expense'||a.t
 /** The ledger lines for an invoice, bill or credit: c from calcLines, ctl the receivable or payable account. */
 function docPostLines(kind,c,ctl){
   const lines=[];const g=groupBy(c.ls);
-  if(kind==='invoice'){lines.push({account:ctl,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
+  if(kind==='invoice'||kind==='sreceipt'){lines.push({account:ctl,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
   else if(kind==='credit'){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' credited'}));lines.push({account:ctl,debit:0,credit:c.total})}
   else if(kind==='vcredit'){lines.push({account:ctl,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' paid, credited'}))}
   else{Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ctl,debit:0,credit:c.total})}
   return lines;
 }
 /** A saved document's record: its lines as entered, and its totals. */
-const docRecord=(c)=>({lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
+const docRecord=(c)=>({lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
 function docForm(kind,doc,preset){
   if(doc&&doc.carried)return carriedDocForm(kind,doc);
-  const sale=saleKind(kind),cred=isCreditKind(kind),L=DOCL[kind],ck=sale?'customer':'vendor',t=today();
+  const sale=saleKind(kind),cred=isCreditKind(kind),sr=kind==='sreceipt',L=DOCL[kind],ck=sale?'customer':'vendor',t=today();
+  const banks=a=>(a.detail==='bank'||a.detail==='card'||(a.type==='Asset'&&!a.detail&&/undeposited|cash|caisse|fonds non/i.test(a.name)))&&a.active!==false;
+  const defBank=sr?(doc&&doc.depositTo)||(sortAccts(S.accounts.filter(a=>a.detail==='bank'&&a.active!==false))[0]||{}).id||'':'';
   const target=cred?(sale?'invoice':'bill'):null;
   const filter=DOC_ACCT_FILTER(sale);
   const defA=(sortAccts(S.accounts.filter(a=>filter(a)&&a.active!==false))[0]||{}).id||'';
-  const d=doc?{...doc,lines:doc.lines.map(l=>({...l,taxCode:taxCodeOf(l)}))}:{number:nextNum(kind),date:t,due:cred?'':addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:'std'}],memo:'',...(preset||{})};
+  const d=doc?{...doc,lines:doc.lines.map(l=>({...l,taxCode:taxCodeOf(l)}))}:{number:nextNum(kind),date:t,due:cred||sr?'':addDays(t,+S.company.terms||0),contactId:'',lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:'std'}],memo:'',...(preset||{})};
   const paid=doc?paidOn(doc.id):0;
   const refunded=doc?r2(S.entries.filter(e=>e.applyTo===doc.id).reduce((s,e)=>s+(+e.amount||0),0)):0;
   const settledNote=!doc||!paid?'':cred?`${money(paid)} of this credit has been used${refunded?`, including ${money(refunded)} refunded`:''}. ${money(r2(d.total-paid))} is still available.`:`${money(paid)} has been ${sale?'received':'paid'} on this ${kind==='invoice'?'invoice':'bill'}. Balance due ${money(r2(d.total-paid))}.`;
   const f=openModal(doc?`${L.t} ${d.number?'#'+d.number:''}`:L.n,
-    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}</div>
+    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${sr?fld('dDep','Deposit to',`<select id="dDep">${acctOptions(defBank,banks)}</select>`):cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}</div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${L.memo}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
     ${cred?`<div class="apply" data-apply></div>`:''}
     ${settledNote?`<div class="banner" style="margin:0"><span>${settledNote}</span></div>`:''}`,
     `${delBtn(!!doc)}${doc&&typeof docActions==='function'?docActions(doc):''}<button type="button" class="btn" data-close>Cancel</button>${doc&&!cred&&docStatus(doc).bal>0?`<button type="button" class="btn" data-paynow>${sale?'Receive payment':'Pay bill'}</button>`:''}${doc&&cred&&docStatus(doc).bal>0?'<button type="button" class="btn" data-refund>Refund</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'dC');presetContact(f,'dC',preset);
-  let rows=[];const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:sale?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:sale?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
+  let rows=[];const cols=[...itemCol(sale,()=>!!contactCode()),{key:'desc',label:'Description',type:'text'},{key:'account',label:sale?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:sale?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
   const contactCode=()=>contact($('#dC',f).value)?.taxCode||'';
   cols.defaults=()=>({qty:1,taxCode:contactCode()||'std',account:defA});
   const totalNow=()=>calcLines(rows,x=>(+x.qty||0)*(+x.rate||0),!sale).total;
@@ -982,16 +997,18 @@ function docForm(kind,doc,preset){
       const used=r2(applied.reduce((s,a)=>s+a.amount,0)+refunded);
       if(used>c.total+0.004)return f.err(`Only ${money(c.total)} of credit is available, but ${money(used)} is used.`);
     }else if(doc&&c.total<paid-0.004)return f.err(`The total can't be less than the ${money(paid)} already ${sale?'received':'paid'}.`);
-    const ar=needAcct(sale?'ar':'ap',sale?'Accounts receivable':'Accounts payable');if(!ar)return;
+    const dep=sr?$('#dDep',f).value:'';if(sr&&!dep)return f.err('Choose the account the money went into.');
+    const ar=sr?{id:dep}:needAcct(sale?'ar':'ap',sale?'Accounts receivable':'Accounts payable');if(!ar)return;
     if(c.tax&&!taxReady(c.parts))return;
     const cid=await resolveContact(f,'dC',ck);if(!cid)return;
     const id=doc?doc.id:(preset&&preset.id)||uid();const num=$('#dN',f).value.trim();
     const lines=docPostLines(kind,c,ar.id);
     const base={date:$('#dD',f).value,contactId:cid,memo:$('#dM',f).value.trim(),...(doc&&doc.example?{example:true}:{})};
     if(preset&&preset.receiptId)base.receiptId=preset.receiptId;
-    const dd={...(doc?strip(doc):{}),...base,kind,number:num,due:cred?'':$('#dDue',f).value,...docRecord(c),created:doc?.created||Date.now()};
+    const dd={...(doc?strip(doc):{}),...base,kind,number:num,due:cred||sr?'':$('#dDue',f).value,...docRecord(c),created:doc?.created||Date.now()};
+    if(sr)dd.depositTo=dep;
     if(cred)dd.applied=applied;
-    if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:kind,ref:num,docId:id,lines,created:dd.created}}]))return;
+    if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:sr?'salesreceipt':kind,ref:num,docId:id,lines,created:dd.created}}]))return;
     closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(L.saved);
   };
 }

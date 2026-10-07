@@ -38,7 +38,7 @@ function estimateForm(x){
     `${delBtn(!!x)}${x?'<button type="button" class="btn ghost" data-estpdf>PDF</button><button type="button" class="btn ghost" data-estmail>Email</button>':''}<button type="button" class="btn" data-close>Cancel</button>${!done&&!(x&&x.status==='declined')?'<button type="button" class="btn" data-estmakehere>Save and make invoice</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'eC');
   const filter=DOC_ACCT_FILTER(true);
-  const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:'Income account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:'Rate',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
+  const cols=[...itemCol(true,()=>!!contact($('#eC',f).value)?.taxCode),{key:'desc',label:'Description',type:'text'},{key:'account',label:'Income account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:'Rate',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
   cols.defaults=()=>({qty:1,taxCode:contact($('#eC',f).value)?.taxCode||'std',account:defA});
   const le=lineEditor($('[data-le]',f),cols,d.lines,r=>setTotals(f,calcLines(r,x=>(+x.qty||0)*(+x.rate||0),false)));
   const save=async()=>{f.err('');
@@ -67,7 +67,7 @@ function estMail(x){
 function estOpenInvoice(id){const d=S.docs.find(y=>y.id===id);if(d){docForm('invoice',d);addExtras('docs',d.id)}}
 /** Open a new invoice filled in from the estimate; saving it links the two. */
 function estToInvoice(x){
-  docForm('invoice',null,{contactId:x.contactId,memo:x.memo||'',lines:x.lines.map(l=>({desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode})),
+  docForm('invoice',null,{contactId:x.contactId,memo:x.memo||'',lines:x.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode})),
     note:`<div class="banner" style="margin:0"><span>From estimate</span> <b class="mono">${esc(x.number||'')}</b><span>. Check the lines, then save the invoice.</span></div>`,
     onSaved:async id=>{const cur=S.estimates.find(y=>y.id===x.id)||x;await put('estimates',x.id,{...strip(cur),status:'accepted',invoiceId:id});toast('Invoice saved and linked to the estimate')}});
 }
@@ -108,7 +108,7 @@ function recurringForm(r,kind,preset){
     ${r&&r.made?`<div class="muted" style="font-size:13px"><span>Made so far:</span> ${r.made}${r.last?` · <span>last on</span> ${fmtDate(r.last)}`:''}</div>`:''}`,
     saveFoot(!!r),'wide');
   wireContactSelect(f,'rcC');
-  const cols=[{key:'desc',label:'Description',type:'text'},{key:'account',label:inv?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:inv?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:x=>r2((+x.qty||0)*(+x.rate||0))}];
+  const cols=[...itemCol(inv,()=>!!contact($('#rcC',f).value)?.taxCode),{key:'desc',label:'Description',type:'text'},{key:'account',label:inv?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:inv?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:x=>r2((+x.qty||0)*(+x.rate||0))}];
   cols.defaults=()=>({qty:1,taxCode:contact($('#rcC',f).value)?.taxCode||'std',account:defA});
   const le=lineEditor($('[data-le]',f),cols,d.lines.map(l=>({...l,taxCode:taxCodeOf(l)})),rows=>setTotals(f,calcLines(rows,x=>(+x.qty||0)*(+x.rate||0),!inv)));
   const em=$('[data-rcemail]',f),syncMode=()=>{if(em)em.hidden=$('#rcMode',f).value==='remind'};$('#rcMode',f).onchange=syncMode;syncMode();
@@ -124,7 +124,7 @@ function recurringForm(r,kind,preset){
     const id=r?r.id:uid(),terms=$('#rcTerms',f).value;
     const data={...(r?strip(r):{made:0,created:Date.now()}),kind,name,contactId:cid,every:$('#rcEvery',f).value,n:Math.max(1,Math.min(12,parseInt($('#rcN',f).value)||1)),next,end,
       day:(r?r.next===next&&r.day:d.next===next&&d.day)||pd(next).getDate(),terms:terms===''?'':Math.max(0,parseInt(terms)||0),mode:$('#rcMode',f).value,email:inv&&!!$('#rcEmail',f)?.checked,active:r?$('#rcActive',f).checked:true,
-      memo:$('#rcMemo',f).value.trim(),lines:c.ls.map(l=>({desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode}))};
+      memo:$('#rcMemo',f).value.trim(),lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode}))};
     if(!await put('recurring',id,data))return;
     closeModal();toast(r?'Recurring transaction saved':`Saved. The first one is made on ${fmtDate(next)}.`);
     if(next<=today()&&data.mode==='auto')recRunDue();

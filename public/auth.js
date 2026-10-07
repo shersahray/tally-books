@@ -335,8 +335,18 @@ function showLink(u,token,kind,o={}){
   const f=openModal(invite?'Invitation link':'Password reset link',`
     <div class="muted">Send this link to <b>${esc(u.name)}</b> yourself, for example by email. Anyone with the link can set the password, so send it only to them. It works once and expires in ${invite?'7 days':'24 hours'}.</div>
     <div class="linkbox mono">${esc(url)}</div>
+    <div data-lsend></div>
     <div class="actions" style="justify-content:flex-start"><button type="button" class="btn sm" data-lcopy>Copy link</button><button type="button" class="btn sm" data-mcopy>Copy email text</button><a class="btn sm" href="mailto:${encodeURIComponent(u.username.includes('@')?u.username:'')}?subject=${encodeURIComponent(T(invite?'Your Sumlora account':'Reset your Sumlora password'))}&body=${encodeURIComponent(mail)}">Open in email</a></div>`,
     `<button type="button" class="btn primary" data-close>Done</button>`);
+  // Sent for you from the server's mailbox, when the administrator has set one up and the username is an email.
+  const subj=T(invite?'Your Sumlora account':'Reset your Sumlora password');
+  (async()=>{const box=$('[data-lsend]',f);if(!box)return;const sm=await loadSysMail();if(!$('[data-lsend]',f))return;
+    if(!/@/.test(u.username)){box.innerHTML='';return}
+    if(!sm||!sm.configured){box.innerHTML=ME&&ME.platformAdmin?'<div class="muted" style="font-size:12.5px">Set up invitation email under Firms to send these for you.</div>':'';return}
+    box.innerHTML=`<div class="banner" style="margin:0"><span><span>Send it to</span> <b translate="no">${esc(u.username)}</b> <span>now, from Sumlora.</span></span><button type="button" class="btn sm primary" data-lsendgo>Send by email</button></div>`;
+    $('[data-lsendgo]',box).onclick=async ev=>{const b=ev.target;b.disabled=true;b.textContent=T('Sending…');
+      try{await api('POST',`/api/users/${encodeURIComponent(u.id)}/email-link`,{token,subject:subj,text:mail});box.innerHTML=`<div class="banner" style="margin:0"><span><span class="pill paid">Sent</span> <span>Emailed to</span> <b translate="no">${esc(u.username)}</b>.</span></div>`;toast(`Emailed to ${u.username}`)}
+      catch(e){b.disabled=false;b.textContent=T('Send by email');toast(e.message,true)}}})();
   $('[data-lcopy]',f).onclick=async()=>{try{await navigator.clipboard.writeText(url);toast('Link copied')}catch(e){toast('Select the link and copy it instead.',true)}};
   $('[data-mcopy]',f).onclick=async()=>{try{await navigator.clipboard.writeText(mail);toast('Email text copied')}catch(e){toast('Select the text and copy it instead.',true)}};
 }
@@ -399,7 +409,7 @@ function firmNameForm(){
 
 /* ---------- Firms on this server (the server's administrators) ---------- */
 let FIRMS=null;
-async function showFirms(){S.view='firms';FIRMS=null;renderMain();try{FIRMS=await api('GET','/api/firms');if(typeof loadBillingAdmin==='function')await loadBillingAdmin()}catch(e){toast(e.message,true)}if(S.view==='firms')renderMain()}
+async function showFirms(){S.view='firms';FIRMS=null;renderMain();try{await loadSysMail(true);FIRMS=await api('GET','/api/firms');if(typeof loadBillingAdmin==='function')await loadBillingAdmin()}catch(e){toast(e.message,true)}if(S.view==='firms')renderMain()}
 const FIRM_STATUS={active:['paid','Active'],pending:['partial','Waiting for approval'],suspended:['overdue','Suspended']};
 function vFirms(){
   if(!ME||!ME.platformAdmin)return head('Firms','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Only the server’s administrator manages firms.</div></div>';
@@ -407,7 +417,7 @@ function vFirms(){
   const list=FIRMS.firms.slice().sort((a,b)=>(a.status==='pending'?0:1)-(b.status==='pending'?0:1)||b.created-a.created);
   const pending=list.filter(f=>f.status==='pending').length;
   return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Firms','Bookkeeping firms using this server. Each firm sees only its own people and companies.',`<button class="btn primary" data-firminvite>+ Invite a firm</button>`)+
-  (typeof billingAdminPanel==='function'?billingAdminPanel():'')+
+  (typeof billingAdminPanel==='function'?billingAdminPanel():'')+sysMailPanel()+
   `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>New firms</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="field"><label for="fmSignups">Can new firms sign up from the sign-in screen?</label><select id="fmSignups">${[['off','No: only people you invite can sign in'],['approval','Yes, after I approve each one'],['open','Yes, straight away']].map(([k,v])=>`<option value="${k}" ${FIRMS.signups===k?'selected':''}>${v}</option>`).join('')}</select></div>
     <div class="field"><label for="fmDefPlan">Plan for firms that sign up</label><select id="fmDefPlan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${FIRMS.defaultPlan===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select><span class="hint">You can change each firm’s plan in the table below.</span></div>
@@ -425,6 +435,7 @@ function bindFirms(m){
   m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
     if(b.hasAttribute('data-back-co'))return showCompanies();
     if(b.hasAttribute('data-firminvite'))return inviteFirmForm(showFirms);
+    if(b.dataset.sysmail)return sysMailAction(b.dataset.sysmail);
     if(typeof billingAdminAction==='function'&&await billingAdminAction(b))return;
     if(b.dataset.firmdel){const f=FIRMS.firms.find(x=>x.id===b.dataset.firmdel);if(!await confirmBox('Remove this firm?',`${f.name}: the firm and its ${f.users} account${f.users===1?'':'s'} are removed, and their emails can be used again. It has no companies, so no books are lost.`,'Remove'))return;
       try{await api('DELETE','/api/firms/'+encodeURIComponent(f.id));await showFirms();toast(`${f.name} removed`)}catch(ex){toast(ex.message,true)}return}
@@ -437,4 +448,33 @@ function bindFirms(m){
     if(t.id==='fmSignups'){try{await api('PUT','/api/firms/settings',{signups:t.value});await showFirms();toast('Saved')}catch(ex){toast(ex.message,true)}return}
     if(t.dataset.firmcap){try{await api('PUT','/api/firms/'+encodeURIComponent(t.dataset.firmcap),{aiCapUsd:+t.value});toast('Monthly AI limit saved')}catch(ex){toast(ex.message,true)}return}
     if(t.dataset.firmai){try{await api('PUT','/api/firms/'+encodeURIComponent(t.dataset.firmai),{ai:t.checked});toast(t.checked?'AI suggestions turned on for this firm':'AI suggestions turned off for this firm')}catch(ex){t.checked=!t.checked;toast(ex.message,true)}}};
+}
+
+/* ---------- Invitation email: the server's own mailbox (administrators) ---------- */
+let SYSMAIL=null;
+async function loadSysMail(force){if(SYSMAIL&&!force)return SYSMAIL;try{SYSMAIL=await api('GET','/api/sysmail')}catch(e){SYSMAIL=null}return SYSMAIL}
+function sysMailPanel(){
+  const m=SYSMAIL;if(!m||!m.admin)return '';
+  return `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>Invitation email</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
+    <div class="muted" style="font-size:13px">Sumlora emails invitation and password reset links from this mailbox, for every firm on your server. Replies go to the person who sent the invitation. The password stays on the server and is never shown again.</div>
+    <div>${m.configured?`<span class="pill paid">On</span> <span>Sending from</span> <b translate="no">${esc(m.fromEmail)}</b>`:'<span class="pill partial">Not set up</span> <span class="muted">Invitations show a link to copy and send yourself.</span>'}</div>
+    <div class="actions" style="justify-content:flex-start"><button class="btn sm ${m.configured?'':'primary'}" data-sysmail="edit">${m.configured?'Change mailbox':'Set up mailbox'}</button>${m.configured?'<button class="btn sm" data-sysmail="test">Send a test</button><button class="btn sm ghost" data-sysmail="off">Turn off</button>':''}</div></div></div>`;
+}
+async function sysMailAction(a){
+  if(a==='test'){try{await api('POST','/api/sysmail/test',{});toast(`Test sent to ${SYSMAIL.fromEmail}`)}catch(e){toast(e.message,true)}return}
+  if(a==='off'){if(!await confirmBox('Turn off invitation email?','Invitations will show a link to copy and send yourself again.','Turn off'))return;try{SYSMAIL=await api('PUT','/api/sysmail',{remove:true});await loadSysMail(true);renderMain();toast('Invitation email is off')}catch(e){toast(e.message,true)}return}
+  const m=SYSMAIL||{},preset=Object.entries(MAIL_PRESETS).find(([k,p])=>p.host&&p.host===m.host)?.[0]||(m.configured?'other':'gmail');
+  const f=openModal('Invitation email',`<div class="muted" style="margin-bottom:8px">Use a mailbox you keep for this, such as noreply@ or accounts@ your domain.</div><div class="fields">
+    ${fld('smPre','Email provider',`<select id="smPre">${Object.entries(MAIL_PRESETS).map(([k,p])=>`<option value="${k}" ${k===preset?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select><span class="hint" data-smhelp>${esc(T(MAIL_PRESETS[preset].help))}</span>`,true)}
+    ${fld('smUser','Email address',`<input type="email" id="smUser" value="${esc(m.user||'')}" autocomplete="off" translate="no">`)}
+    ${fld('smPass',m.configured?'New password (leave blank to keep)':'Password or app password',`<input type="password" id="smPass" autocomplete="new-password">`)}
+    ${fld('smName','Name people see',`<input type="text" id="smName" value="${esc(m.fromName||'Sumlora')}">`)}
+    ${fld('smHost','Outgoing mail server',`<input type="text" id="smHost" value="${esc(m.host||MAIL_PRESETS[preset].host)}" translate="no">`)}
+    ${fld('smPort','Port',`<input type="number" id="smPort" value="${esc(m.port||MAIL_PRESETS[preset].port)}">`)}
+    ${fld('smSec','Security',`<select id="smSec">${[['ssl','SSL'],['starttls','STARTTLS']].map(([k,v])=>`<option value="${k}" ${(m.security||MAIL_PRESETS[preset].security)===k?'selected':''}>${v}</option>`).join('')}</select>`)}
+    </div>`,`<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`);
+  $('#smPre',f).onchange=e=>{const p=MAIL_PRESETS[e.target.value];$('[data-smhelp]',f).textContent=T(p.help);if(p.host){$('#smHost',f).value=p.host;$('#smPort',f).value=p.port;$('#smSec',f).value=p.security}};
+  f.onsubmit=async e=>{e.preventDefault();f.err('');const user=$('#smUser',f).value.trim();
+    try{await api('PUT','/api/sysmail',{host:$('#smHost',f).value.trim(),port:+$('#smPort',f).value,security:$('#smSec',f).value,user,fromEmail:user,fromName:$('#smName',f).value.trim(),pass:$('#smPass',f).value});await loadSysMail(true);closeModal();renderMain();toast('Saved. Send a test to check it.')}
+    catch(ex){f.err(ex.message)}};
 }

@@ -163,7 +163,7 @@ function reviewItems(){
   const noAcct=S.entries.filter(e=>(e.lines||[]).some(l=>!acct(l.account)));
   // Possible duplicates: same kind, same amount and same payee (or memo), within 3 days.
   const dismissed=new Set(S.company.notDuplicates||[]),groups={};
-  const kindOf=e=>({invoice:'sale',deposit:'sale',payment:'in',bill:'buy',expense:'buy',billpayment:'out'})[e.type];
+  const kindOf=e=>({invoice:'sale',salesreceipt:'sale',deposit:'sale',payment:'in',bill:'buy',expense:'buy',billpayment:'out'})[e.type];
   for(const e of S.entries){const k=kindOf(e);if(!k)continue;const key=`${k}|${r2(entryTotal(e))}|${e.contactId||String(e.memo||'').toLowerCase().trim()}`;(groups[key]=groups[key]||[]).push(e)}
   const dups=[];
   for(const g of Object.values(groups)){if(g.length<2)continue;g.sort((a,b)=>a.date.localeCompare(b.date));
