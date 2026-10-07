@@ -16,10 +16,14 @@
     ai: { label: 'AI suggestions', desc: 'Categories for bank lines and receipts read by AI' },
     advancedReports: { label: 'Advanced reports', desc: 'Comparisons by period, cash flow statement, saved reports, report packages and the working trial balance' },
     specialTax: { label: 'Special sales tax methods', desc: 'Quick Method, and the net tax calculation and rebates for charities and non-profits' },
+    projects: { label: 'Projects and time', desc: 'Projects with their income, costs and profit; time tracking billed to customers' },
+    inventory: { label: 'Inventory', desc: 'Quantities on hand, average cost, cost of goods sold posted on each sale' },
+    multiCurrency: { label: 'Multi-currency', desc: 'Customers, vendors and bank accounts in US dollars and other currencies, with exchange gains and losses' },
+    fixedAssets: { label: 'Fixed assets and CCA', desc: 'Asset register, amortization entries and the capital cost allowance schedule' },
   };
   const PLANS = {
     essentials: { label: 'Essentials', features: [] },
-    plus: { label: 'Plus', features: ['payroll', 'ai', 'advancedReports', 'specialTax'] },
+    plus: { label: 'Plus', features: ['payroll', 'ai', 'advancedReports', 'specialTax', 'projects', 'inventory', 'multiCurrency', 'fixedAssets'] },
   };
   const planOf = p => (PLANS[p] ? p : 'plus');
   /** Does the firm's plan include this feature? */

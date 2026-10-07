@@ -267,8 +267,8 @@ function reportsPdf(reports,{cover}={}){
   for(let i=0;i<pages;i++){doc.goto(i);doc.text(W0-M,H0-24,`${i+1} / ${pages}`,{size:8,align:'right',color:'#888888'})}
   return doc.output();
 }
-const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor',bva:()=>'Budget vs actual'};
-function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
+const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor',bva:()=>'Budget vs actual',iv:()=>'Inventory valuation'};
+function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
 
 /* ---------- report package: several reports for a period, as one PDF ---------- */
 function packageForm(){

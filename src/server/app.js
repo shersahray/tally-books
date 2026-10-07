@@ -112,6 +112,24 @@ function createApp(opts) {
   const chargeFirm = (cid, usd) => { const c = reg.get(cid); if (c) ai.addFirmUsage(c.firmId, usd); };
   /* ---------- Paying for Sumlora (online server; nothing changes until the administrator adds a Stripe key) ---------- */
   const billing = new Billing(opts.licenceDir || opts.dataDir, { fetch: opts.billingFetch });
+  /* Bank of Canada exchange rates, cached for a day (past dates don't change). */
+  const fxCache = new Map();
+  async function fxRate(cur, date) {
+    const k = cur + '|' + date, hit = fxCache.get(k);
+    if (hit && (hit.final || Date.now() - hit.at < 3600e3)) return hit.v;
+    const start = new Date(Date.parse(date + 'T12:00:00Z') - 10 * 864e5).toISOString().slice(0, 10);
+    const url = `https://www.bankofcanada.ca/valet/observations/FX${cur}CAD/json?start_date=${start}&end_date=${date}`;
+    let j;
+    try { const r = await (opts.fxFetch || fetch)(url, { headers: { Accept: 'application/json' } }); if (r.status === 404) throw Object.assign(new Error('nf'), { nf: true }); if (!r.ok) throw new Error('http ' + r.status); j = await r.json(); }
+    catch (e) { throw new ValidationError(e.nf ? `The Bank of Canada doesn’t publish a rate for ${cur}. Enter the rate yourself.` : 'The Bank of Canada couldn’t be reached. Enter the rate yourself, or try again.', 502); }
+    const obs = (j.observations || []).filter(o => o.d <= date && o['FX' + cur + 'CAD'] && o['FX' + cur + 'CAD'].v).sort((a, b) => a.d.localeCompare(b.d));
+    const last = obs[obs.length - 1];
+    if (!last) throw new ValidationError(`No Bank of Canada rate for ${cur} around that date. Enter the rate yourself.`, 404);
+    const v = { cur, date: last.d, rate: Number(last['FX' + cur + 'CAD'].v), source: 'Bank of Canada' };
+    fxCache.set(k, { v, at: Date.now(), final: last.d === date || date < new Date().toISOString().slice(0, 10) });
+    if (fxCache.size > 5000) fxCache.clear();
+    return v;
+  }
   /* The server's own mailbox, for invitation and password reset emails (set by the administrator).
      Kept in sysmail.json next to the server's other private settings, readable only by the server's account. */
   const sysMailFile = path.join(opts.licenceDir || opts.dataDir, 'sysmail.json');
@@ -389,7 +407,8 @@ function createApp(opts) {
     // Credits count on both sides: used on an invoice or bill, and as used up on the credit itself.
     for (const c of docs) for (const a of c.applied || []) { paid[a.docId] = (paid[a.docId] || 0) + (Number(a.amount) || 0); paid[c.id] = (paid[c.id] || 0) + (Number(a.amount) || 0); }
     for (const d of docs) {
-      const bal = Math.round(((Number(d.total) || 0) - (paid[d.id] || 0)) * 100) / 100;
+      if (d.kind === 'sreceipt') continue;
+      const bal = Math.round(((Number(d.total) || 0) - (paid[d.id] || 0)) * (Number(d.fx) || 1) * 100) / 100; // in Canadian dollars
       if (bal <= 0.004) continue;
       if (d.kind === 'invoice') {
         receivable += bal;
@@ -476,6 +495,9 @@ function createApp(opts) {
     if (ctx && op === 'set') {
       const d = w.data || {};
       if (collection === 'employees' || collection === 'payruns' || (collection === 'entries' && ['payrun', 'payremit'].includes(d.type))) needFeature(ctx.id, 'payroll', store);
+      if (collection === 'projects' || collection === 'times') needFeature(ctx.id, 'projects', store);
+      if (collection === 'assets') needFeature(ctx.id, 'fixedAssets', store);
+      if (collection === 'items' && d.type === 'inventory') needFeature(ctx.id, 'inventory', store);
       if (collection === 'filings' && ['quick', 'charity', 'npo'].includes(d.method)) {
         const prev = store.get('filings', id);
         if (!(prev && prev.method === d.method)) needFeature(ctx.id, 'specialTax', store);
@@ -1252,6 +1274,7 @@ function createApp(opts) {
       const body = (await readJson(req)) || {};
       const doc = ctx.store.get('docs', String(body.docId || ''));
       if (!doc || doc.kind !== 'invoice') throw new ValidationError('Choose an invoice.');
+      if (doc.currency) throw new ValidationError('Card payment links are for invoices in Canadian dollars.', 409);
       const cents = Math.round(((Number(doc.total) || 0) - settledOn(ctx.store, doc.id)) * 100);
       if (cents < 50) throw new ValidationError('There’s nothing left to pay on this invoice.', 409);
       const cur = doc.payLink;
@@ -1710,6 +1733,13 @@ function createApp(opts) {
       return { ok: true, rev: ctx.bump(), skippedReceipts };
     }],
     // Audit log for this company (owners and staff).
+    // Exchange rates: the Bank of Canada's daily rate (Valet API), the latest on or before the date. Cached.
+    ['GET', /^\/fx$/, async (ctx, req) => {
+      const q = new URL(req.url, 'http://x').searchParams, cur = String(q.get('cur') || '').toUpperCase(), date = String(q.get('date') || '');
+      if (!/^[A-Z]{3}$/.test(cur) || cur === 'CAD') throw new ValidationError('Choose a currency other than Canadian dollars.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ValidationError('Choose a date.');
+      return fxRate(cur, date);
+    }],
     ['GET', /^\/audit$/, (ctx, req) => {
       notClient(ctx.user);
       const q = new URL(req.url, 'http://x').searchParams;

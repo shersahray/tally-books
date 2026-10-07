@@ -141,6 +141,7 @@ function recBuild(r,date,number){
   const id=recId(r,date);
   const terms=r.terms===''||r.terms==null?+S.company.terms||0:+r.terms;
   const base={date,contactId:r.contactId,memo:r.memo||''};
+  if(typeof invCosts==='function')invCosts(r.kind,c,date,id);
   const doc={...base,kind:r.kind,number,due:addDays(date,terms),...docRecord(c),recurringId:r.id,recurringNew:true,created:Date.now()};
   return{id,doc,writes:[{op:'set',collection:'docs',id,data:doc},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:r.kind,ref:number,docId:id,lines:docPostLines(r.kind,c,ctl.id),created:doc.created}}]};
 }
@@ -186,7 +187,7 @@ async function recEmail(list){
   let sent=0;
   for(const m of list){
     const d=S.docs.find(x=>x.id===m.id),ct=d&&contact(d.contactId);if(!d||!ct||!ct.email)continue;
-    try{const pay=await opLinkFor(d);const[subj,text]=templ('invoice',{name:ct.name,num:d.number||'',amount:dmoney(d.total),due:ddate(d.due),pay});
+    try{const pay=await opLinkFor(d);const[subj,text]=templ('invoice',{name:ct.name,num:d.number||'',amount:dmoneyC(d.total,d.currency),due:ddate(d.due),pay});
       await sendMail(ct.email,subj,text,await docPdf(S.docs.find(x=>x.id===d.id)||d),pdfName('invoice',d.number),[d.id],'invoice');sent++}
     catch(e){toast(`Invoice ${d.number} wasn’t emailed: ${e.message}`,true)}
   }
@@ -219,7 +220,7 @@ let PAYCFG=null,opSynced=0;
 async function opLoad(){try{PAYCFG=await api('GET','/api/pay')}catch(e){PAYCFG=null}return PAYCFG}
 /** The "Pay now" link for an invoice's balance (made or refreshed through Stripe), or '' when it can't have one. */
 async function opLinkFor(d){
-  if(!d||d.kind!=='invoice'||!PAYCFG||!PAYCFG.configured||docStatus(d).bal<0.5||(typeof ME!=='undefined'&&ME&&ME.role==='client'))return '';
+  if(!d||d.kind!=='invoice'||d.currency||!PAYCFG||!PAYCFG.configured||docStatus(d).bal<0.5||(typeof ME!=='undefined'&&ME&&ME.role==='client'))return '';
   try{const r=await api('POST','/api/pay/link',{docId:d.id});await load();return r.url||''}catch(e){toast(`No pay link: ${e.message}`,true);return ''}
 }
 /** How to pay, for the bottom of an invoice and its email: e-Transfer, and the card link. */

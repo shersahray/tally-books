@@ -9,7 +9,9 @@ const DL={
 };
 const dlang=()=>S.company.lang==='fr'?'fr':'en';
 const dl=(k,...a)=>DL[dlang()][k].replace(/\{(\d)\}/g,(m,i)=>a[i]);
-const dmoney=n=>(+n||0).toLocaleString(dlang()==='fr'?'fr-CA':'en-CA',{style:'currency',currency:'CAD'});
+let PDFCUR='';
+const dmoneyC=(n,cur)=>(+n||0).toLocaleString(dlang()==='fr'?'fr-CA':'en-CA',{style:'currency',currency:cur||'CAD'});// the currency of the document being drawn ('' = Canadian dollars)
+const dmoney=n=>(+n||0).toLocaleString(dlang()==='fr'?'fr-CA':'en-CA',{style:'currency',currency:PDFCUR||'CAD'});
 const ddate=s=>s?pd(s).toLocaleDateString(dlang()==='fr'?'fr-CA':'en-CA',{year:'numeric',month:'short',day:'numeric'}):'';
 let logoCache={id:'',bytes:null};
 async function logoBytes(){
@@ -63,7 +65,8 @@ function drawFooter(pdf,text){
 }
 
 /** An invoice, credit note or estimate (kind 'estimate') as a PDF (Uint8Array). */
-async function docPdf(doc){
+async function docPdf(doc){PDFCUR=doc.currency||'';try{return await docPdfIn(doc)}finally{PDFCUR=''}}
+async function docPdfIn(doc){
   const pdf=TallyPDF.create(),logo=await logoBytes(),cred=doc.kind==='credit',po=doc.kind==='po',est=doc.kind==='estimate'||po,sr=doc.kind==='sreceipt';
   const st=est?{bal:+doc.total||0}:docStatus(doc),paid=est?0:paidOn(doc.id);
   const meta=[[po?dl('poNo'):sr?dl('srNo'):est?dl('estNo'):cred?dl('crNo'):dl('invNo'),doc.number||''],[dl('date'),ddate(doc.date)]];
@@ -121,7 +124,8 @@ async function docPdf(doc){
   return pdf.output();
 }
 /** A customer's statement as of a date: open invoices and unused credits, with aging. */
-async function statementPdf(contactId,asOf,pdfIn){
+async function statementPdf(contactId,asOf,pdfIn){PDFCUR=typeof contactCur==='function'?contactCur(contactId):'';try{return await statementPdfIn(contactId,asOf,pdfIn)}finally{PDFCUR=''}}
+async function statementPdfIn(contactId,asOf,pdfIn){
   const pdf=pdfIn||TallyPDF.create();if(pdfIn)pdf.addPage();
   const logo=await logoBytes();
   const items=statementItems(contactId,asOf);
@@ -229,7 +233,7 @@ function bindDocActions(f,doc){
     const st=docStatus(doc),late=doc.kind==='invoice'&&st.k==='overdue';
     closeModal();
     composeMail({kind:doc.kind==='credit'?'credit':doc.kind==='sreceipt'?'sreceipt':late?'reminder':'invoice',contactId:doc.contactId,docIds:[doc.id],fileName:name,makePdf:()=>docPdf(S.docs.find(x=>x.id===doc.id)||doc),
-      vars:{name:contactName(doc.contactId),num:doc.number||'',amount:dmoney(late?st.bal:doc.total),due:ddate(doc.due)}});
+      vars:{name:contactName(doc.contactId),num:doc.number||'',amount:dmoneyC(late?st.bal:doc.total,doc.currency),due:ddate(doc.due)}});
   };
 }
 
@@ -260,7 +264,7 @@ function statementsForm(){
   const picked=()=>$$('[data-stc]',f).filter(c=>c.checked).map(c=>c.dataset.stc);
   const dl2=$('[data-stdl]',f);if(dl2)dl2.onclick=async()=>{const ids=picked();if(!ids.length)return;const d=$('#stDate',f).value||today();let pdf=null;for(const id of ids)pdf=await statementPdf(id,d,pdf);saveFile(pdfName('statement',d),new Blob([pdf.output()],{type:'application/pdf'}))};
   f.onsubmit=async e=>{e.preventDefault();const ids=picked();if(!ids.length)return;const d=$('#stDate',f).value||today();closeModal();
-    await bulkSend(ids.map(id=>{const it=statementItems(id,d);return{contactId:id,kind:'statement',fileName:pdfName('statement',d),makePdf:async()=>(await statementPdf(id,d)).output(),vars:{name:contactName(id),amount:dmoney(it.reduce((s,i)=>s+i.bal,0)),due:ddate(d),num:''}}}),'Sending')};
+    await bulkSend(ids.map(id=>{const it=statementItems(id,d);return{contactId:id,kind:'statement',fileName:pdfName('statement',d),makePdf:async()=>(await statementPdf(id,d)).output(),vars:{name:contactName(id),amount:dmoneyC(it.reduce((s,i)=>s+i.bal,0),typeof contactCur==='function'?contactCur(id):''),due:ddate(d),num:''}}}),'Sending')};
 }
 function remindersForm(){
   const late=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').sort((a,b)=>a.due.localeCompare(b.due));
@@ -269,7 +273,7 @@ function remindersForm(){
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Send reminders</button>`,'wide');
   const all=$('[data-rmall]',f);all.onchange=()=>$$('[data-rmd]',f).forEach(c=>c.checked=all.checked);
   f.onsubmit=async e=>{e.preventDefault();const ids=$$('[data-rmd]',f).filter(c=>c.checked).map(c=>c.dataset.rmd);if(!ids.length)return;closeModal();
-    await bulkSend(ids.map(id=>{const d=S.docs.find(x=>x.id===id);return{contactId:d.contactId,kind:'reminder',docIds:[d.id],fileName:pdfName('invoice',d.number),makePdf:()=>docPdf(d),vars:{name:contactName(d.contactId),num:d.number||'',amount:dmoney(docStatus(d).bal),due:ddate(d.due)}}}),'Sending')};
+    await bulkSend(ids.map(id=>{const d=S.docs.find(x=>x.id===id);return{contactId:d.contactId,kind:'reminder',docIds:[d.id],fileName:pdfName('invoice',d.number),makePdf:()=>docPdf(d),vars:{name:contactName(d.contactId),num:d.number||'',amount:dmoneyC(docStatus(d).bal,d.currency),due:ddate(d.due)}}}),'Sending')};
 }
 
 /* ---------- Settings: invoice details and email ---------- */

@@ -10,7 +10,9 @@ S.bank={tab:'review',acct:'',show:'new',sel:{},checked:new Set(),rec:null,draft:
 const isBankAcct=a=>!!a&&(a.detail==='bank'||a.detail==='card');
 const bankAccts=()=>sortAccts(S.accounts.filter(a=>isBankAcct(a)&&a.active!==false));
 function curBankAcct(){const a=acct(S.bank.acct);if(!isBankAcct(a))S.bank.acct=(bankAccts()[0]||{}).id||'';return S.bank.acct}
-const signedOn=(e,id)=>r2((e.lines||[]).filter(l=>l.account===id).reduce((s,l)=>s+(+l.debit||0)-(+l.credit||0),0));
+// On an account in another currency, a line's effect is its foreign amount (l.fx), so matching and reconciling use the bank's own numbers.
+const signedOn=(e,id)=>{const fx=!!(acct(id)||{}).currency;return r2((e.lines||[]).filter(l=>l.account===id).reduce((s,l)=>s+(fx&&l.fx&&l.fx.amt!=null?((+l.debit||0)>0?+l.fx.amt:-l.fx.amt):(+l.debit||0)-(+l.credit||0)),0))};
+const bankMoney=(a,n)=>a&&a.currency&&typeof moneyC==='function'?moneyC(n,a.currency):money(n);
 const natural=(a,v)=>r2(a.detail==='card'?-v:v); // card balances are shown as the amount owed
 const linkedEntryIds=()=>new Set(S.bankTxns.filter(b=>b.status==='added'||b.status==='matched').map(b=>b.entryId));
 const keyWords=d=>String(d||'').toUpperCase().replace(/[^A-Z ]+/g,' ').split(/\s+/).filter(w=>w.length>1).slice(0,2).join(' ');
@@ -57,7 +59,7 @@ function vBanking(){
   if(!accts.length)return h+`<div class="panel"><div class="empty"><b>No bank or credit card accounts</b>Add the client’s chequing, savings or credit card account to start.<div style="margin-top:14px"><button class="btn primary" data-bact="new-bank">+ Bank or card account</button></div></div></div>`;
   const a=acct(curBankAcct());
   h+=`<div class="acct-cards">${accts.map(x=>{const n=S.bankTxns.filter(b=>b.account===x.id&&b.status==='new').length,last=lastRecon(x.id);
-    return `<button class="acct-card" data-bacct="${x.id}" aria-pressed="${x.id===a.id}"><b>${esc(x.name)}</b><span class="val">${mcell(bal(x.id))}</span><span class="sub">${n?`<b style="color:var(--info)">${n} to review</b>`:'Nothing to review'} · ${last?`reconciled to ${fmtDate(last.statementDate)}`:'not reconciled yet'}</span></button>`}).join('')}</div>`;
+    return `<button class="acct-card" data-bacct="${x.id}" aria-pressed="${x.id===a.id}"><b>${esc(x.name)}${x.currency?` <span class="pill quiet">${esc(x.currency)}</span>`:''}</b><span class="val">${x.currency?`${bankMoney(x,natural(x,acctFxBal(x.id)))} <span class="muted" style="font-size:12px;font-weight:400">${money(bal(x.id))} CAD</span>`:mcell(bal(x.id))}</span><span class="sub">${n?`<b style="color:var(--info)">${n} to review</b>`:'Nothing to review'} · ${last?`reconciled to ${fmtDate(last.statementDate)}`:'not reconciled yet'}</span></button>`}).join('')}</div>`;
   h+=`<div class="tabs" role="tablist">${[['review','For review'],['reconcile','Reconcile'],['rules','Rules']].map(([k,v])=>`<button role="tab" data-btab="${k}" aria-selected="${B.tab===k}">${v}</button>`).join('')}</div>`;
   return h+({review:vReview,reconcile:vReconcile,rules:vRules})[B.tab](a);
 }
@@ -87,7 +89,7 @@ function reviewRow(b){
   // Companies with PST pick between GST and PST, GST only, or no tax.
   const tax=isMatch||transfer||!(+S.company.taxRate)?'':pstOn()?`<select data-btax="${b.id}" aria-label="Sales tax included" style="max-width:130px">${[['','No tax'],['std',S.company.taxName],['gst','GST only']].map(([k,v])=>`<option value="${k}" ${(sel.tax==='gst'?'gst':sel.tax?'std':'')===k?'selected':''}>${esc(v)}</option>`).join('')}</select>`:`<input type="checkbox" data-btax="${b.id}" ${sel.tax?'checked':''} aria-label="Amount includes ${esc(S.company.taxName)}" title="Amount includes ${esc(S.company.taxName)}">`;
   const chk=S.bank.checked.has(b.id);
-  return `<tr data-brow="${b.id}" class="${chk?'picked':''}"><td><input type="checkbox" data-bcheck="${b.id}" ${chk?'checked':''} aria-label="Select line"></td><td style="white-space:nowrap">${fmtDate(b.date)}</td><td class="desc"><div title="${esc(b.desc)}">${esc(b.desc||'(no description)')}</div>${hint}</td><td class="n">${b.amount<0?money(-b.amount):''}</td><td class="n">${b.amount>0?money(b.amount):''}</td><td>${cat}</td><td>${payee}</td><td style="text-align:center">${tax}</td><td><div class="acts"><button class="btn sm primary" data-badd="${b.id}" ${sel.choice?'':'disabled'}>${isMatch?'Match':'Add'}</button><button class="btn sm ghost" data-bsplit="${b.id}" title="Split this line across several categories">Split</button><button class="btn sm ghost" data-bexclude="${b.id}">Exclude</button><button class="btn sm ghost" data-brule="${b.id}" title="Make a rule from this line">Rule</button></div></td></tr>`;
+  return `<tr data-brow="${b.id}" class="${chk?'picked':''}"><td><input type="checkbox" data-bcheck="${b.id}" ${chk?'checked':''} aria-label="Select line"></td><td style="white-space:nowrap">${fmtDate(b.date)}</td><td class="desc"><div title="${esc(b.desc)}">${esc(b.desc||'(no description)')}</div>${hint}</td><td class="n">${b.amount<0?bankMoney(acct(b.account),-b.amount):''}</td><td class="n">${b.amount>0?bankMoney(acct(b.account),b.amount):''}</td><td>${cat}</td><td>${payee}</td><td style="text-align:center">${tax}</td><td><div class="acts"><button class="btn sm primary" data-badd="${b.id}" ${sel.choice?'':'disabled'}>${isMatch?'Match':'Add'}</button><button class="btn sm ghost" data-bsplit="${b.id}" title="Split this line across several categories">Split</button><button class="btn sm ghost" data-bexclude="${b.id}">Exclude</button><button class="btn sm ghost" data-brule="${b.id}" title="Make a rule from this line">Rule</button></div></td></tr>`;
 }
 
 function vRules(){
@@ -135,7 +137,11 @@ function vReconcile(a){
 
 /* ---------- actions ---------- */
 function buildWrites(b,sel){
-  const a=acct(b.account),amt=Math.abs(b.amount),into=b.amount>0;
+  const a=acct(b.account),fa=Math.abs(b.amount),into=b.amount>0;
+  // A bank account in another currency: the line is in that currency; the books get Canadian dollars at the day's rate.
+  const cur=a.currency||'',fxr=cur?cachedRate(cur,b.date):1;
+  if(cur&&!(fxr>0))throw new Error(`No ${cur} exchange rate for ${fmtDate(b.date)}. Try again, or add it as an expense or deposit and type the rate.`);
+  const amt=cur?r2(fa*fxr):fa,bfx=cur?{fx:{cur,amt:fa}}:{};
   if(sel.choice.startsWith('m:entry:')){
     const e=S.entries.find(x=>x.id===sel.choice.slice(8));if(!e)throw new Error('That transaction no longer exists.');
     return[{op:'set',collection:'entries',id:e.id,data:{...e,clear:{...(e.clear||{}),[a.id]:'c'}}},{op:'set',collection:'bankTxns',id:b.id,data:{...b,status:'matched',entryId:e.id,made:false}}];
@@ -143,16 +149,20 @@ function buildWrites(b,sel){
   if(sel.choice.startsWith('m:doc:')){
     const d=S.docs.find(x=>x.id===sel.choice.slice(6));if(!d)throw new Error('That invoice or bill no longer exists.');
     const recv=d.kind==='invoice',ctl=byDetail(recv?'ar':'ap');if(!ctl)throw new Error(`Add an ${recv?'Accounts receivable':'Accounts payable'} account first.`);
-    const id=uid();
-    const lines=recv?[{account:a.id,debit:amt,credit:0},{account:ctl.id,debit:0,credit:amt}]:[{account:ctl.id,debit:amt,credit:0},{account:a.id,debit:0,credit:amt}];
-    return[{op:'set',collection:'entries',id,data:{type:recv?'payment':'billpayment',date:b.date,ref:'',memo:`${recv?'Payment for invoice':'Payment of bill'}${d.number?' #'+d.number:''}`,contactId:d.contactId,applyTo:d.id,amount:amt,bank:a.id,lines,clear:{[a.id]:'c'},created:Date.now()}},
+    if((d.currency||'')!==cur)throw new Error(`That ${recv?'invoice':'bill'} is in ${d.currency||'CAD'}. Record the payment from Sales or Expenses.`);
+    const id=uid(),w=[],book=r2(fa*(+d.fx||1)),g=recv?r2(amt-book):r2(book-amt);
+    const lines=recv?[{account:a.id,debit:amt,credit:0,...bfx},{account:ctl.id,debit:0,credit:book}]:[{account:ctl.id,debit:book,credit:0},{account:a.id,debit:0,credit:amt,...bfx}];
+    if(g){const xa=fxAccount(w);lines.push(g>0?{account:xa,debit:0,credit:g,memo:'Exchange gain'}:{account:xa,debit:-g,credit:0,memo:'Exchange loss'})}
+    return[...w,{op:'set',collection:'entries',id,data:{type:recv?'payment':'billpayment',date:b.date,ref:'',memo:`${recv?'Payment for invoice':'Payment of bill'}${d.number?' #'+d.number:''}`,contactId:d.contactId,applyTo:d.id,amount:fa,bank:a.id,lines,clear:{[a.id]:'c'},...(cur?{currency:cur,fx:fxr,cad:amt}:{}),created:Date.now()}},
       {op:'set',collection:'bankTxns',id:b.id,data:{...b,status:'matched',entryId:id,made:true}}];
   }
   const cat=acct(sel.choice.slice(2));if(!cat)throw new Error('Choose a category first.');
   const id=uid();let entry;
   if(isBankAcct(cat)){
-    entry={type:'transfer',date:b.date,ref:'',memo:b.desc,form:into?{from:cat.id,to:a.id,amount:amt}:{from:a.id,to:cat.id,amount:amt},
-      lines:into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:amt}]:[{account:cat.id,debit:amt,credit:0},{account:a.id,debit:0,credit:amt}]};
+    if(cat.currency&&cat.currency!==cur)throw new Error(`${cat.name} is in ${cat.currency}. Record this transfer from + New → Transfer with both amounts.`);
+    const ofx=cat.currency?{fx:{cur:cat.currency,amt:fa}}:{};
+    entry={type:'transfer',date:b.date,ref:'',memo:b.desc,form:into?{from:cat.id,to:a.id,amount:fa}:{from:a.id,to:cat.id,amount:fa},...(cur?{fx:fxr}:{}),
+      lines:into?[{account:a.id,debit:amt,credit:0,...bfx},{account:cat.id,debit:0,credit:amt,...ofx}]:[{account:cat.id,debit:amt,credit:0,...ofx},{account:a.id,debit:0,credit:amt,...bfx}]};
   }else{
     // "gst": GST only, on a company that also charges PST.
     const gstOnly=sel.tax==='gst'&&pstOn(),rate=gstOnly?r2((+S.company.taxRate||0)-(+S.company.pstRate||0)):+S.company.taxRate||0,useTax=!!sel.tax&&rate>0;
@@ -163,16 +173,18 @@ function buildWrites(b,sel){
     if(parts.some(p=>!p.account))throw new Error(`Add a “${parts.find(p=>!p.account).name} payable” account first.`);
     const tax=r2(parts.reduce((s,p)=>s+p.amount,0));
     const code=useTax?(gstOnly?'gst':'std'):'none';
-    const lines=into?[{account:a.id,debit:amt,credit:0},{account:cat.id,debit:0,credit:net,taxCode:code}]:[{account:cat.id,debit:net,credit:0,taxCode:code}];
+    const lines=into?[{account:a.id,debit:amt,credit:0,...bfx},{account:cat.id,debit:0,credit:net,taxCode:code}]:[{account:cat.id,debit:net,credit:0,taxCode:code}];
     parts.forEach(p=>lines.push(into?{account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}:{account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));
-    if(!into)lines.push({account:a.id,debit:0,credit:amt});
-    entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:sel.contactId||'',form:{bank:a.id,lines:[{account:cat.id,desc:b.desc,amount:pre,taxCode:code,tax:!!tax}]},lines};
+    if(!into)lines.push({account:a.id,debit:0,credit:amt,...bfx});
+    entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:sel.contactId||'',form:{bank:a.id,lines:[{account:cat.id,desc:b.desc,amount:cur?r2(pre/fxr):pre,taxCode:code,tax:!!tax}]},...(cur?{currency:cur,fx:fxr}:{}),lines};
   }
   entry.clear={[a.id]:'c'};entry.created=Date.now();
   return[{op:'set',collection:'entries',id,data:entry},{op:'set',collection:'bankTxns',id:b.id,data:{...b,status:'added',entryId:id,made:true,cat:{account:cat.id,contactId:sel.contactId||'',tax:sel.tax==='gst'?'gst':!!sel.tax}}}];
 }
 async function addLines(ids){
   const writes=[],used=new Set();let n=0,skipped=0;
+  // Accounts in another currency: get each day's rate first.
+  for(const id of ids){const b=S.bankTxns.find(x=>x.id===id),a=b&&acct(b.account);if(a&&a.currency&&!cachedRate(a.currency,b.date))await getRate(a.currency,b.date)}
   for(const id of ids){
     const b=S.bankTxns.find(x=>x.id===id);if(!b||b.status!=='new')continue;
     const sel=selFor(b);
@@ -259,8 +271,11 @@ function splitForm(b){
     // Rounding: the tax worked out per part can be a cent off the bank line. Put the difference on the first part.
     const dr=r2(lines.reduce((s,l)=>s+l.debit,0)),cr=r2(lines.reduce((s,l)=>s+l.credit,0)),off=r2(dr-cr);
     if(off){const l=lines.find(x=>x.account===parts[0].r.account);if(into)l.credit=r2(l.credit+off);else l.debit=r2(l.debit-off)}
+    let fxx={};
+    if(a.currency){const r=await getRate(a.currency,b.date);if(!(r&&r.rate))return f.err(`No ${a.currency} exchange rate for that date. Add it as an expense or deposit and type the rate.`);
+      const conv=toHome(lines,r.rate,a.id);lines.length=0;lines.push(...conv);const bl=lines.find(l=>l.account===a.id);if(bl)bl.fx={cur:a.currency,amt};fxx={currency:a.currency,fx:r.rate}}
     const id=uid(),cid=$('#spPayee',f).value;
-    const entry={type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:cid,split:true,form:{bank:a.id,lines:parts.map(p=>({account:p.r.account,desc:p.r.desc||'',amount:p.pre,taxCode:p.code,tax:p.code!=='none'}))},lines,clear:{[a.id]:'c'},created:Date.now()};
+    const entry={...fxx,type:into?'deposit':'expense',date:b.date,ref:'',memo:b.desc,contactId:cid,split:true,form:{bank:a.id,lines:parts.map(p=>({account:p.r.account,desc:p.r.desc||'',amount:p.pre,taxCode:p.code,tax:p.code!=='none'}))},lines,clear:{[a.id]:'c'},created:Date.now()};
     if(await batch([{op:'set',collection:'entries',id,data:entry},{op:'set',collection:'bankTxns',id:b.id,data:{...b,status:'added',entryId:id,made:true}}])){delete S.bank.sel[b.id];S.bank.checked.delete(b.id);closeModal();toast(`Split into ${rows.length} lines`)}
   };
 }

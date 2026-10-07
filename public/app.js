@@ -29,14 +29,14 @@ const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts
 const detailLabel=a=>(DETAILS[a.type]||[]).find(d=>d[0]===(a.detail||''))?.[1]||'';
 const debitNormal=t=>t==='Asset'||t==='Expense'||t==='Cost of Goods Sold';
 const isPL=t=>t==='Income'||t==='Expense'||t==='Cost of Goods Sold';
-const TLABEL={invoice:'Invoice',salesreceipt:'Sales receipt',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Sales tax adjustment'};
+const TLABEL={invoice:'Invoice',salesreceipt:'Sales receipt',invadjust:'Inventory adjustment',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Sales tax adjustment'};
 
 /* ---------- state + server API ---------- */
 const S={more:{},accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',fyStart:1,taxName:'HST',taxRate:13,terms:30,currency:'$'},
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','estimates','recurring','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
+const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','estimates','recurring','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
@@ -165,9 +165,10 @@ function renderMain(){
   const nr=S.receipts.filter(r=>r.status==='inbox').length;const rc=$('#rcCount');if(rc){rc.hidden=!nr;rc.textContent=nr}
   const pnb=$('#nav [data-view=payroll]');if(pnb)pnb.hidden=!feat('payroll');
   if(S.view==='payroll'&&!feat('payroll'))S.view='dashboard';
+  for(const[v,k]of[['projects','projects'],['assets','fixedAssets']]){const b=$(`#nav [data-view=${v}]`);if(b)b.hidden=!feat(k)||(v==='assets'&&ME&&ME.role==='client');if(S.view===v&&!feat(k))S.view='dashboard'}
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
@@ -248,15 +249,15 @@ function vDocs(kind){
   if(st.tab==='recurring')return h+vRecurring(kind);
   if(st.tab==='contacts'){
     const cs=S.contacts.filter(c=>c.kind===ck).sort((a,b)=>a.name.localeCompare(b.name));
-    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span><button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0)-credits.filter(x=>x.d.contactId===c.id).reduce((s,x)=>s+x.s.bal,0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${money(ob)}</td><td class="n ${ov?'neg':''}">${ov?money(ov):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
+    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span><button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0)-credits.filter(x=>x.d.contactId===c.id).reduce((s,x)=>s+x.s.bal,0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}${c.currency?` <span class="pill quiet">${esc(c.currency)}</span>`:''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${moneyC(ob,c.currency)}</td><td class="n ${ov?'neg':''}">${ov?moneyC(ov,c.currency):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
   }
-  const sum=k=>r2(docs.filter(x=>k(x)).reduce((s,x)=>s+x.s.bal,0));
+  const sum=k=>r2(docs.filter(x=>k(x)).reduce((s,x)=>s+x.s.bal*(+x.d.fx||1),0)); // in Canadian dollars
   const t30=addDays(today(),-30);
   const paid30=r2(S.entries.filter(e=>e.type===(inv?'payment':'billpayment')&&e.date>=t30).reduce((s,e)=>s+(+e.amount||0),0));
   const chips=`<div class="chips"><div class="chip"><div class="lbl">Open</div><div class="val">${money(sum(x=>x.s.bal>0))}</div></div><div class="chip"><div class="lbl">Overdue</div><div class="val ${sum(x=>x.s.k==='overdue')?'neg':''}">${money(sum(x=>x.s.k==='overdue'))}</div></div><div class="chip"><div class="lbl">${inv?'Received':'Paid'}, last 30 days</div><div class="val">${money(paid30)}</div></div></div>`;
   const list=docs.concat(credits,receipts).filter(x=>st.status==='all'||(st.status==='credits'?isCreditKind(x.d.kind):st.status==='receipts'?x.d.kind==='sreceipt':isCreditKind(x.d.kind)?false:(st.status==='unpaid'?x.s.bal>0:x.s.k===st.status))).sort((a,b)=>b.d.date.localeCompare(a.d.date)||String(b.d.number).localeCompare(String(a.d.number),undefined,{numeric:true}));
   return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option>${inv?'<option value="receipts">Sales receipts</option>':''}</select><span class="grow"></span></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.slice(0,shownCount('docs',list.length)).map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${money(cr?-x.d.total:x.d.total)}</td><td class="n">${money(cr?-x.s.bal:x.s.bal)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,8):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
+  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.slice(0,shownCount('docs',list.length)).map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${moneyC(cr?-x.d.total:x.d.total,x.d.currency)}</td><td class="n">${moneyC(cr?-x.s.bal:x.s.bal,x.d.currency)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,8):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
 }
 
 function vTx(){
@@ -298,7 +299,7 @@ function vRegister(){
   const shown=[];for(const p of ps){const amt=dn?p.debit-p.credit:p.credit-p.debit;if(f.from&&p.date<f.from)continue;if(f.to&&p.date>f.to)continue;run=r2(run+amt);shown.push({p,run})}
   const bank=a.detail==='bank'||a.detail==='card';
   const cIn=bank?(a.detail==='card'?'Charge':'Deposit'):'Debit',cOut=bank?(a.detail==='card'?'Payment':'Withdrawal'):'Credit';
-  return `<button class="btn ghost sm" data-go="accounts" style="margin-bottom:8px">← Chart of accounts</button>`+head('\u2060'+a.name,`${a.code?`<span class="mono">${esc(a.code)}</span> · `:''}${a.type}${detailLabel(a)&&a.detail?' · '+detailLabel(a):''} · Balance ${mcell(bal(a.id))}`,`<button class="btn" data-editacct="${a.id}">Edit account</button>`)+
+  return `<button class="btn ghost sm" data-go="accounts" style="margin-bottom:8px">← Chart of accounts</button>`+head('\u2060'+a.name,`${a.code?`<span class="mono">${esc(a.code)}</span> · `:''}${a.type}${detailLabel(a)&&a.detail?' · '+detailLabel(a):''} · Balance ${a.currency&&typeof acctFxBal==='function'?`${moneyC(acctFxBal(a.id)*(debitNormal(a.type)?1:-1),a.currency)} · ${mcell(bal(a.id))} CAD`:mcell(bal(a.id))}`,`<button class="btn" data-editacct="${a.id}">Edit account</button>`)+
   `<div class="panel"><div class="toolbar"><span class="flabel">Dates</span><input type="date" id="regFrom" value="${f.from}" aria-label="From date"><span class="muted">to</span><input type="date" id="regTo" value="${f.to}" aria-label="To date"><span class="grow"></span></div>
   <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee</th><th>Memo</th><th class="n">${dn?cIn:cOut}</th><th class="n">${dn?cOut:cIn}</th><th class="n">Balance</th>${bank?'<th title="C = cleared, R = reconciled">✓</th>':''}</tr></thead><tbody>
   ${f.from?`<tr><td colspan="7" class="muted">Opening balance</td><td class="n">${mcell(bal(a.id,null,addDays(f.from,-1)))}</td></tr>`:''}
@@ -320,7 +321,7 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor'],['bva','Budget vs actual']].filter(([k])=>adv||(k!=='cf'&&k!=='bva'));
+  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor'],['bva','Budget vs actual'],['iv','Inventory valuation']].filter(([k])=>(adv||(k!=='cf'&&k!=='bva'))&&(k!=='iv'||(feat('inventory')&&S.items.some(i=>i.type==='inventory'))));
   // Without advanced reports (plan or company setting): no comparisons, cash flow, saved reports, packages or working trial balance.
   if(!adv){if(R.tab==='cf'||R.tab==='bva')R.tab='pl';R.compare='';R.tbAdj=false;R.savedId=''}
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
@@ -340,7 +341,7 @@ function vReports(){
 }
 /** The trial balance tab: plain, working (with adjustments), or the list of adjusting entries. */
 const tbReport=()=>S.rep.tbAdj==='aje'?rAJE():S.rep.tbAdj?rTBAdj():rTB();
-function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual})[S.rep.tab]().html}
+function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[S.rep.tab]().html}
 const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font-weight:600;margin-top:2px">${t}</div><span>${sub}</span></div>`;
 const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}" translate="no">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
 function rTB(){
@@ -391,9 +392,10 @@ function rGL(){
 }
 function rAging(kind){
   const t=today(),B=['Current','1–30','31–60','61–90','Over 90'];const by={};
-  for(const d of S.docs.filter(x=>x.kind===kind)){const s=docStatus(d);if(s.bal<=0)continue;const late=d.due?daysBetween(d.due,t):0;const i=late<=0?0:late<=30?1:late<=60?2:late<=90?3:4;const k=d.contactId||'?';(by[k]=by[k]||[0,0,0,0,0])[i]+=s.bal}
+  // In Canadian dollars: a document in another currency at the rate it was recorded at.
+  for(const d of S.docs.filter(x=>x.kind===kind)){const s=docStatus(d);if(s.bal<=0)continue;const late=d.due?daysBetween(d.due,t):0;const i=late<=0?0:late<=30?1:late<=60?2:late<=90?3:4;const k=d.contactId||'?';(by[k]=by[k]||[0,0,0,0,0])[i]+=s.bal*(+d.fx||1)}
   // Credits not used yet reduce what's owed (shown as current).
-  for(const d of S.docs.filter(x=>x.kind===(kind==='invoice'?'credit':'vcredit'))){const s=docStatus(d);if(s.bal<=0)continue;const k=d.contactId||'?';(by[k]=by[k]||[0,0,0,0,0])[0]-=s.bal}
+  for(const d of S.docs.filter(x=>x.kind===(kind==='invoice'?'credit':'vcredit'))){const s=docStatus(d);if(s.bal<=0)continue;const k=d.contactId||'?';(by[k]=by[k]||[0,0,0,0,0])[0]-=s.bal*(+d.fx||1)}
   const csv=[[kind==='invoice'?'Customer':'Vendor',...B,'Total']];const tot=[0,0,0,0,0];
   const rows=Object.entries(by).sort((a,b)=>contactName(a[0]).localeCompare(contactName(b[0]))).map(([k,v])=>{v.forEach((x,i)=>tot[i]+=x);const s=v.reduce((a,b)=>a+b,0);csv.push([contactName(k),...v.map(r2),r2(s)]);return `<tr><td>${esc(contactName(k)||'No contact')}</td>${v.map((x,i)=>`<td class="n ${i>=2&&x?'neg':''}">${x?money(x):'—'}</td>`).join('')}<td class="n"><b>${money(s)}</b></td></tr>`}).join('');
   const all=tot.reduce((a,b)=>a+b,0);csv.push(['Total',...tot.map(r2),r2(all)]);
@@ -464,6 +466,7 @@ function vSettings(){
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
   ${classesPanel()}
+  ${typeof currenciesPanel==='function'?currenciesPanel():''}
   ${typeof mailPanel==='function'?mailPanel():''}
   ${typeof payPanel==='function'?payPanel():''}
   ${codePanel()}
@@ -493,6 +496,8 @@ function bindMain(m){
     if(S.view==='receipts'&&rcClick(e,t,d))return;
     if(S.view==='convert'&&cvClick(e,t,d))return;
     if(typeof purchasingClick==='function'&&purchasingClick(e,t,d))return;
+    if(typeof projectsClick==='function'&&projectsClick(e,t,d))return;
+    if(typeof assetsClick==='function'&&await assetsClick(e,t,d))return;
     if(typeof salesExtraClick==='function'&&salesExtraClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
@@ -514,6 +519,8 @@ function bindMain(m){
     if(d.doc){const doc=S.docs.find(x=>x.id===d.doc);if(doc){docForm(doc.kind,doc);addExtras('docs',doc.id)}return}
     if(d.contact)return contactForm(contact(d.contact));
     if(d.newcontact)return contactForm(null,d.newcontact);
+    if(t.hasAttribute('data-invadj'))return invAdjustForm();
+    if(t.hasAttribute('data-reval'))return revalueForm();
     if(d.item!==undefined&&typeof itemForm==='function')return itemForm(d.item?S.items.find(x=>x.id===d.item):null);
     if(d.dtab){(S.view==='sales'?S.sales:S.exp).tab=d.dtab;return renderMain()}
     if(d.rtab){S.rep.tab=d.rtab;return renderMain()}
@@ -556,6 +563,8 @@ function bindMain(m){
   bindAI(m);bindAIRead(m);if(typeof bindFeeds==='function')bindFeeds();
   if(typeof bindDocout==='function')bindDocout(m);
   if(S.view==='settings')bindClasses(m);
+  if(typeof bindProjects==='function')bindProjects(m);
+  if(typeof bindAssets==='function')bindAssets(m);
   if(typeof bindPayPanel==='function')bindPayPanel(m);
   if(S.view==='users'||S.view==='signins')bindUsers(m);
   if(S.view==='firms')bindFirms(m);
@@ -727,7 +736,7 @@ function casewareCsv(ye,prior){
   return out.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
 }
 function exportCSV(){
-  const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual})[R.tab]();
+  const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[R.tab]();
   // Column headings and report totals follow the screen language; account names stay as they are.
   const LBL=new Set([...Object.values(NPO_WORDS),'Total net assets','$ change','% change','Operating activities','Investing activities','Financing activities','Items not affecting cash','Changes in working capital','Cash from operating activities','Cash from investing activities','Cash from financing activities','Net change in cash','Cash at the beginning of the period','Cash at the end of the period','Assets','Liabilities','Expenses','Cost of goods sold','Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
   if(isFr())r.csv=r.csv.map((row,i)=>row.map(v=>typeof v==='string'&&(i===0||LBL.has(v))?T(v):v));
@@ -939,16 +948,18 @@ function nextNum(kind){
 // Accounts a document's lines can use: income on sales; expenses, cost of goods sold and other or capital assets on purchases.
 const DOC_ACCT_FILTER=sale=>sale?a=>a.type==='Income':a=>a.type==='Expense'||a.type==='Cost of Goods Sold'||(a.type==='Asset'&&(!a.detail||a.detail==='capital'));
 /** The ledger lines for an invoice, bill or credit: c from calcLines, ctl the receivable or payable account. */
-function docPostLines(kind,c,ctl){
-  const lines=[];const g=groupBy(c.ls);
+function docPostLines(kind,c,ctl,fx){
+  let lines=[];const g=groupBy(c.ls);
   if(kind==='invoice'||kind==='sreceipt'){lines.push({account:ctl,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name}))}
   else if(kind==='credit'){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' credited'}));lines.push({account:ctl,debit:0,credit:c.total})}
   else if(kind==='vcredit'){lines.push({account:ctl,debit:c.total,credit:0});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' paid, credited'}))}
   else{Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push({account:ctl,debit:0,credit:c.total})}
+  if(fx&&fx!==1&&typeof toHome==='function')lines=toHome(lines,fx,ctl); // in another currency: each line in Canadian dollars
+  if(typeof invCostLines==='function'&&['invoice','sreceipt','credit'].includes(kind))lines.push(...invCostLines(kind,c.ls));
   return lines;
 }
 /** A saved document's record: its lines as entered, and its totals. */
-const docRecord=(c)=>({lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
+const docRecord=(c)=>({lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),...(l.cost!=null?{cost:l.cost}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
 function docForm(kind,doc,preset){
   if(doc&&doc.carried)return carriedDocForm(kind,doc);
   const sale=saleKind(kind),cred=isCreditKind(kind),sr=kind==='sreceipt',L=DOCL[kind],ck=sale?'customer':'vendor',t=today();
@@ -962,7 +973,8 @@ function docForm(kind,doc,preset){
   const refunded=doc?r2(S.entries.filter(e=>e.applyTo===doc.id).reduce((s,e)=>s+(+e.amount||0),0)):0;
   const settledNote=!doc||!paid?'':cred?`${money(paid)} of this credit has been used${refunded?`, including ${money(refunded)} refunded`:''}. ${money(r2(d.total-paid))} is still available.`:`${money(paid)} has been ${sale?'received':'paid'} on this ${kind==='invoice'?'invoice':'bill'}. Balance due ${money(r2(d.total-paid))}.`;
   const f=openModal(doc?`${L.t} ${d.number?'#'+d.number:''}`:L.n,
-    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${sr?fld('dDep','Deposit to',`<select id="dDep">${acctOptions(defBank,banks)}</select>`):cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}${sale&&typeof fieldInputs==='function'?fieldInputs(d,false):''}${typeof classField==='function'?classField('dCls',d.cls):''}</div>
+    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${sr?fld('dDep','Deposit to',`<select id="dDep">${acctOptions(defBank,banks)}</select>`):cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}${sale&&typeof fieldInputs==='function'?fieldInputs(d,false):''}${typeof classField==='function'?classField('dCls',d.cls):''}${typeof projField==='function'?projField('dProj',d.proj):''}</div>
+    ${typeof fxRowHTML==='function'?fxRowHTML('dFx',d.currency||contactCur(d.contactId),d.fx):''}<div class="muted fx-home" data-fxhome></div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${L.memo}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
     ${cred?`<div class="apply" data-apply></div>`:''}
@@ -973,7 +985,12 @@ function docForm(kind,doc,preset){
   const contactCode=()=>contact($('#dC',f).value)?.taxCode||'';
   cols.defaults=()=>({qty:1,taxCode:contactCode()||'std',account:defA});
   const totalNow=()=>calcLines(rows,x=>(+x.qty||0)*(+x.rate||0),!sale).total;
-  const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{rows=r;setTotals(f,calcLines(r,x=>(+x.qty||0)*(+x.rate||0),!sale))});
+  // Another currency: the customer's or vendor's (fixed once the document has payments), with the day's exchange rate.
+  const docCurNow=()=>doc?doc.currency||'':contactCur($('#dC',f).value);
+  const showHome=()=>{const el=$('[data-fxhome]',f);if(!el)return;const cur=docCurNow(),r=FXW?FXW.rate():1;el.textContent=cur&&r>0?`${T('Total in Canadian dollars:')} ${money(r2(totalNow()*r))}`:''};
+  let FXW=null;
+  const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{rows=r;const c=calcLines(r,x=>(+x.qty||0)*(+x.rate||0),!sale);setTotals(f,c);const cur=docCurNow();if(cur&&typeof moneyC==='function'){$('[data-t=sub]',f).textContent=moneyC(c.sub,cur);$('[data-t=tax]',f).textContent=moneyC(c.tax,cur);$('[data-t=tot]',f).textContent=moneyC(c.total,cur)}showHome()});
+  if(typeof wireFx==='function')FXW=wireFx(f,'dFx',docCurNow,'#dD',showHome);
   // Credits: which open invoices (or bills) of this customer (or vendor) the credit is used on.
   const mine=a=>(d.applied||[]).find(x=>x.docId===a)?.amount||0;
   const drawApply=()=>{
@@ -985,7 +1002,7 @@ function docForm(kind,doc,preset){
   };
   drawApply();
   // A customer or vendor with a default tax code (e.g. a US customer: zero-rated export) sets it on every line.
-  $('#dC',f).addEventListener('change',()=>{drawApply();const code=contactCode();if(!code)return;$$('[data-le] [data-k=taxCode]',f).forEach(s=>s.value=code);$('[data-le]',f).dispatchEvent(new Event('change'));toast(`Tax set to ${taxCodeLabel(code)} for ${contactName($('#dC',f).value)}`)});
+  $('#dC',f).addEventListener('change',()=>{if(FXW&&!doc)FXW.refresh(false);drawApply();const code=contactCode();if(!code)return;$$('[data-le] [data-k=taxCode]',f).forEach(s=>s.value=code);$('[data-le]',f).dispatchEvent(new Event('change'));toast(`Tax set to ${taxCodeLabel(code)} for ${contactName($('#dC',f).value)}`)});
   let lastDate=d.date;$('#dD',f).onchange=()=>{const due=$('#dDue',f);if(due&&due.value===addDays(lastDate,+S.company.terms||0))due.value=addDays($('#dD',f).value,+S.company.terms||0);lastDate=$('#dD',f).value};
   const pn=$('[data-paynow]',f);if(pn)pn.onclick=()=>payForm(sale?'payment':'billpayment',null,doc.id);
   const rf=$('[data-refund]',f);if(rf)rf.onclick=()=>refundForm(doc);
@@ -1013,13 +1030,20 @@ function docForm(kind,doc,preset){
     if(c.tax&&!taxReady(c.parts))return;
     const cid=await resolveContact(f,'dC',ck);if(!cid)return;
     const id=doc?doc.id:(preset&&preset.id)||uid();const num=$('#dN',f).value.trim();
-    const lines=docPostLines(kind,c,ar.id);
+    if(typeof invCosts==='function')invCosts(kind,c,$('#dD',f).value,id);
+    const cur=docCurNow(),fx=cur&&FXW?FXW.rate():1;
+    if(cur&&!(fx>0))return f.err(`Enter the exchange rate for ${cur}.`);
+    if(cur&&sr&&acctCur(dep)&&acctCur(dep)!==cur)return f.err(`Deposit to a ${cur} or Canadian dollar account.`);
+    const lines=docPostLines(kind,c,ar.id,fx);
+    if(cur&&sr&&acctCur(dep)===cur){const bl=lines.find(l=>l.account===dep);if(bl)bl.fx={cur,amt:c.total}}
     const base={date:$('#dD',f).value,contactId:cid,memo:$('#dM',f).value.trim(),...(doc&&doc.example?{example:true}:{})};
     if(preset&&preset.receiptId)base.receiptId=preset.receiptId;
     const dd={...(doc?strip(doc):{}),...base,kind,number:num,due:cred||sr?'':$('#dDue',f).value,...docRecord(c),created:doc?.created||Date.now()};
     if(sr)dd.depositTo=dep;
+    if(cur){dd.currency=cur;dd.fx=fx;base.currency=cur;base.fx=fx}else{delete dd.currency;delete dd.fx}
     if(sale&&typeof readFields==='function'){const fv=readFields(f,false,doc);if(Object.keys(fv).length)dd.fields=fv;else delete dd.fields}
     const cls=$('#dCls',f);if(cls){if(cls.value)dd.cls=base.cls=cls.value;else delete dd.cls}
+    const pj=$('#dProj',f);if(pj){if(pj.value)dd.proj=base.proj=pj.value;else delete dd.proj}else if(dd.proj)base.proj=dd.proj;
     if(cred)dd.applied=applied;
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:sr?'salesreceipt':kind,ref:num,docId:id,lines,created:dd.created}}]))return;
     closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(L.saved);
@@ -1073,15 +1097,28 @@ function payForm(kind,entry,presetDoc){
   const sel=entry?.applyTo||presetDoc||'';
   const defBank=entry?.bank||(sortAccts(S.accounts.filter(a=>a.detail==='bank'))[0]||{}).id;
   const f=openModal(recv?(entry?'Payment received':'Receive payment'):(entry?'Bill payment':'Pay bill'),
-    `<div class="fields">${fld('pDoc',recv?'Invoice':'Bill',`<select id="pDoc"><option value="">Choose ${dk}…</option>${open.map(d=>`<option value="${d.id}" ${d.id===sel?'selected':''}>${esc(contactName(d.contactId))} · ${d.number?'#'+esc(d.number)+' · ':''}${money(balOf(d.id))} due</option>`).join('')}</select>`,true)}
+    `<div class="fields">${fld('pDoc',recv?'Invoice':'Bill',`<select id="pDoc"><option value="">Choose ${dk}…</option>${open.map(d=>`<option value="${d.id}" ${d.id===sel?'selected':''}>${esc(contactName(d.contactId))} · ${d.number?'#'+esc(d.number)+' · ':''}${typeof moneyC==='function'?moneyC(balOf(d.id),d.currency):money(balOf(d.id))} due</option>`).join('')}</select>`,true)}
     ${fld('pDate','Date',`<input type="date" id="pDate" value="${entry?.date||today()}">`)}
     ${fld('pAmt','Amount',`<input type="number" id="pAmt" step="0.01" inputmode="decimal" value="${entry?entry.amount:(sel?balOf(sel):'')}">`)}
     ${fld('pBank',recv?'Deposit to':'Paid from',`<select id="pBank">${acctOptions(defBank,banks)}</select>`)}
     ${fld('pRef',recv?'Reference (cheque or e-transfer no.)':'Reference',`<input type="text" id="pRef" value="${esc(entry?.ref||'')}">`)}
     ${fld('pMemo','Memo',`<input type="text" id="pMemo" value="${esc(entry?.memo||'')}">`,true)}</div>
+    ${typeof fxRowHTML==='function'?fxRowHTML('pFx','',entry?.fx,'Exchange rate on the payment date'):''}
+    <div class="fields" data-pcadrow hidden>${fld('pCad',recv?'Canadian dollars deposited':'Canadian dollars paid',`<input type="number" id="pCad" step="0.01" inputmode="decimal" value="${esc(entry?.cad??'')}">`)}</div>
+    <div class="muted fx-home" data-pgl></div>
     ${open.length?'':`<div class="muted">No unpaid ${dk}s. Create ${dk==='invoice'?'an invoice':'a bill'} first, or use ${recv?'Deposit':'Expense'} for money that isn't tied to one.</div>`}`,
     saveFoot(!!entry,recv?'Save payment':'Save payment'));
-  $('#pDoc',f).onchange=()=>{const v=$('#pDoc',f).value;if(v)$('#pAmt',f).value=balOf(v)};
+  // Another currency: the amount is in the document's currency. Into an account in that currency, at the day's rate;
+  // into a Canadian dollar account, the dollars that arrived. The difference from the document's rate is a gain or loss.
+  const docOf=()=>S.docs.find(x=>x.id===$('#pDoc',f).value),dcur=()=>(docOf()||{}).currency||'';
+  const fxMode=()=>{const c=dcur();if(!c)return '';const bc=acctCur($('#pBank',f).value);return bc===c?'same':bc?'other':'cad'};
+  const glNow=()=>{const d=docOf(),c=dcur(),m=fxMode(),el=$('[data-pgl]',f);$('[data-pcadrow]',f).hidden=m!=='cad';const row=$('[data-fxrow="pFx"]',f);if(row)row.hidden=m!=='same';
+    if(!c){el.textContent='';return}if(m==='other'){el.textContent=T(`Choose a ${c} or Canadian dollar account.`);return}
+    const amt=+$('#pAmt',f).value||0,book=r2(amt*(+d.fx||1)),cad=m==='same'?r2(amt*(PFX?PFX.rate():0)):r2(+$('#pCad',f).value||0),g=recv?r2(cad-book):r2(book-cad);
+    el.innerHTML=`<span>${T('Recorded at')} ${money(book)} (${d.fx})</span>${cad?` · <span>${T('now')} ${money(cad)}</span> · <b class="${g<0?'neg':''}">${g>=0?T('exchange gain'):T('exchange loss')} ${money(Math.abs(g))}</b>`:''}`};
+  let PFX=null;if(typeof wireFx==='function')PFX=wireFx(f,'pFx',()=>fxMode()==='same'?dcur():'','#pDate',glNow);
+  $('#pDoc',f).onchange=()=>{const v=$('#pDoc',f).value;if(v)$('#pAmt',f).value=balOf(v);if(PFX)PFX.refresh(false);glNow()};
+  $('#pBank',f).addEventListener('change',()=>{if(PFX)PFX.refresh(false);glNow()});f.addEventListener('input',glNow);glNow();
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this payment?',`The ${dk} will show as unpaid again for this amount.`))return;await del('entries',entry.id);closeModal();toast('Payment deleted')};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const docId=$('#pDoc',f).value,amt=r2($('#pAmt',f).value),bank=$('#pBank',f).value;
@@ -1089,8 +1126,17 @@ function payForm(kind,entry,presetDoc){
     if(amt>balOf(docId)+0.004)return f.err(`That's more than the ${money(balOf(docId))} still owing.`);if(!bank)return f.err('Choose a bank account.');
     const ctl=needAcct(recv?'ar':'ap',recv?'Accounts receivable':'Accounts payable');if(!ctl)return;
     const d=S.docs.find(x=>x.id===docId);const id=entry?.id||uid();
-    const lines=recv?[{account:bank,debit:amt,credit:0},{account:ctl.id,debit:0,credit:amt}]:[{account:ctl.id,debit:amt,credit:0},{account:bank,debit:0,credit:amt}];
-    if(await put('entries',id,{type:kind,date:$('#pDate',f).value||today(),ref:$('#pRef',f).value.trim(),memo:$('#pMemo',f).value.trim()||`${recv?'Payment for invoice':'Payment of bill'} ${d.number?'#'+d.number:''}`.trim(),contactId:d.contactId,applyTo:docId,amount:amt,bank,lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast('Payment saved')}
+    let lines=recv?[{account:bank,debit:amt,credit:0},{account:ctl.id,debit:0,credit:amt}]:[{account:ctl.id,debit:amt,credit:0},{account:bank,debit:0,credit:amt}];
+    const extra={},w=[];
+    if(d.currency){const m=fxMode();if(m==='other')return f.err(`Choose a ${d.currency} or Canadian dollar account.`);
+      const rate=m==='same'?(PFX?PFX.rate():0):0,cad=m==='same'?r2(amt*rate):r2(+$('#pCad',f).value||0);
+      if(!(cad>0))return f.err(m==='same'?`Enter the exchange rate for ${d.currency}.`:'Enter the Canadian dollars that arrived.');
+      const book=r2(amt*(+d.fx||1)),g=recv?r2(cad-book):r2(book-cad),bl={account:bank,...(m==='same'?{fx:{cur:d.currency,amt}}:{})};
+      lines=recv?[{...bl,debit:cad,credit:0},{account:ctl.id,debit:0,credit:book}]:[{account:ctl.id,debit:book,credit:0},{...bl,debit:0,credit:cad}];
+      if(g){const fa=fxAccount(w);lines.push(g>0?{account:fa,debit:0,credit:g,memo:'Exchange gain'}:{account:fa,debit:-g,credit:0,memo:'Exchange loss'})}
+      Object.assign(extra,{currency:d.currency,fx:m==='same'?rate:r2(cad/amt*1e6)/1e6,cad})}
+    if(w.length&&!await batch(w))return;
+    if(await put('entries',id,{...extra,type:kind,date:$('#pDate',f).value||today(),ref:$('#pRef',f).value.trim(),memo:$('#pMemo',f).value.trim()||`${recv?'Payment for invoice':'Payment of bill'} ${d.number?'#'+d.number:''}`.trim(),contactId:d.contactId,applyTo:docId,amount:amt,bank,lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast('Payment saved')}
   };
 }
 
@@ -1105,7 +1151,8 @@ function moneyForm(kind,entry,preset){
     `${preset&&preset.note||''}${entry&&typeof rcLinkFor==='function'?rcLinkFor(entry):''}<div class="fields">${fld('mBank',out?'Paid from':'Deposit to',`<select id="mBank">${acctOptions(defBank,a=>a.detail==='bank'||a.detail==='card')}</select>`)}
     ${fld('mC',out?'Payee':'Received from',contactSelect('mC',src?.contactId||'',out?'vendor':'customer',true))}
     ${fld('mDate','Date',`<input type="date" id="mDate" value="${esc(src?.date||today())}">`)}
-    ${fld('mRef',out?'Ref / receipt no.':'Reference',`<input type="text" id="mRef" value="${esc(src?.ref||'')}">`)}${classField('mCls',src?.cls)}</div>
+    ${fld('mRef',out?'Ref / receipt no.':'Reference',`<input type="text" id="mRef" value="${esc(src?.ref||'')}">`)}${classField('mCls',src?.cls)}${typeof projField==='function'?projField('mProj',src?.proj):''}</div>
+    ${typeof fxRowHTML==='function'?fxRowHTML('mFx',acctCur(defBank),src?.fx):''}<div class="muted fx-home" data-fxhome></div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="mMemo">Memo</label><textarea id="mMemo">${esc(src?.memo||'')}</textarea></div>${totalsHTML()}</div>`,
     saveFoot(!!entry),'wide');
@@ -1113,7 +1160,10 @@ function moneyForm(kind,entry,preset){
   const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions}];
   const mCode=()=>contact($('#mC',f).value)?.taxCode||(out?'std':'none');
   cols.defaults=()=>({taxCode:mCode(),account:defA});
-  const le=lineEditor($('[data-le]',f),cols,(fm.lines||[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}]).map(l=>({...l,taxCode:taxCodeOf(l)})),r=>setTotals(f,calcLines(r,x=>+x.amount||0,out)));
+  // A bank or card account in another currency: amounts are in that currency, at the day's exchange rate.
+  let MFX=null;const mHome=()=>{const el=$('[data-fxhome]',f),cur=acctCur($('#mBank',f).value);if(el)el.textContent=cur&&MFX&&MFX.rate()>0?`${T('Total in Canadian dollars:')} ${money(r2(calcLines(le.read(),x=>+x.amount||0,out).total*MFX.rate()))}`:''};
+  const le=lineEditor($('[data-le]',f),cols,(fm.lines||[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}]).map(l=>({...l,taxCode:taxCodeOf(l)})),r=>{setTotals(f,calcLines(r,x=>+x.amount||0,out));if(MFX)mHome()});
+  if(typeof wireFx==='function'){MFX=wireFx(f,'mFx',()=>acctCur($('#mBank',f).value),'#mDate',mHome);$('#mBank',f).addEventListener('change',()=>MFX.refresh(false))}
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox(`Delete this ${kind}?`,'It will be removed from your books.'))return;await del('entries',entry.id);closeModal();toast(`${out?'Expense':'Deposit'} deleted`)};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const c=calcLines(le.read(),x=>+x.amount||0,out);const bank=$('#mBank',f).value;
@@ -1124,21 +1174,32 @@ function moneyForm(kind,entry,preset){
     if(out){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push(c.total>=0?{account:bank,debit:0,credit:c.total}:{account:bank,debit:-c.total,credit:0})}
     else{lines.push(c.total>=0?{account:bank,debit:c.total,credit:0}:{account:bank,debit:0,credit:-c.total});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}))}
     const id=entry?.id||uid();
-    if(await put('entries',id,{type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',...classOf(f,'mCls'),form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
+    const mcur=acctCur(bank),mfx=mcur&&MFX?MFX.rate():1,fxx={};
+    if(mcur){if(!(mfx>0))return f.err(`Enter the exchange rate for ${mcur}.`);const conv=toHome(lines,mfx,bank);lines.length=0;lines.push(...conv);const bl=lines.find(l=>l.account===bank);if(bl)bl.fx={cur:mcur,amt:Math.abs(c.total)};Object.assign(fxx,{currency:mcur,fx:mfx})}
+    if(await put('entries',id,{...fxx,type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',...classOf(f,'mCls'),...(typeof projOf==='function'?projOf(f,'mProj'):{}),form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
   };
 }
 
 function transferForm(entry){
   const fm=entry?.form||{};const bk=a=>a.detail==='bank'||a.detail==='card';
-  const f=openModal('Transfer',`<div class="fields">${fld('tFrom','From',`<select id="tFrom"><option value="">Choose account…</option>${acctOptions(fm.from,bk)}</select>`)}${fld('tTo','To',`<select id="tTo"><option value="">Choose account…</option>${acctOptions(fm.to,bk)}</select>`)}${fld('tDate','Date',`<input type="date" id="tDate" value="${entry?.date||today()}">`)}${fld('tAmt','Amount',`<input type="number" id="tAmt" step="0.01" inputmode="decimal" value="${fm.amount??''}">`)}${fld('tMemo','Memo',`<input type="text" id="tMemo" value="${esc(entry?.memo||'')}">`,true)}</div><div class="muted" style="font-size:13px">Use a transfer to move money between bank accounts or to pay down a credit card.</div>`,saveFoot(!!entry));
+  const f=openModal('Transfer',`<div class="fields">${fld('tFrom','From',`<select id="tFrom"><option value="">Choose account…</option>${acctOptions(fm.from,bk)}</select>`)}${fld('tTo','To',`<select id="tTo"><option value="">Choose account…</option>${acctOptions(fm.to,bk)}</select>`)}${fld('tDate','Date',`<input type="date" id="tDate" value="${entry?.date||today()}">`)}${fld('tAmt','Amount',`<input type="number" id="tAmt" step="0.01" inputmode="decimal" value="${fm.amount??''}">`)}<div data-trecv style="display:contents">${fld('tRecv','Amount received',`<input type="number" id="tRecv" step="0.01" inputmode="decimal" value="${fm.received??''}">`)}</div>${fld('tMemo','Memo',`<input type="text" id="tMemo" value="${esc(entry?.memo||'')}">`,true)}</div>${typeof fxRowHTML==='function'?fxRowHTML('tFx','',entry?.fx):''}<div class="muted" style="font-size:13px">Use a transfer to move money between bank accounts or to pay down a credit card.</div>`,saveFoot(!!entry));
+  // Between currencies: the amount sent (in the From account's currency) and the amount received (in the To account's).
+  const tc=()=>[acctCur($('#tFrom',f).value),acctCur($('#tTo',f).value)];
+  const tSync=()=>{const[a,b]=tc();$('[data-trecv]',f).style.display=a!==b?'contents':'none';$('#tAmt',f).closest('.field').querySelector('label').textContent=a||b?`${T('Amount sent')}${a?` (${a})`:' (CAD)'}`:T('Amount');$('#tRecv',f).closest('.field').querySelector('label').textContent=`${T('Amount received')}${b?` (${b})`:' (CAD)'}`};
+  let TFX=null;if(typeof wireFx==='function')TFX=wireFx(f,'tFx',()=>{const[a,b]=tc();return a&&a===b?a:a&&b?a:''},'#tDate');
+  $('#tFrom',f).addEventListener('change',()=>{tSync();TFX&&TFX.refresh(false)});$('#tTo',f).addEventListener('change',()=>{tSync();TFX&&TFX.refresh(false)});tSync();
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this transfer?','It will be removed from both accounts.'))return;await del('entries',entry.id);closeModal();toast('Transfer deleted')};
   f.onsubmit=async e=>{e.preventDefault();const a=$('#tFrom',f).value,b=$('#tTo',f).value,amt=r2($('#tAmt',f).value);
     if(!a||!b)return f.err('Choose both accounts.');if(a===b)return f.err('Pick two different accounts.');if(!(amt>0))return f.err('Enter an amount above zero.');
-    const id=entry?.id||uid();if(await put('entries',id,{type:'transfer',date:$('#tDate',f).value||today(),memo:$('#tMemo',f).value.trim(),ref:'',form:{from:a,to:b,amount:amt},lines:[{account:b,debit:amt,credit:0},{account:a,debit:0,credit:amt}],created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast('Transfer saved')}};
+    const[ca,cb]=tc(),recv=ca===cb?amt:r2($('#tRecv',f).value);if(!(recv>0))return f.err('Enter the amount received.');
+    // The Canadian dollar value: whichever side is in Canadian dollars, or the sent amount at the rate.
+    let cad=amt;if(ca||cb){cad=!cb?recv:!ca?amt:r2(amt*(TFX?TFX.rate():0));if(!(cad>0))return f.err('Enter the exchange rate.')}
+    const lb={account:b,debit:cad,credit:0,...(cb?{fx:{cur:cb,amt:recv}}:{})},la={account:a,debit:0,credit:cad,...(ca?{fx:{cur:ca,amt}}:{})};
+    const id=entry?.id||uid();if(await put('entries',id,{type:'transfer',date:$('#tDate',f).value||today(),memo:$('#tMemo',f).value.trim(),ref:'',form:{from:a,to:b,amount:amt,...(ca!==cb?{received:recv}:{})},...(ca||cb?{fx:ca&&cb?(TFX?TFX.rate():0):r2(cad/(ca?amt:recv)*1e6)/1e6}:{}),lines:[lb,la],created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast('Transfer saved')}};
 }
 
 function journalForm(entry){
-  const f=openModal(entry?'Journal entry':'New journal entry',`<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${entry?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(entry?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(entry?.memo||'')}">`,true)}${classField('jCls',entry?.cls)}</div><div data-le></div>
+  const f=openModal(entry?'Journal entry':'New journal entry',`<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${entry?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(entry?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(entry?.memo||'')}">`,true)}${classField('jCls',entry?.cls)}${typeof projField==='function'?projField('jProj',entry?.proj):''}</div><div data-le></div>
     ${ME&&ME.role!=='client'?`<div class="fields" style="align-items:end"><label class="check" style="align-self:center"><input type="checkbox" id="jAdj" ${entry?.adjusting?'checked':''}> Adjusting entry (shown in its own column on the working trial balance)</label>
       ${fld('jRev','Reverse on (optional)',`<input type="date" id="jRev" value="${esc(entry?.reverseOn||'')}"><span class="hint">Posts the opposite entry on this date, for example the first day of the next period</span>`)}</div>`:''}<div class="totals"><div>Total debits</div><div data-j="d">0.00</div><div>Total credits</div><div data-j="c">0.00</div><div class="big">Difference</div><div class="big" data-j="x">0.00</div></div>`,saveFoot(!!entry),'wide');
   const rows=(entry?.lines||[{},{}]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||''}));
@@ -1157,7 +1218,7 @@ function journalForm(entry){
     const adjusting=$('#jAdj',f)?$('#jAdj',f).checked:!!entry?.adjusting,reverseOn=$('#jRev',f)?$('#jRev',f).value:(entry?.reverseOn||'');
     if(reverseOn&&reverseOn<=date)return f.err('The reversing date has to be after the entry’s date.');
     const data={...(entry?strip(entry):{}),type:'journal',date,ref,memo,contactId:entry?.contactId||'',lines,created:entry?.created||Date.now(),adjusting,reverseOn,...(entry?.example?{example:true}:{})};
-    delete data.cls;Object.assign(data,classOf(f,'jCls'));
+    delete data.cls;delete data.proj;Object.assign(data,classOf(f,'jCls'),typeof projOf==='function'?projOf(f,'jProj'):{});
     const w=[{op:'set',collection:'entries',id,data}],rid='rv_'+id;
     // The reversing entry: the same lines with debits and credits swapped.
     if(reverseOn)w.push({op:'set',collection:'entries',id:rid,data:{type:'journal',date:reverseOn,ref:ref?ref+'-R':'',memo:`Reversal of ${memo||'journal entry'} (${fmtDate(date)})`,contactId:'',reversalOf:id,...(entry?.example?{example:true}:{}),
@@ -1168,13 +1229,14 @@ function journalForm(entry){
 
 function accountForm(a,preset){
   const used=a?postings().some(p=>p.account===a.id):false;
-  const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option value="${t}" ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`)}${fld('aMap','CaseWare map no.',`<input type="text" id="aMap" value="${esc(a?.cwMap||'')}" maxlength="20" translate="no"><span class="hint">Optional. Goes with the account in the CaseWare export.</span>`)}${fld('aGifi','GIFI code',`<input type="text" id="aGifi" value="${esc(a?.gifi||'')}" maxlength="4" inputmode="numeric" autocomplete="off" list="aGifiList" translate="no" placeholder="e.g. 8811"><datalist id="aGifiList"></datalist><span class="hint" data-gifihint></span>`)}<div data-cf style="display:contents">${fld('aCf','Cash flow statement',`<select id="aCf">${[['','Automatic'],['operating','Operating activities'],['investing','Investing activities'],['financing','Financing activities']].map(([k,v])=>`<option value="${k}" ${(a?.cf||'')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Which section changes in this account go in</span>`)}</div></div>
+  const f=openModal(a?'Edit account':'New account',`<div class="fields">${fld('aType','Account type',`<select id="aType" ${used?'disabled':''}>${TYPES.map(t=>`<option value="${t}" ${a?.type===t?'selected':''}>${t}</option>`).join('')}</select>`)}${fld('aDet','Detail',`<select id="aDet"></select>`)}${fld('aCode','Code',`<input type="text" id="aCode" value="${esc(a?.code||'')}" placeholder="e.g. 6450">`)}${fld('aName','Name',`<input type="text" id="aName" value="${esc(a?.name||'')}" required>`)}${fld('aDesc','Description',`<input type="text" id="aDesc" value="${esc(a?.desc||'')}">`)}${fld('aMap','CaseWare map no.',`<input type="text" id="aMap" value="${esc(a?.cwMap||'')}" maxlength="20" translate="no"><span class="hint">Optional. Goes with the account in the CaseWare export.</span>`)}${fld('aGifi','GIFI code',`<input type="text" id="aGifi" value="${esc(a?.gifi||'')}" maxlength="4" inputmode="numeric" autocomplete="off" list="aGifiList" translate="no" placeholder="e.g. 8811"><datalist id="aGifiList"></datalist><span class="hint" data-gifihint></span>`)}${typeof mcOn==='function'&&(mcOn()||a?.currency)?`<div data-acur style="display:contents">${fld('aCur','Currency',`<select id="aCur" ${used?'disabled':''}>${curOptions(a?.currency||'')}</select>`)}</div>`:''}<div data-cf style="display:contents">${fld('aCf','Cash flow statement',`<select id="aCf">${[['','Automatic'],['operating','Operating activities'],['investing','Investing activities'],['financing','Financing activities']].map(([k,v])=>`<option value="${k}" ${(a?.cf||'')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Which section changes in this account go in</span>`)}</div></div>
   <div data-ob ${a?'hidden':''} class="fields">${fld('aOb','Opening balance',`<input type="number" id="aOb" step="0.01" inputmode="decimal" placeholder="0.00">`)}${fld('aObD','As of',`<input type="date" id="aObD" value="${today()}">`)}</div>
   ${a?`<label class="check"><input type="checkbox" id="aInactive" ${a.active===false?'checked':''}> Inactive (hide from new transactions)</label>`:''}
   ${used?`<div class="muted" style="font-size:13px">This account has transactions, so its type can't change. You can rename it or mark it inactive.</div>`:''}`,saveFoot(!!a&&!used));
   const ty=$('#aType',f),de=$('#aDet',f),ob=$('[data-ob]',f);
   const fillDet=()=>{de.innerHTML=(DETAILS[ty.value]||[]).map(([k,v])=>`<option value="${k}" ${(a?.detail||'')===k?'selected':''}>${v}</option>`).join('');ob.hidden=!!a||!(ty.value==='Asset'||ty.value==='Liability');$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none'};
-  de.addEventListener('change',()=>{$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none'});
+  const curSync=()=>{const c=$('[data-acur]',f);if(c)c.style.display=de.value==='bank'||de.value==='card'?'contents':'none'};
+  de.addEventListener('change',()=>{$('[data-cf]',f).style.display=['Asset','Liability','Equity'].includes(ty.value)&&de.value!=='bank'?'contents':'none';curSync()});ty.addEventListener('change',curSync);setTimeout(curSync,0);
   ty.onchange=fillDet;fillDet();
   // A new bank or credit card account from Banking: the type, detail, a name and the next free code filled in.
   if(!a&&preset){ty.value=preset.type;fillDet();de.value=preset.detail;de.dispatchEvent(new Event('change'));$('#aName',f).value=preset.name||'';if(preset.code)$('#aCode',f).value=preset.code;setTimeout(()=>$('#aName',f).select(),40)}
@@ -1193,9 +1255,9 @@ function accountForm(a,preset){
   f.onsubmit=async e=>{e.preventDefault();f.err('');const name=$('#aName',f).value.trim();if(!name)return f.err('Give the account a name.');
     const gifi=gi.value.trim(),gBad=TallyGIFI.problem(gifi,ty.value,I18N.lang);if(gBad)return f.err(gBad);
     const code=$('#aCode',f).value.trim();if(code&&S.accounts.some(x=>x.code===code&&x.id!==a?.id))return f.err(`Code ${code} is already used.`);
-    const id=a?.id||uid();const data={...(a?strip(a):{}),type:ty.value,detail:de.value,code,name,desc:$('#aDesc',f).value.trim(),cwMap:$('#aMap',f).value.trim(),gifi,cf:['Asset','Liability','Equity'].includes(ty.value)?$('#aCf',f).value:'',active:a?!$('#aInactive',f).checked:true};
+    const id=a?.id||uid();const data={...(a?strip(a):{}),type:ty.value,detail:de.value,code,name,desc:$('#aDesc',f).value.trim(),cwMap:$('#aMap',f).value.trim(),gifi,cf:['Asset','Liability','Equity'].includes(ty.value)?$('#aCf',f).value:'',active:a?!$('#aInactive',f).checked:true,...($('#aCur',f)&&(de.value==='bank'||de.value==='card')?{currency:$('#aCur',f).value}:{})};
     const writes=[{op:'set',collection:'accounts',id,data}];
-    const amt=r2($('#aOb',f)?.value);if(!a&&amt){const obA=needAcct('ob','Opening balance equity');if(!obA)return;const pos=amt>0;writes.push({op:'set',collection:'entries',id:uid(),data:{type:'journal',date:$('#aObD',f).value||today(),ref:'',memo:'Opening balance',lines:[{account:id,debit:pos===debitNormal(data.type)?Math.abs(amt):0,credit:pos===debitNormal(data.type)?0:Math.abs(amt)},{account:obA.id,debit:pos===debitNormal(data.type)?0:Math.abs(amt),credit:pos===debitNormal(data.type)?Math.abs(amt):0}],created:Date.now()}})}
+    const amt=r2($('#aOb',f)?.value);if(!a&&amt&&data.currency)return f.err('For an account in another currency, record the opening balance as a deposit or transfer, with its exchange rate.');if(!a&&amt){const obA=needAcct('ob','Opening balance equity');if(!obA)return;const pos=amt>0;writes.push({op:'set',collection:'entries',id:uid(),data:{type:'journal',date:$('#aObD',f).value||today(),ref:'',memo:'Opening balance',lines:[{account:id,debit:pos===debitNormal(data.type)?Math.abs(amt):0,credit:pos===debitNormal(data.type)?0:Math.abs(amt)},{account:obA.id,debit:pos===debitNormal(data.type)?0:Math.abs(amt),credit:pos===debitNormal(data.type)?Math.abs(amt):0}],created:Date.now()}})}
     if(!await batch(writes))return;
     closeModal();toast('Account saved')};
 }
@@ -1203,10 +1265,10 @@ function accountForm(a,preset){
 function contactForm(c,kind){
   const k=c?.kind||kind||'customer';
   const refs=c?S.docs.some(d=>d.contactId===c.id)||S.entries.some(e=>e.contactId===c.id):false;
-  const f=openModal(c?c.name:`New ${k}`,`<div class="fields">${fld('cName','Name',`<input type="text" id="cName" value="${esc(c?.name||'')}" required>`,true)}${fld('cKind','Type',`<select id="cKind"><option value="customer" ${k==='customer'?'selected':''}>Customer</option><option value="vendor" ${k==='vendor'?'selected':''}>Vendor</option></select>`)}${fld('cTax','Default sales tax',`<select id="cTax"><option value="">Same as the company (${esc(S.company.taxName||'Tax')})</option>${TAX_CODES.filter(t=>t[0]!=='std').map(([k])=>`<option value="${k}" ${c?.taxCode===k?'selected':''}>${esc(taxCodeLabel(k))}</option>`).join('')}</select><span class="hint">For a customer outside Canada, such as in the US, choose Zero-rated export.</span>`)}${fld('cEmail','Email',`<input type="email" id="cEmail" value="${esc(c?.email||'')}">`)}${fld('cPhone','Phone',`<input type="tel" id="cPhone" value="${esc(c?.phone||'')}">`)}${fld('cAddr','Address',`<textarea id="cAddr">${esc(c?.address||'')}</textarea>`,true)}${fld('cNotes','Notes',`<textarea id="cNotes">${esc(c?.notes||'')}</textarea>`,true)}</div>${refs?'<div class="muted" style="font-size:13px">This contact appears on transactions, so it can\'t be deleted.</div>':''}`,saveFoot(!!c&&!refs));
+  const f=openModal(c?c.name:`New ${k}`,`<div class="fields">${fld('cName','Name',`<input type="text" id="cName" value="${esc(c?.name||'')}" required>`,true)}${fld('cKind','Type',`<select id="cKind"><option value="customer" ${k==='customer'?'selected':''}>Customer</option><option value="vendor" ${k==='vendor'?'selected':''}>Vendor</option></select>`)}${fld('cTax','Default sales tax',`<select id="cTax"><option value="">Same as the company (${esc(S.company.taxName||'Tax')})</option>${TAX_CODES.filter(t=>t[0]!=='std').map(([k])=>`<option value="${k}" ${c?.taxCode===k?'selected':''}>${esc(taxCodeLabel(k))}</option>`).join('')}</select><span class="hint">For a customer outside Canada, such as in the US, choose Zero-rated export.</span>`)}${typeof mcOn==='function'&&(mcOn()||c?.currency)?fld('cCur','Currency',`<select id="cCur" ${c&&S.docs.some(d=>d.contactId===c.id)?'disabled':''}>${curOptions(c?.currency||'')}</select>${c&&S.docs.some(d=>d.contactId===c.id)?`<span class="hint">${T('Fixed once they have invoices or bills.')}</span>`:''}`):''}${fld('cEmail','Email',`<input type="email" id="cEmail" value="${esc(c?.email||'')}">`)}${fld('cPhone','Phone',`<input type="tel" id="cPhone" value="${esc(c?.phone||'')}">`)}${fld('cAddr','Address',`<textarea id="cAddr">${esc(c?.address||'')}</textarea>`,true)}${fld('cNotes','Notes',`<textarea id="cNotes">${esc(c?.notes||'')}</textarea>`,true)}</div>${refs?'<div class="muted" style="font-size:13px">This contact appears on transactions, so it can\'t be deleted.</div>':''}`,saveFoot(!!c&&!refs));
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this contact?',`${c.name} will be removed.`))return;await del('contacts',c.id);closeModal();toast('Contact deleted')};
   f.onsubmit=async e=>{e.preventDefault();const name=$('#cName',f).value.trim();if(!name)return f.err('Enter a name.');
-    const id=c?.id||uid();if(await put('contacts',id,{...(c?strip(c):{created:Date.now()}),name,kind:$('#cKind',f).value,email:$('#cEmail',f).value.trim(),phone:$('#cPhone',f).value.trim(),address:$('#cAddr',f).value.trim(),notes:$('#cNotes',f).value.trim(),taxCode:$('#cTax',f).value})){closeModal();toast('Saved')}};
+    const id=c?.id||uid();if(await put('contacts',id,{...(c?strip(c):{created:Date.now()}),name,kind:$('#cKind',f).value,email:$('#cEmail',f).value.trim(),phone:$('#cPhone',f).value.trim(),address:$('#cAddr',f).value.trim(),notes:$('#cNotes',f).value.trim(),taxCode:$('#cTax',f).value,...($('#cCur',f)?{currency:$('#cCur',f).value}:{})})){closeModal();toast('Saved')}};
 }
 
 /* ---------- chrome ---------- */
