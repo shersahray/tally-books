@@ -396,5 +396,6 @@ function newBankAccount(){
   const used=new Set(S.accounts.map(a=>String(a.code||'')));
   const next=(from,to)=>{for(let c=from;c<=to;c+=10)if(!used.has(String(c)))return String(c);for(let c=from;c<=to;c++)if(!used.has(String(c)))return String(c);return ''};
   const n=S.accounts.filter(a=>a.detail==='bank'&&/chequing|chèques/i.test(a.name)).length;
-  accountForm(null,{type:'Asset',detail:'bank',name:n?`${T('Chequing')} ${n+1}`:T('Chequing'),code:next(1000,1099)});
+  const base=(S.company.lang||I18N.lang)==='fr'?'Compte chèques':'Chequing';
+  accountForm(null,{type:'Asset',detail:'bank',name:n?`${base} ${n+1}`:base,code:next(1000,1099)});
 }

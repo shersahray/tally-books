@@ -1852,4 +1852,3 @@ addFr({'Remove':'Retirer','Only while it has no transactions':'Seulement tant qu
   'This person has signed in before, so they can’t be removed. Turn their account off instead.':'Cette personne s’est déjà connectée : elle ne peut pas être retirée. Désactivez plutôt son compte.',
   'You can’t remove your own account.':'Vous ne pouvez pas retirer votre propre compte.'});
 addFr({'+ Bank or card account':'+ Compte bancaire ou de carte','Add the client’s chequing, savings or credit card account to start.':'Ajoutez le compte chèques, le compte d’épargne ou la carte de crédit du client pour commencer.','Chequing {0}':'Compte chèques {0}'});
-addFr({'Chequing':'Compte chèques'});
