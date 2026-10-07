@@ -381,7 +381,7 @@ The tests start a real server against a temporary database. They cover the bookk
 
 ## Not built yet
 
-Sending returns straight to CRA or Revenu Québec, filing T4 and RL-1 slips and records of employment electronically (XML), multiple currencies, and emailing invitations directly (for now you send the link yourself).
+Sending returns straight to CRA or Revenu Québec; filing T4 and RL-1 slips and records of employment electronically (XML); T4A and T5018 slips; payroll tables for pay dates after 31 December 2026 (CRA publishes the January 2027 T4127 edition in late 2026).
 
 ## License
 
