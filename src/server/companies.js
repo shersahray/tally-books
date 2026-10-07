@@ -70,7 +70,8 @@ class Registry {
     if (patch.lastOpened !== undefined) c.lastOpened = patch.lastOpened;
     if (patch.payer !== undefined) c.payer = patch.payer === 'client' ? 'client' : 'firm';   // who pays for Sumlora for this company
     if (patch.billing !== undefined) c.billing = patch.billing;
-    if (patch.clientPlan !== undefined) c.clientPlan = patch.clientPlan;                     // the plan the client pays for                               // the client's subscription, when the client pays
+    if (patch.assistant !== undefined) c.assistant = !!patch.assistant;                      // the AI assistant add-on (paid for separately)
+    if (patch.clientPlan !== undefined) c.clientPlan = patch.clientPlan;                  // the plan the client pays for                               // the client's subscription, when the client pays
     this.save();
     return c;
   }

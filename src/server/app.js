@@ -10,6 +10,7 @@ const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
+const assistant = require('./assistant');
 const mail = require('./mail');
 const stripe = require('./stripe');
 const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
@@ -141,6 +142,8 @@ function createApp(opts) {
   const coNeedsPay = c => billing.configured() && !!c && c.payer === 'client' && !billingPaid(c.billing);
   /** Companies a firm pays for: the ones it keeps that aren't archived and whose client doesn't pay. At least one. */
   const firmCount = fid => Math.max(1, reg.list(fid).filter(c => !c.archived && c.payer !== 'client').length);
+  /** Of those, the companies with the AI assistant add-on. */
+  const firmAssistants = fid => reg.list(fid).filter(c => !c.archived && c.payer !== 'client' && c.assistant).length;
   /** The address people come back to after Stripe's pages. */
   const originOf = req => {
     const proto = (opts.trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()) || (req.socket.encrypted ? 'https' : 'http');
@@ -152,6 +155,37 @@ function createApp(opts) {
     const f = auth.firm(fid);
     if (!billing.configured() || !f || firmExempt(fid) || !f.billing || !billingPaid(f.billing)) return;
     try { auth.setFirmBilling(fid, await billing.setQuantity(f.billing, firmCount(fid))); } catch (e) { console.error('Sumlora subscription: couldn’t update the number of companies:', e.message); }
+    try { auth.setFirmBilling(fid, await billing.setAddon(auth.firm(fid).billing, 'assistant', firmAssistants(fid))); } catch (e) { console.error('Sumlora subscription: couldn’t update the AI assistant add-on:', e.message); }
+  }
+  /**
+   * Turn the AI assistant add-on on or off for a company, and keep the subscription that pays for it in step.
+   * Turning it on must reach Stripe first (so it isn't used unpaid); turning it off never waits on Stripe.
+   * No Stripe key, the server owner's own firm, or a subscription not started yet: just the switch
+   * (a subscription started later includes the add-on).
+   */
+  async function setAssistant(cid, on) {
+    const c = reg.get(cid), f = auth.firm(c.firmId);
+    if (!!c.assistant === on) return;
+    const clientPays = c.payer === 'client';
+    const rec = clientPays ? c.billing : f && f.billing;
+    const billed = billing.configured() && !(clientPays ? false : firmExempt(c.firmId)) && rec && rec.sub && billingPaid(rec);
+    if (!billed) { reg.update(cid, { assistant: on }); return; }
+    if (on) {
+      const next = await billing.setAddon(rec, 'assistant', clientPays ? 1 : firmAssistants(c.firmId) + (c.archived ? 0 : 1));
+      reg.update(cid, { assistant: true });
+      if (clientPays) reg.update(cid, { billing: next }); else auth.setFirmBilling(c.firmId, next);
+      return;
+    }
+    reg.update(cid, { assistant: false });
+    if (clientPays) { try { reg.update(cid, { billing: await billing.setAddon(rec, 'assistant', 0) }); } catch (e) { console.error('Sumlora subscription: couldn’t remove the AI assistant add-on:', e.message); } }
+    else await syncFirmCount(c.firmId);
+  }
+  /** Can people in this company ask the AI assistant, and how many questions are left this month? */
+  function assistantInfo(cid, store) {
+    const c = reg.get(cid);
+    if (!c || !c.assistant) return { on: false };
+    const cap = Number(ai.settings.assistantCap ?? assistant.DEFAULT_CAP), used = Number(store.getMeta('assistant-q:' + assistant.month(Date.now())) || 0);
+    return { on: true, ready: ai.status().configured, used, cap, left: Math.max(0, cap - used) };
   }
   /** Read subscriptions again from Stripe when they're a few hours old (or all of them, for the twice-daily check). */
   async function refreshBilling(firmIds, companyIds, all) {
@@ -457,6 +491,7 @@ function createApp(opts) {
     const cl = ctx.store.getSetting('closing') || {};
     const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}), closingDate: cl.date || '', closingPassword: !!cl.hash, hasCode: hasCode(ctx.store) } };
     for (const c of COLLECTIONS) out[c] = ctx.store.list(c);
+    out.assistant = assistantInfo(ctx.id, ctx.store);
     return out;
   }
 
@@ -1005,7 +1040,7 @@ function createApp(opts) {
       const body = await readJson(req);
       const id = decodeURIComponent(m[1]);
       if (!canSeeCo(user, id)) throw new ValidationError('That company doesn’t exist.', 404);
-      if (body.archived !== undefined || body.payer !== undefined) ownerOnly(user);
+      if (body.archived !== undefined || body.payer !== undefined || body.assistant !== undefined) ownerOnly(user);
       const patch = {};
       if (body.archived !== undefined) patch.archived = !!body.archived;
       if (body.payer !== undefined) patch.payer = body.payer === 'client' ? 'client' : 'firm';
@@ -1013,6 +1048,12 @@ function createApp(opts) {
       if (patch.archived === false && reg.get(id).archived) checkCompanyLimit({ restoring: true });
       if (body.opened) patch.lastOpened = Date.now();
       reg.update(id, patch);
+      // The AI assistant add-on costs money each month, so it's only ever on when an owner turns it on here.
+      if (body.assistant !== undefined) {
+        await setAssistant(id, body.assistant === true);
+        auth.log('assistant-changed', { username: user.username, company: id, on: body.assistant === true });
+        broadcast({ companies: true, firmId: reg.get(id).firmId });
+      }
       if (patch.archived !== undefined) broadcast({ companies: true, firmId: reg.get(id).firmId });
       if (patch.archived !== undefined || patch.payer !== undefined) syncFirmCount(reg.get(id).firmId);
       return { ok: true, company: summary(reg.get(id)) };
@@ -1112,12 +1153,12 @@ function createApp(opts) {
         if (firmExempt(user.firmId)) throw new ValidationError('Your firm doesn’t pay for Sumlora on this server.');
         if (billingPaid(f.billing)) throw new ValidationError('Your firm’s subscription is already running.');
         const plan = PLANS.PLANS[b.plan] ? b.plan : PLANS.planOf(f.plan);
-        return { url: await billing.checkout({ kind: 'firm', id: f.id, plan, quantity: firmCount(f.id), email: user.username, customer: f.billing && f.billing.customer, trial: !(f.billing && f.billing.hadTrial), base: originOf(req) }) };
+        return { url: await billing.checkout({ kind: 'firm', id: f.id, plan, quantity: firmCount(f.id), assistant: firmAssistants(f.id), email: user.username, customer: f.billing && f.billing.customer, trial: !(f.billing && f.billing.hadTrial), base: originOf(req) }) };
       }
       const c = reg.get(String(b.id || ''));
       if (b.kind !== 'company' || !c || !canSeeCo(user, c.id) || c.payer !== 'client') throw new ValidationError('That company doesn’t exist.', 404);
       if (billingPaid(c.billing)) throw new ValidationError('This company’s subscription is already running.');
-      return { url: await billing.checkout({ kind: 'company', id: c.id, plan: PLANS.planOf(c.clientPlan || (f && f.plan)), quantity: 1, email: user.username, customer: c.billing && c.billing.customer, trial: !(c.billing && c.billing.hadTrial), base: originOf(req) }) };
+      return { url: await billing.checkout({ kind: 'company', id: c.id, plan: PLANS.planOf(c.clientPlan || (f && f.plan)), quantity: 1, assistant: c.assistant ? 1 : 0, email: user.username, customer: c.billing && c.billing.customer, trial: !(c.billing && c.billing.hadTrial), base: originOf(req) }) };
     }],
     // Back from Stripe's page: record the subscription.
     ['POST', /^\/api\/billing\/finish$/, async (req, m, res, user) => {
@@ -1521,6 +1562,29 @@ function createApp(opts) {
         ctx.store.audit(ctx.user, 'ai', { collection: 'bankTxns', summary: `AI suggested categories for ${n} bank line(s)` });
       });
       return { ok: true, count: n, usd, rev: ctx.bump() };
+    }],
+    // The AI assistant add-on: answers questions about these books. Read-only; see assistant.js.
+    ['POST', /^\/assistant$/, async (ctx, req) => {
+      const info = assistantInfo(ctx.id, ctx.store);
+      if (!info.on) throw new ValidationError('The AI assistant isn’t turned on for this company. An owner can add it in Settings.', 403);
+      if (!info.ready) throw new ValidationError('The AI assistant isn’t set up on this server yet. The server’s administrator adds the AI key in Settings.', 409);
+      if (info.left <= 0) throw new ValidationError(`This company has used its ${info.cap} AI assistant questions for this month. More are available on the 1st.`, 429);
+      const f = auth.firm(reg.get(ctx.id).firmId);
+      // Firms other than the administrators' still have their monthly AI spending limit.
+      if (f && f.id !== auth.mainFirmId && ai.firmSpent(f.id) >= (f.aiCapUsd ?? 10)) throw new ValidationError(`Your firm’s AI limit for this month, $${Number(f.aiCapUsd ?? 10).toFixed(2)}, has been reached. The server’s administrator can raise it.`, 429);
+      if (ai.spent() >= ai.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${ai.settings.capUsd.toFixed(2)} has been reached. The server’s administrator can raise it in Settings.`, 429);
+      const body = (await readJson(req)) || {};
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      const key = 'assistant-q:' + assistant.month(Date.now());
+      // Count the question before asking, so a burst of questions can't go past the monthly number.
+      if (!String(body.question || '').trim()) throw new ValidationError('Type a question.');
+      ctx.store.putMeta(key, Number(ctx.store.getMeta(key) || 0) + 1);
+      let out;
+      try { out = await assistant.ask(ai, ctx.store, company, { question: body.question, history: body.history, lang: body.lang === 'fr' ? 'fr' : ctx.user.lang }); }
+      catch (e) { ctx.store.putMeta(key, Math.max(0, Number(ctx.store.getMeta(key) || 0) - 1)); throw e; } // a question that got no answer isn't counted
+      chargeFirm(ctx.id, out.usd);
+      ctx.store.audit(ctx.user, 'ai', { summary: `asked the AI assistant: ${String(body.question || '').trim().slice(0, 120)}` });
+      return { answer: out.answer, links: out.links, assistant: assistantInfo(ctx.id, ctx.store) };
     }],
     // Receipts: a photo or PDF sent from the Receipts screen (often a client's phone).
     ['POST', /^\/receipts$/, async (ctx, req) => {

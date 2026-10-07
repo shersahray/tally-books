@@ -25,11 +25,16 @@
     essentials: { label: 'Essentials', features: [] },
     plus: { label: 'Plus', features: ['payroll', 'ai', 'advancedReports', 'specialTax', 'projects', 'inventory', 'multiCurrency', 'fixedAssets'] },
   };
+  // Add-ons: bought separately for each company, on top of either plan. Off unless an owner turns one on.
+  // cents is the default monthly price per company; the server's administrator can change it in Settings.
+  const ADDONS = {
+    assistant: { label: 'AI assistant', desc: 'Ask questions about the books in plain words and get answers with the numbers, plus links to the right report', cents: 500 },
+  };
   const planOf = p => (PLANS[p] ? p : 'plus');
   /** Does the firm's plan include this feature? */
   const inPlan = (plan, key) => PLANS[planOf(plan)].features.includes(key);
   /** Is the feature on for this company: in the plan, and not switched off in the company's settings? */
   const featureOn = (plan, companyFeatures, key) => inPlan(plan, key) && !(companyFeatures && companyFeatures[key] === false);
 
-  return { FEATURES, PLANS, planOf, inPlan, featureOn };
+  return { FEATURES, PLANS, ADDONS, planOf, inPlan, featureOn };
 });

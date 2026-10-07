@@ -28,6 +28,8 @@ class Billing {
     this.fetch = o.fetch || ((...a) => fetch(...a));
     this.data = { key: '', amounts: { essentials: 1500, plus: 3000 }, trialDays: 14, prices: {} };
     try { Object.assign(this.data, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch { /* first run */ }
+    // Add-ons (plans.js ADDONS) have a price too, per company per month.
+    for (const [k, a] of Object.entries(PLANS.ADDONS)) if (!(this.data.amounts[k] > 0)) this.data.amounts[k] = a.cents;
   }
   save() {
     const tmp = this.file + '.tmp';
@@ -56,10 +58,10 @@ class Billing {
       }
       next.key = k;
     }
-    for (const plan of Object.keys(PLANS.PLANS)) {
+    for (const plan of [...Object.keys(PLANS.PLANS), ...Object.keys(PLANS.ADDONS)]) {
       if (!body.amounts || body.amounts[plan] === undefined) continue;
       const c = Math.round(Number(body.amounts[plan]) * 100);
-      if (!Number.isFinite(c) || c < 100 || c > 100000) throw new ValidationError('Each plan’s price must be between $1 and $1,000 a month.');
+      if (!Number.isFinite(c) || c < 100 || c > 100000) throw new ValidationError(PLANS.ADDONS[plan] ? 'Each add-on’s price must be between $1 and $1,000 a month.' : 'Each plan’s price must be between $1 and $1,000 a month.');
       if (c !== next.amounts[plan]) { next.amounts[plan] = c; delete next.prices[plan]; }
     }
     if (body.trialDays !== undefined) {
@@ -91,14 +93,27 @@ class Billing {
     this.save();
     return p.id;
   }
+  /** The Stripe price for an add-on, made the first time it's needed. Marked so its line on a subscription can be told apart. */
+  async addonPrice(key) {
+    const a = PLANS.ADDONS[key];
+    if (!a) throw new ValidationError('That add-on doesn’t exist.');
+    const amount = this.data.amounts[key], have = this.data.prices[key];
+    if (have && have.amount === amount) return have.id;
+    const p = await this.call('POST', 'prices', { currency: 'cad', unit_amount: amount, recurring: { interval: 'month' }, nickname: `Sumlora ${a.label} (per company, monthly)`,
+      product_data: { name: `Sumlora ${a.label}` }, metadata: { sumlora_addon: key } });
+    this.data.prices[key] = { id: p.id, amount };
+    this.save();
+    return p.id;
+  }
   /**
    * Stripe's checkout page for a new subscription.
-   * @param {object} o  { kind: 'firm'|'company', id, plan, quantity, email, customer, trial, base }
+   * @param {object} o  { kind: 'firm'|'company', id, plan, quantity, email, customer, trial, base, assistant (companies with the AI assistant) }
    */
   async checkout(o) {
     const price = await this.price(o.plan);
+    const extra = o.assistant > 0 ? { 'line_items[1][price]': await this.addonPrice('assistant'), 'line_items[1][quantity]': o.assistant } : {};
     const params = {
-      mode: 'subscription', 'line_items[0][price]': price, 'line_items[0][quantity]': Math.max(1, o.quantity || 1),
+      mode: 'subscription', 'line_items[0][price]': price, 'line_items[0][quantity]': Math.max(1, o.quantity || 1), ...extra,
       success_url: `${o.base}/?billing=done&session={CHECKOUT_SESSION_ID}`, cancel_url: `${o.base}/?billing=cancelled`,
       client_reference_id: `${o.kind}:${o.id}`, payment_method_collection: 'always', allow_promotion_codes: 'true',
       subscription_data: { metadata: { sumlora_kind: o.kind, sumlora_id: o.id, sumlora_plan: PLANS.planOf(o.plan) }, ...(o.trial && this.data.trialDays ? { trial_period_days: this.data.trialDays } : {}) },
@@ -127,6 +142,20 @@ class Billing {
     const sub = await this.call('POST', `subscriptions/${rec.sub}`, { 'items[0][id]': rec.item, 'items[0][quantity]': q });
     return recordOf(sub, rec.customer, rec);
   }
+  /**
+   * Set how many companies on a subscription have an add-on: adds, changes or removes its line.
+   * Stripe prorates the change on the next invoice.
+   */
+  async setAddon(rec, key, quantity) {
+    const q = Math.max(0, quantity | 0), have = (rec.addons || {})[key];
+    if ((have ? have.quantity : 0) === q) return rec;
+    let params;
+    if (!q) params = { 'items[0][id]': have.item, 'items[0][deleted]': 'true' };
+    else if (have) params = { 'items[0][id]': have.item, 'items[0][quantity]': q };
+    else params = { 'items[0][price]': await this.addonPrice(key), 'items[0][quantity]': q };
+    const sub = await this.call('POST', `subscriptions/${rec.sub}`, params);
+    return recordOf(sub, rec.customer, rec);
+  }
   /** Stripe's page to change the card, see invoices or cancel. */
   async portal(customer, base) {
     const s = await this.call('POST', 'billing_portal/sessions', { customer, return_url: `${base}/` });
@@ -135,14 +164,19 @@ class Billing {
 }
 
 function recordOf(sub, customer, prev = {}) {
-  const item = sub.items && sub.items.data && sub.items.data[0];
+  // The plan's line, and a line for each add-on (its price is marked with the add-on's name).
+  const items = (sub.items && sub.items.data) || [];
+  const addonOf = it => (it && it.price && it.price.metadata && it.price.metadata.sumlora_addon) || '';
+  const item = items.find(it => !addonOf(it));
+  const addons = {};
+  for (const it of items) if (addonOf(it)) addons[addonOf(it)] = { item: String(it.id), quantity: Number(it.quantity) || 0 };
   const status = String(sub.status || '');
   const rec = {
     customer: String((sub.customer && sub.customer.id) || sub.customer || customer || prev.customer || ''),
     sub: String(sub.id), item: item ? String(item.id) : prev.item || '', quantity: item ? Number(item.quantity) || 1 : prev.quantity || 1,
     status, cancelAtEnd: !!sub.cancel_at_period_end, trialEnd: sub.trial_end ? sub.trial_end * 1000 : 0,
     periodEnd: (sub.current_period_end || (item && item.current_period_end) || 0) * 1000, checked: Date.now(),
-    hadTrial: !!(prev.hadTrial || sub.trial_end), plan: (sub.metadata && sub.metadata.sumlora_plan) || prev.plan || '',
+    hadTrial: !!(prev.hadTrial || sub.trial_end), plan: (sub.metadata && sub.metadata.sumlora_plan) || prev.plan || '', addons,
   };
   rec.pastDueSince = status === 'past_due' ? prev.pastDueSince || Date.now() : 0;
   return rec;

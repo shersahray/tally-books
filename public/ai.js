@@ -54,6 +54,7 @@ function aiPanel(){
       ${AIS.source==='env'?'':fld('aiKey',AIS.configured?'Replace API key':'Claude API key',`<input type="password" id="aiKey" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" translate="no"><span class="hint">From console.anthropic.com → API keys. It stays on this server and is never shown again.</span>`,true)}
       ${fld('aiModel','Model',`<select id="aiModel">${AIS.models.map(m=>`<option value="${m.id}" ${AIS.model===m.id?'selected':''}>${esc(m.label)}</option>`).join('')}</select>`)}
       ${fld('aiCap','Monthly limit (US$)',`<input type="number" id="aiCap" min="0" step="1" value="${AIS.capUsd}"><span class="hint">AI stops for the month at this amount, for all companies together.</span>`)}
+      ${fld('aiAsstCap','AI assistant: questions per company, per month',`<input type="number" id="aiAsstCap" min="0" max="10000" step="1" value="${AIS.assistantCap??100}"><span class="hint">For companies with the AI assistant add-on. Each question usually costs a few cents.</span>`)}
     </div>
     <div><span class="flabel">This month</span><div class="meter" aria-hidden="true"><span style="width:${pct}%"></span></div><div class="muted" style="font-size:13px"><span translate="no">${usd(AIS.spentUsd)}</span> of <span translate="no">${usd(AIS.capUsd)}</span> · ${AIS.linesThisMonth} bank line${AIS.linesThisMonth===1?'':'s'}</div></div>
     <div class="actions"><button class="btn primary" data-aiact="save">Save AI settings</button>${AIS.configured&&AIS.source!=='env'?'<button class="btn ghost" data-aiact="remove">Remove API key</button>':''}</div>
@@ -62,7 +63,7 @@ function aiPanel(){
 async function aiAction(act){
   try{
     if(act==='save'){
-      const body={model:$('#aiModel').value,capUsd:+$('#aiCap').value||0};
+      const body={model:$('#aiModel').value,capUsd:+$('#aiCap').value||0,assistantCap:Math.max(0,Math.round(+$('#aiAsstCap').value||0))};
       const k=$('#aiKey')?.value.trim();if(k)body.apiKey=k;
       AIS=await api('PUT','/api/ai',body);renderMain();toast(k?'API key saved':'AI settings saved');return;
     }
