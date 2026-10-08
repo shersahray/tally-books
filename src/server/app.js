@@ -1746,6 +1746,26 @@ function createApp(opts) {
       broadcast({ companies: true, firmId: (reg.get(ctx.id) || {}).firmId });
       return { ok: true, rev: ctx.bump(), counts };
     }],
+    // Undo the chart of accounts an import brought in: removes the accounts the import created (not the
+    // starter accounts it matched or renamed), but only those nothing uses. The rest stay and are listed.
+    ['POST', /^\/accounts\/remove-imported$/, ctx => {
+      notClient(ctx.user);
+      const imported = ctx.store.list('accounts').filter(a => a.imported);
+      if (!imported.length) throw new ValidationError('There are no imported accounts in these books.', 404);
+      // Records that can name an account outside journal lines (items, bank rules, budgets, assets, payroll, settings).
+      const refs = JSON.stringify(['items', 'docs', 'budgets', 'assets', 'employees', 'rules', 'recurring', 'estimates', 'pos', 'bankTxns', 'trips']
+        .map(c => ctx.store.list(c))) + JSON.stringify(ctx.store.getSetting('company') || {});
+      const removed = [], kept = [];
+      ctx.store.transaction(() => {
+        for (const a of imported) {
+          if (refs.includes(JSON.stringify(a.id))) { kept.push(a.name); continue; }
+          try { applyWrite(ctx.store, { op: 'delete', collection: 'accounts', id: a.id }, ctx.user, ctx); removed.push(a.name); }
+          catch (e) { if (e instanceof ValidationError) kept.push(a.name); else throw e; }
+        }
+        if (removed.length) ctx.store.audit(ctx.user, 'import', { summary: `removed ${removed.length} imported account${removed.length === 1 ? '' : 's'}` });
+      });
+      return { ok: true, rev: ctx.bump(), removed: removed.length, kept };
+    }],
     ['POST', /^\/examples$/, ctx => {
       notClient(ctx.user);
       if ((ctx.store.getSetting('closing') || {}).date) throw new ValidationError('These books are closed, so example data can’t be added. Try it in a new company.', 423);

@@ -288,7 +288,7 @@ function vAccounts(){
     rows+=`<tr class="click" data-acct="${a.id}"><td class="mono">${esc(a.code||'')}</td><td><span translate="no">${esc(a.name)}</span> ${a.active===false?'<span class="pill quiet">Inactive</span>':''}</td><td class="mono" ${a.gifi?`title="${esc(gifiName(a.gifi))}"`:''}>${esc(a.gifi||'')}</td><td class="muted">${detailLabel(a)}</td><td class="n">${mcell(b)}</td></tr>`;
   }
   const staff=ME&&ME.role!=='client'&&!ME.readOnly;
-  return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`${staff?'<button class="btn" data-act="industry">Accounts for a type of business…</button><button class="btn" data-act="acclib">Add accounts from the list…</button><button class="btn" data-act="gifi">GIFI codes…</button>':''}<button class="btn primary" data-new="account">+ Add account</button>`)+
+  return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`${staff?'<button class="btn" data-act="industry">Accounts for a type of business…</button><button class="btn" data-act="acclib">Add accounts from the list…</button><button class="btn" data-act="gifi">GIFI codes…</button>'+(S.accounts.some(a=>a.imported)?'<button class="btn" data-act="rmimported">Remove imported accounts…</button>':''):''}<button class="btn primary" data-new="account">+ Add account</button>`)+
   `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th title="CRA GIFI code (T2 Schedules 100 and 125)">GIFI</th><th>Detail</th><th class="n">Balance</th></tr></thead><tbody>${rows||emptyRow(5,'No accounts yet','Add accounts to start recording transactions.')}</tbody></table></div></div>`;
 }
 
@@ -540,6 +540,7 @@ function bindMain(m){
     if(d.act==='gifi')return gifiForm();
     if(d.act==='industry')return industryForm();
     if(d.act==='acclib')return accountLibForm();
+    if(d.act==='rmimported')return removeImportedAccounts();
     if(d.act==='load-examples')return loadExamples();
     if(d.act==='backup')return saveFile(`${(S.company.name||'books').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase()}-backup-${today()}.json`,await fetch(coUrl('/api/backup')).then(r=>r.blob()));
     if(d.act==='restore')return $('#restoreFile').click();
@@ -1228,6 +1229,18 @@ function journalForm(entry){
       lines:lines.map(l=>({account:l.account,debit:l.credit,credit:l.debit,memo:l.memo})),created:(S.entries.find(x=>x.id===rid)||{}).created||Date.now()+1}});
     else if(S.entries.some(x=>x.id===rid))w.push({op:'delete',collection:'entries',id:rid});
     if(await batch(w)){closeModal();toast(reverseOn?`Journal entry saved, reversing on ${fmtDate(reverseOn)}`:'Journal entry saved')}};
+}
+
+// Undo an import's chart of accounts: the accounts it created go, unless something still uses them.
+async function removeImportedAccounts(){
+  const imp=S.accounts.filter(a=>a.imported);if(!imp.length)return toast('There are no imported accounts in these books.',true);
+  const used=new Set(postings().map(p=>p.account)),busy=imp.filter(a=>used.has(a.id)).length;
+  const body=`${imp.length} account${imp.length===1?' was':'s were'} added by an import. Those that nothing uses will be removed. Starter accounts that the import matched or renamed stay.`+
+    (busy?` ${busy} still ${busy===1?'has':'have'} transactions (such as the opening balance entry) and will stay. To remove ${busy===1?'it':'them'} too, delete those transactions first.`:'');
+  if(!await confirmBox('Remove imported accounts?',body,'Remove'))return;
+  let r=null;if(!await write(async()=>{r=await api('POST','/api/accounts/remove-imported',{})}))return;
+  const n=r.removed||0,k=(r.kept||[]).length;
+  toast(n?`${n} imported account${n===1?'':'s'} removed${k?`. ${k} kept because ${k===1?'it is':'they are'} in use`:''}.`:`Nothing removed: all ${k} imported account${k===1?' is':'s are'} in use.`,!n);
 }
 
 function accountForm(a,preset){
