@@ -1355,7 +1355,7 @@ addFr({
   '{s} can’t be used on these transactions (for example an income account on an expense). Choose another account.':'Le compte {s} ne peut pas être utilisé sur ces opérations (par exemple un compte de revenus sur une dépense). Choisissez un autre compte.',
   'Reclassify at most {0} transactions at a time. Narrow the dates or untick some.':'Reclassez au plus {0} opérations à la fois. Réduisez les dates ou décochez-en.',
   'Delete saved report':'Supprimer le rapport enregistré',
-  'GIFI code':'Code IGRF','GIFI':'IGRF','GIFI codes…':'Codes IGRF…','GIFI codes':'Codes IGRF','Save codes':'Enregistrer les codes',
+  'GIFI code':'Code IGRF','GIFI':'IGRF','GIFI codes…':'Codes IGRF…','Remove imported accounts…':'Supprimer les comptes importés…','Remove imported accounts?':'Supprimer les comptes importés?','There are no imported accounts in these books.':'Il n’y a aucun compte importé dans ces livres.','GIFI codes':'Codes IGRF','Save codes':'Enregistrer les codes',
   'CRA GIFI code (T2 Schedules 100 and 125)':'Code IGRF de l’ARC (annexes 100 et 125 de la T2)',
   'Suggested:':'Suggéré :',
   'Not in Sumlora’s list of GIFI codes. Check it against CRA’s current list.':'Absent de la liste des codes IGRF de Sumlora. Vérifiez-le dans la liste à jour de l’ARC.',

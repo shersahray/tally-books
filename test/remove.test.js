@@ -49,3 +49,25 @@ test('a person who never signed in can be removed; someone who has signed in is 
   // The email can be invited again, correctly this time.
   assert.equal((await call('POST', '/api/users', { name: 'Wrong', username: 'wrong@exmaple.com', role: 'client', companies: [co], invite: true }, owner)).status, 200);
 });
+
+test('imported accounts can be removed in one go; those still in use stay', async () => {
+  const co = (await call('POST', '/api/companies', { name: 'Pizza Co', province: 'QC' }, owner)).json.company.id;
+  const put = (id, data) => call('PUT', `/api/c/${co}/records/accounts/${id}`, data, owner);
+  await put('i100', { code: '100', name: 'Encaisse Desjardins', type: 'Asset', detail: 'bank', imported: 'QuickBooks' });
+  await put('i511', { code: '511', name: 'Loyer', type: 'Expense', detail: '', imported: 'QuickBooks' });
+  await put('i527', { code: '527', name: 'Royautés', type: 'Expense', detail: '', imported: 'QuickBooks' });
+  await put('mine', { code: '999', name: 'Added by hand', type: 'Expense', detail: '' });
+  await call('PUT', `/api/c/${co}/records/entries/ob`, { type: 'journal', date: '2025-01-31', lines: [{ account: 'i100', debit: 10, credit: 0 }, { account: 'i511', debit: 0, credit: 10 }], opening: true, imported: 'QuickBooks' }, owner);
+  const r = await call('POST', `/api/c/${co}/accounts/remove-imported`, {}, owner);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.removed, 1);
+  assert.deepEqual(r.json.kept.sort(), ['Encaisse Desjardins', 'Loyer']);
+  let ids = (await call('GET', `/api/c/${co}/state`, undefined, owner)).json.accounts.map(a => a.id);
+  assert.ok(!ids.includes('i527') && ids.includes('i100') && ids.includes('mine'), 'only the unused imported account goes; hand-made ones stay');
+  // Once the opening balance entry is deleted, the rest can go too.
+  await call('DELETE', `/api/c/${co}/records/entries/ob`, undefined, owner);
+  assert.equal((await call('POST', `/api/c/${co}/accounts/remove-imported`, {}, owner)).json.removed, 2);
+  ids = (await call('GET', `/api/c/${co}/state`, undefined, owner)).json.accounts.map(a => a.id);
+  assert.ok(!ids.includes('i100') && !ids.includes('i511') && ids.includes('mine'));
+  assert.equal((await call('POST', `/api/c/${co}/accounts/remove-imported`, {}, owner)).status, 404, 'nothing left to remove');
+});
