@@ -58,7 +58,7 @@ test('bank feeds: keys are the administrator’s, checked, and never shown', asy
   const st = (await call('PUT', '/api/plaid', { clientId: CID, secret: SECRET, env: 'sandbox' })).json;
   assert.equal(st.configured, true); assert.equal(st.clientIdHint, '…' + CID.slice(-4));
   assert.ok(!JSON.stringify(st).includes(SECRET) && !JSON.stringify(st).includes(CID), 'keys not sent back');
-  assert.equal(fs.statSync(path.join(dir, 'plaid.json')).mode & 0o077, 0, 'file readable by this account only');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(dir, 'plaid.json')).mode & 0o077, 0, 'file readable by this account only');
 });
 
 test('bank feeds: connect, choose accounts, bring in posted lines once, keep reviewed lines', async () => {

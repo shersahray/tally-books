@@ -87,7 +87,7 @@ test('invitation email: set up by the administrator, sent only with the current 
   const s = (await call('PUT', '/api/sysmail', cfg)).json;
   assert.equal(s.fromEmail, 'noreply@sumlora.example');
   assert.ok(!JSON.stringify(s).includes('app-password-456'));
-  assert.equal(fs.statSync(path.join(dir, 'sysmail.json')).mode & 0o077, 0);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(dir, 'sysmail.json')).mode & 0o077, 0);
   assert.equal((await call('POST', '/api/sysmail/test', {})).status, 200);
   assert.equal((await call('POST', `/api/users/${u.id}/email-link`, { token: 'wrong', subject: 'x', text: 'wrong' })).status, 410);
   assert.equal((await call('POST', `/api/users/${u.id}/email-link`, { token: u.link, subject: 'x', text: 'no link here' })).status, 400);
