@@ -65,7 +65,7 @@ test('billing: off until the administrator adds a key; the key is checked and ne
   const s = (await call('PUT', '/api/billing', { key: KEY, amounts: { essentials: 15, plus: 30 }, trialDays: 14 }, admin)).json;
   assert.deepEqual([s.configured, s.mode, s.amounts.essentials, s.amounts.plus, s.trialDays], [true, 'test', 1500, 3000, 14]);
   assert.ok(!JSON.stringify(s).includes(KEY));
-  assert.equal(fs.statSync(path.join(dir, 'billing.json')).mode & 0o077, 0);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(dir, 'billing.json')).mode & 0o077, 0);
   // The server owner's own firm never pays.
   const me = (await call('GET', '/api/billing/me', undefined, admin)).json;
   assert.deepEqual([me.firm.exempt, me.firm.needs], [true, false]);
