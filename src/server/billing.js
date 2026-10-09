@@ -122,11 +122,20 @@ class Billing {
   }
   /**
    * Stripe's checkout page for a new subscription.
-   * @param {object} o  { kind: 'firm'|'company', id, plan, quantity, email, customer, trial, base, assistant (companies with the AI assistant) }
+   * @param {object} o  { kind: 'firm'|'company', id, plan, quantity, email, customer, trial, base,
+   *                     addons: { assistant: 2, scrapyard: 1 } (how many companies have each add-on; `assistant` alone still works) }
    */
   async checkout(o) {
     const price = await this.price(o.plan);
-    const extra = o.assistant > 0 ? { 'line_items[1][price]': await this.addonPrice('assistant'), 'line_items[1][quantity]': o.assistant } : {};
+    const counts = { ...(o.assistant > 0 ? { assistant: o.assistant } : {}), ...(o.addons || {}) };
+    const extra = {};
+    let n = 1;
+    for (const k of Object.keys(PLANS.ADDONS)) {
+      if (!(counts[k] > 0)) continue;
+      extra[`line_items[${n}][price]`] = await this.addonPrice(k);
+      extra[`line_items[${n}][quantity]`] = counts[k];
+      n++;
+    }
     const params = {
       mode: 'subscription', 'line_items[0][price]': price, 'line_items[0][quantity]': Math.max(1, o.quantity || 1), ...extra,
       success_url: `${o.base}/?billing=done&session={CHECKOUT_SESSION_ID}`, cancel_url: `${o.base}/?billing=cancelled`,

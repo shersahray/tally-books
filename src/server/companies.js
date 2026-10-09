@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Store } = require('./db');
+const PLANS = require('../../public/plans.js');
 
 const LEGACY_FILE = 'tally-books.db'; // single-company file from version 1
 
@@ -70,7 +71,8 @@ class Registry {
     if (patch.lastOpened !== undefined) c.lastOpened = patch.lastOpened;
     if (patch.payer !== undefined) c.payer = patch.payer === 'client' ? 'client' : 'firm';   // who pays for Sumlora for this company
     if (patch.billing !== undefined) c.billing = patch.billing;
-    if (patch.assistant !== undefined) c.assistant = !!patch.assistant;                      // the AI assistant add-on (paid for separately)
+    // Add-ons (plans.js ADDONS), paid for separately: the AI assistant, the scrap yard tools…
+    for (const k of Object.keys(PLANS.ADDONS)) if (patch[k] !== undefined) c[k] = !!patch[k];
     if (patch.clientPlan !== undefined) c.clientPlan = patch.clientPlan;                  // the plan the client pays for                               // the client's subscription, when the client pays
     this.save();
     return c;

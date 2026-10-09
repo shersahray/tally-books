@@ -191,6 +191,38 @@
       ['7430', 'Mortgage interest', 'Expense', '', 'Intérêts hypothécaires'],
       A.repairs, A.cleaning,
     ] },
+    // Scrap yards and auto recyclers. Choosing it also turns on the Scrap yard add-on (plans.js ADDONS.scrapyard):
+    // vehicle intake by VIN, purchase vouchers for sellers paid in cash, parts pulled from each car, and profit per vehicle.
+    scrapyard: { label: 'Scrap yard or auto recycler', fr: 'Cour à ferraille ou recycleur automobile', addon: 'scrapyard', accounts: [
+      ['4000', 'Scrap metal sales', 'Income', '', 'Ventes de ferraille'],
+      ['4010', 'Used parts sales', 'Income', '', 'Ventes de pièces usagées'],
+      ['4020', 'Catalytic converter sales', 'Income', '', 'Ventes de convertisseurs catalytiques'],
+      ['4030', 'Whole vehicle sales', 'Income', '', 'Ventes de véhicules entiers'],
+      ['4040', 'Towing and pickup fees charged', 'Income', '', 'Frais de remorquage et de collecte facturés'],
+      ['1410', 'Vehicles in yard (inventory)', 'Asset', '', 'Véhicules dans la cour (stocks)'],
+      ['1510', 'Tow trucks and vehicles', 'Asset', 'capital', 'Dépanneuses et véhicules'],
+      ['1520', 'Yard equipment (loaders, crushers, scales)', 'Asset', 'capital', 'Équipement de cour (chargeuses, presses, balances)'],
+      ['5000', 'Cost of vehicles processed', 'Cost of Goods Sold', '', 'Coût des véhicules traités'],
+      ['5010', 'Scrap metal bought by weight', 'Cost of Goods Sold', '', 'Ferraille achetée au poids'],
+      ['5020', 'Towing and transport of vehicles', 'Cost of Goods Sold', '', 'Remorquage et transport des véhicules'],
+      ['5040', 'Environmental disposal (fluids, tires, batteries, refrigerant)', 'Cost of Goods Sold', '', 'Élimination environnementale (fluides, pneus, batteries, frigorigène)'],
+      A.fuel, A.repairs, A.licences, A.wsib, A.safety, A.security, A.waste, A.cardFees,
+      ['7345', 'Environmental compliance and permits', 'Expense', '', 'Conformité environnementale et permis'],
+    ],
+    // Things a yard sells (and buys) by weight or by the piece. qty on an invoice line is the weight.
+    // Each: [name, income account code, purchase account code ('' = sold only), French name].
+    items: [
+      ['Shredded steel (per tonne)', '4000', '5010', 'Acier déchiqueté (la tonne)'],
+      ['Heavy melting steel (per tonne)', '4000', '5010', 'Acier de fusion lourd (la tonne)'],
+      ['Car bodies, flattened (per tonne)', '4000', '5010', 'Carcasses aplaties (la tonne)'],
+      ['Aluminum (per lb)', '4000', '5010', 'Aluminium (la livre)'],
+      ['Copper (per lb)', '4000', '5010', 'Cuivre (la livre)'],
+      ['Car batteries (each)', '4000', '5010', 'Batteries d’auto (l’unité)'],
+      ['Catalytic converter (each)', '4020', '', 'Convertisseur catalytique (l’unité)'],
+      ['Used auto part', '4010', '', 'Pièce d’auto usagée'],
+    ],
+    // A field on invoices and sales receipts for the scale's weigh ticket number.
+    fields: [{ label: 'Weigh ticket no.', fr: 'No de billet de pesée', sales: true, purchase: false }] },
   };
   /** The accounts an industry adds or renames ([] for none or an unknown key). */
   const accountsFor = key => {

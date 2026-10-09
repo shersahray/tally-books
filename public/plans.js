@@ -29,12 +29,16 @@
   // cents is the default monthly price per company; the server's administrator can change it in Settings.
   const ADDONS = {
     assistant: { label: 'AI assistant', desc: 'Ask questions about the books in plain words and get answers with the numbers, plus links to the right report', cents: 500 },
+    // Turned on by itself when a company is set up as a scrap yard (industries.js), or by an owner in Settings.
+    scrapyard: { label: 'Scrap yard', desc: 'For scrap yards and auto recyclers: vehicles bought by VIN, purchase vouchers for sellers paid in cash, parts pulled from each car, weigh tickets, an environmental checklist and profit per vehicle', cents: 1000 },
   };
+  /** The add-on that comes with a type of business (industries.js), if any. */
+  const ADDON_FOR_INDUSTRY = { scrapyard: 'scrapyard' };
   const planOf = p => (PLANS[p] ? p : 'plus');
   /** Does the firm's plan include this feature? */
   const inPlan = (plan, key) => PLANS[planOf(plan)].features.includes(key);
   /** Is the feature on for this company: in the plan, and not switched off in the company's settings? */
   const featureOn = (plan, companyFeatures, key) => inPlan(plan, key) && !(companyFeatures && companyFeatures[key] === false);
 
-  return { FEATURES, PLANS, ADDONS, planOf, inPlan, featureOn };
+  return { FEATURES, PLANS, ADDONS, ADDON_FOR_INDUSTRY, planOf, inPlan, featureOn };
 });

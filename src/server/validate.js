@@ -555,6 +555,60 @@ function validateAsset(data, store) {
   return out;
 }
 
+/* Scrap yard: a vehicle bought for parts and scrap (the Scrap yard add-on, scrapyard.js).
+   Its purchase is posted as an expense entry (buyEntry): the cost into the vehicles-in-yard inventory account, any
+   GST/HST the seller charged to the tax account, paid from a bank, card or cash account. When the car is finished
+   (crushed, or sold whole), doneEntry moves its cost to cost of goods sold. Parts pulled from it are listed on it. */
+const VEH_STATUS = ['yard', 'parting', 'done', 'sold'];
+const PART_STATUS = ['stock', 'sold', 'scrapped'];
+const ENV_CHECKS = ['fluids', 'battery', 'refrigerant', 'mercury', 'tires', 'airbags'];
+function validateVehicle(data, store, id) {
+  const stock = str(data.stock, 30).trim();
+  if (!stock) throw new ValidationError('Give the vehicle a stock number.');
+  if (store.list('vehicles').some(v => v.id !== id && String(v.stock).toLowerCase() === stock.toLowerCase())) throw new ValidationError(`Stock number ${stock} is already used.`, 409);
+  const vin = str(data.vin, 20).toUpperCase().replace(/[\s-]/g, '');
+  if (vin && !/^[A-Z0-9]{5,17}$/.test(vin)) throw new ValidationError('A VIN has only letters and numbers, up to 17 of them.');
+  if (!isDate(data.bought)) throw new ValidationError('Enter the date the vehicle was bought.');
+  const amt = (v, label) => { const n = Math.round((Number(v) || 0) * 100) / 100; if (!Number.isFinite(n) || n < 0 || n > 1e8) throw new ValidationError(`${label} must be a number of zero or more.`); return n; };
+  const price = amt(data.price, 'The price paid'), tax = amt(data.tax, 'The GST/HST charged');
+  const acct = (v, ok, msg) => { const a = store.get('accounts', String(v || '')); if (!a || !ok(a)) throw new ValidationError(msg); return a.id; };
+  const invAccount = acct(data.invAccount, a => a.type === 'Asset' && !['bank', 'ar'].includes(a.detail) || a.type === 'Cost of Goods Sold' || a.type === 'Expense', 'Choose the account the vehicle’s cost goes to.');
+  const payAccount = price || tax ? acct(data.payAccount, a => a.detail === 'bank' || a.detail === 'card' || (a.type === 'Asset' && !a.detail), 'Choose how the seller was paid (bank, cash or credit card).') : str(data.payAccount, 40);
+  const sellerKind = data.sellerKind === 'business' ? 'business' : 'public';
+  const s = isObj(data.seller) ? data.seller : {};
+  const seller = { name: str(s.name, 120).trim(), address: str(s.address, 300).trim(), phone: str(s.phone, 40).trim(), idType: str(s.idType, 60).trim(), idNumber: str(s.idNumber, 40).trim(), gstNo: str(s.gstNo, 30).trim() };
+  if (sellerKind === 'business') {
+    if (!data.contactId || !store.get('contacts', String(data.contactId))) throw new ValidationError('Choose the business the vehicle was bought from.');
+  } else if (!seller.name) throw new ValidationError('Enter the seller’s name.');
+  if (tax && sellerKind === 'public' && !seller.gstNo) throw new ValidationError('GST/HST can only be claimed back when the seller charged it: enter their GST/HST number, or leave the tax at zero.');
+  const status = VEH_STATUS.includes(data.status) ? data.status : 'yard';
+  const doneDate = isDate(data.doneDate) ? data.doneDate : '';
+  if ((status === 'done' || status === 'sold') && !doneDate) throw new ValidationError('Enter the date the vehicle was finished.');
+  if (doneDate && doneDate < data.bought) throw new ValidationError('The date it was finished is before the date it was bought.');
+  const env = isObj(data.env) ? data.env : {};
+  const year = data.year === '' || data.year == null ? '' : Math.floor(Number(data.year));
+  if (year !== '' && !(year >= 1900 && year <= 2100)) throw new ValidationError('Enter the model year (for example 2012).');
+  const seen = new Set();
+  const parts = (Array.isArray(data.parts) ? data.parts : []).filter(isObj).slice(0, 300).map(p => {
+    const pid = str(p.id, 40);
+    if (!pid || seen.has(pid)) throw new ValidationError('Each part needs its own id.');
+    seen.add(pid);
+    const name = str(p.name, 120).trim();
+    if (!name) throw new ValidationError('Give each part a name.');
+    return { id: pid, name, location: str(p.location, 60).trim(), price: amt(p.price, 'A part’s asking price'), status: PART_STATUS.includes(p.status) ? p.status : 'stock', docId: p.docId ? str(p.docId, 120) : '', added: isDate(p.added) ? p.added : '' };
+  });
+  return {
+    stock, vin, year, make: str(data.make, 40).trim(), model: str(data.model, 60).trim(), colour: str(data.colour, 30).trim(), odometer: str(data.odometer, 20).trim(),
+    plate: str(data.plate, 20).trim().toUpperCase(), ownership: str(data.ownership, 40).trim(),
+    bought: data.bought, price, tax, invAccount, payAccount, sellerKind, contactId: sellerKind === 'business' ? String(data.contactId) : '', seller,
+    payMethod: ['cash', 'cheque', 'etransfer', 'card', 'account', 'other'].includes(data.payMethod) ? data.payMethod : 'cash', ref: str(data.ref, 40).trim(),
+    status, doneDate: status === 'done' || status === 'sold' ? doneDate : '', cogsAccount: data.cogsAccount ? str(data.cogsAccount, 40) : '',
+    buyEntry: data.buyEntry ? str(data.buyEntry, 120) : '', doneEntry: data.doneEntry ? str(data.doneEntry, 120) : '',
+    env: { ...Object.fromEntries(ENV_CHECKS.map(k => [k, !!env[k]])), date: isDate(env.date) ? env.date : '', by: str(env.by, 80).trim() },
+    parts, notes: str(data.notes, 2000), ...(data.created ? { created: Number(data.created) || 0 } : {}),
+  };
+}
+
 function validateRecord(collection, id, data, store) {
   checkId(id);
   if (!isObj(data)) throw new ValidationError('Record body must be a JSON object.');
@@ -568,6 +622,7 @@ function validateRecord(collection, id, data, store) {
     case 'projects': return validateProject(data, store);
     case 'times': return validateTime(data, store);
     case 'assets': return validateAsset(data, store);
+    case 'vehicles': return validateVehicle(data, store, id);
     case 'docs': return validateDoc(data, store, id);
     case 'entries': return validateEntry(data, store, id);
     case 'bankTxns': return validateBankTxn(data, store, id);
@@ -610,6 +665,9 @@ function checkDelete(collection, id, store) {
   }
   if (collection === 'times') { const t = store.get('times', id); if (t && t.invoiceId && store.get('docs', t.invoiceId)) throw new ValidationError('This time is on an invoice. Delete the invoice first.', 409); }
   if (collection === 'assets') { const a = store.get('assets', id); if (a && Object.values(a.posted || {}).some(e => store.get('entries', e))) throw new ValidationError('Amortization for this asset is in the books. Delete those entries first (Fixed assets → the year → Undo).', 409); }
+  if (collection === 'vehicles') { const v = store.get('vehicles', id); if (v && [v.buyEntry, v.doneEntry].some(e => e && store.get('entries', e))) throw new ValidationError('This vehicle’s purchase is in the books. Open the vehicle and use “Delete vehicle and its purchase” instead.', 409); }
+  if (collection === 'entries' && store.list('vehicles').some(v => v.buyEntry === id || v.doneEntry === id)) throw new ValidationError('This transaction belongs to a vehicle in the scrap yard. Change it from Scrap yard → the vehicle instead.', 409);
+  if (collection === 'docs' && store.list('vehicles').some(v => (v.parts || []).some(p => p.docId === id && p.status === 'sold'))) throw new ValidationError('A part pulled from a vehicle was sold on this. Mark the part back in stock first (Scrap yard → the vehicle).', 409);
   if (collection === 'entries' && store.list('assets').some(a => a.disposalEntry === id)) throw new ValidationError('This entry records an asset’s disposal. Undo it from Fixed assets instead.', 409);
   if (collection === 'entries' && store.list('assets').some(a => Object.values(a.posted || {}).includes(id))) throw new ValidationError('This is an amortization entry. Undo it from Fixed assets instead.', 409);
   if (collection === 'items') {
