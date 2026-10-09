@@ -1141,6 +1141,49 @@ function createApp(opts) {
       auth.log('billing-settings', { username: user.username, ip: clientIp(req), change: body.key !== undefined ? 'Stripe key changed' : body.tax !== undefined && Object.keys(body).length === 1 ? `sales tax ${body.tax ? 'on' : 'off'}` : 'prices or trial changed' });
       return st;
     }],
+    // Monthly invoices to the firms and clients using this server, for an administrator who's paid by e-Transfer
+    // (or any way other than Stripe). The invoices are made in one of the administrator's own companies; the
+    // browser builds them like any other invoice. This only reports who to bill and for what.
+    ['GET', /^\/api\/invoicing$/, (req, m, res, user) => {
+      adminOnly(user);
+      const set = auth.data.settings.invoicing || {};
+      const amounts = billing.offer().amounts;
+      const ownCos = reg.list(user.firmId).filter(c => !c.archived).map(c => ({ id: c.id, name: c.name }));
+      const emailOf = u => u && mail.EMAIL_RE.test(u.username) ? u.username : '';
+      const customers = [];
+      for (const f of auth.data.firms) {
+        if (firmExempt(f.id) || f.status !== 'active') continue;
+        const cos = reg.list(f.id).filter(c => !c.archived && c.payer !== 'client');
+        const owner = auth.firmUsers(f.id).find(u => u.role === 'owner' && !u.disabled);
+        customers.push({ key: 'firm:' + f.id, name: f.name, email: emailOf(owner), person: owner ? owner.name : '', plan: PLANS.planOf(f.plan),
+          companies: cos.length, assistant: cos.filter(c => c.assistant).length });
+      }
+      // Companies whose client pays for themselves (marked on the company), in any firm.
+      for (const c of reg.list()) {
+        if (c.archived || c.payer !== 'client') continue;
+        const f = auth.firm(c.firmId);
+        if (!f || f.status !== 'active') continue;
+        const client = auth.data.users.find(u => u.role === 'client' && !u.disabled && (u.companies || []).includes(c.id));
+        customers.push({ key: 'co:' + c.id, name: c.name, email: emailOf(client), person: client ? client.name : '', plan: PLANS.planOf(c.clientPlan || f.plan),
+          companies: 1, assistant: c.assistant ? 1 : 0 });
+      }
+      return { companyId: ownCos.some(c => c.id === set.companyId) ? set.companyId : '', tax: set.tax !== false, companies: ownCos, amounts, plans: PLANS.PLANS, customers };
+    }],
+    ['PUT', /^\/api\/invoicing$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const b = await readJson(req);
+      const set = { ...(auth.data.settings.invoicing || {}) };
+      if (b.companyId !== undefined) {
+        const id = String(b.companyId || '');
+        if (id && !reg.list(user.firmId).some(c => c.id === id && !c.archived)) throw new ValidationError('Choose one of your own firm’s companies.');
+        set.companyId = id;
+      }
+      if (b.tax !== undefined) set.tax = b.tax !== false;
+      auth.data.settings.invoicing = set;
+      auth.save();
+      auth.log('security-changed', { by: user.username, change: 'monthly invoicing settings' });
+      return { ok: true, companyId: set.companyId || '', tax: set.tax !== false };
+    }],
     // What this person has to pay for (if anything), read fresh from Stripe when it's a few hours old.
     ['GET', /^\/api\/billing\/me$/, async (req, m, res, user) => {
       if (!billing.configured()) return { configured: false };

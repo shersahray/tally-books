@@ -424,7 +424,7 @@ function firmNameForm(){
 
 /* ---------- Firms on this server (the server's administrators) ---------- */
 let FIRMS=null;
-async function showFirms(){S.view='firms';FIRMS=null;renderMain();try{await loadSysMail(true);FIRMS=await api('GET','/api/firms');if(typeof loadBillingAdmin==='function')await loadBillingAdmin()}catch(e){toast(e.message,true)}if(S.view==='firms')renderMain()}
+async function showFirms(){S.view='firms';FIRMS=null;renderMain();try{await loadSysMail(true);FIRMS=await api('GET','/api/firms');if(typeof loadBillingAdmin==='function')await loadBillingAdmin();if(typeof loadInvoicing==='function')await loadInvoicing()}catch(e){toast(e.message,true)}if(S.view==='firms')renderMain()}
 const FIRM_STATUS={active:['paid','Active'],pending:['partial','Waiting for approval'],suspended:['overdue','Suspended']};
 function vFirms(){
   if(!ME||!ME.platformAdmin)return head('Firms','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Only the server’s administrator manages firms.</div></div>';
@@ -432,7 +432,7 @@ function vFirms(){
   const list=FIRMS.firms.slice().sort((a,b)=>(a.status==='pending'?0:1)-(b.status==='pending'?0:1)||b.created-a.created);
   const pending=list.filter(f=>f.status==='pending').length;
   return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Firms','Bookkeeping firms using this server. Each firm sees only its own people and companies.',`<button class="btn primary" data-firminvite>+ Invite a firm</button>`)+
-  (typeof billingAdminPanel==='function'?billingAdminPanel():'')+sysMailPanel()+
+  (typeof invoicingPanel==='function'?invoicingPanel():'')+(typeof billingAdminPanel==='function'?billingAdminPanel():'')+sysMailPanel()+
   `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>New firms</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="field"><label for="fmSignups">Can new firms sign up from the sign-in screen?</label><select id="fmSignups">${[['off','No: only people you invite can sign in'],['approval','Yes, after I approve each one'],['open','Yes, straight away']].map(([k,v])=>`<option value="${k}" ${FIRMS.signups===k?'selected':''}>${v}</option>`).join('')}</select></div>
     <div class="field"><label for="fmDefPlan">Plan for firms that sign up</label><select id="fmDefPlan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${FIRMS.defaultPlan===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select><span class="hint">You can change each firm’s plan in the table below.</span></div>
@@ -451,6 +451,7 @@ function bindFirms(m){
     if(b.hasAttribute('data-back-co'))return showCompanies();
     if(b.hasAttribute('data-firminvite'))return inviteFirmForm(showFirms);
     if(b.dataset.sysmail)return sysMailAction(b.dataset.sysmail);
+    if(typeof invoicingAction==='function'&&await invoicingAction(b))return;
     if(typeof billingAdminAction==='function'&&await billingAdminAction(b))return;
     if(b.dataset.firmdel){const f=FIRMS.firms.find(x=>x.id===b.dataset.firmdel);if(!await confirmBox('Remove this firm?',`${f.name}: the firm and its ${f.users} account${f.users===1?'':'s'} are removed, and their emails can be used again. It has no companies, so no books are lost.`,'Remove'))return;
       try{await api('DELETE','/api/firms/'+encodeURIComponent(f.id));await showFirms();toast(`${f.name} removed`)}catch(ex){toast(ex.message,true)}return}
