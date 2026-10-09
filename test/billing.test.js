@@ -38,6 +38,7 @@ async function fakeStripe(url, init) {
     if (method === 'POST') sub.items.data[0].quantity = +body.get('items[0][quantity]');
     return json(200, sub);
   }
+  if (p === 'tax/settings') return json(200, { object: 'tax.settings', status: st.taxStatus || 'pending' });
   if (p === 'billing_portal/sessions') return json(200, { url: 'https://billing.stripe.com/p/session/x' });
   return json(404, { error: { message: 'not found' } });
 }
@@ -149,4 +150,43 @@ test('billing: a client who pays for their own company starts a trial before ope
   // Turning subscriptions off lets everyone in again.
   await call('PUT', '/api/billing', { key: '' }, admin);
   assert.equal((await call('GET', '/api/companies', undefined, firmOwner)).status, 200);
+});
+
+test('billing: sales tax with Stripe Tax: only once Stripe Tax is set up; checkout then adds tax from the billing address', async () => {
+  await call('PUT', '/api/billing', { key: KEY }, admin);
+  assert.equal((await call('GET', '/api/billing', undefined, admin)).json.tax, false, 'off unless turned on');
+  const pending = await call('PUT', '/api/billing', { tax: true }, admin);
+  assert.equal(pending.status, 409); assert.match(pending.json.error, /Stripe Tax/);
+  assert.equal((await call('PUT', '/api/billing', { tax: 'yes' }, admin)).status, 400);
+  st.taxStatus = 'active';
+  assert.equal((await call('PUT', '/api/billing', { tax: true }, admin)).json.tax, true);
+  assert.equal((await call('GET', '/api/billing/me', undefined, admin)).json.offer.tax, true);
+  const owner = (await call('POST', '/api/auth/signup', { firmName: 'Birch Books', name: 'Bo', username: 'bo@birch.example', password: 'birch long phrase here' })).cookie;
+  const prices = st.calls.length;
+  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'essentials' }, owner);
+  const sess = st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body;
+  assert.deepEqual([sess['automatic_tax[enabled]'], sess.billing_address_collection, sess['tax_id_collection[enabled]'], sess.customer_email], ['true', 'required', 'true', 'bo@birch.example']);
+  for (const c of st.calls.slice(prices).filter(c => c.p === 'prices' && c.method === 'POST')) assert.equal(c.body.tax_behavior, 'exclusive', 'prices are plus tax');
+  // Off again: no tax on the next checkout.
+  assert.equal((await call('PUT', '/api/billing', { tax: false }, admin)).json.tax, false);
+  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'essentials' }, owner);
+  assert.equal(st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body['automatic_tax[enabled]'], undefined);
+});
+
+test('sign-up: a business keeping its own books gets its company made, then starts its trial and lands in its books', async () => {
+  const bad = await call('POST', '/api/auth/signup', { acceptTerms: true, kind: 'business', firmName: 'Pine Bakery', name: 'Pat', username: 'pat@pine.example', password: 'pine long phrase here' });
+  assert.equal(bad.status, 400, 'the province is needed for the sales tax');
+  const owner = (await call('POST', '/api/auth/signup', { acceptTerms: true, kind: 'business', province: 'ON', firmName: 'Pine Bakery', name: 'Pat', username: 'pat@pine.example', password: 'pine long phrase here' })).cookie;
+  assert.ok(owner, 'signed in straight away');
+  assert.equal(after402(await call('GET', '/api/companies', undefined, owner)).billing, 'firm', 'the trial is started first');
+  const me = (await call('GET', '/api/billing/me', undefined, owner)).json;
+  assert.equal(me.firm.companies, 1);
+  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'essentials' }, owner);
+  assert.equal(st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body['line_items[0][quantity]'], '1');
+  await call('POST', '/api/billing/finish', { session: Object.keys(st.sessions).at(-1) }, owner);
+  const cos = (await call('GET', '/api/companies', undefined, owner)).json.companies;
+  assert.deepEqual(cos.map(c => c.name), ['Pine Bakery']);
+  const state = (await call('GET', `/api/c/${cos[0].id}/state`, undefined, owner)).json;
+  assert.equal(state.company.province, 'ON');
+  assert.equal(state.company.taxRate, 13);
 });

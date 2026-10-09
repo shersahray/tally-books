@@ -195,13 +195,18 @@ class Auth {
     this.data.settings.signups = v;
     this.save();
   }
-  /** A firm signs itself up: a new firm and its owner. Waits for an administrator's approval unless sign-ups are open. */
-  signup({ firmName, name, username, password }) {
-    if (this.signups === 'off') throw new AuthError('New firms can’t sign up on this server.', 403);
+  /**
+   * A firm, or a business keeping its own books, signs itself up: a new firm and its owner.
+   * Waits for an administrator's approval unless sign-ups are open.
+   */
+  signup({ firmName, name, username, password, kind }) {
+    if (this.signups === 'off') throw new AuthError('New accounts can’t be created on this server.', 403);
+    const business = kind === 'business';
     firmName = String(firmName || '').trim();
-    if (!firmName) throw new AuthError('Enter your firm’s name.', 400);
+    if (!firmName) throw new AuthError(business ? 'Enter your business’s name.' : 'Enter your firm’s name.', 400);
     if (this.data.firms.filter(f => f.status === 'pending').length >= 100) throw new AuthError('Sign-ups are paused for now. Try again later.', 429);
     const f = this.newFirm(firmName, this.signups === 'open' ? 'active' : 'pending', false, this.defaultPlan);
+    if (business) f.kind = 'business';
     try {
       const u = this.addUser({ name, username, password, role: 'owner', firmId: f.id, self: true });
       this.log('firm-signup', { username: u.username, firm: f.name, status: f.status });
