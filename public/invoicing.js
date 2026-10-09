@@ -10,8 +10,11 @@ const slMonth=()=>today().slice(0,7);
 function slMonthName(m){const d=new Date(+m.slice(0,4),+m.slice(5,7)-1,1);const s=d.toLocaleDateString(document.documentElement.lang||'en-CA',{month:'long',year:'numeric'});return s.charAt(0).toUpperCase()+s.slice(1)}
 const slCents=c=>(+c||0)/100;
 const slPlanLabel=(set,plan)=>T(((set.plans||{})[plan]||{label:plan}).label);
-/** Before tax: the plan for each company, and the AI assistant for the companies that have it. */
-function slAmount(set,cu){return r2(cu.companies*slCents(set.amounts[cu.plan])+cu.assistant*slCents(set.amounts.assistant))}
+/** How many of a customer's companies have each add-on (the AI assistant, the scrap yard tools…). */
+const slAddons=cu=>({...(cu.assistant?{assistant:cu.assistant}:{}),...(cu.addons||{})});
+const slAddonLabel=(set,k)=>T(((set.addons||TallyPlans.ADDONS)[k]||{label:k}).label);
+/** Before tax: the plan for each company, and each add-on for the companies that have it. */
+function slAmount(set,cu){return r2(cu.companies*slCents(set.amounts[cu.plan])+Object.entries(slAddons(cu)).reduce((t,[k,n])=>t+(+n||0)*slCents(set.amounts[k]),0))}
 const slDocId=(cu,m)=>('sl_'+cu.key+'_'+m).replace(/[^A-Za-z0-9_.@+~-]/g,'_').slice(0,120);
 
 async function loadInvoicing(){try{INVSET=await api('GET','/api/invoicing')}catch(e){INVSET=null}return INVSET}
@@ -44,7 +47,7 @@ async function slRunDue(auto){
     let num=parseInt(nextNum('invoice'))||1001,made=0;const errs=[];
     for(const cu of todo){
       const id=slDocId(cu,m),lines=[{desc:`Sumlora ${slPlanLabel(set,cu.plan)}, ${label}: ${cu.companies} ${cu.companies===1?'company':'companies'}`,account:income,qty:cu.companies,rate:slCents(set.amounts[cu.plan]),taxCode:tc}];
-      if(cu.assistant)lines.push({desc:`AI assistant add-on, ${label}: ${cu.assistant} ${cu.assistant===1?'company':'companies'}`,account:income,qty:cu.assistant,rate:slCents(set.amounts.assistant),taxCode:tc});
+      for(const[k,n]of Object.entries(slAddons(cu)))if(n>0)lines.push({desc:`${slAddonLabel(set,k)} add-on, ${label}: ${n} ${n===1?'company':'companies'}`,account:income,qty:n,rate:slCents(set.amounts[k]),taxCode:tc});
       const c=calcLines(lines,x=>(+x.qty||0)*(+x.rate||0),false);
       // The customer: the one made for this firm before, or a new one.
       const writes=[];let ct=S.contacts.find(x=>x.kind==='customer'&&x.sumlora===cu.key);
@@ -74,15 +77,15 @@ function invoicingPanel(){
   const tot=list.reduce((t,cu)=>t+slAmount(s,cu),0);
   const co=s.companies.find(c=>c.id===s.companyId);
   return `<div class="panel" style="margin-bottom:16px"><h3>Monthly invoices to firms and clients</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
-    <div class="muted" style="font-size:13px">For customers who pay you by e-Transfer. From the 1st of each month, the first time you open the company below, Sumlora makes one invoice for each firm (its companies on its plan, plus the AI assistant add-on) and for each company whose client pays for themselves. Each gets one invoice a month. Review the invoices, email them, and record each e-Transfer as a payment. Prices come from the Subscriptions settings.</div>
+    <div class="muted" style="font-size:13px">For customers who pay you by e-Transfer. From the 1st of each month, the first time you open the company below, Sumlora makes one invoice for each firm (its companies on its plan, plus any add-ons, like the AI assistant or the scrap yard tools) and for each company whose client pays for themselves. Each gets one invoice a month. Review the invoices, email them, and record each e-Transfer as a payment. Prices come from the Subscriptions settings.</div>
     <div class="fields">
       ${fld('slCo','Bill from this company',`<select id="slCo"><option value="">Choose…</option>${s.companies.map(c=>`<option value="${esc(c.id)}" ${c.id===s.companyId?'selected':''} translate="no">${esc(c.name)}</option>`).join('')}</select><span class="hint">${s.companies.length?'Your own business’s books in Sumlora. The invoices, customers and income go here.':'Add your own business as a company first.'}</span>`)}
       <div class="field"><label class="check" style="margin-top:24px"><input type="checkbox" id="slTax" ${s.tax?'checked':''}> <span>Charge sales tax on the invoices</span></label><span class="hint">The company’s own rate (${co?'set in its Settings':'GST/HST, or GST and QST'}). Leave off if you aren’t registered.</span></div>
     </div>
     <div class="actions"><button class="btn" data-slsave>Save</button>${s.companyId?`<button class="btn primary" data-slopen>Make ${esc(label)} invoices</button>`:''}</div>
     <h3 class="fsec" style="margin:4px 0 0">${esc(label)}: what each customer owes</h3>
-    <div class="tbl-wrap"><table><thead><tr><th>Customer</th><th>Email</th><th>Plan</th><th class="n">Companies</th><th class="n">AI assistant</th><th class="n">Before tax</th></tr></thead><tbody>
-      ${list.length?list.map(cu=>`<tr><td><b translate="no">${esc(cu.name)}</b>${cu.key.startsWith('co:')?' <span class="pill quiet">Client pays</span>':''}</td><td class="mono" style="font-size:12.5px" translate="no">${esc(cu.email||'—')}</td><td>${esc(slPlanLabel(s,cu.plan))}</td><td class="n">${cu.companies}</td><td class="n">${cu.assistant||'—'}</td><td class="n">${money(slAmount(s,cu))}</td></tr>`).join('')+`<tr><td colspan="5"><b>Total</b></td><td class="n"><b>${money(tot)}</b></td></tr>`:emptyRow(6,'No one to bill yet','Firms you invite show here once they add companies.')}
+    <div class="tbl-wrap"><table><thead><tr><th>Customer</th><th>Email</th><th>Plan</th><th class="n">Companies</th><th class="n">Add-ons</th><th class="n">Before tax</th></tr></thead><tbody>
+      ${list.length?list.map(cu=>`<tr><td><b translate="no">${esc(cu.name)}</b>${cu.key.startsWith('co:')?' <span class="pill quiet">Client pays</span>':''}</td><td class="mono" style="font-size:12.5px" translate="no">${esc(cu.email||'—')}</td><td>${esc(slPlanLabel(s,cu.plan))}</td><td class="n">${cu.companies}</td><td class="n">${Object.entries(slAddons(cu)).filter(([,n])=>n>0).map(([k,n])=>`${esc(slAddonLabel(s,k))}: ${n}`).join('<br>')||'—'}</td><td class="n">${money(slAmount(s,cu))}</td></tr>`).join('')+`<tr><td colspan="5"><b>Total</b></td><td class="n"><b>${money(tot)}</b></td></tr>`:emptyRow(6,'No one to bill yet','Firms you invite show here once they add companies.')}
     </tbody></table></div>
     ${idle.length?`<div class="muted" style="font-size:12.5px"><span>No companies yet, so not billed:</span> <span translate="no">${idle.map(cu=>esc(cu.name)).join(', ')}</span></div>`:''}
   </div></div>`;

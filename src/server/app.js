@@ -93,11 +93,15 @@ function createApp(opts) {
   const canSeeCo = (user, cid) => { const c = reg.get(cid); return !!(c && user && c.firmId === user.firmId && auth.canSee(user, cid)); };
   /** AI costs the server's owner money, so each firm uses it only when an administrator allows it. */
   const PLANS = require('../../public/plans.js');
+  const IND = require('../../public/industries.js');
   /** Is a plan feature on for this company: in its firm's plan, and not switched off in its settings? */
   const featureOn = (cid, key, store) => {
     const c = reg.get(cid), f = c && auth.firm(c.firmId);
     const settings = (store || reg.store(cid)).getSetting('company') || {};
     return PLANS.featureOn(licencePlan() || (f ? f.plan : 'plus'), settings.features, key);
+  };
+  const needAddon = (cid, key) => {
+    if (!(reg.get(cid) || {})[key]) throw new ValidationError(`The ${PLANS.ADDONS[key].label} add-on isn’t on for this company. An owner can add it in Settings.`, 403);
   };
   const needFeature = (cid, key, store) => {
     if (!featureOn(cid, key, store)) throw new ValidationError(`${PLANS.FEATURES[key].label} isn’t part of this company’s plan.`, 403);
@@ -142,8 +146,11 @@ function createApp(opts) {
   const coNeedsPay = c => billing.configured() && !!c && c.payer === 'client' && !billingPaid(c.billing);
   /** Companies a firm pays for: the ones it keeps that aren't archived and whose client doesn't pay. At least one. */
   const firmCount = fid => Math.max(1, reg.list(fid).filter(c => !c.archived && c.payer !== 'client').length);
-  /** Of those, the companies with the AI assistant add-on. */
-  const firmAssistants = fid => reg.list(fid).filter(c => !c.archived && c.payer !== 'client' && c.assistant).length;
+  /** Of those, the companies with an add-on (the AI assistant, the scrap yard tools…). */
+  const firmAddons = (fid, key) => reg.list(fid).filter(c => !c.archived && c.payer !== 'client' && c[key]).length;
+  const firmAssistants = fid => firmAddons(fid, 'assistant');
+  /** How many companies have each add-on, for a subscription: { assistant: 2, scrapyard: 1 }. */
+  const addonCounts = list => Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, list.filter(c => c[k]).length]));
   /** The address people come back to after Stripe's pages. */
   const originOf = req => {
     const proto = (opts.trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()) || (req.socket.encrypted ? 'https' : 'http');
@@ -155,31 +162,34 @@ function createApp(opts) {
     const f = auth.firm(fid);
     if (!billing.configured() || !f || firmExempt(fid) || !f.billing || !billingPaid(f.billing)) return;
     try { auth.setFirmBilling(fid, await billing.setQuantity(f.billing, firmCount(fid))); } catch (e) { console.error('Sumlora subscription: couldn’t update the number of companies:', e.message); }
-    try { auth.setFirmBilling(fid, await billing.setAddon(auth.firm(fid).billing, 'assistant', firmAssistants(fid))); } catch (e) { console.error('Sumlora subscription: couldn’t update the AI assistant add-on:', e.message); }
+    for (const k of Object.keys(PLANS.ADDONS)) {
+      try { auth.setFirmBilling(fid, await billing.setAddon(auth.firm(fid).billing, k, firmAddons(fid, k))); } catch (e) { console.error(`Sumlora subscription: couldn’t update the ${PLANS.ADDONS[k].label} add-on:`, e.message); }
+    }
   }
   /**
-   * Turn the AI assistant add-on on or off for a company, and keep the subscription that pays for it in step.
+   * Turn an add-on (plans.js ADDONS) on or off for a company, and keep the subscription that pays for it in step.
    * Turning it on must reach Stripe first (so it isn't used unpaid); turning it off never waits on Stripe.
    * No Stripe key, the server owner's own firm, or a subscription not started yet: just the switch
    * (a subscription started later includes the add-on).
    */
-  async function setAssistant(cid, on) {
+  async function setAddonFor(cid, key, on) {
     const c = reg.get(cid), f = auth.firm(c.firmId);
-    if (!!c.assistant === on) return;
+    if (!!c[key] === on) return;
     const clientPays = c.payer === 'client';
     const rec = clientPays ? c.billing : f && f.billing;
     const billed = billing.configured() && !(clientPays ? false : firmExempt(c.firmId)) && rec && rec.sub && billingPaid(rec);
-    if (!billed) { reg.update(cid, { assistant: on }); return; }
+    if (!billed) { reg.update(cid, { [key]: on }); return; }
     if (on) {
-      const next = await billing.setAddon(rec, 'assistant', clientPays ? 1 : firmAssistants(c.firmId) + (c.archived ? 0 : 1));
-      reg.update(cid, { assistant: true });
+      const next = await billing.setAddon(rec, key, clientPays ? 1 : firmAddons(c.firmId, key) + (c.archived ? 0 : 1));
+      reg.update(cid, { [key]: true });
       if (clientPays) reg.update(cid, { billing: next }); else auth.setFirmBilling(c.firmId, next);
       return;
     }
-    reg.update(cid, { assistant: false });
-    if (clientPays) { try { reg.update(cid, { billing: await billing.setAddon(rec, 'assistant', 0) }); } catch (e) { console.error('Sumlora subscription: couldn’t remove the AI assistant add-on:', e.message); } }
+    reg.update(cid, { [key]: false });
+    if (clientPays) { try { reg.update(cid, { billing: await billing.setAddon(rec, key, 0) }); } catch (e) { console.error(`Sumlora subscription: couldn’t remove the ${PLANS.ADDONS[key].label} add-on:`, e.message); } }
     else await syncFirmCount(c.firmId);
   }
+  const setAssistant = (cid, on) => setAddonFor(cid, 'assistant', on);
   /** Can people in this company ask the AI assistant, and how many questions are left this month? */
   function assistantInfo(cid, store) {
     const c = reg.get(cid);
@@ -411,6 +421,8 @@ function createApp(opts) {
       lang: body.lang,
       orgType: body.orgType,
       industry: body.industry,
+      // A type of business can bring its own fields (a scrap yard's weigh ticket number).
+      customFields: ((IND.INDUSTRIES[body.industry] || {}).fields || []).map(x => ({ label: body.lang === 'fr' ? x.fr || x.label : x.label, sales: x.sales, purchase: x.purchase })),
     });
     let accounts = null;
     if (body.copyFrom) {
@@ -421,11 +433,23 @@ function createApp(opts) {
     const entry = reg.create(company.name, user ? user.firmId : auth.mainFirmId);
     const store = reg.store(entry.id);
     seedDefaults(store, { company, accounts });
+    if (!accounts) seedIndustryItems(store, company);
     if (body.examples && company.orgType === 'business') loadExamples(store);
     if (body.code !== undefined && body.code !== '') { store.putSetting('companyCode', hashCode(body.code)); codeOpen.set(`${user.token}|${entry.id}`, Date.now() + CODE_TTL); }
     store.audit(user, 'create', { summary: `company created${body.copyFrom ? ' with a copied chart of accounts' : ''}${body.examples ? ', with example data' : ''}` });
     broadcast({ companies: true, firmId: entry.firmId });
     return entry;
+  }
+
+  /** The products a type of business starts with (a scrap yard's metals by weight), on its own accounts. */
+  function seedIndustryItems(store, company) {
+    const ind = IND.INDUSTRIES[company.industry];
+    if (!ind || !ind.items || store.list('items').length) return;
+    const byCode = code => (store.list('accounts').find(a => a.code === code) || {}).id || '';
+    store.transaction(() => ind.items.forEach(([name, inc, exp, fr], i) => {
+      const data = validateRecord('items', 'i' + (i + 1), { name: company.lang === 'fr' ? fr || name : name, type: 'service', sold: true, incomeAccount: byCode(inc), bought: !!exp, expenseAccount: exp ? byCode(exp) : '', taxCode: 'std' }, store);
+      store.put('items', 'i' + (i + 1), data);
+    }));
   }
 
   function summary(c) {
@@ -492,6 +516,9 @@ function createApp(opts) {
     const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}), closingDate: cl.date || '', closingPassword: !!cl.hash, hasCode: hasCode(ctx.store) } };
     for (const c of COLLECTIONS) out[c] = ctx.store.list(c);
     out.assistant = assistantInfo(ctx.id, ctx.store);
+    // Add-ons on for this company (the AI assistant has its own details above).
+    const co = reg.get(ctx.id) || {};
+    out.addons = Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, !!co[k]]));
     return out;
   }
 
@@ -532,6 +559,7 @@ function createApp(opts) {
       if (collection === 'employees' || collection === 'payruns' || (collection === 'entries' && ['payrun', 'payremit'].includes(d.type))) needFeature(ctx.id, 'payroll', store);
       if (collection === 'projects' || collection === 'times') needFeature(ctx.id, 'projects', store);
       if (collection === 'assets') needFeature(ctx.id, 'fixedAssets', store);
+      if (collection === 'vehicles') needAddon(ctx.id, 'scrapyard');
       if (collection === 'items' && d.type === 'inventory') needFeature(ctx.id, 'inventory', store);
       if (collection === 'filings' && ['quick', 'charity', 'npo'].includes(d.method)) {
         const prev = store.get('filings', id);
@@ -556,13 +584,15 @@ function createApp(opts) {
       if (!(op === 'delete' ? own : noteOnly)) throw new ValidationError('Your bookkeeper takes care of receipts once they’re sent.', 403);
     }
     // Social insurance numbers never go into the activity log in full.
-    const hideSin = r => (r && r.sin ? { ...r, sin: '•••••' + String(r.sin).slice(-3) } : r);
-    const before = collection === 'employees' ? hideSin(store.get(collection, id)) : store.get(collection, id);
+    // Nor do the ID numbers of people who sold a vehicle to a scrap yard.
+    const hideSin = r => (r && r.sin ? { ...r, sin: '•••••' + String(r.sin).slice(-3) } : r && r.seller && r.seller.idNumber ? { ...r, seller: { ...r.seller, idNumber: '•••••' + String(r.seller.idNumber).slice(-3) } } : r);
+    const masked = collection === 'employees' || collection === 'vehicles';
+    const before = masked ? hideSin(store.get(collection, id)) : store.get(collection, id);
     if (op === 'set') {
       const data = validateRecord(collection, id, w.data, store);
       closedCheck(store, w, data, user);
       store.put(collection, id, data);
-      const after = collection === 'employees' ? hideSin(store.get(collection, id)) : store.get(collection, id);
+      const after = masked ? hideSin(store.get(collection, id)) : store.get(collection, id);
       if (JSON.stringify(before) !== JSON.stringify(after)) store.audit(user, before ? 'change' : 'add', { collection, id, summary: auditSummary(collection, after), before, after });
     } else if (op === 'delete') {
       checkDelete(collection, id, store);
@@ -602,6 +632,7 @@ function createApp(opts) {
       case 'docs': return `${d.kind}${d.number ? ' #' + d.number : ''} ${d.date} ${amt(d.total)}`;
       case 'accounts': return `${d.code ? d.code + ' ' : ''}${d.name}`;
       case 'contacts': case 'employees': return d.name || '';
+      case 'vehicles': return `vehicle ${d.stock}${d.vin ? ' VIN ' + d.vin : ''} ${[d.year, d.make, d.model].filter(Boolean).join(' ')} ${amt(d.price)} (${d.status})`;
       case 'bankTxns': return `${d.date} ${amt(d.amount)} ${String(d.desc || '').slice(0, 50)} (${d.status})`;
       case 'rules': return `when "${d.text}"`;
       case 'recons': return `statement ${d.statementDate} ending ${amt(d.endingBalance)}`;
@@ -1039,15 +1070,24 @@ function createApp(opts) {
     ['POST', /^\/api\/companies$/, async (req, m, res, user) => {
       ownerOnly(user);
       checkCompanyLimit();
-      const entry = createCompany(await readJson(req), user);
+      const body = await readJson(req);
+      const entry = createCompany(body, user);
+      // A type of business that comes with an add-on (a scrap yard) turns it on, unless the owner unticked it.
+      const addon = PLANS.ADDON_FOR_INDUSTRY[(reg.store(entry.id).getSetting('company') || {}).industry];
+      let addonError = '';
+      if (addon && body[addon] !== false) {
+        try { await setAddonFor(entry.id, addon, true); auth.log('addon-changed', { username: user.username, company: entry.id, addon, on: true }); }
+        catch (e) { addonError = `The company was made, but the ${PLANS.ADDONS[addon].label} add-on couldn’t be added: ${e.message} Add it from Settings.`; }
+      }
       syncFirmCount(user.firmId);
-      return { ok: true, company: summary(entry) };
+      return { ok: true, company: summary(reg.get(entry.id)), ...(addonError ? { addonError } : {}) };
     }],
     ['PUT', /^\/api\/companies\/([^/]+)$/, async (req, m, res, user) => {
       const body = await readJson(req);
       const id = decodeURIComponent(m[1]);
       if (!canSeeCo(user, id)) throw new ValidationError('That company doesn’t exist.', 404);
-      if (body.archived !== undefined || body.payer !== undefined || body.assistant !== undefined) ownerOnly(user);
+      const addonKeys = Object.keys(PLANS.ADDONS).filter(k => body[k] !== undefined);
+      if (body.archived !== undefined || body.payer !== undefined || addonKeys.length) ownerOnly(user);
       const patch = {};
       if (body.archived !== undefined) patch.archived = !!body.archived;
       if (body.payer !== undefined) patch.payer = body.payer === 'client' ? 'client' : 'firm';
@@ -1055,10 +1095,11 @@ function createApp(opts) {
       if (patch.archived === false && reg.get(id).archived) checkCompanyLimit({ restoring: true });
       if (body.opened) patch.lastOpened = Date.now();
       reg.update(id, patch);
-      // The AI assistant add-on costs money each month, so it's only ever on when an owner turns it on here.
-      if (body.assistant !== undefined) {
-        await setAssistant(id, body.assistant === true);
-        auth.log('assistant-changed', { username: user.username, company: id, on: body.assistant === true });
+      // Add-ons cost money each month, so they're only ever on when an owner turns them on here
+      // (or picks a type of business that comes with one when making the company).
+      for (const k of addonKeys) {
+        await setAddonFor(id, k, body[k] === true);
+        auth.log(k === 'assistant' ? 'assistant-changed' : 'addon-changed', { username: user.username, company: id, ...(k === 'assistant' ? {} : { addon: k }), on: body[k] === true });
         broadcast({ companies: true, firmId: reg.get(id).firmId });
       }
       if (patch.archived !== undefined) broadcast({ companies: true, firmId: reg.get(id).firmId });
@@ -1156,7 +1197,7 @@ function createApp(opts) {
         const cos = reg.list(f.id).filter(c => !c.archived && c.payer !== 'client');
         const owner = auth.firmUsers(f.id).find(u => u.role === 'owner' && !u.disabled);
         customers.push({ key: 'firm:' + f.id, name: f.name, email: emailOf(owner), person: owner ? owner.name : '', plan: PLANS.planOf(f.plan),
-          companies: cos.length, assistant: cos.filter(c => c.assistant).length });
+          companies: cos.length, assistant: cos.filter(c => c.assistant).length, addons: addonCounts(cos) });
       }
       // Companies whose client pays for themselves (marked on the company), in any firm.
       for (const c of reg.list()) {
@@ -1165,9 +1206,9 @@ function createApp(opts) {
         if (!f || f.status !== 'active') continue;
         const client = auth.data.users.find(u => u.role === 'client' && !u.disabled && (u.companies || []).includes(c.id));
         customers.push({ key: 'co:' + c.id, name: c.name, email: emailOf(client), person: client ? client.name : '', plan: PLANS.planOf(c.clientPlan || f.plan),
-          companies: 1, assistant: c.assistant ? 1 : 0 });
+          companies: 1, assistant: c.assistant ? 1 : 0, addons: addonCounts([c]) });
       }
-      return { companyId: ownCos.some(c => c.id === set.companyId) ? set.companyId : '', tax: set.tax !== false, companies: ownCos, amounts, plans: PLANS.PLANS, customers };
+      return { companyId: ownCos.some(c => c.id === set.companyId) ? set.companyId : '', tax: set.tax !== false, companies: ownCos, amounts, plans: PLANS.PLANS, addons: PLANS.ADDONS, customers };
     }],
     ['PUT', /^\/api\/invoicing$/, async (req, m, res, user) => {
       adminOnly(user);
@@ -1203,12 +1244,12 @@ function createApp(opts) {
         if (firmExempt(user.firmId)) throw new ValidationError('Your firm doesn’t pay for Sumlora on this server.');
         if (billingPaid(f.billing)) throw new ValidationError('Your firm’s subscription is already running.');
         const plan = PLANS.PLANS[b.plan] ? b.plan : PLANS.planOf(f.plan);
-        return { url: await billing.checkout({ kind: 'firm', id: f.id, plan, quantity: firmCount(f.id), assistant: firmAssistants(f.id), email: user.username, customer: f.billing && f.billing.customer, trial: !(f.billing && f.billing.hadTrial), base: originOf(req) }) };
+        return { url: await billing.checkout({ kind: 'firm', id: f.id, plan, quantity: firmCount(f.id), addons: Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, firmAddons(f.id, k)])), email: user.username, customer: f.billing && f.billing.customer, trial: !(f.billing && f.billing.hadTrial), base: originOf(req) }) };
       }
       const c = reg.get(String(b.id || ''));
       if (b.kind !== 'company' || !c || !canSeeCo(user, c.id) || c.payer !== 'client') throw new ValidationError('That company doesn’t exist.', 404);
       if (billingPaid(c.billing)) throw new ValidationError('This company’s subscription is already running.');
-      return { url: await billing.checkout({ kind: 'company', id: c.id, plan: PLANS.planOf(c.clientPlan || (f && f.plan)), quantity: 1, assistant: c.assistant ? 1 : 0, email: user.username, customer: c.billing && c.billing.customer, trial: !(c.billing && c.billing.hadTrial), base: originOf(req) }) };
+      return { url: await billing.checkout({ kind: 'company', id: c.id, plan: PLANS.planOf(c.clientPlan || (f && f.plan)), quantity: 1, addons: addonCounts([c]), email: user.username, customer: c.billing && c.billing.customer, trial: !(c.billing && c.billing.hadTrial), base: originOf(req) }) };
     }],
     // Back from Stripe's page: record the subscription.
     ['POST', /^\/api\/billing\/finish$/, async (req, m, res, user) => {
