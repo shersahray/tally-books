@@ -37,6 +37,7 @@ async function afterSignIn(){
 const legalUrl=k=>`/legal/${k}${I18N.lang==='fr'?'-fr':''}.html`;
 const termsBox=id=>`<label class="check" style="align-items:flex-start;font-size:13.5px"><input type="checkbox" id="${id}" style="margin-top:3px"> <span><span>I agree to the</span> <a href="${legalUrl('terms')}" target="_blank" rel="noopener">Terms of service</a> <span>and the</span> <a href="${legalUrl('privacy')}" target="_blank" rel="noopener">Privacy policy</a><span>.</span></span></label>`;
 const termsTicked=id=>{const b=$('#'+id);if(b&&!b.checked)throw new Error('Tick the box to agree to the Terms of service and Privacy policy.');return true};
+const SG_PROVINCES=[['AB','Alberta'],['BC','British Columbia'],['MB','Manitoba'],['NB','New Brunswick'],['NL','Newfoundland and Labrador'],['NS','Nova Scotia'],['NT','Northwest Territories'],['NU','Nunavut'],['ON','Ontario'],['PE','Prince Edward Island'],['QC','Quebec'],['SK','Saskatchewan'],['YT','Yukon']];
 const pwHint='At least 10 characters. A short phrase of a few unrelated words works well, for example “maple river copper lamp”.';
 const lockCard=(title,sub,body,submit,extra='')=>`<div class="lock"><form class="lock-card" novalidate>
     <div class="lock-brand"><span class="logo" aria-label="Sumlora">${LOGO_SVG}</span></div>
@@ -55,7 +56,7 @@ function renderLock(mode,opt=''){
   if(mode==='signin')html=lockCard('Sign in',esc(msg||'Sign in to see your books.'),`
       ${fld('lgUser','Username or email',`<input type="text" id="lgUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('lgPass','Password',`<input type="password" id="lgPass" autocomplete="current-password">`,true)}`,'Sign in',
-      `<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>${SIGNUPS?'<button type="button" class="btn ghost block" data-locksignup>New firm? Create an account</button>':''}`);
+      `<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>${SIGNUPS?'<button type="button" class="btn ghost block" data-locksignup>New to Sumlora? Create an account</button>':''}`);
   else if(mode==='setup')html=lockCard('Welcome to Sumlora','Create the owner account. You’ll use it to sign in, add staff and clients, and manage security. Only people with an account can see the books.',`
       ${opt&&opt.setupCode?fld('suCode','Setup code',`<input type="text" id="suCode" autocomplete="off" autocapitalize="none" spellcheck="false"><span class="hint">The setup code chosen when this server was installed.</span>`,true):''}
       ${opt&&opt.licence?fld('suLic','Licence code',`<textarea id="suLic" rows="3" class="mono" spellcheck="false" autocomplete="off" placeholder="TB1-…" style="font-size:12.5px;word-break:break-all"></textarea><span class="hint">${opt.licence.required?'Paste the licence code you received with Sumlora. It starts with TB1-.':`Paste the licence code you received with Sumlora. No code yet? Leave it empty for a ${opt.licence.trialDays}-day free trial.`}</span>`,!!opt.licence.required):''}
@@ -66,16 +67,23 @@ function renderLock(mode,opt=''){
       ${fld('suPass2','Type the password again',`<input type="password" id="suPass2" autocomplete="new-password">`,true)}
       <div class="hint muted" style="font-size:12.5px">${pwHint} Write it down somewhere safe: only an owner can reset a password.</div>
       ${termsBox('suTerms')}`,'Create owner account');
-  else if(mode==='signup')html=lockCard('Create your firm’s account','For bookkeeping and accounting firms. You’ll be the owner: you add your staff and your clients’ companies. Other firms on this server never see your books.',`
-      ${fld('sgFirm','Firm name',`<input type="text" id="sgFirm" autocomplete="organization">`,true)}
+  else if(mode==='signup'){const firm=opt==='firm';html=lockCard('Create your Sumlora account','',`
+      <div class="field" style="grid-column:1/-1"><label>Who is the account for?</label>
+        <div class="seg" role="radiogroup" style="display:flex;gap:8px;flex-wrap:wrap">
+          <label class="check" style="flex:1;min-width:180px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><input type="radio" name="sgKind" value="business" ${firm?'':'checked'} style="margin-top:4px"> <span><b>My own business</b><div class="muted" style="font-size:12.5px">Keep your company’s books yourself.</div></span></label>
+          <label class="check" style="flex:1;min-width:180px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><input type="radio" name="sgKind" value="firm" ${firm?'checked':''} style="margin-top:4px"> <span><b>A bookkeeping or accounting firm</b><div class="muted" style="font-size:12.5px">Add your staff and your clients’ companies.</div></span></label>
+        </div></div>
+      ${fld('sgFirm',`<span data-sgfirmlbl>${firm?'Firm name':'Business name'}</span>`,`<input type="text" id="sgFirm" autocomplete="organization">`,true)}
+      <div class="field" data-sgprov style="grid-column:1/-1${firm?';display:none':''}"><label for="sgProv">Province or territory</label><select id="sgProv"><option value="">Choose…</option>${SG_PROVINCES.map(([k,v])=>`<option value="${k}">${T(v)}</option>`).join('')}</select><span class="hint">Sets up the right sales tax (GST, HST or GST/QST) for your books.</span></div>
       ${fld('sgName','Your name',`<input type="text" id="sgName" autocomplete="name">`,true)}
       ${fld('sgUser','Your email (your username)',`<input type="email" id="sgUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('sgPass','Password',`<input type="password" id="sgPass" autocomplete="new-password">`,true)}
       ${fld('sgPass2','Type the password again',`<input type="password" id="sgPass2" autocomplete="new-password">`,true)}
       <div class="hint muted" style="font-size:12.5px"><span>${pwHint}</span>${SIGNUPS==='approval'?' <span>New firms are approved by the server’s administrator before they can sign in.</span>':''}</div>
-      ${termsBox('sgTerms')}`,'Create firm account',
-      '<button type="button" class="btn ghost block" data-lockback>Back to sign in</button>');
-  else if(mode==='pending')html=lockCard('Thanks! Your firm is waiting for approval','The server’s administrator approves new firms. Once your firm is approved, sign in with the email and password you just chose.','','','<button type="button" class="btn primary block" data-lockback>Back to sign in</button>');
+      <div class="muted" style="font-size:12.5px">Your books are private: other accounts on Sumlora never see them.</div>
+      ${termsBox('sgTerms')}`,'Create account',
+      '<button type="button" class="btn ghost block" data-lockback>Already have an account? Sign in</button>');}
+  else if(mode==='pending')html=lockCard('Thanks! Your account is waiting for approval','The server’s administrator approves new accounts. Once yours is approved, sign in with the email and password you just chose.','','','<button type="button" class="btn primary block" data-lockback>Back to sign in</button>');
   else if(mode==='code')html=lockCard('Enter your code','Open your authenticator app (Microsoft Authenticator, Google Authenticator, 1Password…) and enter the 6-digit code for Sumlora.',`
       ${fld('lgCode','Code',`<input type="text" id="lgCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456" style="font-size:20px;letter-spacing:.2em;text-align:center">`,true)}
       <div class="muted" style="font-size:12.5px">Lost your phone? Enter one of your recovery codes instead (it looks like <span class="mono">a1b2c-3d4e5</span>).</div>`,'Continue',
@@ -96,6 +104,8 @@ function renderLock(mode,opt=''){
   const lo=$('[data-lockout]',f);if(lo)lo.onclick=()=>signOut();
   const bk=$('[data-lockback]',f);if(bk)bk.onclick=()=>renderLock('signin');
   const sg=$('[data-locksignup]',f);if(sg)sg.onclick=()=>renderLock('signup');
+  if(mode==='signup')$$('input[name=sgKind]',f).forEach(r=>r.onchange=()=>{const b=r.value==='business'&&r.checked||r.value==='firm'&&!r.checked;
+    $('[data-sgfirmlbl]',f).textContent=T(b?'Business name':'Firm name');$('[data-sgprov]',f).style.display=b?'':'none'});
   if(mode==='pending')return;
   if(mode==='link')return linkScreen(f);
   if(mode==='enroll')return enrollScreen(f,opt);
@@ -118,11 +128,13 @@ function renderLock(mode,opt=''){
         await afterSignIn();toast(lic.trim()?'Owner account created and Sumlora is activated':'Owner account created');
       }else if(mode==='signup'){
         if($('#sgPass').value!==$('#sgPass2').value)throw new Error('The two passwords don’t match.');
+        const kind=(f.querySelector('input[name=sgKind]:checked')||{}).value||'business';
+        if(kind==='business'&&!$('#sgProv').value)throw new Error('Choose your business’s province or territory.');
         termsTicked('sgTerms');
-        const r=await api('POST','/api/auth/signup',{acceptTerms:true,firmName:$('#sgFirm').value,name:$('#sgName').value,username:$('#sgUser').value,password:$('#sgPass').value});
+        const r=await api('POST','/api/auth/signup',{acceptTerms:true,kind,province:kind==='business'?$('#sgProv').value:undefined,firmName:$('#sgFirm').value,name:$('#sgName').value,username:$('#sgUser').value,password:$('#sgPass').value});
         if(r.pending)return renderLock('pending');
         if(r.needCode)return renderLock('code',{ticket:r.ticket});
-        await afterSignIn();toast('Your firm’s account is ready');
+        await afterSignIn();toast('Your account is ready');
       }else if(mode==='terms'){
         termsTicked('tmAgree');
         await api('POST','/api/auth/terms',{version:opt.version,accept:true});
@@ -220,7 +232,10 @@ async function authStart(){
   if(/[#&]link=/.test(location.hash))return requireSignIn('link');
   let me;
   try{me=await api('GET','/api/auth/me')}
-  catch(e){if(e.status===401){SIGNUPS=(e.info&&e.info.signups)||'';return e.info&&e.info.setup?requireSignIn('setup',{setupCode:!!e.info.setupCode,licence:e.info.licenceSetup||null}):requireSignIn('signin')}throw e}
+  catch(e){if(e.status===401){SIGNUPS=(e.info&&e.info.signups)||'';if(e.info&&e.info.setup)return requireSignIn('setup',{setupCode:!!e.info.setupCode,licence:e.info.licenceSetup||null});
+    // From the website: ?signup opens the sign-up form (?signup=firm with "firm" chosen).
+    const q=new URLSearchParams(location.search);if(SIGNUPS&&q.has('signup')){const k=q.get('signup');history.replaceState(null,'',location.pathname+location.hash);return requireSignIn('signup',k==='firm'?'firm':'')}
+    return requireSignIn('signin')}throw e}
   REQ2FA=me.require2fa||'off';ME=me.user;IDLE_MIN=me.idleMinutes;
   if(me.user.theme&&me.user.theme!==TallyTheme.get())TallyTheme.set(me.user.theme,false);
   if(syncAccountLang(me.user))return new Promise(()=>{});

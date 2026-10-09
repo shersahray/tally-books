@@ -689,12 +689,15 @@ function createApp(opts) {
       res.setHeader('Set-Cookie', sessionCookie(token, req));
       return { ok: true, user: u };
     }],
-    // A new firm signs itself up (only when an administrator allows sign-ups).
+    // A new firm, or a business keeping its own books, signs itself up (only when an administrator allows sign-ups).
+    // A business gets its company made straight away, so it lands in its own books (after the free trial is started).
     ['POST', /^\/api\/auth\/signup$/, async (req, m, res) => {
       const body = await readJson(req);
       const ip = clientIp(req);
       ipCheck(ip);
       needAgreement(body);
+      const business = body.kind === 'business';
+      if (business && !PROVINCES[body.province]) throw new ValidationError('Choose your business’s province or territory.');
       const day = new Date().toISOString().slice(0, 10), k = `${ip}|${day}`;
       if ((signupsByIp.get(k) || 0) >= 5) throw new AuthError('Too many sign-up attempts from your network today. Try again tomorrow.', 429);
       signupsByIp.set(k, (signupsByIp.get(k) || 0) + 1); // every try counts, so sign-up can't be used to test which emails have accounts
@@ -706,6 +709,10 @@ function createApp(opts) {
       }
       const { user: u, firm } = out;
       if (body.acceptTerms === true) auth.acceptTerms(u.id, TERMS_VERSION, ip);
+      if (business) {
+        try { checkCompanyLimit(); createCompany({ name: firm.name, province: body.province }, { ...u, firmId: firm.id }); syncFirmCount(firm.id); }
+        catch (e) { console.error('Sign-up: couldn’t create the business’s company:', e.message); } // they can add it themselves
+      }
       if (signupsByIp.size > 5000) for (const key of signupsByIp.keys()) if (!key.endsWith(day)) signupsByIp.delete(key);
       if (firm.status !== 'active') return { ok: true, pending: true };
       return signIn(req, res, meta => auth.login(u.username, body.password, meta));
@@ -1131,7 +1138,7 @@ function createApp(opts) {
       adminOnly(user);
       const body = await readJson(req);
       const st = await billing.update(body);
-      auth.log('billing-settings', { username: user.username, ip: clientIp(req), change: body.key !== undefined ? 'Stripe key changed' : 'prices or trial changed' });
+      auth.log('billing-settings', { username: user.username, ip: clientIp(req), change: body.key !== undefined ? 'Stripe key changed' : body.tax !== undefined && Object.keys(body).length === 1 ? `sales tax ${body.tax ? 'on' : 'off'}` : 'prices or trial changed' });
       return st;
     }],
     // What this person has to pay for (if anything), read fresh from Stripe when it's a few hours old.

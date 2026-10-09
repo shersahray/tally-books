@@ -92,6 +92,7 @@ function billingAdminPanel(){
       ${Object.entries(TallyPlans.ADDONS).map(([k,p])=>fld('bsAmt'+k,`${p.label} add-on: price per company, per month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}"><span class="hint">Only for companies an owner adds it to, on either plan.</span>`)).join('')}
       ${fld('bsTrial','Free trial (days)',`<input type="number" id="bsTrial" min="0" max="60" step="1" value="${a.trialDays}"><span class="hint">Only the first time. 0 = no trial.</span>`)}
     </div>
+    ${a.configured?`<label class="check" style="align-items:flex-start"><input type="checkbox" id="bsTax" ${a.tax?'checked':''} style="margin-top:4px"> <span><b>Charge sales tax (GST/HST and QST) with Stripe Tax</b><div class="muted" style="font-size:12.5px">Stripe adds the right tax for each customer’s province from their billing address, and businesses can put their GST/HST or QST number on their invoices. Set up Stripe Tax first (Stripe → Tax): your business address, your GST/HST and QST registrations, and the default product tax category <i>Software as a service</i>. Applies to new subscriptions; subscriptions already running keep their current tax setting.</div></span></label>`:''}
     <div class="actions"><button class="btn primary" data-billsave>Save subscription settings</button>${a.configured?'<button class="btn ghost" data-billoff>Turn subscriptions off</button>':''}</div>
   </div></div>`;
 }
@@ -100,6 +101,7 @@ async function billingAdminAction(b){
     if(b.hasAttribute('data-billsave')){
       const body={amounts:{},trialDays:+$('#bsTrial').value};for(const k of [...Object.keys(TallyPlans.PLANS),...Object.keys(TallyPlans.ADDONS)])body.amounts[k]=+$('#bsAmt'+k).value;
       const k=$('#bsKey').value.trim();if(k)body.key=k;
+      const tx=$('#bsTax');if(tx&&tx.checked!==!!BILLADM.tax)body.tax=tx.checked;
       BILLADM=await api('PUT','/api/billing',body);loadBillMe();renderMain();toast('Subscription settings saved');return true;
     }
     if(b.hasAttribute('data-billoff')){

@@ -10,6 +10,9 @@
  * Nothing changes until the administrator adds a Stripe key in Settings. The key and the price ids stay in
  * billing.json in the per-computer folder, readable only by the server's account.
  *
+ * Sales tax: when the administrator turns it on, Stripe Tax works out GST/HST and QST from each customer's
+ * billing address and adds it to the invoice. Prices are then "plus tax" (tax-exclusive), as the screens say.
+ *
  * No webhook is needed: a subscription's state is read back from Stripe after checkout, when people sign in
  * (at most every few hours), and twice a day for everyone.
  */
@@ -26,7 +29,7 @@ class Billing {
   constructor(dir, o = {}) {
     this.file = path.join(dir, 'billing.json');
     this.fetch = o.fetch || ((...a) => fetch(...a));
-    this.data = { key: '', amounts: { essentials: 1500, plus: 3000 }, trialDays: 14, prices: {} };
+    this.data = { key: '', amounts: { essentials: 1500, plus: 3000 }, trialDays: 14, tax: false, prices: {} };
     try { Object.assign(this.data, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch { /* first run */ }
     // Add-ons (plans.js ADDONS) have a price too, per company per month.
     for (const [k, a] of Object.entries(PLANS.ADDONS)) if (!(this.data.amounts[k] > 0)) this.data.amounts[k] = a.cents;
@@ -41,10 +44,10 @@ class Billing {
   /** What the administrator sees. Never the key itself. */
   status() {
     const p = stripe.publicStripe({ key: this.data.key });
-    return { configured: p.configured, mode: p.mode || '', ending: p.ending || '', amounts: this.data.amounts, trialDays: this.data.trialDays };
+    return { configured: p.configured, mode: p.mode || '', ending: p.ending || '', amounts: this.data.amounts, trialDays: this.data.trialDays, tax: !!this.data.tax };
   }
   /** Prices and trial, for the screens where people subscribe. */
-  offer() { return { amounts: this.data.amounts, trialDays: this.data.trialDays, currency: 'CAD' }; }
+  offer() { return { amounts: this.data.amounts, trialDays: this.data.trialDays, currency: 'CAD', tax: !!this.data.tax }; }
   async update(body) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ValidationError('Send the subscription settings as an object.');
     const next = { ...this.data, amounts: { ...this.data.amounts } };
@@ -69,6 +72,18 @@ class Billing {
       if (!Number.isInteger(d) || d < 0 || d > 60) throw new ValidationError('The free trial must be between 0 and 60 days.');
       next.trialDays = d;
     }
+    if (body.tax !== undefined) {
+      if (typeof body.tax !== 'boolean') throw new ValidationError('Sales tax is on or off (true or false).');
+      if (body.tax && !next.key) throw new ValidationError('Add the Stripe key before turning on sales tax.');
+      if (body.tax && !this.data.tax) {
+        // Stripe Tax has to be set up in Stripe first (business address and the GST/HST and QST registrations).
+        let t;
+        try { t = await stripe.call({ key: next.key }, this.fetch, 'GET', 'tax/settings'); }
+        catch (e) { throw new ValidationError(e.status === 400 ? 'Sumlora couldn’t read Stripe Tax’s settings. Give the restricted key the Tax settings (read) permission, or turn on Stripe Tax first (Stripe → Tax).' : e.message); }
+        if (t.status !== 'active') throw new ValidationError('Stripe Tax isn’t finished setting up. In Stripe, open Tax, add your business address and your GST/HST (and QST) registrations, then try again.', 409);
+      }
+      next.tax = body.tax;
+    }
     this.data = next;
     this.save();
     return this.status();
@@ -86,10 +101,10 @@ class Billing {
     plan = PLANS.planOf(plan);
     const amount = this.data.amounts[plan];
     const have = this.data.prices[plan];
-    if (have && have.amount === amount) return have.id;
-    const p = await this.call('POST', 'prices', { currency: 'cad', unit_amount: amount, recurring: { interval: 'month' }, nickname: `Sumlora ${PLANS.PLANS[plan].label} (per company, monthly)`,
+    if (have && have.amount === amount && (have.exclusive || !this.data.tax)) return have.id;
+    const p = await this.call('POST', 'prices', { currency: 'cad', unit_amount: amount, recurring: { interval: 'month' }, tax_behavior: 'exclusive', nickname: `Sumlora ${PLANS.PLANS[plan].label} (per company, monthly)`,
       product_data: { name: `Sumlora ${PLANS.PLANS[plan].label}` }, metadata: { sumlora_plan: plan } });
-    this.data.prices[plan] = { id: p.id, amount };
+    this.data.prices[plan] = { id: p.id, amount, exclusive: true };
     this.save();
     return p.id;
   }
@@ -98,10 +113,10 @@ class Billing {
     const a = PLANS.ADDONS[key];
     if (!a) throw new ValidationError('That add-on doesn’t exist.');
     const amount = this.data.amounts[key], have = this.data.prices[key];
-    if (have && have.amount === amount) return have.id;
-    const p = await this.call('POST', 'prices', { currency: 'cad', unit_amount: amount, recurring: { interval: 'month' }, nickname: `Sumlora ${a.label} (per company, monthly)`,
+    if (have && have.amount === amount && (have.exclusive || !this.data.tax)) return have.id;
+    const p = await this.call('POST', 'prices', { currency: 'cad', unit_amount: amount, recurring: { interval: 'month' }, tax_behavior: 'exclusive', nickname: `Sumlora ${a.label} (per company, monthly)`,
       product_data: { name: `Sumlora ${a.label}` }, metadata: { sumlora_addon: key } });
-    this.data.prices[key] = { id: p.id, amount };
+    this.data.prices[key] = { id: p.id, amount, exclusive: true };
     this.save();
     return p.id;
   }
@@ -118,6 +133,9 @@ class Billing {
       client_reference_id: `${o.kind}:${o.id}`, payment_method_collection: 'always', allow_promotion_codes: 'true',
       subscription_data: { metadata: { sumlora_kind: o.kind, sumlora_id: o.id, sumlora_plan: PLANS.planOf(o.plan) }, ...(o.trial && this.data.trialDays ? { trial_period_days: this.data.trialDays } : {}) },
       ...(o.customer ? { customer: o.customer } : o.email && /@/.test(o.email) ? { customer_email: o.email } : {}),
+      // Sales tax from the billing address; businesses can add their GST/HST or QST number to their invoices.
+      ...(this.data.tax ? { 'automatic_tax[enabled]': 'true', billing_address_collection: 'required', 'tax_id_collection[enabled]': 'true',
+        ...(o.customer ? { 'customer_update[address]': 'auto', 'customer_update[name]': 'auto' } : {}) } : {}),
     };
     const s = await this.call('POST', 'checkout/sessions', params);
     return s.url;
