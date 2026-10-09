@@ -2003,4 +2003,14 @@ addFr({
   'Already have an account? Sign in':'Vous avez déjà un compte? Connectez-vous',
   'Thanks! Your account is waiting for approval':'Merci! Votre compte attend d’être approuvé',
   'Choose your business’s province or territory.':'Choisissez la province ou le territoire de votre entreprise.',
-  'Charge sales tax (GST/HST and QST) with Stripe Tax':'Percevoir la taxe de vente (TPS/TVH et TVQ) avec Stripe Tax'});
+  'Charge sales tax (GST/HST and QST) with Stripe Tax':'Percevoir la taxe de vente (TPS/TVH et TVQ) avec Stripe Tax',
+  'Monthly invoices to firms and clients':'Factures mensuelles aux cabinets et aux clients',
+  'Bill from this company':'Facturer à partir de cette entreprise',
+  'Your own business’s books in Sumlora. The invoices, customers and income go here.':'Les livres de votre propre entreprise dans Sumlora. Les factures, les clients et les revenus y sont inscrits.',
+  'Add your own business as a company first.':'Ajoutez d’abord votre propre entreprise.',
+  'Charge sales tax on the invoices':'Facturer la taxe de vente',
+  'No one to bill yet':'Personne à facturer pour l’instant',
+  'Firms you invite show here once they add companies.':'Les cabinets que vous invitez s’affichent ici dès qu’ils ajoutent des entreprises.',
+  'No companies yet, so not billed:':'Aucune entreprise pour l’instant, donc non facturés :',
+  'Client pays':'Le client paie',
+  'Before tax':'Avant taxes'});
