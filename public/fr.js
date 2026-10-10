@@ -2020,7 +2020,7 @@ addFr({
 
 /* ---------- payroll: paying a remittance in online banking ---------- */
 addFr({
-  'Pay CRA':'Payer l’ARC','Pay Revenu Québec':'Payer Revenu Québec','Pay CRA · {s}':'Payer l’ARC · {s}','Pay Revenu Québec · {s}':'Payer Revenu Québec · {s}',
+  'Pay CRA':'Payer l’ARC','Pay Revenu Québec':'Payer Revenu Québec',
   'How to pay':'Comment payer','Copy':'Copier','Copy this:':'Copiez ceci :','Open Settings':'Ouvrir les paramètres',
   'I’ve paid. Record it':'C’est payé. L’enregistrer',
   'CRA – payroll deductions':'ARC – retenues sur la paie','Revenu Québec – source deductions':'Revenu Québec – retenues à la source',
@@ -2038,3 +2038,5 @@ addFr({
   'Add your Revenu Québec identification number (1234567890RS0001) in Settings → Payroll.':'Ajoutez votre numéro d’identification de Revenu Québec (1234567890RS0001) dans Paramètres → Paie.',
   'The CRA payroll account number in Settings → Payroll doesn’t look right. It should be 9 digits, RP and 4 digits (123456789RP0001).':'Le numéro de compte de retenues sur la paie de l’ARC dans Paramètres → Paie ne semble pas valide. Il doit compter 9 chiffres, RP et 4 chiffres (123456789RP0001).',
   'The Revenu Québec identification number in Settings → Payroll doesn’t look right. It should be 10 digits, RS and 4 digits (1234567890RS0001).':'Le numéro d’identification de Revenu Québec dans Paramètres → Paie ne semble pas valide. Il doit compter 10 chiffres, RS et 4 chiffres (1234567890RS0001).'});
+// Titles of the Pay CRA guide and the Record payment form: “Payer l’ARC”, not the general “Payer ARC”.
+addFr({'Pay CRA · {s}':'Payer l’ARC · {s}'},{first:true});

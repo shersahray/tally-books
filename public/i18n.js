@@ -75,8 +75,10 @@ const T=s=>tr(s)??s;
 
 /** Add translations: { 'English': 'Français' }.
  *  Numbers and dates in the English are found automatically ("Paid 3 bills" = "Paid {0} bills").
- *  Write {0}, {1}… for numbers you want to place in the French; {s} (or {s1}, {s2}) matches any text. */
-function addFr(entries){
+ *  Write {0}, {1}… for numbers you want to place in the French; {s} (or {s1}, {s2}) matches any text.
+ *  Patterns with {s} are tried in the order they were added; pass {first:true} for specific ones that must win
+ *  over a more general pattern added earlier (e.g. "Pay CRA · {s}" over "Pay {s} · {s1}"). */
+function addFr(entries,{first=false}={}){
   const PH=new RegExp('\\{(\\d+)\\}|\\{s(\\d?)\\}|'+TOKEN.source,'g');
   for(const [en,frRaw] of Object.entries(entries)){
     let i=0;const map={};
@@ -84,7 +86,7 @@ function addFr(entries){
     const fr=frRaw.replace(/\{(\d+)\}/g,(m,d)=>map[d]!==undefined?`{${map[d]}}`:m);
     if(/\{s\d?\}/.test(key)){
       const src=key.replace(/[.*+?^$()|[\]\\{}]/g,'\\$&').replace(/\\\{s(\d?)\\\}/g,'{s$1}').replace(/\\\{(\d+)\\\}/g,(m,d)=>`\\{(?<n${d}>\\d+)\\}`).replace(/\{s(\d?)\}/g,(m,d)=>`(?<s${d||'0'}>.+?)`);
-      I18N.wild.push([new RegExp('^'+src+'$'),fr]);
+      I18N.wild[first?'unshift':'push']([new RegExp('^'+src+'$'),fr]);
     }else I18N.dict[key]=fr;
   }
 }
