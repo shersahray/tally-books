@@ -1,6 +1,6 @@
 # sumlora.ca public website
 
-A single static page (`index.html`) plus the logo files. No build step: upload the three files to whatever hosts sumlora.ca.
+A single static page (`index.html`) plus the logo files. No build step: upload every file in this folder (the page, logos and favicon files) to the root of whatever hosts sumlora.ca, so `sumlora.ca/favicon.ico` loads.
 
 ## Where the buttons go
 
