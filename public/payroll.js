@@ -167,7 +167,7 @@ function vPayroll(){
   if(P.tab==='remit'){
     const rs=remittances();
     return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${payCfg().remitFreq==='quarterly'?'Quarterly remitter':'Regular (monthly) remitter'}: payment due the 15th of the month after ${payCfg().remitFreq==='quarterly'?'each quarter':'you pay employees'}. Change this in Settings.</span></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Agency</th><th>Period</th><th>Due</th><th class="n">Owed</th><th class="n">Paid</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${rs.length?rs.map(x=>`<tr class="click" data-remit="${x.agency}|${x.key}"><td>${AGENCY_NAME[x.agency]}</td><td>${esc(x.label)}</td><td class="${x.st.k==='overdue'?'neg':'muted'}" style="white-space:nowrap">${fmtDate(x.due)}</td><td class="n">${money(x.owed)}</td><td class="n">${money(x.paid)}</td><td class="n">${money(x.bal)}</td><td><span class="pill ${x.st.k}">${x.st.label}</span></td><td class="n">${x.bal>0.004?`<button class="btn sm" data-remit-pay="${x.agency}|${x.key}">Record payment</button>`:''}</td></tr>`).join(''):emptyRow(8,'Nothing to remit yet','Source deductions show up here after your first pay run.')}</tbody></table></div></div>`;
+    <div class="tbl-wrap"><table><thead><tr><th>Agency</th><th>Period</th><th>Due</th><th class="n">Owed</th><th class="n">Paid</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${rs.length?rs.map(x=>`<tr class="click" data-remit="${x.agency}|${x.key}"><td>${AGENCY_NAME[x.agency]}</td><td>${esc(x.label)}</td><td class="${x.st.k==='overdue'?'neg':'muted'}" style="white-space:nowrap">${fmtDate(x.due)}</td><td class="n">${money(x.owed)}</td><td class="n">${money(x.paid)}</td><td class="n">${money(x.bal)}</td><td><span class="pill ${x.st.k}">${x.st.label}</span></td><td class="n" style="white-space:nowrap">${x.bal>0.004?`<button class="btn sm primary" data-remit-guide="${x.agency}|${x.key}">${x.agency==='cra'?'Pay CRA':'Pay Revenu Québec'}</button> <button class="btn sm" data-remit-pay="${x.agency}|${x.key}">Record payment</button>`:''}</td></tr>`).join(''):emptyRow(8,'Nothing to remit yet','Source deductions show up here after your first pay run.')}</tbody></table></div></div>`;
   }
   const runs=S.payruns.slice().sort((a,b)=>runOrder(b,a));
   const yrRuns=runs.filter(r=>r.payDate.startsWith(yr)),tot=yrRuns.map(runTotals);
@@ -180,6 +180,7 @@ async function payClick(e,t,d){
   if(d.ptab){S.pay.tab=d.ptab;renderMain();return true}
   if(d.payEmp){employeeForm(d.payEmp==='new'?null:employee(d.payEmp));return true}
   if(d.payRun){if(d.payRun==='new')payRunForm();else payRunView(S.payruns.find(r=>r.id===d.payRun));return true}
+  if(d.remitGuide){e.stopPropagation();remitGuide(d.remitGuide);return true}
   if(d.remitPay){e.stopPropagation();remitForm(d.remitPay);return true}
   if(d.remit){remitDetail(d.remit);return true}
   return false;
@@ -482,8 +483,36 @@ function remitDetail(key){
     <tfoot><tr><td><b>Total to remit</b></td><td class="n"><b>${money(x.owed)}</b></td></tr></tfoot></table></div>
     ${x.agency==='cra'?`<div class="banner" style="margin:0"><span>For the remittance voucher (PD7A): gross payroll ${money(x.gross)}; employees paid in the last pay period ${x.lastEmps}.</span></div>`:`<div class="banner" style="margin:0"><span>Report these amounts on your Revenu Québec source deductions remittance (TPZ-1015.R.14.1).</span></div>`}
     <div><div class="flabel" style="margin-bottom:6px">Payments</div>${pays.length?`<div class="tbl-wrap"><table><tbody>${pays.map(e=>`<tr class="click" data-rp="${e.id}"><td>${fmtDate(e.date)}</td><td class="muted">${esc(e.ref||'')}</td><td class="n">${money(e.amount)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted">No payment recorded yet.</div>'}</div>`,
-    `<button type="button" class="btn" data-close>Close</button>${x.bal>0.004?`<button type="button" class="btn primary" data-go-pay>Record payment</button>`:''}`);
-  f.addEventListener('click',ev=>{const r=ev.target.closest('[data-rp]');if(r)remitForm(key,S.entries.find(e=>e.id===r.dataset.rp));if(ev.target.closest('[data-go-pay]'))remitForm(key)});
+    `<button type="button" class="btn" data-close>Close</button>${x.bal>0.004?`<button type="button" class="btn" data-go-guide>How to pay</button><button type="button" class="btn primary" data-go-pay>Record payment</button>`:''}`);
+  f.addEventListener('click',ev=>{const r=ev.target.closest('[data-rp]');if(r)remitForm(key,S.entries.find(e=>e.id===r.dataset.rp));if(ev.target.closest('[data-go-pay]'))remitForm(key);if(ev.target.closest('[data-go-guide]'))remitGuide(key)});
+}
+/* Everything the client needs to pay a remittance in their own online banking, each part one tap to copy.
+   No money moves through Sumlora: they pay at their bank, then record the payment here. */
+function remitGuide(key){
+  const x=remittances().find(r=>r.agency+'|'+r.key===key);if(!x)return;
+  const cra=x.agency==='cra',c=payCfg(),acct=String((cra?c.craAccount:c.rqId)||'').replace(/\s+/g,'').toUpperCase();
+  const prob=PR.remitAccountProblem(x.agency,acct),period=PR.remitPeriodEnd(x.key),amt=r2(x.bal).toFixed(2);
+  const quarterly=/-Q[1-4]$/.test(x.key);
+  const row=(label,shown,copy,hint)=>`<tr><td><div class="flabel">${label}</div><div style="font-size:16px;font-weight:600"${copy!=null?' translate="no"':''}>${shown}</div>${hint?`<div class="muted" style="font-size:12px">${hint}</div>`:''}</td><td class="n" style="vertical-align:middle">${copy!=null?`<button type="button" class="btn sm" data-copy="${esc(copy)}">Copy</button>`:''}</td></tr>`;
+  const acctRow=prob?`<tr><td colspan="2"><div class="banner" style="margin:0"><span>${prob==='missing'?(cra?'Add your CRA payroll account number (123456789RP0001) in Settings → Payroll.':'Add your Revenu Québec identification number (1234567890RS0001) in Settings → Payroll.'):(cra?'The CRA payroll account number in Settings → Payroll doesn’t look right. It should be 9 digits, RP and 4 digits (123456789RP0001).':'The Revenu Québec identification number in Settings → Payroll doesn’t look right. It should be 10 digits, RS and 4 digits (1234567890RS0001).')}</span> <button type="button" class="link" data-go-settings>Open Settings</button></div></td></tr>`
+    :row(cra?'Account number (payroll account)':'Identification number',esc(acct),acct,cra?'Your business number + RP + 4 digits':'');
+  const late=x.due&&x.due<today();
+  const f=openModal(`${cra?'Pay CRA':'Pay Revenu Québec'} · ${x.label}`,`
+    <div class="tbl-wrap"><table><tbody>
+      ${row('Payee',cra?'CRA – payroll deductions':'Revenu Québec – source deductions',null,cra?`Most banks list it as “Federal – payroll deductions – ${quarterly?'quarterly':'regular'}” or similar. Search “payroll” when adding the payee.`:'Search “Revenu Québec” or “retenues à la source” when adding the payee.')}
+      ${acctRow}
+      ${row('Amount',money(x.bal),amt)}
+      ${row('Remitting period',esc(period),period,quarterly?'The last month of the quarter':'The month you paid employees, not the month you’re paying in')}
+      ${row('Due',`<span class="${late?'neg':''}">${fmtDate(x.due)}</span>`,null,late?'This is past due. Pay as soon as you can; CRA can charge a penalty and interest on late remittances.':'Bank payments can take 1 to 3 business days to reach the government. Pay a few days early so it arrives by the due date.')}
+    </tbody></table></div>
+    <div class="muted" style="font-size:13px">${cra?'You can also pay with CRA My Payment or a pre-authorized debit in CRA My Business Account.':'You can also pay through Mon dossier for businesses at Revenu Québec.'} Once it’s paid, record it here so your books show the remittance as paid.</div>`,
+    `<button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" data-paid>I’ve paid. Record it</button>`);
+  f.addEventListener('click',async ev=>{
+    const b=ev.target.closest('[data-copy]');
+    if(b){const v=b.dataset.copy;try{await navigator.clipboard.writeText(v);toast('Copied')}catch(e){prompt('Copy this:',v)}return}
+    if(ev.target.closest('[data-paid]')){remitForm(key);return}
+    if(ev.target.closest('[data-go-settings]')){closeModal();go('settings')}
+  });
 }
 function remitForm(key,entry){
   const[agency,period]=key.split('|');const x=remittances().find(r=>r.agency===agency&&r.key===period);
