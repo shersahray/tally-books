@@ -2017,3 +2017,24 @@ addFr({
   'No companies yet, so not billed:':'Aucune entreprise pour l’instant, donc non facturés :',
   'Client pays':'Le client paie',
   'Before tax':'Avant taxes'});
+
+/* ---------- payroll: paying a remittance in online banking ---------- */
+addFr({
+  'Pay CRA':'Payer l’ARC','Pay Revenu Québec':'Payer Revenu Québec','Pay CRA · {s}':'Payer l’ARC · {s}','Pay Revenu Québec · {s}':'Payer Revenu Québec · {s}',
+  'How to pay':'Comment payer','Copy':'Copier','Copy this:':'Copiez ceci :','Open Settings':'Ouvrir les paramètres',
+  'I’ve paid. Record it':'C’est payé. L’enregistrer',
+  'CRA – payroll deductions':'ARC – retenues sur la paie','Revenu Québec – source deductions':'Revenu Québec – retenues à la source',
+  'Most banks list it as “Federal – payroll deductions – regular” or similar. Search “payroll” when adding the payee.':'La plupart des banques l’affichent comme « Fédéral – retenues sur la paie – régulier » ou un nom semblable. Cherchez « paie » ou « payroll » en ajoutant le bénéficiaire.',
+  'Most banks list it as “Federal – payroll deductions – quarterly” or similar. Search “payroll” when adding the payee.':'La plupart des banques l’affichent comme « Fédéral – retenues sur la paie – trimestriel » ou un nom semblable. Cherchez « paie » ou « payroll » en ajoutant le bénéficiaire.',
+  'Search “Revenu Québec” or “retenues à la source” when adding the payee.':'Cherchez « Revenu Québec » ou « retenues à la source » en ajoutant le bénéficiaire.',
+  'Account number (payroll account)':'Numéro de compte (compte de retenues sur la paie)','Identification number':'Numéro d’identification',
+  'Your business number + RP + 4 digits':'Votre numéro d’entreprise + RP + 4 chiffres',
+  'Remitting period':'Période de versement','The last month of the quarter':'Le dernier mois du trimestre',
+  'The month you paid employees, not the month you’re paying in':'Le mois où vous avez payé les employés, pas le mois du versement',
+  'This is past due. Pay as soon as you can; CRA can charge a penalty and interest on late remittances.':'Ce versement est en retard. Payez dès que possible : l’ARC peut imposer une pénalité et des intérêts sur les versements en retard.',
+  'Bank payments can take 1 to 3 business days to reach the government. Pay a few days early so it arrives by the due date.':'Un paiement bancaire peut prendre de 1 à 3 jours ouvrables pour se rendre au gouvernement. Payez quelques jours d’avance pour qu’il arrive à temps.',
+  'You can also pay with CRA My Payment or a pre-authorized debit in CRA My Business Account. Once it’s paid, record it here so your books show the remittance as paid.':'Vous pouvez aussi payer avec Mon paiement de l’ARC ou par débit préautorisé dans Mon dossier d’entreprise. Une fois payé, enregistrez-le ici pour que vos livres indiquent que le versement est fait.',
+  'You can also pay through Mon dossier for businesses at Revenu Québec. Once it’s paid, record it here so your books show the remittance as paid.':'Vous pouvez aussi payer dans Mon dossier pour les entreprises de Revenu Québec. Une fois payé, enregistrez-le ici pour que vos livres indiquent que le versement est fait.',
+  'Add your Revenu Québec identification number (1234567890RS0001) in Settings → Payroll.':'Ajoutez votre numéro d’identification de Revenu Québec (1234567890RS0001) dans Paramètres → Paie.',
+  'The CRA payroll account number in Settings → Payroll doesn’t look right. It should be 9 digits, RP and 4 digits (123456789RP0001).':'Le numéro de compte de retenues sur la paie de l’ARC dans Paramètres → Paie ne semble pas valide. Il doit compter 9 chiffres, RP et 4 chiffres (123456789RP0001).',
+  'The Revenu Québec identification number in Settings → Payroll doesn’t look right. It should be 10 digits, RS and 4 digits (1234567890RS0001).':'Le numéro d’identification de Revenu Québec dans Paramètres → Paie ne semble pas valide. Il doit compter 10 chiffres, RS et 4 chiffres (1234567890RS0001).'});

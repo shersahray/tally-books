@@ -77,6 +77,18 @@ test('Refuses pay dates without loaded rates, and remittance due dates', () => {
   assert.equal(P.remittanceDue('2026-12-31'), '2027-01-15');
 });
 
+test('Remitting period and account number for paying CRA or Revenu Québec online', () => {
+  assert.equal(P.remitPeriodEnd('2026-09'), '2026-09');
+  assert.equal(P.remitPeriodEnd('2026-Q1'), '2026-03');
+  assert.equal(P.remitPeriodEnd('2026-Q4'), '2026-12');
+  assert.equal(P.remitAccountProblem('cra', '123456789RP0001'), '');
+  assert.equal(P.remitAccountProblem('cra', '123456789 rp 0001'), '');
+  assert.equal(P.remitAccountProblem('cra', '123456789'), 'format');
+  assert.equal(P.remitAccountProblem('cra', ''), 'missing');
+  assert.equal(P.remitAccountProblem('rq', '1234567890RS0001'), '');
+  assert.equal(P.remitAccountProblem('rq', '123456789RP0001'), 'format');
+});
+
 // A full year of biweekly pays, calculated with year-to-date amounts so maximums are respected.
 function yearOfPays(emp, gross, prov) {
   const runs = [];

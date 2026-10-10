@@ -315,6 +315,20 @@
     return `${ny}-${String(nm).padStart(2, '0')}-15`;
   }
 
+  /** The remitting period a bank or CRA asks for, as YYYY-MM: the month employees were paid,
+      or the last month of the quarter for quarterly remitters. Takes a period key ('2026-09' or '2026-Q3'). */
+  function remitPeriodEnd(key) {
+    const q = /^(\d{4})-Q([1-4])$/.exec(key || '');
+    return q ? `${q[1]}-${String(q[2] * 3).padStart(2, '0')}` : String(key || '').slice(0, 7);
+  }
+  /** Account number check for paying online: '' when fine, or what's wrong. CRA: 123456789RP0001; Revenu Québec: 1234567890RS0001. */
+  function remitAccountProblem(agency, acct) {
+    const a = String(acct || '').replace(/\s+/g, '').toUpperCase();
+    if (!a) return 'missing';
+    if (agency === 'rq') return /^\d{10}RS\d{4}$/.test(a) ? '' : 'format';
+    return /^\d{9}RP\d{4}$/.test(a) ? '' : 'format';
+  }
+
   /* ---------- year-end: T4 and RL-1 slips and summaries ----------
      Box rules from CRA's "Filling out the T4 slip" and Revenu Québec's RL-1 guide (RL-1.G).
      A separate T4 (and RL-1) is made for each province an employee worked in during the year. */
@@ -699,7 +713,7 @@
     ['M', 'Dismissal or suspension'], ['N', 'Leave of absence'], ['P', 'Parental'], ['Z', 'Compassionate care / family caregiver'],
   ];
 
-  return { calc, remitSplit, remittanceDue, tableFor, BENEFIT_KINDS, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
+  return { calc, remitSplit, remittanceDue, remitPeriodEnd, remitAccountProblem, tableFor, BENEFIT_KINDS, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
     yearEnd, sinProblem, slipsDue, hsfRateFor, YEAR_LIMITS,
     holidays, holidaysBetween, holidayWindow, holidayPay, vacationRate, serviceYears, roe, roePeriods, ROE_PERIODS, ROE_REASONS, addDays: addD, daysBetween };
 });
