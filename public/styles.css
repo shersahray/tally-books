@@ -530,3 +530,8 @@ label.btn.disabled{opacity:.6;pointer-events:none}
   .asst-box{right:0;left:0;bottom:0;width:100%;max-width:none;height:min(85vh,640px);border-radius:12px 12px 0 0}
 }
 @media print{.asst-fab,.asst-box{display:none!important}}
+/* Batch actions on the Sales list */
+th.bsel,td.bsel{width:28px;padding-right:0}
+.bbar{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
+.bprog{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:10px}
+.bprog span{display:block;height:100%;background:var(--accent);transition:width .2s}

@@ -220,6 +220,12 @@
       return transact(id, w => { w.company = { ...w.company, hasCode: !body.remove }; });
     }
     if (rest === '/code/check') { if (codes[id] && String(body.code) !== codes[id]) throw new ApiError(403, 'That code isn’t right for this company.'); return { ok: true }; }
+    if (rest === '/docs/mark-sent') {
+      const ids = new Set((body.docIds || []).map(String)), docs = b.docs.filter(d => ids.has(d.id));
+      if (!docs.length) throw new ApiError(400, 'Pick at least one invoice.');
+      if (docs.some(d => d.kind !== 'invoice')) throw new ApiError(400, 'Only invoices can be marked as sent.');
+      return { ...transact(id, w => { w.docs = w.docs.map(d => ids.has(d.id) ? { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: '', by: 'Demo user', what: 'marked' }] } : d); }), marked: docs.length };
+    }
     if (rest === '/mail' && method === 'GET') return { configured: false, sentToday: 0 };
     if (rest === '/pay' && method === 'GET') return { configured: false };
     if (rest.startsWith('/pay')) throw new ApiError(400, 'Card payments aren’t available in the demo, because nothing in it is saved.');
