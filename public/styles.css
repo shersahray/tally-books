@@ -540,3 +540,9 @@ th.bsel,td.bsel{width:28px;padding-right:0}
 .bbar{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
 .bprog{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:10px}
 .bprog span{display:block;height:100%;background:var(--accent);transition:width .2s}
+/* Report filters and the transaction list */
+.rep-filters{background:var(--surface-2);font-size:13px;gap:6px 10px}
+.rf-row{grid-template-columns:20px 1fr}
+.mfoot .grow{flex:1}
+.report table.tl th .rep-sort{color:inherit;font-weight:600}
+.report table.tl th.n .rep-sort{display:block;text-align:right}
