@@ -7,6 +7,7 @@ const REPFILTER = require('../../public/report-filters.js');
 const TAGS = require('../../public/tags.js');
 const APPROVALS = require('../../public/approvals.js');
 const DEP = require('../../public/deposits-calc.js');
+const DELAYED = require('../../public/delayed-calc.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -161,6 +162,7 @@ function validateDoc(data, store, id) {
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Document total must be a number.');
   if (!Array.isArray(data.lines)) throw new ValidationError('Document lines must be a list.');
   checkLineClasses(data.lines, store, id && store.get('docs', id));
+  checkDelayedLines(data, store, id);
   // Bill approvals (approvals.js): only on bills. The server decides it on every save (see applyWrite); this checks its shape.
   if (data.approval !== undefined) {
     if (data.kind !== 'bill') delete data.approval;
@@ -729,7 +731,8 @@ function validateRecord(collection, id, data, store) {
     case 'attachments': return validateAttachment(data, store);
     case 'questions': return validateQuestion(data, store);
     case 'estimates': return validateEstimate(data, store, id);
-    case 'recurring': return validateRecurring(data, store);
+    case 'recurring': return validateRecurring(data, store, id);
+    case 'delayed': return validateDelayed(data, store, id);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -747,8 +750,12 @@ function checkDelete(collection, id, store) {
     throw new ValidationError('This account has imported bank transactions or bank rules, so it can’t be deleted. Mark it inactive instead.', 409);
   }
   const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id || r.from === id || r.to === id;
-  if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines))) {
+  if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines) || store.list('delayed').some(onLines))) {
     throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
+  }
+  if (collection === 'delayed') {
+    const r = store.get('delayed', id), d = r && r.invoiceId && store.get('docs', r.invoiceId);
+    if (d && (d.lines || []).some(l => l && l.dl === id)) throw new ValidationError(`This is on invoice${d.number ? ' #' + d.number : ''}. Take it off the invoice (or delete the invoice) first.`, 409);
   }
   if (collection === 'estimates' && DEP.forEstimate(id, store.list('entries')).list.length) {
     throw new ValidationError('This estimate has deposits recorded on it. Delete or refund them first.', 409);
@@ -776,7 +783,7 @@ function checkDelete(collection, id, store) {
   if (collection === 'entries' && store.list('assets').some(a => Object.values(a.posted || {}).includes(id))) throw new ValidationError('This is an amortization entry. Undo it from Fixed assets instead.', 409);
   if (collection === 'items') {
     const onIt = r => (r.lines || []).some(l => l.item === id);
-    if (store.list('docs').some(onIt) || store.list('estimates').some(onIt) || store.list('recurring').some(onIt) || store.list('pos').some(onIt) || store.list('entries').some(e => e.inv && e.inv.item === id)) throw new ValidationError('This product or service is on invoices, bills or estimates, so it can’t be deleted. Mark it inactive instead.', 409);
+    if (store.list('docs').some(onIt) || store.list('estimates').some(onIt) || store.list('recurring').some(onIt) || store.list('delayed').some(onIt) || store.list('pos').some(onIt) || store.list('entries').some(e => e.inv && e.inv.item === id)) throw new ValidationError('This product or service is on invoices, bills or estimates, so it can’t be deleted. Mark it inactive instead.', 409);
   }
   if (collection === 'contacts' && (store.contactUsed(id) || store.list('rules').some(r => r.contactId === id))) {
     throw new ValidationError('This contact appears on transactions, so it can’t be deleted.', 409);
@@ -988,6 +995,7 @@ function docLines(lines) {
     if (!isObj(l)) throw new ValidationError('Each line must be an object.');
     const out = { desc: str(l.desc, 500), account: String(l.account || ''), taxCode: ['std', 'gst', 'zero', 'export', 'exempt', 'none'].includes(l.taxCode) ? l.taxCode : 'none' };
     if (l.item) out.item = str(l.item, 120);
+    if (l.cls !== undefined && l.cls !== null) out.cls = typeof l.cls === 'string' ? l.cls.slice(0, 40) : '\u0000'; // checked by checkLineClasses
     if (l.qty !== undefined) out.qty = Number(l.qty) || 0;
     if (l.rate !== undefined) out.rate = Number(l.rate) || 0;
     if (l.amount !== undefined) out.amount = Number(l.amount) || 0;
@@ -1003,6 +1011,7 @@ function validateEstimate(data, store, id) {
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Estimate total must be a number.');
   const lines = docLines(data.lines);
   for (const l of lines) if (l.account && !store.get('accounts', l.account)) throw new ValidationError('An account on this estimate doesn’t exist.');
+  checkLineClasses(lines, store, id && store.get('estimates', id));
   if (data.invoiceId && !store.get('docs', String(data.invoiceId))) throw new ValidationError('The invoice made from this estimate doesn’t exist.');
   const out = { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
   // Deposit requested: a percent of the total, or an amount up to the total.
@@ -1020,7 +1029,60 @@ function validateEstimate(data, store, id) {
     if (s.list.length && prev && prev.contactId !== out.contactId) throw new ValidationError('A deposit has been received on this estimate, so its customer can’t change.', 409);
     if (s.received > (Number(out.total) || 0) + 0.004) throw new ValidationError(`The total can’t be less than the ${s.received.toFixed(2)} deposit received.`, 409);
   }
-  return out;
+  // Its class and tags go with it to the invoice made from it.
+  if (data.cls) {
+    const prevE = id && store.get('estimates', id), known = new Set(((store.getSetting && store.getSetting('company')) || {}).classes?.map(x => x.id) || []);
+    if (!known.has(String(data.cls)) && !(prevE && prevE.cls === data.cls)) throw new ValidationError('That class doesn’t exist. Add it under Settings first.');
+    out.cls = String(data.cls);
+  } else delete out.cls;
+  return withTags(out, data, store);
+}
+
+/* Delayed charges and delayed credits (delayed-calc.js): noted for a customer, not in the books until they're added
+   to an invoice. The invoice's lines say which ones are on it (line.dl); saving or deleting it closes or reopens them. */
+function validateDelayed(data, store, id) {
+  if (!DELAYED.KINDS.includes(data.kind)) throw new ValidationError('Choose a delayed charge or a delayed credit.');
+  if (!isDate(data.date)) throw new ValidationError('The date must be YYYY-MM-DD.');
+  const c = store.get('contacts', String(data.contactId || ''));
+  if (!c || c.kind === 'vendor') throw new ValidationError('Choose the customer.');
+  if (c.currency) throw new ValidationError('Delayed charges are in Canadian dollars. Bill a customer in another currency on an invoice.');
+  const lines = docLines(data.lines).filter(l => l.account || l.desc || l.qty || l.rate);
+  if (!lines.length) throw new ValidationError('Add at least one line.');
+  for (const l of lines) {
+    const a = store.get('accounts', l.account);
+    if (!a || a.type !== 'Income') throw new ValidationError('Choose an income account on every line.');
+    if (l.item && !store.get('items', l.item)) throw new ValidationError('A product or service on this doesn’t exist.');
+    if (!Number.isFinite(l.qty || 0) || !Number.isFinite(l.rate || 0)) throw new ValidationError('Line amounts must be numbers.');
+  }
+  const prev = id && store.get('delayed', id);
+  checkLineClasses(lines, store, prev);
+  const amount = DELAYED.total({ lines });
+  if (!(amount > 0)) throw new ValidationError('The amount has to be above zero.');
+  // Linked to an invoice by saving the invoice (the server does it). A save here keeps a link only when that invoice
+  // really has its lines (so a restore keeps the links, and nothing else can make one up).
+  const onInv = invId => { const d = invId && store.get('docs', String(invId)); return d && d.kind === 'invoice' && (d.lines || []).some(l => l && l.dl === id) ? d : null; };
+  const invDoc = onInv(data.invoiceId) || onInv(prev && prev.invoiceId), inv = invDoc ? invDoc.id : '';
+  if (invDoc && invDoc.contactId !== String(data.contactId)) throw new ValidationError('This is on an invoice, so its customer can’t change. Take it off the invoice first.', 409);
+  const known = new Set(((store.getSetting && store.getSetting('company')) || {}).classes?.map(x => x.id) || []);
+  if (prev && prev.cls) known.add(prev.cls);
+  const cls = data.cls && known.has(String(data.cls)) ? String(data.cls) : '';
+  if (data.cls && !cls) throw new ValidationError('That class doesn’t exist. Add it under Settings first.');
+  const out = { kind: data.kind, date: data.date, contactId: String(data.contactId), number: str(data.number, 40).trim(), memo: str(data.memo, 2000), lines, amount,
+    status: inv ? 'closed' : 'open', invoiceId: inv, ...(cls ? { cls } : {}), created: Number(data.created) || Date.now() };
+  if (data.example) out.example = true;
+  return withTags(out, data, store);
+}
+/** An invoice's lines from delayed charges and credits (line.dl): each one this customer's, and not on another invoice. */
+function checkDelayedLines(data, store, id) {
+  const ids = new Set();
+  for (const l of data.lines || []) {
+    if (!isObj(l) || l.dl === undefined || l.dl === '' || l.dl === null) { if (isObj(l)) delete l.dl; continue; }
+    if (data.kind !== 'invoice') throw new ValidationError('Delayed charges and credits go on invoices only.');
+    const r = store.get('delayed', String(l.dl));
+    if (!r || r.contactId !== data.contactId) throw new ValidationError('A delayed charge or credit on this invoice isn’t this customer’s.');
+    if (r.invoiceId && r.invoiceId !== id && store.get('docs', r.invoiceId)) throw new ValidationError('A delayed charge or credit on this invoice is already on another invoice.', 409);
+    l.dl = r.id; ids.add(r.id);
+  }
 }
 /* Recurring transactions: a template and a schedule. The client makes each one when it's due (or reminds someone).
    Invoices and bills have a customer or vendor and item lines; expenses and deposits a bank or card account and
@@ -1033,7 +1095,7 @@ function recBank(store, id, what) {
   if (a.currency) throw new ValidationError('Recurring transactions use Canadian-dollar bank and card accounts.');
   return String(id);
 }
-function validateRecurring(data, store) {
+function validateRecurring(data, store, id) {
   if (!REC_KINDS.includes(data.kind)) throw new ValidationError('A recurring transaction must be an invoice, bill, expense, deposit, transfer or journal entry.');
   if (!str(data.name).trim()) throw new ValidationError('Give the recurring transaction a name.');
   const doc = data.kind === 'invoice' || data.kind === 'bill', money = data.kind === 'expense' || data.kind === 'deposit';
@@ -1055,6 +1117,7 @@ function validateRecurring(data, store) {
     const lines = docLines(data.lines);
     if (!lines.length) throw new ValidationError('Add at least one line.');
     for (const l of lines) if (!store.get('accounts', l.account)) throw new ValidationError('Choose an account on every line.');
+    checkLineClasses(lines, store, id && store.get('recurring', id));
     out.lines = lines;
   }
   if (doc) out.terms = data.terms === '' || data.terms == null ? '' : Math.max(0, Math.min(365, Math.round(Number(data.terms) || 0)));
@@ -1078,8 +1141,14 @@ function validateRecurring(data, store) {
     if (bad) throw new ValidationError(bad);
     out.lines = RECUR.journalLines(data.lines);
     for (const l of out.lines) if (!store.get('accounts', l.account)) throw new ValidationError('A line uses an account that doesn’t exist.');
+    checkLineClasses(out.lines, store, id && store.get('recurring', id));
   }
-  return out;
+  // The class and tags it gives what it makes (a class at the top, or one on each line with classes on each line).
+  const prev = id && store.get('recurring', id);
+  const known = new Set(((store.getSetting && store.getSetting('company')) || {}).classes?.map(x => x.id) || []);
+  if (prev && prev.cls) known.add(prev.cls);
+  if (data.cls) { if (!known.has(String(data.cls))) throw new ValidationError('That class doesn’t exist. Add it under Settings first.'); out.cls = String(data.cls); } else delete out.cls;
+  return withTags(out, data, store);
 }
 
 function validateQuestion(data, store) {

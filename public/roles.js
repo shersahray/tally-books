@@ -11,7 +11,7 @@
   'use strict';
 
   const AREAS = {
-    sales: { label: 'Sales', desc: 'Customers, invoices, sales receipts, credit notes, estimates, projects and payments received' },
+    sales: { label: 'Sales', desc: 'Customers, invoices, sales receipts, credit notes, estimates, delayed charges, projects and payments received' },
     expenses: { label: 'Expenses', desc: 'Vendors, bills, expenses, vendor credits, purchase orders, mileage and receipts' },
     banking: { label: 'Banking', desc: 'Bank lines for review, bank rules, bank feeds, reconciliation, deposits and transfers' },
     payroll: { label: 'Payroll', desc: 'Employees and pay runs. With View, social insurance numbers and bank account numbers stay hidden.' },
@@ -54,7 +54,7 @@
       // Recurring invoices and bills, and recurring transactions (expense, deposit, transfer, journal entry).
       case 'recurring': return r.kind === 'invoice' ? 'sales' : r.kind === 'bill' ? 'expenses' : (ENTRY_AREA[r.kind] || 'accounting');
       case 'entries': return ENTRY_AREA[r.type] || 'accounting';
-      case 'estimates': case 'projects': case 'times': return 'sales';
+      case 'estimates': case 'projects': case 'times': case 'delayed': return 'sales';
       case 'pos': case 'trips': case 'receipts': case 'vehicles': return 'expenses';
       case 'bankTxns': case 'rules': case 'recons': return 'banking';
       case 'employees': case 'payruns': return 'payroll';
@@ -113,7 +113,7 @@
 
   // What each kind of spreadsheet import (Import data) adds, by area: the screen offers only the kinds a role can change,
   // and the server checks each record it adds (an invoice import's new customers are Sales too).
-  const IMPORT_AREA = { customers: 'sales', vendors: 'expenses', items: 'sales', accounts: 'accounting', invoices: 'sales', bills: 'expenses', journal: 'accounting' };
+  const IMPORT_AREA = { customers: 'sales', vendors: 'expenses', items: 'sales', inventory: 'sales', accounts: 'accounting', invoices: 'sales', sreceipts: 'sales', credits: 'sales', bills: 'expenses', vcredits: 'expenses', journal: 'accounting' };
 
   return { AREAS, LEVELS, MAX_ROLES, can, canWrite, editsSomething, recordArea, writeAreas, settingArea, cleanRole, ENTRY_AREA, IMPORT_AREA };
 });

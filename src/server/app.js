@@ -22,6 +22,7 @@ const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 const DEP = require('../../public/deposits-calc.js');
+const DELAYED = require('../../public/delayed-calc.js');
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 const MIME = {
@@ -725,6 +726,13 @@ function createApp(opts) {
     throw e;
   }
 
+  /** Close the delayed charges and credits an invoice's lines came from (line.dl), and open the ones taken off it. */
+  function syncDelayed(store, docId, doc) {
+    const list = store.list('delayed');
+    if (!list.length) return;
+    for (const u of DELAYED.sync(list, docId, doc)) store.put('delayed', u.id, u.data);
+  }
+
   function applyWrite(store, w, user, ctx) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
@@ -797,6 +805,7 @@ function createApp(opts) {
       const data = validateRecord(collection, id, w.data, store);
       closedCheck(store, w, data, user);
       store.put(collection, id, data);
+      if (collection === 'docs') syncDelayed(store, id, data);
       const after = masked ? hideSin(store.get(collection, id)) : store.get(collection, id);
       if (JSON.stringify(before) !== JSON.stringify(after)) store.audit(user, before ? 'change' : 'add', { collection, id, summary: auditSummary(collection, after), before, after });
     } else if (op === 'delete') {
@@ -816,6 +825,8 @@ function createApp(opts) {
       }
       // An estimate turned into a deleted invoice goes back to accepted, ready to invoice again.
       if (collection === 'docs') for (const x of store.list('estimates').filter(x => x.invoiceId === id)) store.put('estimates', x.id, { ...x, invoiceId: '' });
+      // Delayed charges and credits on a deleted invoice are open again, ready for the next one.
+      if (collection === 'docs') syncDelayed(store, id, null);
       if (before) store.audit(user, 'delete', { collection, id, summary: auditSummary(collection, before), before });
       if (collection === 'bankTxns') for (const q of store.list('questions').filter(q => q.target === 'bankTxns' && q.targetId === id)) store.delete('questions', q.id);
       // A deleted transaction sends any bank lines linked to it back to "For review".
@@ -833,6 +844,7 @@ function createApp(opts) {
     switch (col) {
       case 'estimates': return `estimate ${d.number ? '#' + d.number + ' ' : ''}${d.date} ${amt(d.total)}`;
       case 'recurring': return `recurring ${d.kind} “${String(d.name || '').slice(0, 60)}”, next ${d.next}`;
+      case 'delayed': return `${d.kind === 'credit' ? 'delayedcredit' : 'delayedcharge'} ${d.number ? '#' + d.number + ' ' : ''}${d.date} ${amt(d.amount)}${d.invoiceId ? ' (on an invoice)' : ''}`;
       case 'entries': return `${d.type} ${d.date}${d.ref ? ' #' + d.ref : ''} ${amt(tot(d))}${d.memo ? ' · ' + String(d.memo).slice(0, 60) : ''}`;
       case 'docs': return `${d.kind}${d.number ? ' #' + d.number : ''} ${d.date} ${amt(d.total)}`;
       case 'accounts': return `${d.code ? d.code + ' ' : ''}${d.name}`;
@@ -1326,7 +1338,7 @@ function createApp(opts) {
       const id = decodeURIComponent(m[1]);
       if (!canSeeCo(user, id)) throw new ValidationError('That company doesn’t exist.', 404);
       const c = reg.get(id), store = reg.store(id);
-      const used = ['entries', 'docs', 'estimates', 'recurring', 'bankTxns', 'receipts', 'payruns', 'filings', 'attachments'].some(k => store.list(k).length);
+      const used = ['entries', 'docs', 'estimates', 'recurring', 'delayed', 'bankTxns', 'receipts', 'payruns', 'filings', 'attachments'].some(k => store.list(k).length);
       if (used) throw new ValidationError('This company has transactions or documents, so it can’t be removed. Archive it instead to hide it from the list.', 409);
       if (c.billing && billingPaid(c.billing)) throw new ValidationError('This company’s client has a Sumlora subscription running. Cancel it first (Stripe → Subscriptions), then remove the company.', 409);
       await plaid.removeCompany(id).catch(() => {});
@@ -1557,7 +1569,7 @@ function createApp(opts) {
       const gone = new Set(((before && before.tags) || []).map(t => t.id).filter(id => !company.tags.some(t => t.id === id)));
       if (gone.size) {
         const on = r => Array.isArray(r && r.tags) && r.tags.some(id => gone.has(id));
-        if (['entries', 'docs', 'rules'].some(c => ctx.store.list(c).some(on)) || ctx.store.list('bankTxns').some(b => on(b.cat))) throw new ValidationError('That tag is still on transactions. Remove it from them first.', 409);
+        if (['entries', 'docs', 'rules', 'delayed', 'estimates', 'recurring'].some(c => ctx.store.list(c).some(on)) || ctx.store.list('bankTxns').some(b => on(b.cat))) throw new ValidationError('That tag is still on transactions. Remove it from them first.', 409);
       }
       // Plan features: can't be turned on here when the plan doesn't include them (settings already saved stay as they were).
       if (company.quickMethod && company.quickMethod.on && !(before && before.quickMethod && before.quickMethod.on)) needFeature(ctx.id, 'specialTax', ctx.store);
@@ -2292,6 +2304,8 @@ function createApp(opts) {
             ctx.store.put(c, id, validateRecord(c, id, data, ctx.store));
           }
         }
+        // Delayed charges load before the invoices they're on, so link them again from the invoices' lines.
+        for (const d of ctx.store.list('docs')) if ((d.lines || []).some(l => l && l.dl)) syncDelayed(ctx.store, d.id, d);
       });
       ctx.store.audit(ctx.user, 'restore', { summary: `restored a backup exported ${String(body.exportedAt || '').slice(0, 10) || 'on an unknown date'}` });
       reg.update(ctx.id, { name: company.name });
