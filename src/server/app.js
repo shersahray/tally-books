@@ -1824,10 +1824,15 @@ function createApp(opts) {
       const body = await readJson(req, 60 * 1024 * 1024);
       if (!body || !Array.isArray(body.writes) || !body.writes.length) throw new ValidationError('There’s nothing to import.');
       if (body.writes.length > 100000) throw new ValidationError('That’s too much to import at once. Import the transaction history a year at a time.', 413);
+      // A spreadsheet import (Import data) only adds: products and services too, and never touches an existing record, accounts included.
+      const addOnly = body.addOnly === true;
+      const cols = addOnly ? ['accounts', 'contacts', 'items', 'entries', 'docs'] : ['accounts', 'contacts', 'entries', 'docs'];
+      const ids = new Set();
       for (const w of body.writes) {
-        if (!w || (w.collection !== 'accounts' && w.op === 'delete') || !['accounts', 'contacts', 'entries', 'docs'].includes(w.collection)) throw new ValidationError('An import can only add accounts, contacts, transactions and open invoices or bills.');
+        if (!w || ((addOnly || w.collection !== 'accounts') && w.op !== 'set') || !cols.includes(w.collection)) throw new ValidationError(addOnly ? 'An import can only add accounts, customers and vendors, products and services, invoices, bills and journal entries.' : 'An import can only add accounts, contacts, transactions and open invoices or bills.');
         // Only new contacts, transactions and bills; existing ones are never overwritten.
-        if (w.collection !== 'accounts' && w.op === 'set' && ctx.store.get(w.collection, String(w.id))) throw new ValidationError('An import can only add new records, not change existing ones.');
+        if ((addOnly || w.collection !== 'accounts') && w.op === 'set' && ctx.store.get(w.collection, String(w.id))) throw new ValidationError('An import can only add new records, not change existing ones.');
+        if (addOnly) { const k = w.collection + '/' + w.id; if (ids.has(k)) throw new ValidationError('The same record is listed twice in the import.'); ids.add(k); }
       }
       const snapDir = path.join(opts.dataDir, 'before-restore');
       fs.mkdirSync(snapDir, { recursive: true, mode: 0o700 });
@@ -1841,7 +1846,11 @@ function createApp(opts) {
       ctx.store.transaction(() => {
         body.writes.forEach((w, i) => {
           try { applyWrite(ctx.store, w, ctx.user, ctx); } catch (e) {
-            if (e instanceof ValidationError) throw new ValidationError(`Item ${i + 1} (${w.collection}${w.data && (w.data.name || w.data.number || w.data.date) ? ': ' + String(w.data.name || w.data.number || w.data.date).slice(0, 60) : ''}): ${e.message}`, e.status);
+            if (e instanceof ValidationError) {
+              const x = new ValidationError(`Item ${i + 1} (${w.collection}${w.data && (w.data.name || w.data.number || w.data.date) ? ': ' + String(w.data.name || w.data.number || w.data.date).slice(0, 60) : ''}): ${e.message}`, e.status);
+              if (e.closedThrough) x.closedThrough = e.closedThrough; // so the app can offer to unlock the books and try again
+              throw x;
+            }
             throw e;
           }
           if (w.op === 'set') counts[w.collection] = (counts[w.collection] || 0) + 1;
