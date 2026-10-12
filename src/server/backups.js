@@ -12,7 +12,7 @@ const { DEFAULT_COMPANY } = require('./seed');
 
 const BACKUP_DIR_NAME = 'Sumlora Backups';
 const OLD_BACKUP_DIR_NAME = 'Tally Books Backups'; // the app's name before Sumlora: keep backing up there
-const EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' };
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const pad = n => String(n).padStart(2, '0');
 const localDay = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;

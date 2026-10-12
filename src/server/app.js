@@ -14,6 +14,7 @@ const assistant = require('./assistant');
 const mail = require('./mail');
 const stripe = require('./stripe');
 const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
+const inbound = require('./inbound');
 const { TERMS_VERSION, TERMS_DRAFT } = require('./legal');
 const { Billing, paid: billingPaid, stale: billingStale, describe: billingDescribe } = require('./billing');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
@@ -218,6 +219,8 @@ function createApp(opts) {
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
   // Plaid's keys and the banks' access tokens stay with this computer (the licence folder on desktop), never in a books folder that may be shared.
   const plaid = new Plaid(opts.licenceDir || opts.dataDir, { env: opts.plaid || {}, fetch: opts.plaidFetch });
+  // Receipts by email: the server's settings and each company's address (inbound.js), kept with the server like Plaid's keys.
+  const inSet = new inbound.InboundSettings(opts.licenceDir || opts.dataDir);
   /** Bring one bank connection's new transactions into its company's "For review". */
   async function syncFeed(cid, itemId, user) {
     const it = plaid.item(itemId, cid);
@@ -895,7 +898,7 @@ function createApp(opts) {
       // A firm sees its own people's sign-ins; the server's administrators see everything.
       if (user.platformAdmin) return { log: auth.readLog(1000) };
       const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
-      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
+      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
     }],
     // The administrator's overview: firms on this server, desktop licences sold, renewals due, AI use.
@@ -1130,6 +1133,7 @@ function createApp(opts) {
       if (used) throw new ValidationError('This company has transactions or documents, so it can’t be removed. Archive it instead to hide it from the list.', 409);
       if (c.billing && billingPaid(c.billing)) throw new ValidationError('This company’s client has a Sumlora subscription running. Cancel it first (Stripe → Subscriptions), then remove the company.', 409);
       await plaid.removeCompany(id).catch(() => {});
+      inSet.drop(id);
       reg.remove(id);
       auth.dropCompany(id);
       auth.log('company-removed', { by: user.username, company: c.name });
@@ -1186,6 +1190,19 @@ function createApp(opts) {
       const st = plaid.update(body);
       auth.log('plaid-settings', { username: user.username, ip: clientIp(req), change: body.secret !== undefined || body.clientId !== undefined ? 'Plaid keys changed' : 'settings changed' });
       return st;
+    }],
+    // Receipts by email: the administrator turns it on, names the domain and gets the webhook address for the mail provider.
+    ['GET', /^\/api\/inbound$/, (req, m, res, user) => {
+      if (!(user.role === 'owner' && user.platformAdmin)) return { ready: inSet.ready() };
+      const st = inSet.status();
+      return { ...st, admin: true, webhook: st.secret ? `${originOf(req)}/api/inbound/email/${st.secret}` : '' };
+    }],
+    ['PUT', /^\/api\/inbound$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const body = await readJson(req);
+      const st = inSet.update(body);
+      auth.log('inbound-settings', { username: user.username, ip: clientIp(req), change: body.newSecret ? 'webhook secret changed' : `receipts by email ${st.on ? 'on' : 'off'} (${st.domain || 'no domain'})` });
+      return { ...st, admin: true, webhook: `${originOf(req)}/api/inbound/email/${st.secret}` };
     }],
     // Sumlora subscriptions: the administrator's settings.
     ['GET', /^\/api\/billing$/, (req, m, res, user) => { adminOnly(user); return billing.status(); }],
@@ -1719,6 +1736,32 @@ function createApp(opts) {
       if (canRead) queueRead(ctx.id, id);
       return { ok: true, id, rev: ctx.bump() };
     }],
+    // Receipts by email: this company's forwarding address, and who may send to it.
+    ['GET', /^\/receipts\/email$/, ctx => {
+      notClient(ctx.user);
+      const feature = featureOn(ctx.id, 'emailReceipts', ctx.store), cfg = ctx.store.getSetting('inboundEmail') || {};
+      if (feature && inSet.ready()) inSet.ensure(ctx.id);
+      return { feature, ready: inSet.ready(), address: feature ? inSet.address(ctx.id) : '', allowed: cfg.allowed || [], rejected: (cfg.rejected || []).slice(-10).reverse() };
+    }],
+    ['PUT', /^\/receipts\/email$/, async (ctx, req) => {
+      notClient(ctx.user);
+      needFeature(ctx.id, 'emailReceipts', ctx.store);
+      const body = (await readJson(req)) || {};
+      const before = ctx.store.getSetting('inboundEmail') || {}, allowed = inbound.cleanAllowed(body.allowed);
+      ctx.store.transaction(() => {
+        ctx.store.putSetting('inboundEmail', { ...before, allowed });
+        ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'inboundEmail', summary: allowed.length ? `receipts by email: only from ${allowed.join(', ')}`.slice(0, 300) : 'receipts by email: from anyone' });
+      });
+      return { ok: true, allowed };
+    }],
+    ['POST', /^\/receipts\/email\/new$/, ctx => {
+      notClient(ctx.user);
+      needFeature(ctx.id, 'emailReceipts', ctx.store);
+      if (!inSet.ready()) throw new ValidationError('Receipts by email aren’t set up on this server yet. Ask the server’s administrator.', 409);
+      inSet.rotate(ctx.id);
+      ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'inboundEmail', summary: 'receipts by email: new address made; the old one stopped working' });
+      return { ok: true, address: inSet.address(ctx.id) };
+    }],
     /* Questions about a transaction: the team asks, the client answers (or the other way round), the team resolves.
        A message from the client marks it answered; one from the team marks it waiting for the client. */
     ['POST', /^\/questions$/, async (ctx, req) => {
@@ -1786,7 +1829,7 @@ function createApp(opts) {
     ['GET', /^\/files\/([A-Za-z0-9-]+)$/, (ctx, req, m, res) => {
       const f = ctx.store.getFile(m[1]);
       if (!f) throw new ValidationError('That file isn’t here any more.', 404);
-      const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[f.mediaType] || 'bin';
+      const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' }[f.mediaType] || 'bin';
       const safe = (f.name || 'receipt').replace(/[^A-Za-z0-9 ._-]+/g, '').replace(/\.[A-Za-z0-9]+$/, '').slice(0, 60) || 'receipt';
       res.writeHead(200, { 'Content-Type': f.mediaType, 'Content-Length': f.data.length, 'Content-Disposition': `inline; filename="${safe}.${ext}"`,
         'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin',
@@ -1942,12 +1985,104 @@ function createApp(opts) {
     }],
   ];
 
+  /* ---------- Receipts by email: the webhook the mail provider calls ----------
+     Answers 200 for anything the provider shouldn't send again (an unknown address, a sender that isn't allowed,
+     a company without the feature): the reason is in the answer and in that company's Settings → Receipts by email. */
+  const inboundHits = new Map(); // company -> { since, n }: emails in the last hour
+  function inboundRefuse(cid, from, reason) {
+    try {
+      const store = reg.store(cid), cfg = store.getSetting('inboundEmail') || {};
+      store.putSetting('inboundEmail', { ...cfg, rejected: [...(cfg.rejected || []), { at: Date.now(), from: String(from || '').slice(0, 200), reason }].slice(-20) });
+    } catch { /* the refusal is still answered */ }
+    return reason;
+  }
+  async function inboundEmail(req, secret) {
+    if (req.method !== 'POST' || !inSet.ready() || !inSet.secretOk(secret)) { req.resume(); return [404, { error: 'Not found' }]; }
+    const type = String(req.headers['content-type'] || '').toLowerCase();
+    if (!/^(application\/json|multipart\/form-data)/.test(type)) { req.resume(); return [415, { error: 'Send Postmark’s JSON or SendGrid’s form.' }]; }
+    if (Number(req.headers['content-length']) > inbound.LIMITS.request) { req.resume(); return [413, { error: 'That email is too large.' }]; }
+    const raw = await readRaw(req, inbound.LIMITS.request);
+    let mail;
+    if (type.startsWith('application/json')) { let j; try { j = JSON.parse(raw.toString('utf8')); } catch { return [400, { error: 'That isn’t valid JSON.' }]; } mail = inbound.fromPostmark(j); }
+    else mail = inbound.fromSendgrid(raw, req.headers['content-type']);
+    const cids = [...new Set(mail.recipients.map(a => inSet.companyFor(a)).filter(Boolean))].slice(0, 5);
+    if (!cids.length) return [200, { ok: false, ignored: 'No company has that address.' }];
+    const total = mail.attachments.reduce((t, a) => t + a.data.length, 0);
+    if (total > inbound.LIMITS.email) { cids.forEach(c => inboundRefuse(c, mail.fromEmail, 'The email was over 25 MB.')); return [413, { error: 'The attachments are over 25 MB.' }]; }
+    const out = [];
+    for (const cid of cids) {
+      try { out.push({ company: cid, ...(await inboundDeliver(cid, mail)) }); }
+      catch (e) { if (e.status === 429) return [429, { error: e.message }]; throw e; }
+    }
+    return [200, { ok: out.some(r => r.receipts && r.receipts.length), results: out }];
+  }
+  async function inboundDeliver(cid, mail) {
+    const c = reg.get(cid), f = c && auth.firm(c.firmId);
+    if (!c || c.archived || !f || f.status !== 'active') return { rejected: 'The company isn’t taking receipts.' };
+    const h = inboundHits.get(cid);
+    if (!h || Date.now() - h.since > 3600e3) inboundHits.set(cid, { since: Date.now(), n: 1 });
+    else if (++h.n > inbound.LIMITS.perHour) throw new ValidationError('Too many emails for this company this hour. Try again later.', 429);
+    if (inboundHits.size > 10000) for (const [k, v] of inboundHits) if (Date.now() - v.since > 3600e3) inboundHits.delete(k);
+    if (!featureOn(cid, 'emailReceipts')) return { rejected: inboundRefuse(cid, mail.fromEmail, 'Receipts by email aren’t part of this company’s plan.') };
+    if (licence.on && !licence.status().canChange) return { rejected: inboundRefuse(cid, mail.fromEmail, 'The books are view only until the licence is renewed.') };
+    if (firmNeedsPay(f) || coNeedsPay(c)) return { rejected: inboundRefuse(cid, mail.fromEmail, 'The Sumlora subscription needs attention.') };
+    const ctx = ctxFor(cid), cfg = ctx.store.getSetting('inboundEmail') || {};
+    if (!mail.fromEmail) return { rejected: inboundRefuse(cid, '', 'The email had no sender.') };
+    if (!inbound.senderAllowed(cfg.allowed, mail.fromEmail)) return { rejected: inboundRefuse(cid, mail.fromEmail, 'The sender isn’t on the list of allowed senders.') };
+    // The files that can be receipts: PDFs and photos (by their first bytes), not too big, not a signature logo.
+    const files = [], skipped = [];
+    for (const a of mail.attachments) {
+      const mediaType = inbound.sniffInbound(a.data);
+      if (!mediaType) { if (!a.inline) skipped.push(`${a.name || 'file'}: not a PDF or photo`); continue; }
+      if (a.inline && a.data.length < inbound.INLINE_MIN) continue;
+      if (a.data.length > inbound.LIMITS.attachment) { skipped.push(`${a.name || 'file'}: over 10 MB`); continue; }
+      if (files.length >= inbound.LIMITS.files) { skipped.push(`${a.name || 'file'}: more than ${inbound.LIMITS.files} files`); continue; }
+      files.push({ data: a.data, mediaType, name: a.name });
+    }
+    if (!files.length) {
+      if (skipped.length) return { rejected: inboundRefuse(cid, mail.fromEmail, `Nothing could be used: ${skipped.join('; ')}.`.slice(0, 300)), skipped };
+      const body = String(mail.text || '').trim() || inbound.htmlToText(mail.html);
+      if (!body) return { rejected: inboundRefuse(cid, mail.fromEmail, 'The email had no attachment and no text.') };
+      files.push({ data: inbound.bodyPdf(mail), mediaType: 'application/pdf', name: (mail.subject || 'Email receipt').slice(0, 100) + '.pdf' });
+    }
+    // The same daily limit as the Receipts screen.
+    const dayKey = 'receipts-sent:' + new Date().toISOString().slice(0, 10), sentToday = Number(ctx.store.getMeta(dayKey) || 0);
+    if (sentToday + files.length > 300) return { rejected: inboundRefuse(cid, mail.fromEmail, 'That’s 300 receipts today for this company.') };
+    const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+    let canRead = ai.status().configured && company.ai && firmAi(cid);
+    try { if (canRead) needFirmAi(cid); } catch { canRead = false; }
+    const who = { username: 'email', name: mail.fromName ? `${mail.fromName} (${mail.fromEmail})` : mail.fromEmail };
+    const ids = [];
+    ctx.store.transaction(() => {
+      ctx.store.putMeta(dayKey, sentToday + files.length);
+      for (const fl of files) {
+        const id = crypto.randomUUID(), fileId = crypto.randomUUID();
+        const fileName = String(fl.name || 'receipt').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').trim().slice(0, 120) || 'receipt';
+        // AI reads PDFs and the usual photo types; an iPhone's HEIC photo is kept for the bookkeeper to look at.
+        const readable = fl.mediaType !== 'image/heic';
+        const rec = { fileId, fileName, mediaType: fl.mediaType, size: fl.data.length, uploadedBy: '', uploadedByName: mail.fromEmail, uploadedAt: Date.now(),
+          readStatus: canRead && readable ? 'waiting' : 'off', readError: canRead && !readable ? 'AI can’t read HEIC photos. Open it to record it.' : '', status: 'inbox', note: '', entryId: '', docId: '',
+          source: 'email', emailFrom: mail.fromEmail, emailSubject: mail.subject.slice(0, 200) };
+        ctx.store.putFile(fileId, { mediaType: fl.mediaType, name: fileName, data: fl.data });
+        ctx.store.put('receipts', id, rec);
+        ctx.store.audit(who, 'add', { collection: 'receipts', id, summary: `Receipt emailed in from ${mail.fromEmail}`, after: rec });
+        ids.push({ id, readable });
+      }
+    });
+    for (const r of ids) if (canRead && r.readable) queueRead(cid, r.id);
+    ctx.bump();
+    return { receipts: ids.map(r => r.id), skipped };
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
+      const url = new URL(req.url, 'http://localhost');
+      // The mail provider's call: no session (nor the APP_PASSWORD prompt); the long secret in the address is the password.
+      const im = url.pathname.match(/^\/api\/inbound\/email\/([^/]*)$/);
+      if (im) { const [st, out] = await inboundEmail(req, im[1]); return sendJson(res, st, out); }
       if (opts.password && !authorized(req, opts.password)) {
         return send(res, 401, 'Sign in required', { 'WWW-Authenticate': 'Basic realm="Sumlora", charset="UTF-8"', 'Content-Type': 'text/plain' });
       }
-      const url = new URL(req.url, 'http://localhost');
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
         // Everything except signing in needs a signed-in user.
@@ -2085,6 +2220,21 @@ function sameOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return true; // non-browser clients (curl, tests)
   try { return new URL(origin).host === req.headers.host; } catch { return false; }
+}
+
+/** The request body as it came, up to a limit. */
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new ValidationError('That email is too large.', 413)); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }
 
 function readJson(req, limit = 5 * 1024 * 1024) {
