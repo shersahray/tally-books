@@ -405,7 +405,8 @@ function sanitizeDraft(x, { accounts, vendors } = {}) {
     reason: str(x.reason, 300),
   };
 }
-const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'draft', 'readAt', 'wasAttached'];
+const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'draft', 'readAt', 'wasAttached', 'source', 'emailFrom', 'emailSubject'];
+const RECEIPT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic'];
 function validateReceipt(data, store, id) {
   const prev = store.get('receipts', id);
   if (!prev && !(data.fileId && store.hasFile(String(data.fileId)))) throw new ValidationError('Add receipts from the Receipts screen.');
@@ -414,9 +415,11 @@ function validateReceipt(data, store, id) {
   const base = {};
   if (prev) { for (const k of RECEIPT_SERVER) if (prev[k] !== undefined) base[k] = prev[k]; }
   else {
-    Object.assign(base, { fileId: String(data.fileId), fileName: str(data.fileName, 120), mediaType: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(data.mediaType) ? data.mediaType : 'image/jpeg',
+    Object.assign(base, { fileId: String(data.fileId), fileName: str(data.fileName, 120), mediaType: RECEIPT_TYPES.includes(data.mediaType) ? data.mediaType : 'image/jpeg',
       size: Number(data.size) || 0, uploadedBy: str(data.uploadedBy, 200), uploadedByName: str(data.uploadedByName, 200), uploadedAt: Number(data.uploadedAt) || Date.now(),
       readStatus: data.draft ? 'read' : 'off', readError: '', wasAttached: !!data.wasAttached });
+    // Emailed in (kept through a backup and restore): who sent it and the subject.
+    if (data.source === 'email') Object.assign(base, { source: 'email', emailFrom: str(data.emailFrom, 200), emailSubject: str(data.emailSubject, 200) });
     if (data.draft) base.draft = sanitizeDraft(data.draft);
   }
   const status = RECEIPT_STATUS.includes(data.status) ? data.status : 'inbox';

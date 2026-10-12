@@ -169,6 +169,10 @@
       if (method === 'GET') return { configured: true, demo: true, model: 'claude-haiku-4-5', capUsd: 20, spentUsd: 0, linesThisMonth: 0, source: 'env', keyHint: '(demo)', models: [{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (lowest cost)' }, { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (more accurate)' }] };
       throw new ApiError(400, 'AI settings aren’t available in the demo.');
     }
+    if (path === '/api/inbound') {
+      if (method === 'GET') return { admin: true, on: false, domain: '', secret: '', ready: false, addresses: 0, webhook: '' };
+      throw new ApiError(400, 'Receipts by email aren’t available in the demo, because nothing in it is saved.');
+    }
     if (path === '/api/companies' && method === 'GET') return { companies: cos.map(summary), provinces: PROVS, pendingFirms: demoFirms.filter(f => f.status === 'pending').length };
     if (path === '/api/companies' && method === 'POST') return { ok: true, company: summary(createCompany(body)) };
     let m = path.match(/^\/api\/companies\/([^/]+)$/);
@@ -224,6 +228,9 @@
       w.questions = (w.questions || []).map(q => q.id !== m[1] ? q : m[2] === 'reply' ? { ...q, status: 'open', thread: [...q.thread, { by: 'demo', name: 'Demo user', role: 'owner', at: Date.now(), text: String(body.text || '') }] } : { ...q, status: m[2] === 'resolve' ? 'resolved' : 'open' });
       if (method === 'DELETE') w.questions = w.questions.filter(q => q.id !== m[1]);
     });
+    // Receipts by email: a made-up address so the settings can be seen; nothing arrives in the demo.
+    if (rest === '/receipts/email' && method === 'GET') return { feature: true, ready: true, address: 'r-0d3m0a11ce5f00dbeefcafe12345678@receipts.example.com', allowed: [], rejected: [] };
+    if (rest.startsWith('/receipts/email')) throw new ApiError(400, 'Receipts by email aren’t available in the demo, because nothing in it is saved.');
     if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Sumlora, receipts go to this screen from a phone or a computer.');
     if (rest === '/closing') { const out = transact(id, w => { w.company = { ...w.company, closingDate: body.date || '', closingPassword: body.password !== undefined ? !!body.password : !!w.company.closingPassword }; }); return out; }
     if (rest === '/closing/unlock') return { ok: true, minutes: 15 };

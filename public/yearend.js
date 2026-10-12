@@ -58,7 +58,7 @@ async function readZip(buf) {
 /* ---------- the package ---------- */
 const ypSafe = s => String(s || '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80) || 'file';
 const ypCsv = rows => '﻿' + rows.map(r => r.map(v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\r\n');
-const YP_EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const YP_EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' };
 /** The fiscal year-ends to offer: last year first. */
 function ypYearEnds() {
   const t = today(), thisEnd = fyEndOf(t), lastEnd = fyEndOf(addDays(fyStartOf(t), -1));

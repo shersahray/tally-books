@@ -55,7 +55,7 @@ const newOk=k=>k==='contact'?perm('sales','edit')||perm('expenses','edit'):!NEW_
 let MODAL_AREA=null; // the area of the form being opened (set around each form; see the end of auth.js)
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|billing(?:\/|$)|invoicing$|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|inbound$|billing(?:\/|$)|invoicing$|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -502,7 +502,9 @@ function vSettings(){
   ${aiPanel()}
   ${assistantPanel()}
   ${typeof yardPanel==='function'?yardPanel():''}
+  ${typeof rcMailPanel==='function'?rcMailPanel():''}
   ${typeof plaidPanel==='function'?plaidPanel():''}
+  ${typeof inboundPanel==='function'?inboundPanel():''}
   ${feat('payroll')?payrollSettingsPanel():''}
   ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
@@ -596,7 +598,7 @@ function bindMain(m){
   if(S.view==='dataimport'&&typeof bindDataImport==='function')bindDataImport(m);
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
-  bindAI(m);bindAIRead(m);bindAssistantSettings(m);if(typeof bindFeeds==='function')bindFeeds();
+  bindAI(m);bindAIRead(m);bindAssistantSettings(m);if(typeof bindFeeds==='function')bindFeeds();if(typeof bindRcMail==='function')bindRcMail(m);
   if(typeof bindDocout==='function')bindDocout(m);
   if(typeof bindBatch==='function')bindBatch(m);
   if(S.view==='settings')bindClasses(m);
