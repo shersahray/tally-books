@@ -3,6 +3,7 @@ const GIFI = require('../../public/gifi.js');
 const PLANS = require('../../public/plans.js');
 const IND = require('../../public/industries.js');
 const RECUR = require('../../public/recurring-calc.js');
+const APPROVALS = require('../../public/approvals.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -130,6 +131,11 @@ function validateDoc(data, store, id) {
   } else { delete data.currency; delete data.fx; }
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Document total must be a number.');
   if (!Array.isArray(data.lines)) throw new ValidationError('Document lines must be a list.');
+  // Bill approvals (approvals.js): only on bills. The server decides it on every save (see applyWrite); this checks its shape.
+  if (data.approval !== undefined) {
+    if (data.kind !== 'bill') delete data.approval;
+    else { try { data.approval = APPROVALS.cleanApproval(data.approval); } catch (e) { throw new ValidationError(e.message); } if (data.approval === undefined) delete data.approval; }
+  }
   return data;
 }
 
@@ -781,6 +787,8 @@ function validateCompany(data) {
     docStyle: { color: /^#[0-9a-fA-F]{6}$/.test(isObj(data.docStyle) ? data.docStyle.color : '') ? data.docStyle.color : '#0a7369', layout: ['classic', 'bold', 'minimal'].includes(isObj(data.docStyle) && data.docStyle.layout) ? data.docStyle.layout : 'classic' },
     customFields: (Array.isArray(data.customFields) ? data.customFields : []).filter(isObj).slice(0, 3).map((f, i) => ({ id: 'f' + (i + 1), label: str(f.label, 30).trim(), sales: f.sales !== false, purchase: !!f.purchase })).filter(f => f.label),
     lateFee: validateLateFee(data.lateFee),
+    // Bill approvals: on or off, which bills (over an amount, from some vendors) and who besides owners approves them.
+    approvals: APPROVALS.clean(data.approvals),
     // Opening UCC for each CCA class, at the start of the first fiscal year Sumlora works out (from the last T2 Schedule 8).
     ccaOpening: isObj(data.ccaOpening) ? Object.fromEntries(Object.entries(data.ccaOpening).filter(([k, v]) => /^[0-9]{1,2}(\.[0-9]{1,2})?$/.test(k) && isObj(v) && isDate(v.fy)).slice(0, 60).map(([k, v]) => [k, { fy: v.fy, ucc: Math.max(0, Math.round((Number(v.ucc) || 0) * 100) / 100) }])) : {},
     // Classes: a way to sort income and expenses (branch, department, line of business). One per transaction.

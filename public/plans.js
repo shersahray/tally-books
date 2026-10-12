@@ -21,12 +21,13 @@
     multiCurrency: { label: 'Multi-currency', desc: 'Customers, vendors and bank accounts in US dollars and other currencies, with exchange gains and losses' },
     fixedAssets: { label: 'Fixed assets and CCA', desc: 'Asset register, amortization entries and the capital cost allowance schedule' },
     emailReceipts: { label: 'Receipts by email', desc: 'Each company gets its own email address: receipts forwarded to it go to the Receipts inbox' },
+    billApprovals: { label: 'Bill approvals', desc: 'Bills over an amount, or from chosen vendors, wait for an owner or approver to approve them before they can be paid' },
     // For the whole firm, not each company: owners define roles under Users & security (see roles.js).
     customRoles: { label: 'Custom roles', desc: 'Your own roles for staff, with None, View or Edit for sales, expenses, banking, payroll, reports, accounting, sales tax and settings', firm: true },
   };
   const PLANS = {
     essentials: { label: 'Essentials', features: [] },
-    plus: { label: 'Plus', features: ['payroll', 'ai', 'advancedReports', 'specialTax', 'projects', 'inventory', 'multiCurrency', 'fixedAssets', 'emailReceipts', 'customRoles'] },
+    plus: { label: 'Plus', features: ['payroll', 'ai', 'advancedReports', 'specialTax', 'projects', 'inventory', 'multiCurrency', 'fixedAssets', 'emailReceipts', 'billApprovals', 'customRoles'] },
   };
   // Add-ons: bought separately for each company, on top of either plan. Off unless an owner turns one on.
   // cents is the default monthly price per company; the server's administrator can change it in Settings.

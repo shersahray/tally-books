@@ -540,3 +540,7 @@ th.bsel,td.bsel{width:28px;padding-right:0}
 .bbar{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
 .bprog{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:10px}
 .bprog span{display:block;height:100%;background:var(--accent);transition:width .2s}
+
+/* Bill approvals */
+.ap-hist{margin:6px 0 0;padding-left:18px;font-size:13px;display:flex;flex-direction:column;gap:4px}
+.ap-pick{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;padding:4px 0}

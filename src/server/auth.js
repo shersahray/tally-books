@@ -293,7 +293,7 @@ class Auth {
     const f = this.firm(u.firmId);
     const cr = this.customRoleOf(u);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
-      customRole: cr ? cr.id : '', roleName: cr ? cr.name : '', perms: cr ? { ...cr.perms } : null,
+      customRole: cr ? cr.id : '', roleName: cr ? cr.name : '', perms: cr ? { ...cr.perms } : null, approveBills: !!(cr && cr.approveBills),
       firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: (this.planOverride && this.planOverride()) || (f ? PLANS.planOf(f.plan) : 'plus'), platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '', terms: u.terms ? { v: u.terms.v, at: u.terms.at } : null };
@@ -335,7 +335,7 @@ class Auth {
     r = { id: 'r_' + crypto.randomBytes(6).toString('hex'), ...r, created: Date.now() };
     f.roles.push(r);
     this.save();
-    this.log('role-added', { by: actor.username, role: r.name, perms: permText(r.perms) });
+    this.log('role-added', { by: actor.username, role: r.name, perms: permText(r.perms, r) });
     return r;
   }
   updateRole(id, data, actor) {
@@ -344,10 +344,10 @@ class Auth {
     if (!r) throw new AuthError('That role doesn’t exist.', 404);
     let next;
     try { next = ROLESLIB.cleanRole(data, f.roles.filter(x => x.id !== id)); } catch (e) { throw new AuthError(e.message, 400); }
-    const before = permText(r.perms), oldName = r.name;
+    const before = permText(r.perms, r), oldName = r.name;
     Object.assign(r, next);
     this.save();
-    this.log('role-changed', { by: actor.username, role: r.name, ...(oldName !== r.name ? { was: oldName } : {}), perms: permText(r.perms), before });
+    this.log('role-changed', { by: actor.username, role: r.name, ...(oldName !== r.name ? { was: oldName } : {}), perms: permText(r.perms, r), before });
     return r;
   }
   removeRole(id, actor) {
@@ -748,7 +748,7 @@ class Auth {
 }
 
 /** "Sales: edit, Expenses: view" for the sign-in activity log. */
-const permText = p => Object.keys(ROLESLIB.AREAS).map(a => `${ROLESLIB.AREAS[a].label}: ${(p && p[a]) || 'none'}`).join(', ');
+const permText = (p, r) => Object.keys(ROLESLIB.AREAS).map(a => `${ROLESLIB.AREAS[a].label}: ${(p && p[a]) || 'none'}`).join(', ') + (r && r.approveBills ? ', approves bills' : '');
 
 function readCookie(req, name) {
   const h = req.headers.cookie || '';
