@@ -447,7 +447,7 @@ function roleForm(r){
   const sale=k=>k==='invoice'||k==='sreceipt'||k==='credit'||k==='payment'||k==='customer';
   const AREA_OF={docForm:k=>sale(k)?'sales':'expenses',payForm:k=>sale(k)?'sales':'expenses',moneyForm:k=>k==='deposit'?'banking':'expenses',refundForm:c=>c&&c.kind==='credit'?'sales':'expenses',
     contactForm:(c,k)=>(c?c.kind:k)==='vendor'?'expenses':'sales',transferForm:()=>'banking',journalForm:()=>'accounting',accountForm:()=>'accounting',assetForm:()=>'accounting',ruleForm:()=>'banking',
-    estimateForm:()=>'sales',poForm:()=>'expenses',employeeForm:()=>'payroll',payRunForm:()=>'payroll',payRunView:()=>'payroll',remitForm:()=>'payroll'};
+    estimateForm:()=>'sales',depositForm:()=>'sales',depApplyForm:()=>'sales',depRefundForm:()=>'sales',poForm:()=>'expenses',employeeForm:()=>'payroll',payRunForm:()=>'payroll',payRunView:()=>'payroll',remitForm:()=>'payroll'};
   for(const[name,area]of Object.entries(AREA_OF)){const fn=window[name];if(typeof fn!=='function')continue;
     window[name]=function(...a){const prev=MODAL_AREA;MODAL_AREA=area(...a);try{return fn.apply(this,a)}finally{MODAL_AREA=prev}}}
 })();

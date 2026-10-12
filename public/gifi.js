@@ -886,6 +886,7 @@
     if (d === 'ap' || d === 'card' || d === 'vacation_payable') return '2620';
     if (d === 'tax' || d === 'qst' || d === 'pst') return '2680';
     if (d === 'payroll_cra' || d === 'payroll_rq' || d === 'payroll_other') return '2627';
+    if (d === 'custdep') return '2961';
     if (d === 'ob') return '';
     if (d === 'wages') return '9060';
     if (d === 'payroll_tax') return '8622';

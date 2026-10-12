@@ -6,6 +6,7 @@
  * date, so two people opening the books at once can't make it twice.
  * Online payments: an Interac e-Transfer address printed on invoices, and card payments through the
  * company's own Stripe account (a "Pay now" link per invoice; payments are recorded when the books open).
+ * Deposits on estimates: asked for on the estimate, received into Customer deposits, used on the invoice (deposits-calc.js).
  */
 
 /* ---------- estimates ---------- */
@@ -21,9 +22,12 @@ function nextEstNum(){const n=Math.max(1000,...S.estimates.map(e=>parseInt(Strin
 function vEstimates(){
   const list=S.estimates.slice().sort((a,b)=>b.date.localeCompare(a.date)||String(b.number).localeCompare(String(a.number),undefined,{numeric:true}));
   const open=list.filter(x=>['Open','Accepted'].includes(estState(x).label));
-  return `<div class="chips"><div class="chip"><div class="lbl">Open and accepted</div><div class="val">${money(open.reduce((s,x)=>s+(+x.total||0),0))}</div><div class="lbl">${open.length} estimate${open.length===1?'':'s'}</div></div></div>
+  const held=Object.values(depCredits()).reduce((s,v)=>s+v,0);
+  // Deposit: what was asked for and what came in.
+  const depCell=x=>{const req=depReq(x),s=depSum(x);return !req&&!s.list.length?'<span class="muted">—</span>':`${req?`<div class="muted" style="font-size:12.5px">Requested ${money(req)}</div>`:''}${s.received?`<div>Received ${money(s.received)}</div>`:''}${s.available>0.004&&s.available<s.received-0.004?`<div class="muted" style="font-size:12.5px">Held ${money(s.available)}</div>`:''}`};
+  return `<div class="chips"><div class="chip"><div class="lbl">Open and accepted</div><div class="val">${money(open.reduce((s,x)=>s+(+x.total||0),0))}</div><div class="lbl">${open.length} estimate${open.length===1?'':'s'}</div></div>${held?`<div class="chip"><div class="lbl">Deposits held</div><div class="val">${money(held)}</div><div class="lbl">Not used on an invoice yet</div></div>`:''}</div>
   <div class="panel"><div class="toolbar"><span class="grow muted">Estimates (quotes) aren’t in your books until you turn them into an invoice.</span><button class="btn sm primary" data-estnew>+ New estimate</button></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>Customer</th><th>Good until</th><th class="n">Total</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(x=>{const st=estState(x);return `<tr class="click" data-est="${x.id}"><td style="white-space:nowrap">${fmtDate(x.date)}</td><td class="mono">${esc(x.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.contactId))}</td><td class="muted" style="white-space:nowrap">${fmtDate(x.expires)}</td><td class="n">${money(x.total)}</td><td><span class="pill ${st.k}">${st.label}</span></td><td class="n">${st.label==='Invoiced'?`<button class="btn sm" data-estinv="${x.invoiceId}">View invoice</button>`:st.label==='Declined'?'':`<button class="btn sm" data-estmake="${x.id}">Make invoice</button>`}</td></tr>`}).join(''):emptyRow(7,'No estimates yet','Send a customer a quote; when they say yes, turn it into an invoice in one click.')}</tbody></table></div></div>`;
+  <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>Customer</th><th>Good until</th><th class="n">Total</th><th class="n">Deposit</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(x=>{const st=estState(x);return `<tr class="click" data-est="${x.id}"><td style="white-space:nowrap">${fmtDate(x.date)}</td><td class="mono">${esc(x.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.contactId))}</td><td class="muted" style="white-space:nowrap">${fmtDate(x.expires)}</td><td class="n">${money(x.total)}</td><td class="n" style="white-space:nowrap">${depCell(x)}</td><td><span class="pill ${st.k}">${st.label}</span></td><td class="n">${st.label==='Invoiced'?`<button class="btn sm" data-estinv="${x.invoiceId}">View invoice</button>`:st.label==='Declined'?'':`<button class="btn sm" data-estmake="${x.id}">Make invoice</button>`}</td></tr>`}).join(''):emptyRow(8,'No estimates yet','Send a customer a quote; when they say yes, turn it into an invoice in one click.')}</tbody></table></div></div>`;
 }
 function estimateForm(x){
   const t=today(),defA=(sortAccts(S.accounts.filter(a=>a.type==='Income'&&a.active!==false))[0]||{}).id||'';
@@ -34,44 +38,191 @@ function estimateForm(x){
     <div class="fields">${fld('eC','Customer',contactSelect('eC',d.contactId,'customer'))}${fld('eN','Estimate no.',`<input type="text" id="eN" value="${esc(d.number)}">`)}${fld('eD','Date',`<input type="date" id="eD" value="${esc(d.date)}">`)}${fld('eX','Good until',`<input type="date" id="eX" value="${esc(d.expires||'')}">`)}
     ${typeof fieldInputs==='function'?fieldInputs(d,false):''}${x&&!done?fld('eS','Status',`<select id="eS">${Object.entries(EST_STATUS).map(([k,v])=>`<option value="${k}" ${d.status===k?'selected':''}>${v}</option>`).join('')}</select>`):''}</div>
     <div data-le></div>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="eM">Message on estimate</label><textarea id="eM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>`,
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="eM">Message on estimate</label><textarea id="eM">${esc(d.memo||'')}</textarea>
+      <label for="eDepV" style="margin-top:10px">Deposit requested</label><div style="display:flex;gap:6px"><select id="eDepK" aria-label="Kind of deposit" style="max-width:150px"><option value="">None</option><option value="percent" ${d.deposit?.kind==='percent'?'selected':''}>Percent of total</option><option value="amount" ${d.deposit?.kind==='amount'?'selected':''}>Amount</option></select><input type="number" id="eDepV" step="0.01" min="0" inputmode="decimal" value="${esc(d.deposit?.value??'')}" style="max-width:130px" ${d.deposit?'':'disabled'}><span class="muted" data-depamt style="align-self:center;font-size:13px"></span></div><span class="hint">Printed on the estimate as the deposit to accept it.</span></div>${totalsHTML()}</div>
+    ${x?`<div class="apply" data-deps>${depBoxHTML(x)}</div>`:''}`,
     `${delBtn(!!x)}${x?'<button type="button" class="btn ghost" data-estpdf>PDF</button><button type="button" class="btn ghost" data-estmail>Email</button>':''}<button type="button" class="btn" data-close>Cancel</button>${!done&&!(x&&x.status==='declined')?'<button type="button" class="btn" data-estmakehere>Save and make invoice</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'eC');
   const filter=DOC_ACCT_FILTER(true);
   const cols=[...itemCol(true,()=>!!contact($('#eC',f).value)?.taxCode),{key:'desc',label:'Description',type:'text'},{key:'account',label:'Income account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:'Rate',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
   cols.defaults=()=>({qty:1,taxCode:contact($('#eC',f).value)?.taxCode||'std',account:defA});
-  const le=lineEditor($('[data-le]',f),cols,d.lines,r=>setTotals(f,calcLines(r,x=>(+x.qty||0)*(+x.rate||0),false)));
+  let estTotal=0;
+  const depShow=()=>{const k=$('#eDepK',f).value,v=$('#eDepV',f);v.disabled=!k;$('[data-depamt]',f).textContent=k==='percent'&&+v.value>0?money(TallyDeposits.requested({total:estTotal,deposit:{kind:k,value:+v.value}})):''};
+  const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{const c=calcLines(r,x=>(+x.qty||0)*(+x.rate||0),false);estTotal=c.total;setTotals(f,c);if($('#eDepK',f))depShow()});
+  $('#eDepK',f).onchange=()=>{depShow();if($('#eDepK',f).value)$('#eDepV',f).focus()};$('#eDepV',f).oninput=depShow;depShow();
+  if(x)bindDepBox(f,x);
   const save=async()=>{f.err('');
     const c=calcLines(le.read(),x=>(+x.qty||0)*(+x.rate||0),false);
     if($('#eC',f).value===''||($('#eC',f).value==='__new'&&!$('#eCNew',f).value.trim())){f.err('Choose a customer.');return null}
     if(!$('#eD',f).value){f.err('Enter a date.');return null}
     if(!c.ls.length){f.err('Add at least one line with an account and an amount.');return null}
+    const dk=$('#eDepK',f).value,dv=r2($('#eDepV',f).value),deposit=dk&&dv?{kind:dk,value:dv}:null;
+    if(dk&&!(dv>0)){f.err('Enter the deposit requested, or choose None.');return null}
+    if(dk==='percent'&&dv>100){f.err('The deposit requested can’t be more than 100%.');return null}
+    if(dk==='amount'&&dv>c.total+0.004){f.err('The deposit requested is more than the estimate’s total.');return null}
+    const got=x?depSum(x).received:0;if(got>c.total+0.004){f.err(`The total can’t be less than the ${money(got)} deposit received.`);return null}
     const cid=await resolveContact(f,'eC','customer');if(!cid)return null;
     const id=x?x.id:uid();
     const r=docRecord(c);delete r.taxRate;
     const data={...(x?strip(x):{}),number:$('#eN',f).value.trim(),date:$('#eD',f).value,expires:$('#eX',f).value,contactId:cid,memo:$('#eM',f).value.trim(),status:$('#eS',f)?.value||d.status||'open',invoiceId:x?.invoiceId||'',...r,created:x?.created||Date.now()};
     const fv=typeof readFields==='function'?readFields(f,false,x):{};if(Object.keys(fv).length)data.fields=fv;else delete data.fields;
+    if(deposit)data.deposit=deposit;else delete data.deposit;
     if(!await put('estimates',id,data))return null;
     return {...data,id};
   };
   f.onsubmit=async e=>{e.preventDefault();if(await save()){closeModal();toast('Estimate saved')}};
   const mh=$('[data-estmakehere]',f);if(mh)mh.onclick=async()=>{const s=await save();if(s){closeModal();estToInvoice(s)}};
-  const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this estimate?',done?'The invoice made from it stays.':'Estimates aren’t in your books, so nothing else changes.'))return;if(await del('estimates',x.id)){closeModal();toast('Estimate deleted')}};
-  const pb=$('[data-estpdf]',f);if(pb)pb.onclick=async()=>{try{saveFile(pdfName('estimate',x.number),new Blob([await docPdf({...x,kind:'estimate'})],{type:'application/pdf'}))}catch(e){toast(e.message,true)}};
+  const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(depSum(x).list.length){f.err('This estimate has deposits recorded on it. Delete or refund them first.');return}if(!await confirmBox('Delete this estimate?',done?'The invoice made from it stays.':'Estimates aren’t in your books, so nothing else changes.'))return;if(await del('estimates',x.id)){closeModal();toast('Estimate deleted')}};
+  const pb=$('[data-estpdf]',f);if(pb)pb.onclick=async()=>{try{if(PAYCFG&&PAYCFG.configured)await opDepLinkFor(x);x=S.estimates.find(y=>y.id===x.id)||x;saveFile(pdfName('estimate',x.number),new Blob([await docPdf({...x,kind:'estimate'})],{type:'application/pdf'}))}catch(e){toast(e.message,true)}};
   const mb=$('[data-estmail]',f);if(mb)mb.onclick=()=>{closeModal();estMail(x)};
   $$('[data-estinv]',f).forEach(b=>b.onclick=()=>{closeModal();estOpenInvoice(b.dataset.estinv)});
 }
-function estMail(x){
+async function estMail(x){
+  // Asking for a deposit: how much to pay to accept, and how (e-Transfer, and a card link when Stripe is on).
+  const pay=depReq(x)?depMailText(x,await opDepLinkFor(x)):'';x=S.estimates.find(y=>y.id===x.id)||x;
   composeMail({kind:'estimate',contactId:x.contactId,docIds:[],fileName:pdfName('estimate',x.number),makePdf:()=>docPdf({...(S.estimates.find(y=>y.id===x.id)||x),kind:'estimate'}),
-    vars:{name:contactName(x.contactId),num:x.number||'',amount:dmoney(x.total),due:ddate(x.expires)}});
+    vars:{name:contactName(x.contactId),num:x.number||'',amount:dmoney(x.total),due:ddate(x.expires),pay}});
 }
 function estOpenInvoice(id){const d=S.docs.find(y=>y.id===id);if(d){docForm('invoice',d);addExtras('docs',d.id)}}
 /** Open a new invoice filled in from the estimate; saving it links the two. */
 function estToInvoice(x){
   docForm('invoice',null,{contactId:x.contactId,memo:x.memo||'',fields:x.fields,lines:x.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode})),
     note:`<div class="banner" style="margin:0"><span>From estimate</span> <b class="mono">${esc(x.number||'')}</b><span>. Check the lines, then save the invoice.</span></div>`,
-    onSaved:async id=>{const cur=S.estimates.find(y=>y.id===x.id)||x;await put('estimates',x.id,{...strip(cur),status:'accepted',invoiceId:id});toast('Invoice saved and linked to the estimate')}});
+    onSaved:async id=>{const cur=S.estimates.find(y=>y.id===x.id)||x;await put('estimates',x.id,{...strip(cur),status:'accepted',invoiceId:id});toast('Invoice saved and linked to the estimate');
+      // A deposit received on the estimate is used on the new invoice; anything over its total stays held for the customer.
+      await depApplyOnInvoice(S.estimates.find(y=>y.id===x.id)||cur,id)}});
 }
+
+/* ---------- deposits on estimates ----------
+ * The rules and the sums are in deposits-calc.js (TallyDeposits), shared with the server. A deposit received is held in
+ * Customer deposits (a current liability) until the estimate becomes an invoice; then it's used on the invoice. */
+DETAILS.Liability.push(['custdep','Customer deposits']);
+const DEP_METHOD={etransfer:'Interac e-Transfer',cheque:'Cheque',cash:'Cash',card:'Credit or debit card',other:'Other'};
+const DEP_TYPE={custdeposit:'Deposit received',depapply:'Used on invoice',deprefund:'Refunded'};
+const depSum=x=>TallyDeposits.forEstimate(x.id,S.entries);
+const depReq=x=>TallyDeposits.requested(x);
+/** The Customer deposits account: the one already set up, an account named for it, or a new one (2345). Like payAccounts(). */
+function depAcct(){
+  const have=byDetail('custdep');if(have)return{writes:[],id:have.id};
+  const named=S.accounts.find(a=>a.type==='Liability'&&!a.detail&&TallyDeposits.NAME_RE.test(a.name));
+  if(named)return{writes:[{op:'set',collection:'accounts',id:named.id,data:{...strip(named),detail:'custdep'}}],id:named.id};
+  const id=S.accounts.some(a=>a.id==='a2345')?uid():'a2345',free=!S.accounts.some(a=>a.code==='2345');
+  return{writes:[{op:'set',collection:'accounts',id,data:{code:free?'2345':'',name:S.company.lang==='fr'?'Dépôts des clients':'Customer deposits',type:'Liability',detail:'custdep',desc:TallyDeposits.ACCOUNT_DESC,active:true}}],id};
+}
+const depBanks=a=>(a.detail==='bank'||(a.type==='Asset'&&!a.detail&&/undeposited|fonds non/i.test(a.name)))&&!a.currency&&a.active!==false;
+const depDefBank=()=>(sortAccts(S.accounts.filter(a=>a.detail==='bank'&&!a.currency&&a.active!==false))[0]||{}).id||'';
+/** Open invoices of the estimate's customer a deposit can be used on (in Canadian dollars), with their balance. */
+const depInvoices=(x,keep)=>S.docs.filter(d=>d.kind==='invoice'&&d.contactId===x.contactId&&!d.currency&&(docStatus(d).bal>0.004||d.id===keep)).sort((a,b)=>a.date.localeCompare(b.date));
+/** A transaction that belongs to a deposit opens its own form. Returns true when handled. */
+function depOpenEntry(e){
+  if(!TallyDeposits.TYPES.includes(e.type))return false;
+  const x=S.estimates.find(y=>y.id===e.estimateId);if(!x)return false;
+  ({custdeposit:depositForm,depapply:depApplyForm,deprefund:depRefundForm})[e.type](x,e);addExtras('entries',e.id);return true;
+}
+/** The deposit part of the estimate form: what was asked for, received, used and refunded, and what to do next. */
+function depBoxHTML(x){
+  const s=depSum(x),req=depReq(x),done=estState(x).label==='Invoiced',ro=typeof ME!=='undefined'&&ME&&(ME.readOnly||ME.role==='client');
+  const out=Math.max(0,r2(req-s.received)),link=!done&&out>=0.5&&PAYCFG&&PAYCFG.configured&&!ro;
+  const canUse=s.available>0.004&&depInvoices(x).length;
+  const sums=[[req,'Requested'],[s.received,'Received'],[s.applied,'Used on invoices'],[s.refunded,'Refunded'],[s.available,'Held']].filter(([v],i)=>v||i===1);
+  return `<h3 class="fsec">Deposit</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13.5px">${sums.map(([v,l])=>`<span><span class="muted">${l}</span> <b>${money(v)}</b></span>`).join('')}</div>
+    ${s.list.length?`<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>What</th><th>How</th><th class="n">Amount</th></tr></thead><tbody>${s.list.map(e=>{const inv=e.type==='depapply'&&S.docs.find(d=>d.id===e.applyTo);return `<tr class="click" data-depentry="${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td>${DEP_TYPE[e.type]}${inv?` <span class="mono">${esc(inv.number||'')}</span>`:''}</td><td class="muted trunc">${esc([e.method?T(DEP_METHOD[e.method]):'',e.bank?acctName(e.bank):'',e.ref||''].filter(Boolean).join(' · '))}</td><td class="n">${money(e.type==='custdeposit'?e.amount:-e.amount)}</td></tr>`}).join('')}</tbody></table></div>`:''}
+    <div class="actions" style="justify-content:flex-start;flex-wrap:wrap">${ro?'':`${s.received<r2(+x.total||0)-0.004?'<button type="button" class="btn sm" data-depnew>Record deposit</button>':''}${canUse?'<button type="button" class="btn sm" data-depuse>Use on an invoice</button>':''}${s.available>0.004?'<button type="button" class="btn sm ghost" data-depref>Refund deposit</button>':''}`}${link?'<button type="button" class="btn sm ghost" data-deplink>Copy deposit pay link</button>':''}</div>
+    <div class="muted" style="font-size:12.5px">Deposits are held in Customer deposits (a liability) until the estimate becomes an invoice, then used on it. Sales tax is reported on the invoice, not on the deposit.</div>`;
+}
+function bindDepBox(f,x){
+  const box=$('[data-deps]',f);if(!box)return;
+  const reopen=()=>{const cur=S.estimates.find(y=>y.id===x.id);if(cur)estimateForm(cur)};
+  const n=$('[data-depnew]',box);if(n)n.onclick=()=>depositForm(x,null,reopen);
+  const u=$('[data-depuse]',box);if(u)u.onclick=()=>depApplyForm(x,null,reopen);
+  const r=$('[data-depref]',box);if(r)r.onclick=()=>depRefundForm(x,null,reopen);
+  const l=$('[data-deplink]',box);if(l)l.onclick=async()=>{const url=await opDepLinkFor(x);if(!url)return;try{await navigator.clipboard.writeText(url);toast('Pay link copied. Paste it in a message to the customer.')}catch(e){prompt('Copy this link:',url)}};
+  $$('[data-depentry]',box).forEach(t=>t.onclick=()=>{const e=S.entries.find(y=>y.id===t.dataset.depentry);if(!e)return;({custdeposit:depositForm,depapply:depApplyForm,deprefund:depRefundForm})[e.type](x,e,reopen)});
+}
+/** Delete button for a deposit form: removes the transaction (the server refuses if the deposit was already used). */
+function depDel(f,entry,after){const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this transaction?','It’s removed from the books, and the estimate shows the deposit as it was before.'))return;if(await del('entries',entry.id)){closeModal();toast('Deleted');after&&after()}}}
+/** Record a deposit received on an estimate: Dr bank, Cr Customer deposits. */
+function depositForm(x,entry,after){
+  const s=TallyDeposits.forEstimate(x.id,S.entries,entry&&entry.id),room=r2((+x.total||0)-s.received);
+  const def=entry?entry.amount:Math.min(room,Math.max(0,r2(depReq(x)-s.received))||room);
+  const f=openModal(entry?'Deposit received':'Record deposit',`<div class="muted"><span>From</span> <b translate="no">${esc(contactName(x.contactId))}</b> <span>on estimate</span> <span class="mono">${esc(x.number||'')}</span>. <span>Estimate total</span> ${money(x.total)}${depReq(x)?` · <span>deposit requested</span> ${money(depReq(x))}`:''}.</div>
+    <div class="fields">${fld('dpDate','Date received',`<input type="date" id="dpDate" value="${esc(entry?.date||today())}">`)}${fld('dpAmt','Amount',`<input type="number" id="dpAmt" step="0.01" min="0" inputmode="decimal" value="${def>0?def:''}">`)}
+    ${fld('dpBank','Deposit to',`<select id="dpBank">${acctOptions(entry?.bank||depDefBank(),depBanks)}</select>`)}${fld('dpMeth','Payment method',`<select id="dpMeth">${Object.entries(DEP_METHOD).map(([k,v])=>`<option value="${k}" ${(entry?.method||'etransfer')===k?'selected':''}>${v}</option>`).join('')}</select>`)}
+    ${fld('dpRef','Reference (cheque or e-transfer no.)',`<input type="text" id="dpRef" value="${esc(entry?.ref||'')}">`,true)}</div>
+    <div class="muted" style="font-size:13px">It’s held in Customer deposits until it’s used on the invoice. No sales tax is recorded now; it’s on the invoice.</div>`,saveFoot(!!entry));
+  depDel(f,entry,after);
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const amt=r2($('#dpAmt',f).value),bank=$('#dpBank',f).value,date=$('#dpDate',f).value;
+    if(!date)return f.err('Enter a date.');if(!(amt>0))return f.err('Enter an amount above zero.');if(!bank)return f.err('Choose a bank account.');
+    if(amt>room+0.004)return f.err(`That’s more than the estimate’s total. At most ${money(room)} more can be received.`);
+    const used=r2(s.applied+s.refunded);if(entry&&amt<used-0.004)return f.err(`${money(used)} of the deposit has already been used or refunded.`);
+    const d=depAcct();
+    const data={type:'custdeposit',date,ref:$('#dpRef',f).value.trim(),memo:`Deposit on estimate ${x.number||''}`.trim(),contactId:x.contactId,estimateId:x.id,amount:amt,bank,method:$('#dpMeth',f).value,lines:TallyDeposits.lines('custdeposit',d.id,bank,amt),created:entry?.created||Date.now()};
+    if(await batch([...d.writes,{op:'set',collection:'entries',id:entry?.id||uid(),data}])){closeModal();toast('Deposit saved');after&&after()}
+  };
+}
+/** The entry that uses a deposit on an invoice: Dr Customer deposits, Cr A/R. Dated the invoice's date, or the last deposit's if later. */
+function depApplyData(x,inv,amt,date,ref){
+  const ar=byDetail('ar'),d=depAcct();if(!ar)return null;
+  return{writes:d.writes,data:{type:'depapply',date,ref:ref||x.number||'',memo:`Deposit from estimate ${x.number||''} used on invoice ${inv.number?'#'+inv.number:''}`.replace(/\s+/g,' ').trim(),contactId:x.contactId,estimateId:x.id,applyTo:inv.id,amount:amt,lines:TallyDeposits.lines('depapply',d.id,ar.id,amt),created:Date.now()}};
+}
+const depApplyDate=(x,inv)=>{const last=depSum(x).list.filter(e=>e.type==='custdeposit').map(e=>e.date).sort().pop()||'';return last>inv.date?last:inv.date};
+/** Use a deposit on one of the customer's open invoices. */
+function depApplyForm(x,entry,after){
+  const s=TallyDeposits.forEstimate(x.id,S.entries,entry&&entry.id),invs=depInvoices(x,entry?.applyTo);
+  const balOf=id=>{const d=S.docs.find(y=>y.id===id);return d?r2(d.total-paidOn(id,entry?.id)):0};
+  const sel=entry?.applyTo||(invs.find(d=>d.id===x.invoiceId)||invs[0]||{}).id||'';
+  const amtFor=id=>r2(Math.min(s.available,balOf(id)));
+  const f=openModal('Use deposit on an invoice',`<div class="muted"><span>Deposit held for</span> <b translate="no">${esc(contactName(x.contactId))}</b>: ${money(s.available)}.</div>
+    <div class="fields">${fld('daInv','Invoice',`<select id="daInv">${invs.map(d=>`<option value="${d.id}" ${d.id===sel?'selected':''}>${d.number?'#'+esc(d.number)+' · ':''}${fmtDate(d.date)} · ${money(balOf(d.id))} due</option>`).join('')}</select>`,true)}
+    ${fld('daDate','Date',`<input type="date" id="daDate" value="${esc(entry?.date||(sel?depApplyDate(x,S.docs.find(d=>d.id===sel)):today()))}">`)}${fld('daAmt','Amount',`<input type="number" id="daAmt" step="0.01" min="0" inputmode="decimal" value="${entry?entry.amount:sel?amtFor(sel):''}">`)}</div>`,saveFoot(!!entry));
+  depDel(f,entry,after);
+  $('#daInv',f).onchange=()=>{const v=$('#daInv',f).value;$('#daAmt',f).value=amtFor(v);$('#daDate',f).value=depApplyDate(x,S.docs.find(d=>d.id===v))};
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const invId=$('#daInv',f).value,amt=r2($('#daAmt',f).value),inv=S.docs.find(d=>d.id===invId);
+    if(!inv)return f.err('Choose an invoice.');if(!(amt>0))return f.err('Enter an amount above zero.');
+    if(amt>s.available+0.004)return f.err(`Only ${money(s.available)} of the deposit is available.`);if(amt>balOf(invId)+0.004)return f.err(`That's more than the ${money(balOf(invId))} still owing.`);
+    const a=depApplyData(x,inv,amt,$('#daDate',f).value||today());if(!a)return needAcct('ar','Accounts receivable');
+    if(await batch([...a.writes,{op:'set',collection:'entries',id:entry?.id||uid(),data:{...a.data,created:entry?.created||a.data.created}}])){closeModal();toast('Deposit used on the invoice');after&&after()}
+  };
+}
+/** Give a deposit back (the job was cancelled): Dr Customer deposits, Cr bank. */
+function depRefundForm(x,entry,after){
+  const s=TallyDeposits.forEstimate(x.id,S.entries,entry&&entry.id);
+  const f=openModal(entry?'Deposit refunded':'Refund deposit',`<div class="muted"><span>Paid back to</span> <b translate="no">${esc(contactName(x.contactId))}</b>. <span>${money(s.available)} of the deposit is available.</span></div>
+    <div class="fields">${fld('drDate','Date',`<input type="date" id="drDate" value="${esc(entry?.date||today())}">`)}${fld('drAmt','Amount',`<input type="number" id="drAmt" step="0.01" min="0" inputmode="decimal" value="${entry?entry.amount:s.available}">`)}
+    ${fld('drBank','Paid from',`<select id="drBank">${acctOptions(entry?.bank||depDefBank(),depBanks)}</select>`)}${fld('drRef','Reference',`<input type="text" id="drRef" value="${esc(entry?.ref||'')}">`)}</div>`,saveFoot(!!entry));
+  depDel(f,entry,after);
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const amt=r2($('#drAmt',f).value),bank=$('#drBank',f).value;
+    if(!(amt>0))return f.err('Enter an amount above zero.');if(amt>s.available+0.004)return f.err(`Only ${money(s.available)} of the deposit is available.`);if(!bank)return f.err('Choose a bank account.');
+    const d=depAcct();
+    const data={type:'deprefund',date:$('#drDate',f).value||today(),ref:$('#drRef',f).value.trim(),memo:`Deposit refunded, estimate ${x.number||''}`.trim(),contactId:x.contactId,estimateId:x.id,amount:amt,bank,lines:TallyDeposits.lines('deprefund',d.id,bank,amt),created:entry?.created||Date.now()};
+    if(await batch([...d.writes,{op:'set',collection:'entries',id:entry?.id||uid(),data}])){closeModal();toast('Refund saved');after&&after()}
+  };
+}
+/** After an estimate becomes an invoice: use what's held on it (up to the invoice's balance). The rest stays as a credit. */
+async function depApplyOnInvoice(x,invId){
+  const inv=S.docs.find(d=>d.id===invId),s=depSum(x);if(!inv||s.available<0.005||inv.currency)return;
+  const amt=r2(Math.min(s.available,docStatus(inv).bal));if(amt<0.005)return;
+  const a=depApplyData(x,inv,amt,depApplyDate(x,inv));if(!a)return;
+  if(await batch([...a.writes,{op:'set',collection:'entries',id:uid(),data:a.data}])){
+    const left=r2(s.available-amt);toast(left>0.004?`Deposit of ${money(amt)} used on the invoice. ${money(left)} is still held for the customer.`:`Deposit of ${money(amt)} used on the invoice.`)}
+}
+/** The "Pay now" link for the deposit still owing on an estimate, or '' when it can't have one. */
+async function opDepLinkFor(x){
+  if(!x||!PAYCFG||!PAYCFG.configured||TallyDeposits.outstanding(x,S.entries)<0.5||estState(x).label==='Invoiced'||(typeof ME!=='undefined'&&ME&&ME.role==='client'))return '';
+  try{const r=await api('POST','/api/pay/link',{estimateId:x.id});await load();return r.url||''}catch(e){toast(`No pay link: ${e.message}`,true);return ''}
+}
+/** Deposit wording for the estimate's email: what to pay to accept it, and how. */
+function depMailText(x,link){
+  const out=TallyDeposits.outstanding(x,S.entries);if(out<0.005)return '';
+  const how=opHowToPay({...x,est:true},link);
+  return (dlang()==='fr'?`Dépôt pour accepter : ${dmoney(out)}`:`Deposit to accept: ${dmoney(out)}`)+(how?'\n'+how:'');
+}
+/** Deposits not used yet, by customer: a credit in the customer list and the A/R aging. */
+const depCredits=()=>TallyDeposits.byCustomer(S.estimates,S.entries);
 
 /* ---------- recurring transactions ----------
  * Invoices and bills (documents), and expenses, deposits, transfers and journal entries (straight into the
@@ -318,8 +469,8 @@ function recReview(r){
 /** Stripe payments that couldn't be recorded by themselves (paid twice, or more than what's owing). */
 function opIssueBanner(){
   if(typeof ME!=='undefined'&&ME&&ME.role==='client')return '';
-  const list=S.docs.flatMap(d=>(d.payIssues||[]).filter(x=>!x.resolved).map(x=>({d,x})));if(!list.length)return '';
-  return list.slice(0,3).map(({d,x})=>`<div class="banner err"><span><b>A Stripe payment needs you.</b> <span>${money(x.amount)} was paid online on ${fmtDate(x.date)} for invoice</span> <span class="mono">${esc(d.number||'')}</span><span>, but it’s more than what was owing, so it wasn’t recorded. Refund it in Stripe, or record it yourself (for example as a deposit to the Stripe account and a credit for the customer), then mark it dealt with.</span></span><span class="actions"><button class="btn sm" data-doc="${d.id}">Open invoice</button><button class="btn sm" data-opissue="${d.id}|${esc(x.session)}">Dealt with</button></span></div>`).join('');
+  const list=[...S.docs,...S.estimates.map(e=>({...e,est:true}))].flatMap(d=>(d.payIssues||[]).filter(x=>!x.resolved).map(x=>({d,x})));if(!list.length)return '';
+  return list.slice(0,3).map(({d,x})=>d.est?`<div class="banner err"><span><b>A Stripe payment needs you.</b> <span>${money(x.amount)} was paid online on ${fmtDate(x.date)} as a deposit on estimate</span> <span class="mono">${esc(d.number||'')}</span><span>, but it’s more than the estimate’s total, so it wasn’t recorded. Refund it in Stripe, or record it yourself, then mark it dealt with.</span></span><span class="actions"><button class="btn sm" data-est="${d.id}">Open estimate</button><button class="btn sm" data-opissue="est:${d.id}|${esc(x.session)}">Dealt with</button></span></div>`:`<div class="banner err"><span><b>A Stripe payment needs you.</b> <span>${money(x.amount)} was paid online on ${fmtDate(x.date)} for invoice</span> <span class="mono">${esc(d.number||'')}</span><span>, but it’s more than what was owing, so it wasn’t recorded. Refund it in Stripe, or record it yourself (for example as a deposit to the Stripe account and a credit for the customer), then mark it dealt with.</span></span><span class="actions"><button class="btn sm" data-doc="${d.id}">Open invoice</button><button class="btn sm" data-opissue="${d.id}|${esc(x.session)}">Dealt with</button></span></div>`).join('');
 }
 const recWaiting=()=>S.recurring.filter(r=>r.mode==='remind'&&recDue(r));
 function recBanner(){
@@ -338,17 +489,18 @@ async function opLinkFor(d){
 /** How to pay, for the bottom of an invoice and its email: e-Transfer, and the card link. */
 function opHowToPay(d,link){
   const out=[];const fr=dlang()==='fr';
-  if(S.company.etransfer)out.push(fr?`Paiement par virement Interac à ${S.company.etransfer}${d&&d.number?` (indiquez la facture ${d.number})`:''}.`:`Pay by Interac e-Transfer to ${S.company.etransfer}${d&&d.number?` (include invoice ${d.number} in the message)`:''}.`);
+  const what=d&&d.est?(fr?'la soumission':'estimate'):(fr?'la facture':'invoice');
+  if(S.company.etransfer)out.push(fr?`Paiement par virement Interac à ${S.company.etransfer}${d&&d.number?` (indiquez ${what} ${d.number})`:''}.`:`Pay by Interac e-Transfer to ${S.company.etransfer}${d&&d.number?` (include ${what} ${d.number} in the message)`:''}.`);
   if(link)out.push(fr?`Payer en ligne par carte : ${link}`:`Pay online by card: ${link}`);
   return out.join('\n');
 }
 /** Check Stripe for payments on open links. At most every 5 minutes, and only when there's a link to check. */
 async function opSync(force){
   if(!PAYCFG||!PAYCFG.configured||(typeof ME!=='undefined'&&ME&&(ME.readOnly||ME.role==='client'))||!perm('sales','edit'))return;
-  if(!force&&(Date.now()-opSynced<5*60e3||!S.docs.some(d=>d.payLink&&d.payLink.active!==false)))return;
+  if(!force&&(Date.now()-opSynced<5*60e3||![...S.docs,...S.estimates].some(d=>d.payLink&&d.payLink.active!==false)))return;
   opSynced=Date.now();
   try{const r=await api('POST','/api/pay/sync');
-    if(r.added&&r.added.length){await load();toast(r.added.length===1?`Paid online: ${money(r.added[0].amount)} for invoice ${r.added[0].number?'#'+r.added[0].number:''}`:`${r.added.length} online payments recorded`)}
+    if(r.added&&r.added.length){await load();toast(r.added.length===1&&r.added[0].estimate?`Deposit paid online: ${money(r.added[0].amount)}`:r.added.length===1?`Paid online: ${money(r.added[0].amount)} for invoice ${r.added[0].number?'#'+r.added[0].number:''}`:`${r.added.length} online payments recorded`)}
     else if(force)toast('No new online payments.');
     if(r.errors&&r.errors.length)toast(r.errors[0],true);
   }catch(e){if(force)toast(e.message,true)}
@@ -389,7 +541,7 @@ function salesExtraClick(e,t,d){
   if(d.estinv){e.stopPropagation();estOpenInvoice(d.estinv);return true}
   if(d.est){const x=S.estimates.find(y=>y.id===d.est);if(x)estimateForm(x);return true}
   if(d.recnew){recurringForm(null,d.recnew);return true}
-  if(d.opissue){const[docId,session]=d.opissue.split('|');api('POST','/api/pay/issue',{docId,session}).then(()=>load()).catch(err=>toast(err.message,true));return true}
+  if(d.opissue){const[docId,session]=d.opissue.split('|');api('POST','/api/pay/issue',docId.startsWith('est:')?{estimateId:docId.slice(4),session}:{docId,session}).then(()=>load()).catch(err=>toast(err.message,true));return true}
   if(d.recskip){e.stopPropagation();const r=S.recurring.find(x=>x.id===d.recskip);if(r)recSkip(r);return true}
   if(d.recpause){e.stopPropagation();const r=S.recurring.find(x=>x.id===d.recpause);if(r)recPause(r);return true}
   if(d.recrun){e.stopPropagation();const r=S.recurring.find(x=>x.id===d.recrun);if(r){if(r.mode==='remind')recReview(r);else recRunDue(r.id)}return true}

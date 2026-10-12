@@ -29,7 +29,7 @@ const DETAILS={Asset:[['','Other asset'],['bank','Bank or cash'],['ar','Accounts
 const detailLabel=a=>(DETAILS[a.type]||[]).find(d=>d[0]===(a.detail||''))?.[1]||'';
 const debitNormal=t=>t==='Asset'||t==='Expense'||t==='Cost of Goods Sold';
 const isPL=t=>t==='Income'||t==='Expense'||t==='Cost of Goods Sold';
-const TLABEL={invoice:'Invoice',salesreceipt:'Sales receipt',invadjust:'Inventory adjustment',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Sales tax adjustment'};
+const TLABEL={invoice:'Invoice',salesreceipt:'Sales receipt',invadjust:'Inventory adjustment',bill:'Bill',payment:'Payment received',billpayment:'Bill payment',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry',taxpayment:'Sales tax payment',credit:'Credit note',vcredit:'Vendor credit',refund:'Refund to customer',vrefund:'Refund from vendor',qmadjust:'Sales tax adjustment',custdeposit:'Customer deposit',depapply:'Deposit used',deprefund:'Deposit refunded'};
 
 /* ---------- state + server API ---------- */
 const S={more:{},accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',fyStart:1,taxName:'HST',taxRate:13,terms:30,currency:'$'},
@@ -272,7 +272,8 @@ function vDocs(kind){
   if(st.tab==='recurring')return h+vRecurring(kind);
   if(st.tab==='contacts'){
     const cs=S.contacts.filter(c=>c.kind===ck).sort((a,b)=>a.name.localeCompare(b.name));
-    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span>${diStaffBtn(inv?'customers':'vendors')}<button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0)-credits.filter(x=>x.d.contactId===c.id).reduce((s,x)=>s+x.s.bal,0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}${c.currency?` <span class="pill quiet">${esc(c.currency)}</span>`:''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${moneyC(ob,c.currency)}</td><td class="n ${ov?'neg':''}">${ov?moneyC(ov,c.currency):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
+    const deps=inv&&typeof depCredits==='function'?depCredits():{}; // deposits held on estimates count as a credit
+    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span>${diStaffBtn(inv?'customers':'vendors')}<button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0)-credits.filter(x=>x.d.contactId===c.id).reduce((s,x)=>s+x.s.bal,0)-(inv&&!c.currency?deps[c.id]||0:0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}${c.currency?` <span class="pill quiet">${esc(c.currency)}</span>`:''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${moneyC(ob,c.currency)}</td><td class="n ${ov?'neg':''}">${ov?moneyC(ov,c.currency):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
   }
   const sum=k=>r2(docs.filter(x=>k(x)).reduce((s,x)=>s+x.s.bal*(+x.d.fx||1),0)); // in Canadian dollars
   const t30=addDays(today(),-30);
@@ -422,6 +423,8 @@ function rAging(kind){
   for(const d of S.docs.filter(x=>x.kind===kind)){const s=docStatus(d);if(s.bal<=0)continue;const late=d.due?daysBetween(d.due,t):0;const i=late<=0?0:late<=30?1:late<=60?2:late<=90?3:4;const k=d.contactId||'?';(by[k]=by[k]||[0,0,0,0,0])[i]+=s.bal*(+d.fx||1)}
   // Credits not used yet reduce what's owed (shown as current).
   for(const d of S.docs.filter(x=>x.kind===(kind==='invoice'?'credit':'vcredit'))){const s=docStatus(d);if(s.bal<=0)continue;const k=d.contactId||'?';(by[k]=by[k]||[0,0,0,0,0])[0]-=s.bal*(+d.fx||1)}
+  // Deposits received on estimates and not used on an invoice yet, too.
+  if(kind==='invoice'&&typeof depCredits==='function')for(const[k,v]of Object.entries(depCredits()))(by[k||'?']=by[k||'?']||[0,0,0,0,0])[0]-=v;
   const csv=[[kind==='invoice'?'Customer':'Vendor',...B,'Total']];const tot=[0,0,0,0,0];
   const rows=Object.entries(by).sort((a,b)=>contactName(a[0]).localeCompare(contactName(b[0]))).map(([k,v])=>{v.forEach((x,i)=>tot[i]+=x);const s=v.reduce((a,b)=>a+b,0);csv.push([contactName(k),...v.map(r2),r2(s)]);return `<tr><td>${esc(contactName(k)||'No contact')}</td>${v.map((x,i)=>`<td class="n ${i>=2&&x?'neg':''}">${x?money(x):'—'}</td>`).join('')}<td class="n"><b>${money(s)}</b></td></tr>`}).join('');
   const all=tot.reduce((a,b)=>a+b,0);csv.push(['Total',...tot.map(r2),r2(all)]);
@@ -973,6 +976,7 @@ async function openEntry(e){if(!e)return;
   // A reversing entry is changed through the entry it reverses.
   if(e.reversalOf){const o=S.entries.find(x=>x.id===e.reversalOf);if(o){toast(`This entry reverses the journal entry of ${fmtDate(o.date)}. Change it there.`);journalForm(o);addExtras('entries',o.id);return}}
   if(e.type==='refund'||e.type==='vrefund'){const c=S.docs.find(x=>x.id===e.applyTo);if(c){refundForm(c,e);addExtras('entries',e.id);return}}
+  if(typeof depOpenEntry==='function'&&depOpenEntry(e))return;
   const fn={payment:()=>payForm('payment',e),billpayment:()=>payForm('billpayment',e),expense:()=>moneyForm('expense',e),deposit:()=>moneyForm('deposit',e),transfer:()=>transferForm(e)}[e.type];fn?fn():journalForm(e);addExtras('entries',e.id)}
 
 const DOCL={
@@ -1022,7 +1026,7 @@ function docForm(kind,doc,preset){
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${L.memo}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
     ${cred?`<div class="apply" data-apply></div>`:''}
-    ${settledNote?`<div class="banner" style="margin:0"><span>${settledNote}</span></div>`:''}`,
+    ${settledNote?`<div class="banner" style="margin:0"><span>${settledNote}</span></div>`:''}${doc&&kind==='invoice'?S.entries.filter(e=>e.type==='depapply'&&e.applyTo===doc.id).map(e=>`<div class="muted" style="font-size:13px"><span>Deposit received</span> ${money(e.amount)} · <span>from estimate</span> <span class="mono">${esc((S.estimates.find(x=>x.id===e.estimateId)||{}).number||'')}</span></div>`).join(''):''}`,
     `${delBtn(!!doc)}${doc&&typeof docActions==='function'?docActions(doc):''}<button type="button" class="btn" data-close>Cancel</button>${doc&&!cred&&docStatus(doc).bal>0?`<button type="button" class="btn" data-paynow>${sale?'Receive payment':'Pay bill'}</button>`:''}${doc&&cred&&docStatus(doc).bal>0?'<button type="button" class="btn" data-refund>Refund</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'dC');presetContact(f,'dC',preset);
   let rows=[];const cols=[...itemCol(sale,()=>!!contactCode()),{key:'desc',label:'Description',type:'text'},{key:'account',label:sale?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:sale?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
@@ -1052,10 +1056,12 @@ function docForm(kind,doc,preset){
   const rf=$('[data-refund]',f);if(rf)rf.onclick=()=>refundForm(doc);
   if(doc&&typeof bindDocActions==='function')bindDocActions(f,doc);
   const lc=L.t.toLowerCase();
+  // A deposit used on the invoice isn't a payment to delete first: it goes back to being held on the estimate.
+  const depUsed=doc?S.entries.filter(e=>e.type==='depapply'&&e.applyTo===doc.id):[];
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{
-    if(cred?refunded:paid){f.err(cred?'Delete the refunds from this credit first.':`Delete the payments on this ${lc} first.`);return}
-    if(!await confirmBox(`Delete this ${lc}?`,cred&&paid?'Its posting to the ledger is removed too, and the invoices or bills it was used on show their balances again.':'Its posting to the ledger is removed too.'))return;
-    if(!await batch([{op:'delete',collection:'entries',id:'d_'+doc.id},{op:'delete',collection:'docs',id:doc.id}]))return;closeModal();toast(L.del)};
+    if(cred?refunded:r2(paid-depUsed.reduce((s,e)=>s+(+e.amount||0),0))>0.004){f.err(cred?'Delete the refunds from this credit first.':`Delete the payments on this ${lc} first.`);return}
+    if(!await confirmBox(`Delete this ${lc}?`,cred&&paid?'Its posting to the ledger is removed too, and the invoices or bills it was used on show their balances again.':depUsed.length?'Its posting to the ledger is removed too. The deposit used on it goes back to being held for the customer.':'Its posting to the ledger is removed too.'))return;
+    if(!await batch([...depUsed.map(e=>({op:'delete',collection:'entries',id:e.id})),{op:'delete',collection:'entries',id:'d_'+doc.id},{op:'delete',collection:'docs',id:doc.id}]))return;closeModal();toast(L.del)};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const c=calcLines(le.read(),x=>(+x.qty||0)*(+x.rate||0),!sale);
     if($('#dC',f).value===''||($('#dC',f).value==='__new'&&!$('#dCNew',f).value.trim()))return f.err(`Choose a ${ck}.`);
