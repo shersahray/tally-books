@@ -348,16 +348,17 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['tl','Transaction list'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor'],['bva','Budget vs actual'],['iv','Inventory valuation'],['tg','Tags']].filter(([k])=>(adv||(k!=='cf'&&k!=='bva'))&&(k!=='iv'||(feat('inventory')&&S.items.some(i=>i.type==='inventory')))&&(k!=='tg'||(typeof tagList==='function'&&tagList().length)));
+  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['tl','Transaction list'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor'],['bva','Budget vs actual'],['iv','Inventory valuation'],['tg','Tags'],['fc','Cash flow forecast']].filter(([k])=>(adv||(k!=='cf'&&k!=='bva'))&&(k!=='fc'||feat('cashForecast'))&&(k!=='iv'||(feat('inventory')&&S.items.some(i=>i.type==='inventory')))&&(k!=='tg'||(typeof tagList==='function'&&tagList().length)));
   if(R.tab==='tg'&&!T.some(([k])=>k==='tg'))R.tab='pl';
   // Without advanced reports (plan or company setting): no comparisons, cash flow, saved reports, packages or working trial balance.
   if(!adv){if(R.tab==='cf'||R.tab==='bva')R.tab='pl';R.compare='';R.tbAdj=false;R.savedId=''}
+  if(R.tab==='fc'&&!feat('cashForecast'))R.tab='pl';
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
   const pointInTime=!['pl','gl','sc','si','ev','bva','tl','tg'].includes(R.tab);
   const saved=adv?savedReports():[],staff=ME&&ME.role!=='client',cur=saved.find(x=>x.id===S.rep.savedId&&savedMatches(x));
-  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff&&adv?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}${ME&&ME.role!=='client'&&!ME.readOnly?'<button class="btn" data-act="yearpkg">Year-end package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
+  return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff&&adv&&R.tab!=='fc'?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}${ME&&ME.role!=='client'&&!ME.readOnly?'<button class="btn" data-act="yearpkg">Year-end package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
-    ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
+    ${R.tab==='fc'?fcToolbar():R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
     ${['pl','bva'].includes(R.tab)&&(S.company.classes||[]).length&&!(R.tab==='pl'&&R.compare==='byclass')?`<label class="flabel" for="repCls">${esc(clsWords().one)}</label><select id="repCls"><option value="">${esc(clsWords().all)}</option>${S.company.classes.map(c=>`<option value="${esc(c.id)}" ${R.cls===c.id?'selected':''} translate="no">${esc(c.name)}</option>`).join('')}<option value="__none" ${R.cls==='__none'?'selected':''}>${esc(clsWords().none)}</option></select>`:''}
     ${typeof budgetToolbar==='function'?budgetToolbar():''}
@@ -539,6 +540,7 @@ function bindMain(m){
     if(typeof assetsClick==='function'&&await assetsClick(e,t,d))return;
     if(typeof yardClick==='function'&&await yardClick(e,t,d))return;
     if(typeof salesExtraClick==='function'&&salesExtraClick(e,t,d))return;
+    if(typeof fcClick==='function'&&fcClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
     if(d.plact)return plaidAction(d.plact);
@@ -598,6 +600,7 @@ function bindMain(m){
   const rb=$('#repBasis',m);if(rb)rb.onchange=()=>{S.rep.basis=rb.value;renderMain()};
   const rcl=$('#repCls',m);if(rcl)rcl.onchange=()=>{S.rep.cls=rcl.value;renderMain()};
   if(typeof bindBudgetToolbar==='function')bindBudgetToolbar(m);
+  if(typeof bindForecast==='function')bindForecast(m);
   const rta=$('#repTbAdj',m);if(rta)rta.onchange=()=>{S.rep.tbAdj=rta.value==='aje'?'aje':rta.value==='adj';renderMain()};
   const rsv=$('#repSaved',m);if(rsv)rsv.onchange=()=>{if(rsv.value)openSaved(rsv.value)};
   ['repFrom','repTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.onchange=()=>{S.rep.period='custom';S.rep.from=($('#repFrom')||{}).value||S.rep.from;S.rep.to=$('#repTo').value;renderMain()}});

@@ -821,12 +821,49 @@ function validateCompany(data) {
       ...(REPFILTER.clean(r.flt) ? { flt: REPFILTER.clean(r.flt) } : {}),
       ...(isObj(r.sort) && ['date', 'type', 'num', 'name', 'memo', 'acct', 'split', 'cls', 'amt'].includes(r.sort.col) ? { sort: { col: r.sort.col, dir: r.sort.dir === 'desc' ? 'desc' : 'asc' } } : {}),
     })).filter(r => r.id && r.name),
+    cashForecast: validateCashForecast(data.cashForecast),
   };
   if (out.qstRate > 0 && out.pstRate > 0) throw new ValidationError('A company charges QST or PST, not both.');
   if (out.pstRate > 0 && out.pstRate >= out.taxRate) throw new ValidationError('The sales tax rate must include GST plus PST.');
   // Registered charities and qualifying non-profits can't use the Quick Method.
   if (out.quickMethod.on && (out.orgType === 'charity' || (out.orgType === 'npo' && out.nonprofit.qualifying))) out.quickMethod = { ...out.quickMethod, on: false };
   return out;
+}
+/**
+ * Cash flow forecast (Reports → Cash flow forecast): how it's worked out, the company's own planned money in and
+ * out, and the lines someone unticked to leave out. Planned items are refused when they're wrong, not dropped, so
+ * the person saving one sees why.
+ */
+function validateCashForecast(c) {
+  c = isObj(c) ? c : {};
+  const planned = Array.isArray(c.planned) ? c.planned : [];
+  if (planned.length > 100) throw new ValidationError('At most 100 planned items.');
+  const ids = new Set();
+  const out = planned.map(p => {
+    if (!isObj(p)) throw new ValidationError('Each planned item must be an object.');
+    const id = str(p.id, 40).trim(), name = str(p.name, 80).trim(), amount = Math.round((Number(p.amount) || 0) * 100) / 100;
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(id) || ids.has(id)) throw new ValidationError('Each planned item needs its own id.');
+    ids.add(id);
+    if (!name) throw new ValidationError('Give the planned item a name.');
+    if (!['in', 'out'].includes(p.dir)) throw new ValidationError('A planned item is money in or money out.');
+    if (!(amount > 0) || amount > 1e9) throw new ValidationError('Enter the planned amount (more than $0).');
+    if (!isDate(p.date)) throw new ValidationError('Enter the date of the planned item.');
+    const every = ['once', 'week', 'month', 'quarter', 'year'].includes(p.every) ? p.every : 'once';
+    const n = Number(p.n === undefined || p.n === '' ? 1 : p.n);
+    if (every !== 'once' && !(Number.isInteger(n) && n >= 1 && n <= 12)) throw new ValidationError('Repeat every 1 to 12 weeks, months, quarters or years.');
+    const end = every !== 'once' && p.end ? p.end : '';
+    if (end && (!isDate(end) || end < p.date)) throw new ValidationError('The planned item’s end date must be on or after its first date.');
+    return { id, name, dir: p.dir, amount, date: p.date, every, ...(every !== 'once' ? { n } : {}), ...(end ? { end } : {}) };
+  });
+  return {
+    days: [30, 60, 90].includes(Number(c.days)) ? Number(c.days) : 30,
+    overdue: c.overdue === 'skip' ? 'skip' : 'week',
+    late: !!c.late,
+    cards: !!c.cards,
+    planned: out,
+    // Keys of forecast lines left out ("inv:<id>", "rec:<id>:<date>"…), newest kept.
+    off: [...new Set((Array.isArray(c.off) ? c.off : []).filter(k => typeof k === 'string' && /^[A-Za-z0-9_:|.@+~-]{1,140}$/.test(k)))].slice(-500),
+  };
 }
 /** Late fees on overdue invoices: a flat amount or a percentage of what's overdue, after some days of grace. */
 function validateLateFee(l) {
