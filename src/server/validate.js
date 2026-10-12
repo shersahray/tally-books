@@ -6,18 +6,19 @@ const RECUR = require('../../public/recurring-calc.js');
 const REPFILTER = require('../../public/report-filters.js');
 const TAGS = require('../../public/tags.js');
 const APPROVALS = require('../../public/approvals.js');
+const DEP = require('../../public/deposits-calc.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
   Asset: ['', 'bank', 'ar', 'capital'],
-  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable'],
+  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable', 'custdep'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
   Expense: ['', 'wages', 'payroll_tax'],
 };
-const ENTRY_TYPES = ['invoice', 'salesreceipt', 'invadjust', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust'];
+const ENTRY_TYPES = ['invoice', 'salesreceipt', 'invadjust', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust', 'custdeposit', 'depapply', 'deprefund'];
 const PAY_PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
 const PAY_FREQ = ['weekly', 'biweekly', 'semimonthly', 'monthly'];
 const ID_RE = /^[A-Za-z0-9_.:@+~-]{1,120}$/;
@@ -180,7 +181,7 @@ function validateEntry(data, store, id) {
   }
   if (data.applyTo) {
     const doc = store.get('docs', data.applyTo);
-    const wants = { payment: 'invoice', billpayment: 'bill', refund: 'credit', vrefund: 'vcredit' }[data.type];
+    const wants = { payment: 'invoice', billpayment: 'bill', refund: 'credit', vrefund: 'vcredit', depapply: 'invoice' }[data.type];
     if (doc && wants && doc.kind !== wants) throw new ValidationError(data.type === 'refund' || data.type === 'vrefund' ? 'A refund has to come from a credit.' : `A payment has to go to ${wants === 'invoice' ? 'an invoice' : 'a bill'}.`);
     // Never more than what's left on it (after other payments, refunds and credits).
     if (doc && wants) {
@@ -192,12 +193,47 @@ function validateEntry(data, store, id) {
   }
   // Adjusting entries are marked for the working trial balance; a reversing entry points at the one it undoes.
   const out = { ...data, lines };
+  if (DEP.TYPES.includes(data.type)) validateDepositEntry(out, store, id);
   if (data.adjusting !== undefined) out.adjusting = !!data.adjusting;
   if (data.reverseOn !== undefined && data.reverseOn !== '') {
     if (!isDate(data.reverseOn) || data.reverseOn <= data.date) throw new ValidationError('The reversing date has to be after the entry’s date.');
   }
   if (data.reversalOf !== undefined) out.reversalOf = str(data.reversalOf, 60);
   return withTags(out, data, store);
+}
+
+/* Deposits on estimates (deposits-calc.js): received (Dr bank, Cr Customer deposits), used on an invoice made for the
+   same customer (Dr Customer deposits, Cr A/R) or refunded (Dr Customer deposits, Cr bank). Never more used or refunded
+   than was received, and never more received than the estimate's total. */
+function validateDepositEntry(out, store, id) {
+  const est = store.get('estimates', String(out.estimateId || ''));
+  if (!est) throw new ValidationError('The estimate this deposit belongs to doesn’t exist.');
+  const amt = cents(out.amount) / 100;
+  if (!(amt > 0)) throw new ValidationError('The deposit amount must be above zero.');
+  if (out.lines.length !== 2) throw new ValidationError('A deposit has two lines.');
+  const di = out.type === 'custdeposit' ? 1 : 0; // the Customer deposits line: credited when received, debited when used or refunded
+  const dep = store.get('accounts', String(out.lines[di].account)), other = store.get('accounts', String(out.lines[1 - di].account));
+  if (!dep || dep.detail !== 'custdep') throw new ValidationError('A deposit has to go through the Customer deposits account.');
+  const want = DEP.lines(out.type, dep.id, other && other.id, amt);
+  if (out.lines.some((l, i) => l.account !== want[i].account || cents(l.debit) !== cents(want[i].debit) || cents(l.credit) !== cents(want[i].credit))) throw new ValidationError('A deposit’s lines don’t match its amount.');
+  if (out.type === 'depapply') {
+    if (!other || other.detail !== 'ar') throw new ValidationError('A deposit used on an invoice comes off Accounts receivable.');
+    const inv = store.get('docs', String(out.applyTo || ''));
+    if (!inv || inv.kind !== 'invoice') throw new ValidationError('Choose the invoice to use the deposit on.');
+    if (inv.contactId !== est.contactId) throw new ValidationError('A deposit can only be used on the same customer’s invoices.');
+    if (inv.currency) throw new ValidationError('Deposits are in Canadian dollars, so they can’t be used on an invoice in another currency.');
+  } else {
+    if (!other || !(other.detail === 'bank' || (other.type === 'Asset' && !other.detail))) throw new ValidationError('Choose the bank account the money went into (or came out of).');
+    if (other.currency) throw new ValidationError('Deposits are in Canadian dollars. Choose a Canadian dollar bank account.');
+    delete out.applyTo;
+    out.bank = other.id;
+  }
+  if (out.method !== undefined && out.method !== '' && !DEP.METHODS.includes(out.method)) throw new ValidationError('Unknown payment method.');
+  const s = DEP.forEstimate(est.id, store.list('entries'), id);
+  const received = s.received + (out.type === 'custdeposit' ? amt : 0), used = s.applied + s.refunded + (out.type === 'custdeposit' ? 0 : amt);
+  if (out.type === 'custdeposit' && received > (Number(est.total) || 0) + 0.004) throw new ValidationError(`That’s more than the estimate’s total of ${(Number(est.total) || 0).toFixed(2)}.`);
+  if (used > received + 0.004) throw new ValidationError(out.type === 'custdeposit' ? `${used.toFixed(2)} of this deposit has already been used or refunded.` : `Only ${Math.max(0, s.received - s.applied - s.refunded).toFixed(2)} of the deposit is available.`);
+  Object.assign(out, { amount: amt, estimateId: est.id, contactId: est.contactId, ref: str(out.ref, 60), memo: str(out.memo, 300) });
 }
 
 function bankAccount(store, id) {
@@ -674,7 +710,7 @@ function validateRecord(collection, id, data, store) {
     case 'receipts': return validateReceipt(data, store, id);
     case 'attachments': return validateAttachment(data, store);
     case 'questions': return validateQuestion(data, store);
-    case 'estimates': return validateEstimate(data, store);
+    case 'estimates': return validateEstimate(data, store, id);
     case 'recurring': return validateRecurring(data, store);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
@@ -695,6 +731,16 @@ function checkDelete(collection, id, store) {
   const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id || r.from === id || r.to === id;
   if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines))) {
     throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
+  }
+  if (collection === 'estimates' && DEP.forEstimate(id, store.list('entries')).list.length) {
+    throw new ValidationError('This estimate has deposits recorded on it. Delete or refund them first.', 409);
+  }
+  if (collection === 'entries') {
+    const e = store.get('entries', id);
+    if (e && e.type === 'custdeposit') {
+      const s = DEP.forEstimate(e.estimateId, store.list('entries'), id);
+      if (s.applied + s.refunded > s.received + 0.004) throw new ValidationError('Part of this deposit has been used on an invoice or refunded. Delete that first.', 409);
+    }
   }
   if (collection === 'entries' && store.list('trips').some(t => t.entryId === id)) {
     throw new ValidationError('This expense is a mileage claim. Undo the claim from Expenses → Mileage instead.', 409);
@@ -929,7 +975,7 @@ function docLines(lines) {
     return out;
   });
 }
-function validateEstimate(data, store) {
+function validateEstimate(data, store, id) {
   if (!isDate(data.date)) throw new ValidationError('Estimate date must be YYYY-MM-DD.');
   if (data.expires && !isDate(data.expires)) throw new ValidationError('The date the estimate is good until must be YYYY-MM-DD.');
   const c = store.get('contacts', String(data.contactId || ''));
@@ -938,7 +984,23 @@ function validateEstimate(data, store) {
   const lines = docLines(data.lines);
   for (const l of lines) if (l.account && !store.get('accounts', l.account)) throw new ValidationError('An account on this estimate doesn’t exist.');
   if (data.invoiceId && !store.get('docs', String(data.invoiceId))) throw new ValidationError('The invoice made from this estimate doesn’t exist.');
-  return { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
+  const out = { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
+  // Deposit requested: a percent of the total, or an amount up to the total.
+  delete out.deposit;
+  if (data.deposit && Number(data.deposit.value)) {
+    const d = data.deposit, kind = d.kind === 'percent' ? 'percent' : 'amount', v = Math.round(Number(d.value) * 100) / 100;
+    if (!(v > 0)) throw new ValidationError('The deposit requested must be above zero.');
+    if (kind === 'percent' && v > 100) throw new ValidationError('The deposit requested can’t be more than 100%.');
+    if (kind === 'amount' && v > (Number(data.total) || 0) + 0.004) throw new ValidationError('The deposit requested is more than the estimate’s total.');
+    out.deposit = { kind, value: v };
+  }
+  // Once a deposit has been received, the customer stays, and the total can't drop below it.
+  if (id) {
+    const s = DEP.forEstimate(id, store.list('entries')), prev = store.get('estimates', id);
+    if (s.list.length && prev && prev.contactId !== out.contactId) throw new ValidationError('A deposit has been received on this estimate, so its customer can’t change.', 409);
+    if (s.received > (Number(out.total) || 0) + 0.004) throw new ValidationError(`The total can’t be less than the ${s.received.toFixed(2)} deposit received.`, 409);
+  }
+  return out;
 }
 /* Recurring transactions: a template and a schedule. The client makes each one when it's due (or reminds someone).
    Invoices and bills have a customer or vendor and item lines; expenses and deposits a bank or card account and

@@ -4,8 +4,8 @@
    language the company keeps its books in. They're downloaded, or emailed from the company's own
    mailbox through the server (POST /api/mail/send). */
 const DL={
-  en:{po:'PURCHASE ORDER',poNo:'PO no.',expected:'Expected by',vendor:'Vendor',shipTo:'Ship to',sreceipt:'SALES RECEIPT',srNo:'Sales receipt no.',paidBy:'Paid',estimate:'ESTIMATE',estNo:'Estimate no.',until:'Good until',payHead:'How to pay',invoice:'INVOICE',credit:'CREDIT NOTE',statement:'STATEMENT',billTo:'Bill to',to:'To',invNo:'Invoice no.',crNo:'Credit note no.',date:'Date',due:'Due date',asOf:'As of',desc:'Description',qty:'Qty',rate:'Rate',amount:'Amount',sub:'Subtotal',total:'Total',paid:'Paid',credits:'Credits applied',bal:'Balance due',avail:'Credit available',page:'Page {0} of {1}',taxNo:'GST/HST no.',taxNoQc:'GST/QST no.',type:'Type',no:'No.',balance:'Balance',inv:'Invoice',cr:'Credit note',current:'Current',d30:'1–30 days',d60:'31–60 days',d90:'61–90 days',d90p:'Over 90 days',totalDue:'Total due',appliedTo:'Applied to invoice {0}: {1}'},
-  fr:{po:'BON DE COMMANDE',poNo:'N° de bon de commande',expected:'Prévu pour le',vendor:'Fournisseur',shipTo:'Livrer à',sreceipt:'REÇU DE VENTE',srNo:'N° de reçu de vente',paidBy:'Payé',estimate:'SOUMISSION',estNo:'N° de soumission',until:'Valide jusqu’au',payHead:'Comment payer',invoice:'FACTURE',credit:'NOTE DE CRÉDIT',statement:'RELEVÉ DE COMPTE',billTo:'Facturer à',to:'À',invNo:'N° de facture',crNo:'N° de note de crédit',date:'Date',due:'Échéance',asOf:'Au',desc:'Description',qty:'Qté',rate:'Prix',amount:'Montant',sub:'Sous-total',total:'Total',paid:'Payé',credits:'Crédits appliqués',bal:'Solde dû',avail:'Crédit disponible',page:'Page {0} de {1}',taxNo:'N° de TPS/TVH',taxNoQc:'N° de TPS/TVQ',type:'Type',no:'N°',balance:'Solde',inv:'Facture',cr:'Note de crédit',current:'Courant',d30:'1 à 30 jours',d60:'31 à 60 jours',d90:'61 à 90 jours',d90p:'Plus de 90 jours',totalDue:'Total dû',appliedTo:'Appliqué à la facture {0} : {1}'},
+  en:{po:'PURCHASE ORDER',poNo:'PO no.',expected:'Expected by',vendor:'Vendor',shipTo:'Ship to',sreceipt:'SALES RECEIPT',srNo:'Sales receipt no.',paidBy:'Paid',estimate:'ESTIMATE',estNo:'Estimate no.',until:'Good until',payHead:'How to pay',invoice:'INVOICE',credit:'CREDIT NOTE',statement:'STATEMENT',billTo:'Bill to',to:'To',invNo:'Invoice no.',crNo:'Credit note no.',date:'Date',due:'Due date',asOf:'As of',desc:'Description',qty:'Qty',rate:'Rate',amount:'Amount',sub:'Subtotal',total:'Total',paid:'Paid',credits:'Credits applied',bal:'Balance due',avail:'Credit available',page:'Page {0} of {1}',taxNo:'GST/HST no.',taxNoQc:'GST/QST no.',type:'Type',no:'No.',balance:'Balance',inv:'Invoice',cr:'Credit note',current:'Current',d30:'1–30 days',d60:'31–60 days',d90:'61–90 days',d90p:'Over 90 days',totalDue:'Total due',appliedTo:'Applied to invoice {0}: {1}',depAccept:'Deposit to accept',depRecv:'Deposit received'},
+  fr:{po:'BON DE COMMANDE',poNo:'N° de bon de commande',expected:'Prévu pour le',vendor:'Fournisseur',shipTo:'Livrer à',sreceipt:'REÇU DE VENTE',srNo:'N° de reçu de vente',paidBy:'Payé',estimate:'SOUMISSION',estNo:'N° de soumission',until:'Valide jusqu’au',payHead:'Comment payer',invoice:'FACTURE',credit:'NOTE DE CRÉDIT',statement:'RELEVÉ DE COMPTE',billTo:'Facturer à',to:'À',invNo:'N° de facture',crNo:'N° de note de crédit',date:'Date',due:'Échéance',asOf:'Au',desc:'Description',qty:'Qté',rate:'Prix',amount:'Montant',sub:'Sous-total',total:'Total',paid:'Payé',credits:'Crédits appliqués',bal:'Solde dû',avail:'Crédit disponible',page:'Page {0} de {1}',taxNo:'N° de TPS/TVH',taxNoQc:'N° de TPS/TVQ',type:'Type',no:'N°',balance:'Solde',inv:'Facture',cr:'Note de crédit',current:'Courant',d30:'1 à 30 jours',d60:'31 à 60 jours',d90:'61 à 90 jours',d90p:'Plus de 90 jours',totalDue:'Total dû',appliedTo:'Appliqué à la facture {0} : {1}',depAccept:'Dépôt pour accepter',depRecv:'Dépôt reçu'},
 };
 const dlang=()=>S.company.lang==='fr'?'fr':'en';
 const dl=(k,...a)=>DL[dlang()][k].replace(/\{(\d)\}/g,(m,i)=>a[i]);
@@ -99,11 +99,16 @@ async function docPdfIn(doc,pdfIn,keep){
   const oldRate=doc.taxRate!=null&&Math.abs(+doc.taxRate-(+S.company.taxRate||0))>0.0001;
   if(+doc.tax)for(const p of (doc.taxParts&&doc.taxParts.length?doc.taxParts:oldRate?[{name:dlang()==='fr'?'Taxes':'Tax',rate:+doc.taxRate,amount:+doc.tax}]:splitTaxTotal(+doc.tax)))rows.push([`${p.name} ${p.rate}%`,dmoney(p.amount)]);
   rows.push([dl('total'),dmoney(doc.total),true]);
-  if(est){}
+  // An estimate asking for a deposit: what's been received, and what's still to pay to accept it.
+  if(est&&!po&&typeof TallyDeposits!=='undefined'&&doc.id){const req=TallyDeposits.requested(doc),got=TallyDeposits.forEstimate(doc.id,S.entries).received;
+    if(got)rows.push([dl('depRecv'),'-'+dmoney(got)]);if(req&&req-got>0.004)rows.push([dl('depAccept'),dmoney(r2(req-got)),true])}
+  else if(est){}
   else if(sr)rows.push([dl('paidBy'),dmoney(doc.total),true]);
   else if(!cred){
     const credits=r2(S.docs.filter(c=>c.applied).reduce((s,c)=>s+c.applied.filter(a=>a.docId===doc.id).reduce((t,a)=>t+(+a.amount||0),0),0));
-    const pays=r2(paid-credits);
+    const deps=r2(S.entries.filter(e=>e.type==='depapply'&&e.applyTo===doc.id).reduce((s,e)=>s+(+e.amount||0),0));
+    const pays=r2(paid-credits-deps);
+    if(deps)rows.push([dl('depRecv'),'-'+dmoney(deps)]);
     if(pays)rows.push([dl('paid'),'-'+dmoney(pays)]);
     if(credits)rows.push([dl('credits'),'-'+dmoney(credits)]);
     rows.push([dl('bal'),dmoney(st.bal),true]);
@@ -122,6 +127,10 @@ async function docPdfIn(doc,pdfIn,keep){
     const how=opHowToPay(doc,link);
     if(how){if(notes.length)notes.push('');notes.push(dl('payHead'));for(const l of how.split('\n'))notes.push(...pdf.wrap(l,280,9))}
   }
+  // A deposit still to pay on an estimate: the same, for the deposit.
+  if(doc.kind==='estimate'&&doc.id&&typeof TallyDeposits!=='undefined'&&typeof opHowToPay==='function'){const out=TallyDeposits.outstanding(doc,S.entries);
+    if(out>0.004){const link=doc.payLink&&doc.payLink.active!==false&&typeof PAYCFG!=='undefined'&&PAYCFG&&PAYCFG.configured&&Math.round(out*100)===doc.payLink.cents?doc.payLink.url:'';
+      const how=opHowToPay({...doc,est:true},link);if(how){if(notes.length)notes.push('');notes.push(dl('payHead'));for(const l of how.split('\n'))notes.push(...pdf.wrap(l,280,9))}}}
   for(const n of notes.slice(0,40)){if(ly>700){pdf.addPage();ly=60}pdf.text(M,ly,n,{size:9,color:'#333333'});ly+=12}
   drawFooter(pdf,S.company.invoiceNote);
   pageNumbers(pdf,first);
@@ -189,7 +198,7 @@ function templ(kind,v){
   };
   const out=T[kind].slice();
   // Invoices and reminders: how to pay, before the sign-off.
-  if(v.pay&&(kind==='invoice'||kind==='reminder')){const i=out[1].lastIndexOf('\n\n');out[1]=i>0?out[1].slice(0,i)+'\n\n'+v.pay+out[1].slice(i):out[1]+'\n\n'+v.pay}
+  if(v.pay&&(kind==='invoice'||kind==='reminder'||kind==='estimate')){const i=out[1].lastIndexOf('\n\n');out[1]=i>0?out[1].slice(0,i)+'\n\n'+v.pay+out[1].slice(i):out[1]+'\n\n'+v.pay}
   return out;
 }
 async function sendMail(to,subject,text,pdfBytes,fileName,docIds,what){

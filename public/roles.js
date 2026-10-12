@@ -37,6 +37,7 @@
     journal: 'accounting', invadjust: 'accounting',
     taxpayment: 'salestax', qmadjust: 'salestax',
     payrun: 'payroll', payremit: 'payroll',
+    custdeposit: 'sales', depapply: 'sales', deprefund: 'sales',
   };
   const SALES_DOCS = ['invoice', 'sreceipt', 'credit'];
 

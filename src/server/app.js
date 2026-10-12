@@ -21,6 +21,7 @@ const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth')
 const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
+const DEP = require('../../public/deposits-calc.js');
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 const MIME = {
@@ -57,6 +58,18 @@ const BACKUP_FORMAT = 'tally-books-backup';
 function createApp(opts) {
   const reg = new Registry(opts.dataDir);
   const stripeFetch = opts.stripeFetch || ((...a) => fetch(...a)); // tests pass a stand-in for Stripe
+  /** The Customer deposits account (a current liability), made the first time a deposit comes in online. Same rule as the app's depAccount(). */
+  const depAccount = ctx => {
+    const all = ctx.store.list('accounts');
+    const have = all.find(a => a.detail === 'custdep' && a.active !== false) || all.find(a => a.detail === 'custdep');
+    if (have) return have.id;
+    const named = all.find(a => a.type === 'Liability' && !a.detail && DEP.NAME_RE.test(a.name));
+    if (named) { applyWrite(ctx.store, { op: 'set', collection: 'accounts', id: named.id, data: { ...named, detail: 'custdep' } }, ctx.user, ctx); return named.id; }
+    const id = all.some(a => a.id === 'a2345') ? crypto.randomUUID() : 'a2345';
+    const fr = (ctx.store.getSetting('company') || {}).lang === 'fr';
+    applyWrite(ctx.store, { op: 'set', collection: 'accounts', id, data: { code: all.some(a => a.code === '2345') ? '' : '2345', name: fr ? 'Dépôts des clients' : 'Customer deposits', type: 'Liability', detail: 'custdep', active: true, desc: DEP.ACCOUNT_DESC } }, ctx.user, ctx);
+    return id;
+  };
   /** Every Stripe link an invoice has had (the current one included); closedAt marks the current one as turned off. */
   const payLinkList = (d, closedAt) => {
     const list = (Array.isArray(d.payLinks) ? d.payLinks : []).slice(-30);
@@ -498,6 +511,8 @@ function createApp(opts) {
       else if (d.kind === 'credit') receivable -= bal;
       else if (d.kind === 'vcredit') payable -= bal;
     }
+    // Deposits received on estimates and not used yet are a credit for the customer.
+    for (const v of Object.values(DEP.byCustomer(store.list('estimates'), entries))) receivable -= v;
     const recons = store.list('recons').map(r => r.statementDate).sort();
     const { billing: bill, ...entry } = c;
     return {
@@ -1621,23 +1636,26 @@ function createApp(opts) {
       const cfg = ctx.store.getSetting('stripe');
       if (!cfg || !cfg.key) throw new ValidationError('Turn on online payments first (Settings → Online payments).', 409);
       const body = (await readJson(req)) || {};
-      const doc = ctx.store.get('docs', String(body.docId || ''));
-      if (!doc || doc.kind !== 'invoice') throw new ValidationError('Choose an invoice.');
+      // An invoice's balance, or the deposit still to be paid on an estimate.
+      const est = body.estimateId !== undefined, col = est ? 'estimates' : 'docs';
+      const doc = ctx.store.get(col, String((est ? body.estimateId : body.docId) || ''));
+      if (est ? !doc : !doc || doc.kind !== 'invoice') throw new ValidationError(est ? 'Choose an estimate.' : 'Choose an invoice.');
       if (doc.currency) throw new ValidationError('Card payment links are for invoices in Canadian dollars.', 409);
-      const cents = Math.round(((Number(doc.total) || 0) - settledOn(ctx.store, doc.id)) * 100);
-      if (cents < 50) throw new ValidationError('There’s nothing left to pay on this invoice.', 409);
+      if (est && doc.invoiceId && ctx.store.get('docs', doc.invoiceId)) throw new ValidationError('This estimate is already an invoice. Send the invoice’s pay link instead.', 409);
+      const cents = est ? Math.round(DEP.outstanding(doc, ctx.store.list('entries')) * 100) : Math.round(((Number(doc.total) || 0) - settledOn(ctx.store, doc.id)) * 100);
+      if (cents < 50) throw new ValidationError(est ? 'There’s no deposit left to pay on this estimate.' : 'There’s nothing left to pay on this invoice.', 409);
       const cur = doc.payLink;
       if (cur && cur.active !== false && cur.cents === cents) return { url: cur.url, rev: ctx.rev };
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       let link;
-      try { link = await stripe.createLink(cfg, stripeFetch, { cents, docId: doc.id, company: company.name, name: `${company.name} · Invoice ${doc.number || ''}`.trim() }); }
+      try { link = await stripe.createLink(cfg, stripeFetch, { cents, docId: doc.id, company: company.name, name: `${company.name} · ${est ? 'Deposit on estimate' : 'Invoice'} ${doc.number || ''}`.trim() }); }
       catch (e) { throw new ValidationError(e.message, e.status || 502); }
       // The old link is turned off, but kept on the list so a payment made through it before then is still found.
       const closed = cur && cur.id && cur.active !== false ? await stripe.deactivate(cfg, stripeFetch, cur.id).then(() => Date.now(), () => 0) : 0;
       ctx.store.transaction(() => {
-        const d = ctx.store.get('docs', doc.id);
-        if (d) ctx.store.put('docs', doc.id, { ...d, payLink: { id: link.id, url: link.url, cents, created: Date.now(), active: true }, payLinks: payLinkList(d, closed) });
-        ctx.store.audit(ctx.user, 'stripe', { collection: 'docs', id: doc.id, summary: `payment link for invoice ${doc.number ? '#' + doc.number : doc.id}: $${(cents / 100).toFixed(2)}` });
+        const d = ctx.store.get(col, doc.id);
+        if (d) ctx.store.put(col, doc.id, { ...d, payLink: { id: link.id, url: link.url, cents, created: Date.now(), active: true }, payLinks: payLinkList(d, closed) });
+        ctx.store.audit(ctx.user, 'stripe', { collection: col, id: doc.id, summary: `payment link for ${est ? 'the deposit on estimate' : 'invoice'} ${doc.number ? '#' + doc.number : doc.id}: $${(cents / 100).toFixed(2)}` });
       });
       return { url: link.url, rev: ctx.bump() };
     }],
@@ -1651,11 +1669,14 @@ function createApp(opts) {
       if (!cfg || !cfg.key) return { added: [], errors: [], rev: ctx.rev };
       const recorded = new Set(ctx.store.list('entries').filter(e => e.stripeSession).map(e => e.stripeSession));
       const week = 7 * 864e5, now = Date.now();
-      const docs = ctx.store.list('docs').filter(d => d.kind === 'invoice' && (d.payLinks || d.payLink));
+      // Invoices, and estimates with a deposit link (est: true; a payment there is a deposit received).
+      const entriesNow = ctx.store.list('entries');
+      const docs = [...ctx.store.list('docs').filter(d => d.kind === 'invoice' && (d.payLinks || d.payLink)),
+        ...ctx.store.list('estimates').filter(d => d.payLinks || d.payLink).map(d => ({ ...d, est: true }))];
       const found = [], errors = [], closeNow = [];
       outer: for (const d of docs) {
         const known = new Set((d.payIssues || []).map(x => x.session));
-        const balance = Math.round(((Number(d.total) || 0) - settledOn(ctx.store, d.id)) * 100);
+        const balance = d.est ? Math.round(DEP.outstanding(d, entriesNow) * 100) : Math.round(((Number(d.total) || 0) - settledOn(ctx.store, d.id)) * 100);
         for (const l of payLinkList(d)) {
           if (l.done || (l.closed && now - l.closed > week)) continue;
           // The balance changed some other way (a payment entered by hand, the invoice edited): this link is out of date.
@@ -1670,11 +1691,11 @@ function createApp(opts) {
         let acc = ctx.store.list('accounts').find(a => a.stripe);
         const ar = ctx.store.list('accounts').find(a => a.detail === 'ar' && a.active !== false) || ctx.store.list('accounts').find(a => a.detail === 'ar');
         const touched = new Map(); // doc id -> { done: Set(link ids), issues: [] }
-        const mark = id => { if (!touched.has(id)) touched.set(id, { done: new Set(), issues: [] }); return touched.get(id); };
+        const mark = (id, est) => { if (!touched.has(id)) touched.set(id, { done: new Set(), issues: [], col: est ? 'estimates' : 'docs' }); return touched.get(id); };
         for (const { d, l, s } of found) {
           const amount = s.cents / 100, t = new Date(s.created * 1000);
           const date = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
-          mark(d.id).done.add(l.id);
+          mark(d.id, d.est).done.add(l.id);
           try {
             if (!acc) {
               const id = ctx.store.get('accounts', 'a1090') ? crypto.randomUUID() : 'a1090';
@@ -1683,35 +1704,40 @@ function createApp(opts) {
               acc = ctx.store.get('accounts', id);
             }
             const id = 'stripe_' + s.id.replace(/[^A-Za-z0-9_]/g, '').slice(-80);
-            applyWrite(ctx.store, { op: 'set', collection: 'entries', id, data: { type: 'payment', date, ref: 'Stripe', memo: `Paid online${d.number ? ' · invoice #' + d.number : ''}`, contactId: d.contactId || '', applyTo: d.id, amount, bank: acc.id,
+            if (d.est) {
+              const dep = depAccount(ctx);
+              applyWrite(ctx.store, { op: 'set', collection: 'entries', id, data: { type: 'custdeposit', date, ref: 'Stripe', memo: `Deposit paid online${d.number ? ' · estimate #' + d.number : ''}`, contactId: d.contactId || '', estimateId: d.id, amount, bank: acc.id, method: 'card',
+                lines: DEP.lines('custdeposit', dep, acc.id, amount), stripeSession: s.id, created: Date.now() } }, ctx.user, ctx);
+            } else applyWrite(ctx.store, { op: 'set', collection: 'entries', id, data: { type: 'payment', date, ref: 'Stripe', memo: `Paid online${d.number ? ' · invoice #' + d.number : ''}`, contactId: d.contactId || '', applyTo: d.id, amount, bank: acc.id,
               lines: [{ account: acc.id, debit: amount, credit: 0 }, { account: ar && ar.id, debit: 0, credit: amount }], stripeSession: s.id, created: Date.now() } }, ctx.user, ctx);
-            added.push({ docId: d.id, number: d.number || '', amount });
+            added.push({ docId: d.id, number: d.number || '', amount, ...(d.est ? { estimate: true } : {}) });
           } catch (e) {
             // Usually: more than what's still owing (paid twice, or an old link after another payment). Kept for a person to sort out.
             const issue = { session: s.id, link: l.id, amount, date, error: String(e.message).slice(0, 200), at: Date.now() };
-            mark(d.id).issues.push(issue); issues.push({ docId: d.id, number: d.number || '', ...issue });
+            mark(d.id, d.est).issues.push(issue); issues.push({ docId: d.id, number: d.number || '', ...issue, ...(d.est ? { estimate: true } : {}) });
           }
         }
-        for (const c of closeNow) if (c.closedOk) { const m = mark(c.d.id); m.closed = m.closed || new Set(); m.closed.add(c.l.id); }
+        for (const c of closeNow) if (c.closedOk) { const m = mark(c.d.id, c.d.est); m.closed = m.closed || new Set(); m.closed.add(c.l.id); }
         for (const [id, m] of touched) {
-          const cur = ctx.store.get('docs', id); if (!cur) continue;
+          const cur = ctx.store.get(m.col, id); if (!cur) continue;
           const list = payLinkList(cur).map(l => ({ ...l, ...(m.done.has(l.id) ? { done: true } : {}), ...(m.closed && m.closed.has(l.id) && !l.closed ? { closed: Date.now() } : {}) }));
           const pl = cur.payLink && (m.done.has(cur.payLink.id) || (m.closed && m.closed.has(cur.payLink.id))) ? { ...cur.payLink, active: false } : cur.payLink;
-          ctx.store.put('docs', id, { ...cur, payLink: pl, payLinks: list, ...(m.issues.length ? { payIssues: [...(cur.payIssues || []), ...m.issues].slice(-20) } : {}) });
+          ctx.store.put(m.col, id, { ...cur, payLink: pl, payLinks: list, ...(m.issues.length ? { payIssues: [...(cur.payIssues || []), ...m.issues].slice(-20) } : {}) });
         }
       });
-      for (const i of issues) errors.push(`A Stripe payment of $${i.amount.toFixed(2)} for invoice ${i.number ? '#' + i.number : ''} couldn’t be recorded: ${i.error}`);
+      for (const i of issues) errors.push(`A Stripe payment of $${i.amount.toFixed(2)} for ${i.estimate ? 'the deposit on estimate' : 'invoice'} ${i.number ? '#' + i.number : ''} couldn’t be recorded: ${i.error}`);
       return { added, issues, errors, rev: added.length || issues.length || closeNow.length ? ctx.bump() : ctx.rev };
     }],
     // A problem payment was dealt with by hand (refunded in Stripe, or recorded as a credit): stop showing it.
     ['POST', /^\/pay\/issue$/, async (ctx, req) => {
       notClient(ctx.user); needArea(ctx.user, 'sales');
       const body = (await readJson(req)) || {};
-      const d = ctx.store.get('docs', String(body.docId || ''));
+      const col = body.estimateId !== undefined ? 'estimates' : 'docs';
+      const d = ctx.store.get(col, String((col === 'estimates' ? body.estimateId : body.docId) || ''));
       if (!d || !(d.payIssues || []).some(x => x.session === body.session)) throw new ValidationError('That payment problem isn’t on this invoice.', 404);
       ctx.store.transaction(() => {
-        ctx.store.put('docs', d.id, { ...d, payIssues: d.payIssues.map(x => (x.session === body.session ? { ...x, resolved: Date.now() } : x)) });
-        ctx.store.audit(ctx.user, 'stripe', { collection: 'docs', id: d.id, summary: `marked a Stripe payment problem on invoice ${d.number ? '#' + d.number : d.id} as dealt with` });
+        ctx.store.put(col, d.id, { ...d, payIssues: d.payIssues.map(x => (x.session === body.session ? { ...x, resolved: Date.now() } : x)) });
+        ctx.store.audit(ctx.user, 'stripe', { collection: col, id: d.id, summary: `marked a Stripe payment problem on ${col === 'estimates' ? 'estimate' : 'invoice'} ${d.number ? '#' + d.number : d.id} as dealt with` });
       });
       return { ok: true, rev: ctx.bump() };
     }],
