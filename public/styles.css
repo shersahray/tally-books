@@ -546,3 +546,21 @@ th.bsel,td.bsel{width:28px;padding-right:0}
 .mfoot .grow{flex:1}
 .report table.tl th .rep-sort{color:inherit;font-weight:600}
 .report table.tl th.n .rep-sort{display:block;text-align:right}
+/* Tags: small pills on lists, and the picker on forms (tags-ui.js) */
+.pill.tag{background:var(--info-soft);color:var(--info);font-weight:500;max-width:160px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.tagpick{display:flex;flex-wrap:wrap;gap:4px;align-items:center;background:var(--surface);border:1px solid var(--line-strong);border-radius:6px;padding:3px 6px;min-height:34px;position:relative}
+.tagpick:focus-within{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
+.tagpick .pill.tag{display:inline-flex;align-items:center;gap:2px;padding-right:3px;max-width:200px}
+.tagpick .tagx{all:unset;cursor:pointer;padding:0 4px;border-radius:8px;line-height:1.2}
+.tagpick .tagx:hover,.tagpick .tagx:focus-visible{background:var(--line)}
+.tagpick .tagin{flex:1 1 70px;min-width:70px;position:relative}
+.tagpick .tagin input{border:0;padding:3px 2px;width:100%;background:transparent;outline:none}
+.tagpick .tagin input:focus{outline:none}
+.tagmenu{position:fixed;z-index:70;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:4px;min-width:200px;max-width:min(320px,80vw);max-height:240px;overflow-y:auto;display:flex;flex-direction:column}
+.tagopt{all:unset;cursor:pointer;padding:6px 9px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tagopt.hot,.tagopt:hover{background:var(--surface-2)}
+.tagopt.add{color:var(--accent)}
+.review .tagpick{min-width:120px;max-width:170px}
+.review .tagpick .tagin{min-width:50px}
+tr.tag-grp td{background:var(--surface-2)}
+#tagsPanel .tagacts{display:flex;flex-wrap:wrap;gap:2px;justify-content:flex-end}

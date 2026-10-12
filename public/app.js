@@ -34,7 +34,7 @@ const TLABEL={invoice:'Invoice',salesreceipt:'Sales receipt',invadjust:'Inventor
 /* ---------- state + server API ---------- */
 const S={more:{},accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Business',fyStart:1,taxName:'HST',taxRate:13,terms:30,currency:'$'},
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
-  sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:''},
+  sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:'',tag:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
 const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
@@ -282,7 +282,7 @@ function vDocs(kind){
   // Batch actions (docout.js): on Sales only, since bills have no PDF to send or print.
   const bt=inv&&typeof batchBar==='function',shown=list.slice(0,shownCount('docs',list.length)),nc=bt&&batchOn()?9:8;
   return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option>${inv?'<option value="receipts">Sales receipts</option>':''}</select><span class="grow"></span>${bt?batchBar():''}${diStaffBtn(inv?'invoices':'bills')}</div>
-  <div class="tbl-wrap"><table><thead><tr>${bt?batchHeadCell(shown.map(x=>x.d.id)):''}<th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?shown.map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}">${bt?batchCell(x.d):''}<td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${moneyC(cr?-x.d.total:x.d.total,x.d.currency)}</td><td class="n">${moneyC(cr?-x.s.bal:x.s.bal,x.d.currency)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,nc):emptyRow(nc,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
+  <div class="tbl-wrap"><table><thead><tr>${bt?batchHeadCell(shown.map(x=>x.d.id)):''}<th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?shown.map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}">${bt?batchCell(x.d):''}<td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}${typeof tagPills==='function'?tagPills(x.d.tags):''}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${moneyC(cr?-x.d.total:x.d.total,x.d.currency)}</td><td class="n">${moneyC(cr?-x.s.bal:x.s.bal,x.d.currency)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,nc):emptyRow(nc,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
 }
 
 function vTx(){
@@ -291,16 +291,18 @@ function vTx(){
   `<div class="panel"><div class="toolbar">
     <input class="grow" type="search" id="txQ" placeholder="Search payee, memo, number, amount" value="${esc(f.q)}" aria-label="Search transactions">
     <select id="txType" aria-label="Transaction type"><option value="">All types</option>${Object.entries(TLABEL).map(([k,v])=>`<option value="${k}" ${f.type===k?'selected':''}>${v}</option>`).join('')}<option value="adjusting" ${f.type==='adjusting'?'selected':''}>Adjusting entries</option><option value="attached" ${f.type==='attached'?'selected':''}>With attachments</option></select>
+    ${typeof tagList==='function'&&tagList().length?`<select id="txTag" aria-label="Tag"><option value="">All tags</option>${tagList().slice().sort((a,b)=>tagLabel(a).localeCompare(tagLabel(b))).map(t=>`<option value="${esc(t.id)}" ${f.tag===t.id?'selected':''} translate="no">${esc(tagLabel(t))}</option>`).join('')}<option value="__none" ${f.tag==='__none'?'selected':''}>No tag</option></select>`:''}
     <input type="date" id="txFrom" value="${f.from}" aria-label="From date"><span class="muted">to</span><input type="date" id="txTo" value="${f.to}" aria-label="To date">
   </div><div id="txBody">${txTable()}</div></div>`;
 }
 function txTable(){
   const f=S.tx,q=f.q.trim().toLowerCase();
   const att=f.type==='attached'?new Set(S.attachments.filter(a=>a.target==='entries').map(a=>a.targetId).concat(S.attachments.filter(a=>a.target==='docs').map(a=>'d_'+a.targetId))):null;
-  const rows=S.entries.filter(e=>(!f.type||(f.type==='adjusting'?e.adjusting:f.type==='attached'?att.has(e.id):e.type===f.type))&&(!f.from||e.date>=f.from)&&(!f.to||e.date<=f.to)&&(!q||[e.ref,e.memo,contactName(e.contactId),money(entryTotal(e)),String(entryTotal(e)),...(e.lines||[]).map(l=>acctName(l.account)+' '+(l.memo||''))].join(' ').toLowerCase().includes(q)))
+  const tg=f.tag&&(f.tag==='__none'||(typeof tagById==='function'&&tagById(f.tag)))?f.tag:'';
+  const rows=S.entries.filter(e=>(!tg||(tg==='__none'?!(e.tags||[]).length:(e.tags||[]).includes(tg)))&&(!f.type||(f.type==='adjusting'?e.adjusting:f.type==='attached'?att.has(e.id):e.type===f.type))&&(!f.from||e.date>=f.from)&&(!f.to||e.date<=f.to)&&(!q||[e.ref,e.memo,contactName(e.contactId),money(entryTotal(e)),String(entryTotal(e)),...(e.lines||[]).map(l=>acctName(l.account)+' '+(l.memo||''))].join(' ').toLowerCase().includes(q)))
     .sort((a,b)=>b.date.localeCompare(a.date)||(b.created||0)-(a.created||0));
   const tot=r2(rows.reduce((s,e)=>s+entryTotal(e),0));
-  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee / customer</th><th>Accounts</th><th>Memo</th><th class="n">Amount</th></tr></thead><tbody>${rows.length?rows.slice(0,shownCount('tx',rows.length)).map(e=>{const ac=[...new Set((e.lines||[]).map(l=>acctName(l.account)))];return `<tr class="click" data-entry="${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td style="white-space:nowrap">${TLABEL[e.type]||e.type}${e.adjusting?' <span class="pill quiet">Adjusting</span>':''}${e.reversalOf?' <span class="pill quiet">Reversal</span>':''}${e.example?' <span class="pill ex">Example</span>':''}</td><td class="mono">${esc(e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(e.contactId))}</td><td class="trunc muted" translate="no" title="${esc(ac.join(', '))}">${esc(ac.length>2?ac.slice(0,2).join(', ')+` +${ac.length-2}`:ac.join(', '))}</td><td class="trunc muted" translate="no">${esc(e.memo||'')}</td><td class="n">${money(entryTotal(e))}</td></tr>`}).join('')+moreRow('tx',shownCount('tx',rows.length),rows.length,7,'Or search, or pick dates.'):emptyRow(7,S.entries.length?'No matching transactions':'No transactions yet',S.entries.length?'Clear the search or widen the dates.':'Use + New to record your first one.')}</tbody>${rows.length?`<tfoot><tr><td colspan="6" class="muted">${rows.length} transaction${rows.length===1?'':'s'}</td><td class="n"><b>${money(tot)}</b></td></tr></tfoot>`:''}</table></div>`;
+  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee / customer</th><th>Accounts</th><th>Memo</th><th class="n">Amount</th></tr></thead><tbody>${rows.length?rows.slice(0,shownCount('tx',rows.length)).map(e=>{const ac=[...new Set((e.lines||[]).map(l=>acctName(l.account)))];return `<tr class="click" data-entry="${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td style="white-space:nowrap">${TLABEL[e.type]||e.type}${e.adjusting?' <span class="pill quiet">Adjusting</span>':''}${e.reversalOf?' <span class="pill quiet">Reversal</span>':''}${e.example?' <span class="pill ex">Example</span>':''}</td><td class="mono">${esc(e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(e.contactId))}</td><td class="trunc muted" translate="no" title="${esc(ac.join(', '))}">${esc(ac.length>2?ac.slice(0,2).join(', ')+` +${ac.length-2}`:ac.join(', '))}</td><td class="trunc muted" translate="no">${esc(e.memo||'')}${typeof tagPills==='function'?tagPills(e.tags):''}</td><td class="n">${money(entryTotal(e))}</td></tr>`}).join('')+moreRow('tx',shownCount('tx',rows.length),rows.length,7,'Or search, or pick dates.'):emptyRow(7,S.entries.length?'No matching transactions':'No transactions yet',S.entries.length?'Clear the search or widen the dates.':'Use + New to record your first one.')}</tbody>${rows.length?`<tfoot><tr><td colspan="6" class="muted">${rows.length} transaction${rows.length===1?'':'s'}</td><td class="n"><b>${money(tot)}</b></td></tr></tfoot>`:''}</table></div>`;
 }
 
 function vAccounts(){
@@ -328,7 +330,7 @@ function vRegister(){
   `<div class="panel"><div class="toolbar"><span class="flabel">Dates</span><input type="date" id="regFrom" value="${f.from}" aria-label="From date"><span class="muted">to</span><input type="date" id="regTo" value="${f.to}" aria-label="To date"><span class="grow"></span></div>
   <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Payee</th><th>Memo</th><th class="n">${dn?cIn:cOut}</th><th class="n">${dn?cOut:cIn}</th><th class="n">Balance</th>${bank?'<th title="C = cleared, R = reconciled">✓</th>':''}</tr></thead><tbody>
   ${f.from?`<tr><td colspan="7" class="muted">Opening balance</td><td class="n">${mcell(bal(a.id,null,addDays(f.from,-1)))}</td></tr>`:''}
-  ${shown.length?shown.slice(-shownCount('reg',shown.length)).reverse().map(({p,run})=>`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(p.e.contactId))}</td><td class="trunc muted" translate="no">${esc(p.memo||p.e.memo||'')}</td><td class="n">${(dn?p.debit:p.credit)?money(dn?p.debit:p.credit):''}</td><td class="n">${(dn?p.credit:p.debit)?money(dn?p.credit:p.debit):''}</td><td class="n">${mcell(run)}</td>${bank?`<td class="mono muted">${({c:'C',r:'R'})[p.e.clear?.[a.id]]||''}</td>`:''}</tr>`).join('')+moreRow('reg',shownCount('reg',shown.length),shown.length,bank?9:8,'Or pick dates to find older ones.'):emptyRow(8,'No activity','Nothing has been posted to this account in this date range.')}
+  ${shown.length?shown.slice(-shownCount('reg',shown.length)).reverse().map(({p,run})=>`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(p.e.contactId))}</td><td class="trunc muted" translate="no">${esc(p.memo||p.e.memo||'')}${typeof tagPills==='function'?tagPills(p.e.tags):''}</td><td class="n">${(dn?p.debit:p.credit)?money(dn?p.debit:p.credit):''}</td><td class="n">${(dn?p.credit:p.debit)?money(dn?p.credit:p.debit):''}</td><td class="n">${mcell(run)}</td>${bank?`<td class="mono muted">${({c:'C',r:'R'})[p.e.clear?.[a.id]]||''}</td>`:''}</tr>`).join('')+moreRow('reg',shownCount('reg',shown.length),shown.length,bank?9:8,'Or pick dates to find older ones.'):emptyRow(8,'No activity','Nothing has been posted to this account in this date range.')}
   </tbody></table></div></div>`;
 }
 
@@ -346,11 +348,12 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['tl','Transaction list'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor'],['bva','Budget vs actual'],['iv','Inventory valuation']].filter(([k])=>(adv||(k!=='cf'&&k!=='bva'))&&(k!=='iv'||(feat('inventory')&&S.items.some(i=>i.type==='inventory'))));
+  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['tl','Transaction list'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor'],['bva','Budget vs actual'],['iv','Inventory valuation'],['tg','Tags']].filter(([k])=>(adv||(k!=='cf'&&k!=='bva'))&&(k!=='iv'||(feat('inventory')&&S.items.some(i=>i.type==='inventory')))&&(k!=='tg'||(typeof tagList==='function'&&tagList().length)));
+  if(R.tab==='tg'&&!T.some(([k])=>k==='tg'))R.tab='pl';
   // Without advanced reports (plan or company setting): no comparisons, cash flow, saved reports, packages or working trial balance.
   if(!adv){if(R.tab==='cf'||R.tab==='bva')R.tab='pl';R.compare='';R.tbAdj=false;R.savedId=''}
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
-  const pointInTime=!['pl','gl','sc','si','ev','bva','tl'].includes(R.tab);
+  const pointInTime=!['pl','gl','sc','si','ev','bva','tl','tg'].includes(R.tab);
   const saved=adv?savedReports():[],staff=ME&&ME.role!=='client',cur=saved.find(x=>x.id===S.rep.savedId&&savedMatches(x));
   return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff&&adv?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}${ME&&ME.role!=='client'&&!ME.readOnly?'<button class="btn" data-act="yearpkg">Year-end package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
@@ -496,6 +499,7 @@ function vSettings(){
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
   ${classesPanel()}
+  ${typeof tagsPanel==='function'?tagsPanel():''}
   ${typeof currenciesPanel==='function'?currenciesPanel():''}
   ${typeof mailPanel==='function'?mailPanel():''}
   ${typeof payPanel==='function'?payPanel():''}
@@ -551,6 +555,7 @@ function bindMain(m){
     if(d.pay){e.stopPropagation();const doc=S.docs.find(x=>x.id===d.pay);return payForm(doc.kind==='invoice'?'payment':'billpayment',null,doc.id)}
     if(d.editacct)return accountForm(acct(d.editacct));
     if(d.acct){S.reg={from:'',to:''};return go('register',d.acct)}
+    if(d.tagtx){S.tx={q:'',type:'',from:S.rep.from,to:S.rep.to,tag:d.tagtx};return go('transactions')}
     if(d.entry)return openEntry(S.entries.find(x=>x.id===d.entry));
     if(d.doc){const doc=S.docs.find(x=>x.id===d.doc);if(doc){docForm(doc.kind,doc);addExtras('docs',doc.id)}return}
     if(d.contact)return contactForm(contact(d.contact));
@@ -584,8 +589,8 @@ function bindMain(m){
   };
   if(typeof bindItemsSearch==='function')bindItemsSearch(m);
   const ds=$('#docStatus',m);if(ds){const st=S.view==='sales'?S.sales:S.exp;ds.value=st.status;ds.onchange=()=>{st.status=ds.value;renderMain()}}
-  const txU=()=>{S.tx={q:$('#txQ').value,type:$('#txType').value,from:$('#txFrom').value,to:$('#txTo').value};$('#txBody').innerHTML=txTable()};
-  ['txQ','txType','txFrom','txTo'].forEach(id=>{const el=$('#'+id,m);if(el)el.oninput=el.onchange=txU});
+  const txU=()=>{S.tx={q:$('#txQ').value,type:$('#txType').value,from:$('#txFrom').value,to:$('#txTo').value,tag:($('#txTag')||{}).value||''};$('#txBody').innerHTML=txTable()};
+  ['txQ','txType','txFrom','txTo','txTag'].forEach(id=>{const el=$('#'+id,m);if(el)el.oninput=el.onchange=txU});
   const rf=$('#regFrom',m),rt=$('#regTo',m);if(rf){rf.onchange=rt.onchange=()=>{S.reg={from:rf.value,to:rt.value};renderMain()}}
   const rp=$('#repPeriod',m);if(rp)rp.onchange=()=>{S.rep.period=rp.value;renderMain()};
   const ra=$('#repAcct',m);if(ra)ra.onchange=()=>{S.rep.acct=ra.value;renderMain()};
@@ -607,6 +612,7 @@ function bindMain(m){
   if(typeof bindDocout==='function')bindDocout(m);
   if(typeof bindBatch==='function')bindBatch(m);
   if(S.view==='settings')bindClasses(m);
+  if(S.view==='settings'&&typeof bindTags==='function')bindTags(m);
   if(typeof bindProjects==='function')bindProjects(m);
   if(typeof bindAssets==='function')bindAssets(m);
   if(typeof bindYard==='function')bindYard(m);
@@ -1022,7 +1028,7 @@ function docForm(kind,doc,preset){
   const refunded=doc?r2(S.entries.filter(e=>e.applyTo===doc.id).reduce((s,e)=>s+(+e.amount||0),0)):0;
   const settledNote=!doc||!paid?'':cred?`${money(paid)} of this credit has been used${refunded?`, including ${money(refunded)} refunded`:''}. ${money(r2(d.total-paid))} is still available.`:`${money(paid)} has been ${sale?'received':'paid'} on this ${kind==='invoice'?'invoice':'bill'}. Balance due ${money(r2(d.total-paid))}.`;
   const f=openModal(doc?`${L.t} ${d.number?'#'+d.number:''}`:L.n,
-    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${sr?fld('dDep','Deposit to',`<select id="dDep">${acctOptions(defBank,banks)}</select>`):cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}${sale&&typeof fieldInputs==='function'?fieldInputs(d,false):''}${typeof classField==='function'?classField('dCls',d.cls):''}${typeof projField==='function'?projField('dProj',d.proj):''}${typeof vehField==='function'?vehField('dVeh',d.veh):''}</div>
+    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${sr?fld('dDep','Deposit to',`<select id="dDep">${acctOptions(defBank,banks)}</select>`):cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}${sale&&typeof fieldInputs==='function'?fieldInputs(d,false):''}${typeof classField==='function'?classField('dCls',d.cls):''}${typeof projField==='function'?projField('dProj',d.proj):''}${typeof vehField==='function'?vehField('dVeh',d.veh):''}${typeof tagField==='function'?tagField('dTags',d.tags):''}</div>
     ${typeof fxRowHTML==='function'?fxRowHTML('dFx',d.currency||contactCur(d.contactId),d.fx):''}<div class="muted fx-home" data-fxhome></div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${L.memo}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
@@ -1094,6 +1100,8 @@ function docForm(kind,doc,preset){
     const cls=$('#dCls',f);if(cls){if(cls.value)dd.cls=base.cls=cls.value;else delete dd.cls}
     const pj=$('#dProj',f);if(pj){if(pj.value)dd.proj=base.proj=pj.value;else delete dd.proj}else if(dd.proj)base.proj=dd.proj;
     const vh=$('#dVeh',f);if(vh){if(vh.value)dd.veh=base.veh=vh.value;else delete dd.veh}else if(dd.veh)base.veh=dd.veh;
+    // Tags go on the document and on its journal entry (reports add up journal entries).
+    if(typeof tagsOf==='function')setTags(dd,tagsOf(f,'dTags'));if(dd.tags)base.tags=dd.tags;
     if(cred)dd.applied=applied;
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:sr?'salesreceipt':kind,ref:num,docId:id,lines,created:dd.created}}]))return;
     closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(L.saved);
@@ -1208,7 +1216,7 @@ function moneyForm(kind,entry,preset){
     `${preset&&preset.note||''}${entry&&typeof rcLinkFor==='function'?rcLinkFor(entry):''}<div class="fields">${fld('mBank',out?'Paid from':'Deposit to',`<select id="mBank">${acctOptions(defBank,a=>a.detail==='bank'||a.detail==='card')}</select>`)}
     ${fld('mC',out?'Payee':'Received from',contactSelect('mC',src?.contactId||'',out?'vendor':'customer',true))}
     ${fld('mDate','Date',`<input type="date" id="mDate" value="${esc(src?.date||today())}">`)}
-    ${fld('mRef',out?'Ref / receipt no.':'Reference',`<input type="text" id="mRef" value="${esc(src?.ref||'')}">`)}${classField('mCls',src?.cls)}${typeof projField==='function'?projField('mProj',src?.proj):''}${typeof vehField==='function'?vehField('mVeh',src?.veh):''}</div>
+    ${fld('mRef',out?'Ref / receipt no.':'Reference',`<input type="text" id="mRef" value="${esc(src?.ref||'')}">`)}${classField('mCls',src?.cls)}${typeof projField==='function'?projField('mProj',src?.proj):''}${typeof vehField==='function'?vehField('mVeh',src?.veh):''}${typeof tagField==='function'?tagField('mTags',src?.tags):''}</div>
     ${typeof fxRowHTML==='function'?fxRowHTML('mFx',acctCur(defBank),src?.fx):''}<div class="muted fx-home" data-fxhome></div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="mMemo">Memo</label><textarea id="mMemo">${esc(src?.memo||'')}</textarea></div>${totalsHTML()}</div>`,
@@ -1235,7 +1243,7 @@ function moneyForm(kind,entry,preset){
     const id=entry?.id||preset?.id||uid(),rcId=preset?.recurringId||entry?.recurringId;
     const mcur=acctCur(bank),mfx=mcur&&MFX?MFX.rate():1,fxx={};
     if(mcur){if(!(mfx>0))return f.err(`Enter the exchange rate for ${mcur}.`);const conv=toHome(lines,mfx,bank);lines.length=0;lines.push(...conv);const bl=lines.find(l=>l.account===bank);if(bl)bl.fx={cur:mcur,amt:Math.abs(c.total)};Object.assign(fxx,{currency:mcur,fx:mfx})}
-    if(await put('entries',id,{...fxx,type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',...classOf(f,'mCls'),...(typeof projOf==='function'?projOf(f,'mProj'):{}),...(typeof vehOf==='function'?vehOf(f,'mVeh'):{}),form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{}),...(rcId?{recurringId:rcId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
+    if(await put('entries',id,{...fxx,type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',...classOf(f,'mCls'),...(typeof tagsOf==='function'?(tagsOf(f,'mTags')||(entry&&entry.tags?{tags:entry.tags}:{})):{}),...(typeof projOf==='function'?projOf(f,'mProj'):{}),...(typeof vehOf==='function'?vehOf(f,'mVeh'):{}),form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{}),...(rcId?{recurringId:rcId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
   };
 }
 
@@ -1261,7 +1269,7 @@ function transferForm(entry,preset){
 
 function journalForm(entry,preset){
   const src=entry||preset;
-  const f=openModal(entry?'Journal entry':'New journal entry',`${preset&&preset.note||''}<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${src?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(src?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(src?.memo||'')}">`,true)}${classField('jCls',src?.cls)}${typeof projField==='function'?projField('jProj',src?.proj):''}${typeof vehField==='function'?vehField('jVeh',src?.veh):''}</div><div data-le></div>
+  const f=openModal(entry?'Journal entry':'New journal entry',`${preset&&preset.note||''}<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${src?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(src?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(src?.memo||'')}">`,true)}${classField('jCls',src?.cls)}${typeof projField==='function'?projField('jProj',src?.proj):''}${typeof vehField==='function'?vehField('jVeh',src?.veh):''}${typeof tagField==='function'?tagField('jTags',src?.tags):''}</div><div data-le></div>
     ${ME&&ME.role!=='client'?`<div class="fields" style="align-items:end"><label class="check" style="align-self:center"><input type="checkbox" id="jAdj" ${entry?.adjusting?'checked':''}> Adjusting entry (shown in its own column on the working trial balance)</label>
       ${fld('jRev','Reverse on (optional)',`<input type="date" id="jRev" value="${esc(entry?.reverseOn||'')}"><span class="hint">Posts the opposite entry on this date, for example the first day of the next period</span>`)}</div>`:''}<div class="totals"><div>Total debits</div><div data-j="d">0.00</div><div>Total credits</div><div data-j="c">0.00</div><div class="big">Difference</div><div class="big" data-j="x">0.00</div></div>`,saveFoot(!!entry,'Save',preset&&preset.recurringId||typeof recMakeBtn!=='function'||entry?.reversalOf?'':recMakeBtn()),'wide');
   const rows=(src?.lines||[{},{}]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||''}));
@@ -1282,6 +1290,7 @@ function journalForm(entry,preset){
     const adjusting=$('#jAdj',f)?$('#jAdj',f).checked:!!entry?.adjusting,reverseOn=$('#jRev',f)?$('#jRev',f).value:(entry?.reverseOn||'');
     if(reverseOn&&reverseOn<=date)return f.err('The reversing date has to be after the entry’s date.');
     const data={...(entry?strip(entry):{}),type:'journal',date,ref,memo,contactId:entry?.contactId||preset?.contactId||'',lines,created:entry?.created||Date.now(),adjusting,reverseOn,...(entry?.example?{example:true}:{}),...(preset?.recurringId?{recurringId:preset.recurringId}:{})};
+    if(typeof tagsOf==='function')setTags(data,tagsOf(f,'jTags'));
     delete data.cls;delete data.proj;delete data.veh;Object.assign(data,classOf(f,'jCls'),typeof projOf==='function'?projOf(f,'jProj'):{},typeof vehOf==='function'?vehOf(f,'jVeh'):{});
     const w=[{op:'set',collection:'entries',id,data}],rid='rv_'+id;
     // The reversing entry: the same lines with debits and credits swapped.

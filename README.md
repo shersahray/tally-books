@@ -81,6 +81,12 @@ It runs two ways from the same code:
   - Dates can be YYYY-MM-DD, DD/MM/YYYY or MM/DD/YYYY (you're asked which when a file could be either), or Excel dates.
   - Nothing already in the books is changed: records with the same name or number are skipped and reported. The closing date and filed sales tax periods are respected as in the forms, and everything comes in together, or nothing does.
 - **Light or dark:** each person chooses Automatic (follows the computer), Light or Dark, in the sidebar, on the sign-in screen or under Account. The choice is saved on their account, so it follows them to other computers.
+- **Tags:** labels to follow an event, a campaign or a job, like QuickBooks Online's tags. Put several on an invoice, bill, sales receipt, credit, expense, deposit, journal entry or bank line (unlike a class, which is one per transaction). Tags can be in groups (group *Event*: *Trade show*, *Open house*).
+  - **Settings → Tags:** add, rename, move into a group, or remove. A tag still on transactions comes off all of them first, after a confirmation; the transactions themselves don't change. On any form, type in the Tags box to find a tag, or press Enter to add a new one (type *Event: Spring fair* to put it in the Event group).
+  - **Bank lines and rules:** pick tags on each line waiting for review; a bank rule can add tags, and a line from the same payee suggests the tags used last time.
+  - Tags show as small labels on the Sales and Expenses lists, Transactions, account registers and the bank lines already added. Transactions can be filtered by tag.
+  - **Money in and out by tag** (Reports → Tags): income, expenses and the net for each tag over a period, on the accrual or cash basis, with CSV and PDF. Click a tag to see its transactions. A transaction with two tags counts under both, so the tags don't add up to the profit and loss.
+  - The server checks every transaction's tags: tags the company has, at most 20. Changing only the tags on a transaction is allowed in closed books. With a custom role, tags on a record follow its area (Sales, Expenses, Banking…); anyone who can change transactions can add a new tag from a form, and renaming or removing tags needs Accounting.
 - **Reports for accountants:**
   - Profit and loss, balance sheet and cash flow statement side by side with the previous period, the same period last year, or by month or quarter, with the change in dollars and percent.
   - **Accrual or cash basis:** the profit and loss, balance sheet, cash flow statement, general ledger, sales by customer and expenses by vendor can be shown on the cash basis, like QuickBooks Online's *Accounting method*. Invoices, bills, credit notes and vendor credits count when they're paid (or a credit is used or refunded), in proportion: half paid counts half of every line, sales tax included. Sales receipts, expenses, deposits and journal entries don't change. On the cash basis the balance sheet has no A/R or A/P, and sales tax payable shows only the tax on what's been paid. Choose it on each report, or set the default in Settings; saved reports keep it. The trial balance, aging reports, sales tax returns and the year-end package stay on the accrual basis.
@@ -304,6 +310,8 @@ The Mac and Linux builds stay unsigned. Signing the Mac version needs Apple's se
 public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   industries.js    Starter accounts by type of business (shared with the server)
   roles.js         Custom roles: areas, None/View/Edit, which area each record belongs to (shared with the server)
+  tags.js          Tags: cleaning the list, checking a transaction's tags, money in and out by tag (shared with the server)
+  tags-ui.js       The tag picker, Settings → Tags, tag labels on lists and the Money in and out by tag report
   bankparse.js     Bank file parsers (CSV column detection, OFX/QFX/QBO)
   banking.js       Banking screens: import, review, rules, reconcile
   ai.js            AI suggestions for bank lines, reading receipts, AI settings
