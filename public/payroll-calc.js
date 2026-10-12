@@ -714,6 +714,15 @@
       vacation, outside, due: addD(finalPeriodEnd, 5),
     };
   }
+  /**
+   * The pays that belong on a new ROE: only those after the employee's previous ROE. An ROE covers the pay since the
+   * last one was issued (the previous ROE's final pay period ending date, block 12), so earlier pay isn't counted twice.
+   * lines: as for roe(); roes: the employee's saved ROEs ({ finalEnd }). Returns { lines, since } (since: the previous block 12, or '').
+   */
+  function roeSince(lines, roes) {
+    const since = (roes || []).map(r => String((r && r.finalEnd) || '')).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().pop() || '';
+    return { since, lines: since ? lines.filter(l => String(l.to || l.payDate) > since) : lines.slice() };
+  }
   const ROE_REASONS = [
     ['A', 'Shortage of work / end of contract or season'], ['B', 'Strike or lockout'], ['D', 'Illness or injury'], ['E', 'Quit'],
     ['F', 'Maternity'], ['G', 'Retirement'], ['H', 'Work-sharing'], ['J', 'Apprentice training'], ['K', 'Other'],
@@ -722,5 +731,5 @@
 
   return { calc, remitSplit, remittanceDue, remitPeriodEnd, remitAccountProblem, tableFor, BENEFIT_KINDS, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
     yearEnd, sinProblem, slipsDue, hsfRateFor, YEAR_LIMITS,
-    holidays, holidaysBetween, holidayWindow, holidayPay, vacationRate, serviceYears, roe, roePeriods, ROE_PERIODS, ROE_REASONS, addDays: addD, daysBetween };
+    holidays, holidaysBetween, holidayWindow, holidayPay, vacationRate, serviceYears, roe, roeSince, roePeriods, ROE_PERIODS, ROE_REASONS, addDays: addD, daysBetween };
 });

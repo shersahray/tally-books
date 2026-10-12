@@ -33,7 +33,7 @@
 
   const digits = v => String(v ?? '').replace(/\D/g, '');
   /** Plain uppercase ASCII: accents dropped (é → E), anything else a bank might refuse becomes a space. */
-  const ascii = v => String(v ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase()
+  const ascii = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
     .replace(/[^A-Z0-9 &\-.,'/#]/g, ' ').replace(/\s+/g, ' ').trim();
   const left = (v, n) => String(v).slice(0, n).padEnd(n, ' ');
   const right0 = (v, n) => { const s = String(v); if (s.length > n) throw new Error(`${s} doesn’t fit in ${n} digits.`); return s.padStart(n, '0'); };

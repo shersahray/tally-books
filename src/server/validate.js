@@ -343,6 +343,8 @@ function validateEmployee(data) {
     out.sin = sin;
   } else out.sin = '';
   out.dental = [1, 2, 3, 4, 5].includes(Number(data.dental)) ? Number(data.dental) : 0; // 0 = not chosen yet
+  // The address in parts, for the T4 and ROE files (the free-text `address` is kept too).
+  if (data.addr !== undefined) out.addr = validateAddrParts(data.addr, name);
   // Direct deposit: the employee's bank account (institution, transit, account).
   out.payMethod = data.payMethod === 'deposit' ? 'deposit' : 'cheque';
   const bk = isObj(data.bank) ? data.bank : {};
@@ -379,6 +381,9 @@ function validateEmployee(data) {
     const n = v => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
     out.roes = data.roes.map(r => {
       const c = isObj(r.calc) ? r.calc : null;
+      // Block 16 can be a specific code (E03, K12…) and block 17C needs Service Canada's code for the other money.
+      if (r.reasonCode !== undefined && r.reasonCode !== '' && !/^[A-Z]\d{2}$/.test(String(r.reasonCode))) throw new ValidationError('The ROE reason code isn’t valid.');
+      if (r.otherCd !== undefined && r.otherCd !== '' && !/^[A-Z]\d{2}$/.test(String(r.otherCd))) throw new ValidationError('The ROE other money code isn’t valid.');
       return { ...r, calc: c && { type: ['W', 'B', 'S', 'M'].includes(c.type) ? c.type : 'B', count: n(c.count), hours: n(c.hours), total: n(c.total), vacation: n(c.vacation), outside: n(c.outside),
         due: isDate(c.due) ? c.due : '', periods: (Array.isArray(c.periods) ? c.periods : []).slice(0, 60).filter(isObj).map(p => ({ n: n(p.n), from: isDate(p.from) ? p.from : '', to: isDate(p.to) ? p.to : '', amount: n(p.amount) })) } };
     });
@@ -814,6 +819,26 @@ function validateDirectDeposit(d) {
   };
 }
 
+/** An address in parts (employee, or the employer for the T4 Summary): null when empty. */
+function validateAddrParts(a, who) {
+  if (a === null || a === '') return null;
+  if (!isObj(a)) throw new ValidationError('The address isn’t valid.');
+  const country = ['CAN', 'USA'].includes(a.country) ? a.country : 'CAN';
+  const out = { line1: str(a.line1, 60).trim(), line2: str(a.line2, 60).trim(), city: str(a.city, 40).trim(),
+    prov: str(a.prov, 2).trim().toUpperCase(), postal: str(a.postal, 10).toUpperCase().replace(country === 'CAN' ? /[\s-]/g : /\s+/g, ''), country };
+  if (!out.line1 && !out.line2 && !out.city && !out.postal) return null;
+  if (out.prov && (country === 'CAN' ? !PAY_PROVINCES.includes(out.prov) : !/^[A-Z]{2}$/.test(out.prov))) throw new ValidationError(`${who ? who + ': ' : ''}choose a province or territory.`);
+  if (out.postal && country === 'CAN' && !/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(out.postal)) throw new ValidationError(`${who ? who + ': ' : ''}the postal code looks like A1A 1A1.`);
+  return out;
+}
+/** Who sends the T4 XML file to CRA, and who CRA contacts about it (the T619 transmittal). */
+function validateTransmitter(t) {
+  if (!isObj(t)) return {};
+  const email = v => { const s = str(v, 60).trim(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : ''; };
+  return { repId: str(t.repId, 7).toUpperCase().replace(/[^A-Z0-9]/g, ''), name: str(t.name, 35).trim(), contact: str(t.contact, 35).trim(),
+    phone: str(t.phone, 30).trim(), email: email(t.email), email2: email(t.email2) };
+}
+
 function validatePayrollSettings(p) {
   if (!isObj(p)) return { hsfRate: 1.65, remitFreq: 'monthly' };
   const hsf = Number(p.hsfRate);
@@ -825,6 +850,8 @@ function validatePayrollSettings(p) {
     hsfPrimary: !!p.hsfPrimary,
     assocPayroll: optAmount(p.assocPayroll, 'Associated employers’ payroll') || 0,
     dd: validateDirectDeposit(p.dd),
+    transmitter: validateTransmitter(p.transmitter),
+    employerAddr: isObj(p.employerAddr) ? validateAddrParts(p.employerAddr, 'Employer') : null,
   };
 }
 

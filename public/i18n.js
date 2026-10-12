@@ -38,7 +38,7 @@ function syncAccountLang(user){
 
 /* ---------- matching ---------- */
 const MONTHS_EN='Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec';
-const MONTHS_FR='janv\\.|févr\\.|mars|avr\\.|mai|juin|juil\\.|août|sept\\.|oct\\.|nov\\.|déc\\.|janvier|février|avril|juillet|septembre|octobre|novembre|décembre';
+const MONTHS_FR='janv\\.|févr\\.|mars|avr\\.|mai|juin|juill\\.|juil\\.|août|sept\\.|oct\\.|nov\\.|déc\\.|janvier|février|avril|juillet|septembre|octobre|novembre|décembre';
 const TOKEN=new RegExp([
   // dates (with optional time): Sep 18, 2026 · Sep 18, 2026, 6:13 p.m. · 18 sept. 2026 · 18 sept. 2026, 18 h 13 · 2026-09-18
   `\\b(?:${MONTHS_EN})[a-z]*\\.? \\d{1,2}, \\d{4}(?:,? \\d{1,2}:\\d{2}(?:\\s?[ap]\\.?m\\.?)?)?`,
