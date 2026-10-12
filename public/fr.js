@@ -2517,3 +2517,30 @@ addFr({
   '“{s}” isn’t an email address. Use name@example.com, or @example.com for everyone there.':'« {s} » n’est pas une adresse courriel. Utilisez nom@exemple.com, ou @exemple.com pour toutes les personnes de ce domaine.',
   'Allow at most {0} senders.':'Autorisez au plus {0} expéditeurs.',
 });
+
+/* ---------- Report filters and list reports ---------- */
+addFr({
+  'Transaction list':'Liste des opérations',
+  'By customer':'Par client',
+  'Other customers':'Autres clients',
+  'Not specified':'Non précisé',
+  'Filter':'Filtrer',
+  'Filter (on)':'Filtrer (actif)',
+  'Filtered by':'Filtré par',
+  'Clear filters':'Effacer les filtres',
+  'Filter this report':'Filtrer ce rapport',
+  'Find a name or account':'Chercher un nom ou un compte',
+  'Clear all':'Tout effacer',
+  'Tags':'Étiquettes',
+  'Other accounts':'Autres comptes',
+  'Export CSV and PDF include every line.':'L’exportation CSV et le PDF contiennent toutes les lignes.',
+  '{0} – {1} · Filtered':'Du {0} au {1} · filtré',
+  '{0} – {1} · Cash basis · Filtered':'Du {0} au {1} · comptabilité de caisse · filtré',
+  '{0} – {1} · Filtered ·':'Du {0} au {1} · filtré ·',
+  '{0} – {1} · Cash basis · Filtered ·':'Du {0} au {1} · comptabilité de caisse · filtré ·',
+  '{0} – {1} · before sales tax · Filtered':'Du {0} au {1} · avant taxes · filtré',
+  '{0} – {1} · before sales tax · Cash basis · Filtered':'Du {0} au {1} · avant taxes · comptabilité de caisse · filtré',
+  'Tick what to include. Different kinds of filter add up: a customer and an account shows that customer’s amounts in that account. Customers and vendors together show both.':'Cochez ce qu’il faut inclure. Les différents types de filtres se combinent : un client et un compte montrent les montants de ce client dans ce compte. Des clients et des fournisseurs ensemble montrent les deux.',
+  'With an account filter, the amount is the change in those accounts: debits are positive, credits negative.':'Avec un filtre de comptes, le montant est la variation de ces comptes : les débits sont positifs, les crédits négatifs.',
+  'The P&L by customer puts income under the customer on the invoice or sales receipt, and costs under a customer when the bill, expense or entry is for one of their projects. The rest is Not specified.':'L’état des résultats par client place les revenus sous le client de la facture ou du reçu de vente, et les coûts sous un client quand la facture fournisseur, la dépense ou l’écriture vise un de ses projets. Le reste est Non précisé.',
+});

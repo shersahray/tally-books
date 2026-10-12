@@ -84,6 +84,9 @@ It runs two ways from the same code:
 - **Reports for accountants:**
   - Profit and loss, balance sheet and cash flow statement side by side with the previous period, the same period last year, or by month or quarter, with the change in dollars and percent.
   - **Accrual or cash basis:** the profit and loss, balance sheet, cash flow statement, general ledger, sales by customer and expenses by vendor can be shown on the cash basis, like QuickBooks Online's *Accounting method*. Invoices, bills, credit notes and vendor credits count when they're paid (or a credit is used or refunded), in proportion: half paid counts half of every line, sales tax included. Sales receipts, expenses, deposits and journal entries don't change. On the cash basis the balance sheet has no A/R or A/P, and sales tax payable shows only the tax on what's been paid. Choose it on each report, or set the default in Settings; saved reports keep it. The trial balance, aging reports, sales tax returns and the year-end package stay on the accrual basis.
+  - **Filters**, like QuickBooks Online's report customization: the profit and loss, general ledger, sales by customer, expenses by vendor and transaction list can be filtered by customers, vendors, accounts and classes (tick as many of each as you like). Filters add up with the period, comparison, class and accounting method, and saved reports keep them. A customer filter includes bills, expenses and entries for that customer's projects. The balance sheet, cash flow and trial balance aren't filtered, since part of the books doesn't balance.
+  - **Profit and loss by customer** (Compare → By customer): a column for each of the eight customers with the most sales, then *Other customers*, *Not specified* and the total, which is the whole profit and loss. Income goes to the customer on the invoice or sales receipt; costs go to a customer when the bill, expense or entry is for one of their projects.
+  - **Transaction list:** every transaction in the period with its date, type, number, name, memo, account, other accounts, class and amount. Click a column to sort by it, a row to open it. With an account filter it shows each transaction's change in those accounts. The **general ledger** is QuickBooks' *Transaction detail by account*: grouped by account with a running balance, and filterable the same way.
   - **Cash flow statement** (indirect method): net income, changes in working capital, investing and financing activities, and cash at the start and end. Each balance sheet account can be set to operating, investing or financing.
   - **Saved reports**, a **PDF** of any report, and a **report package**: the reports you choose for a period in one PDF with a cover page, to download or email to the client.
   - **Working trial balance**: before adjustments, adjusting entries and the adjusted balance in three columns.
@@ -319,7 +322,8 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   companies.js     Client list, company switcher, new company
   salestax.js      GST/HST, QST and PST/RST return worksheets, filing, payments
   cashbasis.js     Cash-basis postings for reports: invoices and bills counted when paid, in proportion
-  reports.js       Comparative reports, cash flow, saved reports, PDFs, report packages, reconciliation reports
+  report-filters.js  Report filters (customer, vendor, account, class, tag), customers for the P&L by customer, transaction list rows
+  reports.js       Comparative reports, cash flow, saved reports, PDFs, report packages, reconciliation reports, filters, transaction list
   review.js        Attachments, reclassify, the Review page and questions to the client
   payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas, year-end slip figures, public holidays, vacation pay rates and ROE figures
   payroll-dd.js    Direct deposit files for the employer's bank (Payments Canada Standard 005 / CPA-005)

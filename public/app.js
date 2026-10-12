@@ -346,11 +346,11 @@ function periodRange(p){
   }
 }
 function vReports(){
-  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor'],['bva','Budget vs actual'],['iv','Inventory valuation']].filter(([k])=>(adv||(k!=='cf'&&k!=='bva'))&&(k!=='iv'||(feat('inventory')&&S.items.some(i=>i.type==='inventory'))));
+  const R=S.rep,adv=feat('advancedReports');const T=[['pl',W('Profit and loss')],['bs',W('Balance sheet')],['cf','Cash flow'],['tb','Trial balance'],['gl','General ledger'],['tl','Transaction list'],['ar','A/R aging'],['ap','A/P aging'],['sc','Sales by customer'],['si','Sales by product'],['ev','Expenses by vendor'],['bva','Budget vs actual'],['iv','Inventory valuation']].filter(([k])=>(adv||(k!=='cf'&&k!=='bva'))&&(k!=='iv'||(feat('inventory')&&S.items.some(i=>i.type==='inventory'))));
   // Without advanced reports (plan or company setting): no comparisons, cash flow, saved reports, packages or working trial balance.
   if(!adv){if(R.tab==='cf'||R.tab==='bva')R.tab='pl';R.compare='';R.tbAdj=false;R.savedId=''}
   if(R.period!=='custom'){const[a,b]=periodRange(R.period);R.from=a;R.to=b}
-  const pointInTime=!['pl','gl','sc','si','ev','bva'].includes(R.tab);
+  const pointInTime=!['pl','gl','sc','si','ev','bva','tl'].includes(R.tab);
   const saved=adv?savedReports():[],staff=ME&&ME.role!=='client',cur=saved.find(x=>x.id===S.rep.savedId&&savedMatches(x));
   return head('Reports','',`${saved.length?`<select id="repSaved" aria-label="Saved reports"><option value="">Saved reports…</option>${saved.map(x=>`<option value="${x.id}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${cur&&staff?`<button class="btn" data-act="repunsave">Delete saved report</button>`:''}${staff&&adv?'<button class="btn" data-act="repsave">Save this report</button><button class="btn" data-act="reppkg">Report package</button>':''}${ME&&ME.role!=='client'&&!ME.readOnly?'<button class="btn" data-act="yearpkg">Year-end package</button>':''}`)+`<div class="tabs" role="tablist">${T.map(([k,v])=>`<button role="tab" data-rtab="${k}" aria-selected="${R.tab===k}">${v}</button>`).join('')}</div>
   <div class="panel"><div class="toolbar">
@@ -361,13 +361,14 @@ function vReports(){
     ${R.tab==='gl'?`<select id="repAcct" aria-label="Account"><option value="">All accounts</option>${acctOptions(R.acct||'')}</select>`:''}
     ${R.tab==='tb'&&adv?`<label class="flabel" for="repTbAdj">Show</label><select id="repTbAdj">${[['','Trial balance'],['adj','Working trial balance (with adjustments)'],['aje','Adjusting entries']].map(([k,v])=>`<option value="${k}" ${(R.tbAdj==='aje'?'aje':R.tbAdj?'adj':'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
     ${BASIS_TABS.includes(R.tab)?`<label class="flabel" for="repBasis">Accounting method</label><select id="repBasis">${[['accrual','Accrual basis'],['cash','Cash basis']].map(([k,v])=>`<option value="${k}" ${basisChoice()===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
-    ${['pl','bs','cf'].includes(R.tab)&&adv?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE.filter(([k])=>k!=='byclass'||(S.company.classes||[]).length)).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${k==='byclass'?clsWords().by:v}</option>`).join('')}</select>`:''}
+    ${['pl','bs','cf'].includes(R.tab)&&adv?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE.filter(([k])=>(k!=='byclass'||(S.company.classes||[]).length)&&(k!=='bycustomer'||R.tab==='pl'))).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${k==='byclass'?clsWords().by:v}</option>`).join('')}</select>`:''}
+    ${FILTER_TABS.includes(R.tab)?`<button class="btn sm" data-act="repfilter">${repFilter()?'Filter (on)':'Filter'}</button>`:''}
     <span class="grow"></span>${R.tab==='tb'&&ME&&ME.role!=='client'?'<button class="btn sm" data-act="caseware">Export for CaseWare</button>':''}<button class="btn sm" data-act="export">Export CSV</button><button class="btn sm" data-act="reppdf">PDF</button>
-  </div><div id="repBody">${reportBody()}</div></div>`;
+  </div>${filterBar()}<div id="repBody">${reportBody()}</div></div>`;
 }
 /** The trial balance tab: plain, working (with adjustments), or the list of adjusting entries. */
 const tbReport=()=>S.rep.tbAdj==='aje'?rAJE():S.rep.tbAdj?rTBAdj():rTB();
-function reportBody(){return({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[S.rep.tab]().html}
+function reportBody(){return(REPORT_FNS[S.rep.tab]||REPORT_FNS.pl)().html}
 const rh=(t,sub)=>`<div class="rh"><b>${esc(S.company.name)}</b><div style="font-weight:600;margin-top:2px">${t}</div><span>${sub}</span></div>`;
 const rrow=(cls,label,amt,acctId)=>`<tr class="${cls}"><td>${acctId?`<button class="link" data-acct="${acctId}" translate="no">${esc(label)}</button>`:esc(label)}</td><td class="n">${amt===null?'':mcell(amt)}</td></tr>`;
 function rTB(){
@@ -385,7 +386,7 @@ function rTB(){
 function rGL(){
   const{from,to}=S.rep,only=S.rep.acct||'';
   const csv=[['Account','Date','Type','No.','Name','Memo','Debit','Credit','Balance']];let h='',td=0,tc=0,n=0;
-  const byAcct={};for(const p of repPostings())if(p.date>=from&&p.date<=to)(byAcct[p.account]=byAcct[p.account]||[]).push(p);
+  const flt=repFilter(),byAcct={};for(const p of repPostingsF())if(p.date>=from&&p.date<=to)(byAcct[p.account]=byAcct[p.account]||[]).push(p);
   // On screen, only the first lines are drawn (more on request); the CSV and PDF always have every line.
   const glTotal=only?(byAcct[only]||[]).length:Object.values(byAcct).reduce((s,x)=>s+x.length,0),glMax=shownCount('gl',glTotal,2000);
   for(const a of sortAccts(S.accounts)){
@@ -394,6 +395,7 @@ function rGL(){
     const dn=debitNormal(a.type),sign=dn?1:-1;
     const open=isPL(a.type)?(fyStartOf(from)<from?fbal(a.id,fyStartOf(from),addDays(from,-1)):0):fbal(a.id,null,addDays(from,-1));
     if(!ps.length&&!open&&!only)continue;
+    if(flt&&flt.acct&&!flt.acct.includes(a.id)&&!only)continue;
     const label=(a.code?a.code+' ':'')+a.name;let run=open,ad=0,ac=0;const skip=n>=glMax&&n>0;
     if(!skip)h+=`<tbody class="gl-acct"><tr class="sec"><td colspan="8"><button class="link" data-acct="${a.id}">${esc(label)}</button> <span class="muted">· ${a.type}</span></td></tr>
       <tr class="gl-open"><td></td><td colspan="5" class="muted">Opening balance${isPL(a.type)?' (fiscal year to date)':''}</td><td></td><td class="n">${mcell(open)}</td></tr>`;
@@ -410,8 +412,8 @@ function rGL(){
   }
   csv.push(['Total','','','','','',r2(td),r2(tc),'']);
   if(glMax<glTotal)h+=`<tbody>${moreRow('gl',glMax,glTotal,8,'Pick one account to see all of it. Export CSV and PDF include every line.')}</tbody>`;
-  const out=Math.abs(r2(td-tc))>0.004&&!only;
-  return{html:`<div class="report" style="max-width:none">${rh('General ledger',`${fmtDate(from)} – ${fmtDate(to)}${basisSub()}${only?` · <span translate="no">${esc(acctName(only))}</span>`:''}`)}<div class="tbl-wrap"><table class="gl"><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Name</th><th>Memo</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead>
+  const out=Math.abs(r2(td-tc))>0.004&&!only&&!flt; // a filtered ledger needn't balance
+  return{html:`<div class="report" style="max-width:none">${rh('General ledger',`${fmtDate(from)} – ${fmtDate(to)}${basisSub()}${filtSub()}${only?` · <span translate="no">${esc(acctName(only))}</span>`:''}`)}<div class="tbl-wrap"><table class="gl"><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Name</th><th>Memo</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead>
     ${h||`<tbody><tr><td colspan="8" class="muted" style="padding:16px">No transactions in this period.</td></tr></tbody>`}
     ${h&&!only?`<tfoot><tr class="grand"><td colspan="5">Total, ${n} line${n===1?'':'s'}</td><td class="n">${money(td)}</td><td class="n">${money(tc)}</td><td></td></tr></tfoot>`:''}</table></div>
     ${out?`<div class="banner err" style="margin:12px 16px">Debits and credits differ by ${money(r2(td-tc))}. Check for entries posted to deleted accounts.</div>`:''}</div>`,csv,name:`general-ledger_${from}_${to}`};
@@ -565,6 +567,9 @@ function bindMain(m){
     if(d.act==='repsave')return saveReport();
     if(d.act==='repunsave')return deleteSaved(S.rep.savedId);
     if(d.act==='reppkg')return packageForm();
+    if(d.act==='repfilter')return filterForm();
+    if(d.act==='repfltclear'){S.rep.flt=null;return renderMain()}
+    if(d.tlsort)return tlSort(d.tlsort);
     if(d.act==='yearpkg')return yearEndPackageForm();
     if(d.act==='retry')return load();
     if(d.act==='activity')return showActivity();
@@ -777,9 +782,9 @@ function casewareCsv(ye,prior){
   return out.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
 }
 function exportCSV(){
-  const R=S.rep;const r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[R.tab]();
+  const r=REPORT_FNS[S.rep.tab]();
   // Column headings and report totals follow the screen language; account names stay as they are.
-  const LBL=new Set([...Object.values(NPO_WORDS),'Total net assets','$ change','% change','Operating activities','Investing activities','Financing activities','Items not affecting cash','Changes in working capital','Cash from operating activities','Cash from investing activities','Cash from financing activities','Net change in cash','Cash at the beginning of the period','Cash at the end of the period','Assets','Liabilities','Expenses','Cost of goods sold','Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance']);
+  const LBL=new Set([...Object.values(NPO_WORDS),'Total net assets','$ change','% change','Operating activities','Investing activities','Financing activities','Items not affecting cash','Changes in working capital','Cash from operating activities','Cash from investing activities','Cash from financing activities','Net change in cash','Cash at the beginning of the period','Cash at the end of the period','Assets','Liabilities','Expenses','Cost of goods sold','Account','Amount','Code','Type','Debit','Credit','Total','Date','No.','Name','Memo','Balance','Customer','Vendor','Current','Total income','Total expenses','Net income','Gross profit','Retained earnings','Net income, current fiscal year','Total assets','Total liabilities','Total equity','Total liabilities and equity','Total cost of goods sold','Opening balance','Other accounts','Class']);
   if(isFr())r.csv=r.csv.map((row,i)=>row.map(v=>typeof v==='string'&&(i===0||LBL.has(v))?T(v):v));
   const text=r.csv.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
   saveFile(r.name+'.csv',new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'}));

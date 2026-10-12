@@ -10,7 +10,7 @@ let RIX=null;
 const repCls=()=>['pl','bva'].includes(S.rep.tab)&&(S.company.classes||[]).length&&!(S.rep.tab==='pl'&&S.rep.compare==='byclass')?S.rep.cls||'':'';
 /* Accrual or cash basis (cashbasis.js). The Reports page's choice, else the company's default. Only the reports
    below change; everything else (trial balance, aging, sales tax, budgets…) stays on the books' accrual basis. */
-const BASIS_TABS=['pl','bs','cf','gl','sc','ev'];
+const BASIS_TABS=['pl','bs','cf','gl','sc','ev','tl'];
 const basisChoice=()=>(S.rep.basis||S.company.reportBasis)==='cash'?'cash':'accrual';
 const repBasis=()=>BASIS_TABS.includes(S.rep.tab)&&basisChoice()==='cash'?'cash':'accrual';
 /** " · Cash basis" for a report's subtitle (the French has the whole subtitle as a key, e.g. "As of {0} · Cash basis"). */
@@ -23,24 +23,50 @@ function repPostings(){
   const ctl=new Set(S.accounts.filter(a=>a.detail==='ar'||a.detail==='ap').map(a=>a.id));
   CPS={src:ps,out:TallyCash.cashPostings(S.entries,S.docs,ctl)};return CPS.out;
 }
-/** Running sums for one class ('' = every transaction, '__none' = those without a class), on the report's basis.
-    One cache per class, so a profit and loss by class (a column for each class) stays quick. `cls` left out = the report's class filter. */
-function rix(cls){
+/* ---------- filters (report-filters.js): by customer, vendor, account, class (and tag, once transactions have tags) ----------
+   They stack with the period, comparison, class and accounting method. The balance sheet, cash flow and trial
+   balance aren't filtered: part of the books doesn't balance. */
+const FILTER_TABS=['pl','gl','sc','ev','tl'];
+/** The filter on the report on screen, or null. A P&L by class has its own class columns, so it ignores a class filter. */
+function repFilter(){
+  // Only on the Reports page: a reconciliation report opened from Banking adds up the whole account.
+  if(!FILTER_TABS.includes(S.rep.tab)||typeof TallyRepFilter==='undefined'||(S.view&&S.view!=='reports'))return null;
+  return S.rep.tab==='pl'&&S.rep.compare==='byclass'?TallyRepFilter.without(S.rep.flt,'cls'):TallyRepFilter.clean(S.rep.flt);
+}
+/** What the filters need to know about names: customer or vendor, and each project's customer. */
+function rfCtx(){
+  const k=new Map(S.contacts.map(c=>[c.id,c.kind||''])),pc=new Map((S.projects||[]).map(p=>[p.id,p.contactId||'']));
+  return{kind:id=>k.get(id)||'',projCust:id=>pc.get(id)||''};
+}
+let FPS=null;
+/** The report's postings with its filter applied. One cached list per filter, until the books change. */
+function repPostingsF(){
+  const ps=repPostings(),f=repFilter();if(!f)return ps;
+  const key=TallyRepFilter.key(f);if(!FPS||FPS.src!==ps)FPS={src:ps,by:new Map()};
+  let out=FPS.by.get(key);if(!out){out=TallyRepFilter.apply(ps,f,rfCtx());FPS.by.set(key,out)}
+  return out;
+}
+const filtSub=()=>repFilter()?' · Filtered':'';
+/** Running sums for one class ('' = every transaction, '__none' = those without a class) and, for a P&L by customer,
+    one customer column (an id, '__none', or a list of ids for "Other customers"), on the report's basis and filter.
+    One cache per class, customer and filter, so a report with a column for each stays quick. `cls` left out = the report's class filter. */
+function rix(cls,cust){
   if(cls===undefined)cls=repCls();
-  const ps=repPostings();if(!RIX||RIX.ps!==ps)RIX={ps,by:new Map()};
-  const hit=RIX.by.get(cls);if(hit)return hit;
-  const m=new Map();
-  for(const p of ps){if(cls&&(cls==='__none'?!!p.e.cls:p.e.cls!==cls))continue;let a=m.get(p.account);if(!a)m.set(p.account,a=[]);a.push([p.date,p.debit-p.credit])}
+  const ps=repPostingsF(),hasC=cust!==undefined&&cust!=='',key=`${cls}|${hasC?TallyRepFilter.custKey(cust):''}`;
+  if(!RIX||RIX.ps!==ps)RIX={ps,by:new Map()};
+  const hit=RIX.by.get(key);if(hit)return hit;
+  const m=new Map(),ct=hasC?TallyRepFilter.custTest(cust,rfCtx()):null;
+  for(const p of ps){if(cls&&(cls==='__none'?!!p.e.cls:p.e.cls!==cls))continue;if(ct&&!ct(p.e))continue;let a=m.get(p.account);if(!a)m.set(p.account,a=[]);a.push([p.date,p.debit-p.credit])}
   for(const a of m.values()){a.sort((x,y)=>x[0]<y[0]?-1:x[0]>y[0]?1:0);let c=0;a.cum=a.map(x=>c+=x[1])}
-  const out={m,cls};RIX.by.set(cls,out);return out;
+  const out={m,cls};RIX.by.set(key,out);return out;
 }
 const firstOnOrAfter=(a,d)=>{let lo=0,hi=a.length;while(lo<hi){const mid=(lo+hi)>>1;if(a[mid][0]<d)lo=mid+1;else hi=mid}return lo};
-function rawSum(id,from,to,cls){
-  const a=rix(cls).m.get(id);if(!a||!a.length)return 0;
+function rawSum(id,from,to,cls,cust){
+  const a=rix(cls,cust).m.get(id);if(!a||!a.length)return 0;
   const i=from?firstOnOrAfter(a,from):0,j=to?firstOnOrAfter(a,to+'~'):a.length;
   return r2((j>0?a.cum[j-1]:0)-(i>0?a.cum[i-1]:0));
 }
-function fbal(id,from,to,cls){const a=acct(id),r=rawSum(id,from,to,cls);return a&&!debitNormal(a.type)?r2(-r):r}
+function fbal(id,from,to,cls,cust){const a=acct(id),r=rawSum(id,from,to,cls,cust);return a&&!debitNormal(a.type)?r2(-r):r}
 function fNet(from,to){let n=0;for(const a of S.accounts){if(a.type==='Income')n+=fbal(a.id,from,to);else if(a.type==='Expense'||a.type==='Cost of Goods Sold')n-=fbal(a.id,from,to)}return r2(n)}
 
 /* ---------- periods and columns ---------- */
@@ -57,7 +83,9 @@ function rangeLabel(from,to){
   if(n)return `${monthLabel(from)} – ${monthLabel(to)}`;
   return `${fmtDate(from)} – ${fmtDate(to)}`;
 }
-const PL_COMPARE=[['','No comparison'],['prev','Previous period'],['prevyear','Same period last year'],['months','By month'],['quarters','By quarter'],['byclass','By class']];
+const PL_COMPARE=[['','No comparison'],['prev','Previous period'],['prevyear','Same period last year'],['months','By month'],['quarters','By quarter'],['byclass','By class'],['bycustomer','By customer']];
+/** Columns in a P&L by customer: the customers with the most sales, then the rest together, so it stays readable. */
+const PL_TOP_CUSTOMERS=8;
 const BS_COMPARE=[['','No comparison'],['prevmonth','End of the previous month'],['prevyear','One year earlier'],['months','Each month-end this fiscal year']];
 /** Columns for a period report: [{label, from, to}], plus whether to add Total or change columns. */
 function periodCols(from,to,cmp){
@@ -72,6 +100,17 @@ function periodCols(from,to,cmp){
     const cols=cs.filter(c=>c.active!==false||has(c.id)).map(c=>({label:c.name,from,to,cls:c.id,data:true}));
     if(has('__none'))cols.push({label:clsWords().none,from,to,cls:'__none'});
     if(cols.length>36)return{error:'That’s too many columns. Turn off classes you no longer use.'};
+    return{cols,total:true};
+  }
+  if(cmp==='bycustomer'){
+    // A column for each of the top customers, then Other customers, Not specified (no customer or project) and Total.
+    // Income goes to the invoice's or sales receipt's customer; a bill, expense or journal entry goes to a customer
+    // through its project, else to Not specified. The Total column adds them up, so it's the whole profit and loss.
+    const ty=new Map(S.accounts.map(a=>[a.id,a.type]));
+    const rk=TallyRepFilter.rankCustomers(repPostingsF(),{from,to,types:id=>ty.get(id),ctx:rfCtx(),top:PL_TOP_CUSTOMERS});
+    const cols=rk.top.map(id=>({label:contactName(id)||'?',from,to,cust:id,data:true}));
+    if(rk.other.length)cols.push({label:`${T('Other customers')} (${rk.other.length})`,from,to,cust:rk.other});
+    if(rk.none||!cols.length)cols.push({label:T('Not specified'),from,to,cust:'__none'});
     return{cols,total:true};
   }
   if(cmp==='months'||cmp==='quarters'){
@@ -127,7 +166,7 @@ function rPL(){
   if(C.error)return errReport(W('Profit and loss'),C.error);
   const rows=[],n=C.cols.length;
   const sec=(type,title)=>{
-    const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({a,vals:C.cols.map(c=>fbal(a.id,c.from,c.to,c.cls))})).filter(x=>x.vals.some(v=>Math.abs(v)>=0.005));
+    const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({a,vals:C.cols.map(c=>fbal(a.id,c.from,c.to,c.cls,c.cust))})).filter(x=>x.vals.some(v=>Math.abs(v)>=0.005));
     if(!as.length&&type==='Cost of Goods Sold')return null;
     const tot=C.cols.map((c,i)=>r2(as.reduce((s,x)=>s+x.vals[i],0)));
     rows.push({cls:'sec',label:title});
@@ -139,9 +178,12 @@ function rPL(){
   if(cogs)rows.push({cls:'tot',label:W('Gross profit'),vals:inc.map((v,i)=>r2(v-cogs[i]))});
   const exp=sec('Expense','Expenses');
   rows.push({cls:'spacer'},{cls:'grand',label:W('Net income'),vals:inc.map((v,i)=>r2(v-(cogs||z)[i]-exp[i]))});
-  const byCls=C.cols.some(c=>c.cls),cl=byCls?'':repCls(),cn=cl==='__none'?clsWords().none:cl?(clsName(cl)||''):'';
+  const byCls=C.cols.some(c=>c.cls),byCust=C.cols.some(c=>c.cust),cl=byCls?'':repCls(),cn=cl==='__none'?clsWords().none:cl?(clsName(cl)||''):'';
   // Translated here: with a suffix the whole title wouldn't match the dictionary on screen.
-  return colReport({title:(byCls||cn?T(W('Profit and loss')):W('Profit and loss'))+(byCls?` · ${clsWords().by}`:cn?` · ${cn}`:''),sub:`${fmtDate(from)} – ${fmtDate(to)}${basisSub()}`,C,rows,name:`profit-and-loss${byCls?'-by-'+clsWords().slug:''}_${from}_${to}${repBasis()==='cash'?'_cash':''}`});
+  const tt=byCls?` · ${clsWords().by}`:byCust?` · ${T('By customer')}`:'',tc=cn?` · ${cn}`:'';
+  const r=colReport({title:(tt||tc?T(W('Profit and loss')):W('Profit and loss'))+tt+tc,sub:`${fmtDate(from)} – ${fmtDate(to)}${basisSub()}${filtSub()}`,C,rows,name:`profit-and-loss${byCls?'-by-'+clsWords().slug:byCust?'-by-customer':''}_${from}_${to}${repBasis()==='cash'?'_cash':''}`});
+  if(byCust)r.html=r.html.replace(/<\/div>$/,`<div class="muted" style="font-size:12.5px;padding:8px 16px 14px">The P&amp;L by customer puts income under the customer on the invoice or sales receipt, and costs under a customer when the bill, expense or entry is for one of their projects. The rest is Not specified.</div></div>`);
+  return r;
 }
 
 /* ---------- balance sheet ---------- */
@@ -218,12 +260,12 @@ async function saveReport(){
     <div class="muted" style="font-size:13px">Saves the report, its period and comparison so you can open it again in one click. The dates move with the period: “This fiscal year” is always the current one.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`);
   f.onsubmit=async e=>{e.preventDefault();const name=$('#srName',f).value.trim();if(!name)return f.err('Give it a name.');
-    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:R.tbAdj==='aje'?'aje':!!R.tbAdj,...(repCls()?{cls:R.cls}:{}),...(R.tab==='bva'&&R.budget?{budget:R.budget}:{}),...(BASIS_TABS.includes(R.tab)?{basis:basisChoice()}:{})};
+    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:R.tbAdj==='aje'?'aje':!!R.tbAdj,...(repCls()?{cls:R.cls}:{}),...(R.tab==='bva'&&R.budget?{budget:R.budget}:{}),...(BASIS_TABS.includes(R.tab)?{basis:basisChoice()}:{}),...(repFilter()?{flt:repFilter()}:{}),...(R.tab==='tl'&&R.tlSort?{sort:R.tlSort}:{})};
     if(await putCompany({...strip(S.company),savedReports:[...savedReports().filter(x=>x.name!==name),item].slice(-30)})){S.rep.savedId=item.id;closeModal();toast('Report saved')}};
 }
-function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:x.tbAdj==='aje'?'aje':!!x.tbAdj,cls:x.cls||'',budget:x.budget||'',basis:x.basis||''});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
+function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:x.tbAdj==='aje'?'aje':!!x.tbAdj,cls:x.cls||'',budget:x.budget||'',basis:x.basis||'',flt:x.flt||null,...(x.sort?{tlSort:x.sort}:{})});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
 /** Is the report on screen still the saved one (same report, period and options)? */
-const savedMatches=x=>{const R=S.rep;return x.tab===R.tab&&x.period===R.period&&(x.compare||'')===(R.compare||'')&&(x.acct||'')===(R.acct||'')&&(x.tbAdj==='aje'?'aje':!!x.tbAdj)===(R.tbAdj==='aje'?'aje':!!R.tbAdj)&&(x.period!=='custom'||(x.from===R.from&&x.to===R.to))&&(!x.basis||x.basis===basisChoice())};
+const savedMatches=x=>{const R=S.rep;return x.tab===R.tab&&x.period===R.period&&(x.compare||'')===(R.compare||'')&&(x.acct||'')===(R.acct||'')&&(x.tbAdj==='aje'?'aje':!!x.tbAdj)===(R.tbAdj==='aje'?'aje':!!R.tbAdj)&&(x.period!=='custom'||(x.from===R.from&&x.to===R.to))&&(!x.basis||x.basis===basisChoice())&&TallyRepFilter.key(x.flt)===TallyRepFilter.key(repFilter())};
 async function deleteSaved(id){const x=savedReports().find(r=>r.id===id);if(!x||!await confirmBox('Delete this saved report?',x.name,'Delete'))return;if(await putCompany({...strip(S.company),savedReports:savedReports().filter(r=>r.id!==id)})){S.rep.savedId='';toast('Saved report deleted');renderMain()}}
 
 /* ---------- PDFs ---------- */
@@ -250,7 +292,7 @@ function pdfRows(r){
 }
 /** Draw reports into a PDF. Each report starts on a new page; long ones continue with the column heads repeated. */
 function reportsPdf(reports,{cover}={}){
-  const wide=reports.some(r=>(r.head||[]).length>4||(r.csv&&r.csv[0]&&r.csv[0][0]==='Account'&&r.csv[0].length===9));
+  const wide=reports.some(r=>r.wide||(r.head||[]).length>4||(r.csv&&r.csv[0]&&r.csv[0][0]==='Account'&&r.csv[0].length===9));
   const doc=TallyPDF.create({landscape:wide}),W0=doc.width,H0=doc.height,M=40;
   // The PDF starts with one blank page: use it for the first page drawn.
   let fresh=doc.pageCount()===1;const page=()=>{if(fresh)fresh=false;else doc.addPage()};
@@ -297,8 +339,8 @@ function reportsPdf(reports,{cover}={}){
   for(let i=0;i<pages;i++){doc.goto(i);doc.text(W0-M,H0-24,`${i+1} / ${pages}`,{size:8,align:'right',color:'#888888'})}
   return doc.output();
 }
-const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor',bva:()=>'Budget vs actual',iv:()=>'Inventory valuation'};
-function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}${basisSub()}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
+const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor',bva:()=>'Budget vs actual',iv:()=>'Inventory valuation',tl:()=>'Transaction list'};
+function reportPdfNow(){const k=S.rep.tab,r=REPORT_FNS[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}${basisSub()}${filtSub()}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
 
 /* ---------- report package: several reports for a period, as one PDF ---------- */
 function packageForm(){
@@ -314,7 +356,7 @@ function packageForm(){
     const from=$('#pkFrom',f).value,to=$('#pkTo',f).value;if(!from||!to||from>to)throw new Error('Choose the period.');
     const keys=$$('[data-pk]',f).filter(x=>x.checked).map(x=>x.dataset.pk);if(!keys.length)throw new Error('Choose at least one report.');
     const keep={...S.rep},cmp=$('#pkCmp',f).value,out=[];
-    try{for(const k of keys){Object.assign(S.rep,{tab:k,period:'custom',from,to,compare:k==='bs'?(cmp==='prev'?'prevperiod':cmp):cmp});const r=({pl:rPL,bs:rBS,cf:rCF,tb:rTB,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(to)}`:'');out.push(r)}}
+    try{for(const k of keys){Object.assign(S.rep,{tab:k,period:'custom',from,to,compare:k==='bs'?(cmp==='prev'?'prevperiod':cmp):cmp,flt:null});const r=({pl:rPL,bs:rBS,cf:rCF,tb:rTB,ar:()=>rAging('invoice'),ap:()=>rAging('bill')})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(to)}`:'');out.push(r)}}
     finally{Object.assign(S.rep,keep)}
     const sub=`${fmtDate(from)} – ${fmtDate(to)}`;
     return{pdf:reportsPdf(out,{cover:{title:'Financial reports',sub,note:$('#pkNote',f).value.trim()}}),name:`${S.company.name.replace(/[^\w\s-]+/g,'').trim().replace(/\s+/g,'-')||'reports'}_reports_${from}_${to}.pdf`,sub};
@@ -413,12 +455,12 @@ function nameReport({title,col,rows,cols,name,empty,note}){
   const csv=[[col,...cols.map(c=>c.label)],...rows.map(r=>[r.label,...r.vals.map(v=>typeof v==='number'?r2(v):v===null?'':v)]),['Total',...tot.map(v=>v===null?'':v)]];
   const cell=(v,c)=>v===null||v===undefined?'<span class="muted">—</span>':c.kind==='qty'?(+v||0).toLocaleString(LOC(),{maximumFractionDigits:2}):c.kind==='pct'?`${(+v||0).toLocaleString(LOC(),{maximumFractionDigits:1})}%`:mcell(v);
   const body=rows.map(r=>`<tr>${r.contact?`<td><button class="link" data-contact="${esc(r.contact)}" translate="no">${esc(r.label)}</button></td>`:r.item?`<td><button class="link" data-item="${esc(r.item)}" translate="no">${esc(r.label)}</button></td>`:`<td>${esc(r.label)}</td>`}${r.vals.map((v,i)=>`<td class="n">${cell(v,cols[i])}</td>`).join('')}</tr>`).join('');
-  return{html:`<div class="report" style="max-width:none">${rh(esc(title),`${fmtDate(from)} – ${fmtDate(to)} · before sales tax${basisSub()}`)}<div class="tbl-wrap"><table><thead><tr><th>${esc(col)}</th>${cols.map(c=>`<th class="n">${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${cols.length+1}" class="muted" style="padding:16px">${esc(empty)}</td></tr>`}</tbody>${rows.length?`<tfoot><tr class="grand"><td>Total</td>${tot.map((v,i)=>`<td class="n">${v===null?'':cell(v,cols[i])}</td>`).join('')}</tr></tfoot>`:''}</table></div>${note?`<div class="muted" style="font-size:12.5px;padding:10px 12px 12px">${esc(note)}</div>`:''}</div>`,csv,name:`${name}_${from}_${to}`};
+  return{html:`<div class="report" style="max-width:none">${rh(esc(title),`${fmtDate(from)} – ${fmtDate(to)} · before sales tax${basisSub()}${filtSub()}`)}<div class="tbl-wrap"><table><thead><tr><th>${esc(col)}</th>${cols.map(c=>`<th class="n">${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${cols.length+1}" class="muted" style="padding:16px">${esc(empty)}</td></tr>`}</tbody>${rows.length?`<tfoot><tr class="grand"><td>Total</td>${tot.map((v,i)=>`<td class="n">${v===null?'':cell(v,cols[i])}</td>`).join('')}</tr></tfoot>`:''}</table></div>${note?`<div class="muted" style="font-size:12.5px;padding:10px 12px 12px">${esc(note)}</div>`:''}</div>`,csv,name:`${name}_${from}_${to}`};
 }
 function byContactOn(types){
   // From the report's postings, so on the cash basis an invoice or bill counts each time it's paid.
   const{from,to}=S.rep,by={},per=new Map(),inc=types.includes('Income'),ty=new Map(S.accounts.map(a=>[a.id,a.type]));
-  for(const p of repPostings()){if(p.date<from||p.date>to||p.e.opening||!types.includes(ty.get(p.account)))continue;per.set(p.e,(per.get(p.e)||0)+(inc?p.credit-p.debit:p.debit-p.credit))}
+  for(const p of repPostingsF()){if(p.date<from||p.date>to||p.e.opening||!types.includes(ty.get(p.account)))continue;per.set(p.e,(per.get(p.e)||0)+(inc?p.credit-p.debit:p.debit-p.credit))}
   for(const[e,amt]of per){if(Math.abs(amt)<0.005)continue;const k=e.contactId||'';const o=by[k]=by[k]||{amt:0,n:0};o.amt+=amt;o.n++}
   return by;
 }
@@ -439,3 +481,83 @@ function rSalesByItem(){
   const rows=Object.entries(by).map(([k,o])=>({label:k?S.items.find(i=>i.id===k).name:T('Not linked to a product or service'),item:k||'',vals:[r2(o.qty),r2(o.amt),k&&o.qty?r2(o.amt/o.qty):null]})).filter(r=>Math.abs(r.vals[1])>=0.005).sort((a,b)=>(a.item?0:1)-(b.item?0:1)||b.vals[1]-a.vals[1]);
   return nameReport({title:'Sales by product or service',col:'Product or service',name:'sales-by-product',rows,cols:[{label:'Quantity',kind:'qty',sum:false},{label:'Sales'},{label:'Average price',sum:false}],empty:'No invoices or sales receipts in this period.',note:'From invoices, sales receipts and credit notes. Deposits recorded without one aren’t included.'});
 }
+
+/* ---------- filters: the Filter button and the list of what's filtered ---------- */
+/** The kinds of filter a report offers, with the choices for each. Tags join this list once transactions have them. */
+function filterKinds(){
+  const tab=S.rep.tab,byName=(a,b)=>a.name.localeCompare(b.name),cs=S.company.classes||[];
+  const ks=[
+    {k:'cust',label:'Customers',none:'No customer',opts:S.contacts.filter(c=>c.kind==='customer').sort(byName).map(c=>[c.id,c.name])},
+    {k:'vend',label:'Vendors',none:'No vendor',opts:S.contacts.filter(c=>c.kind==='vendor').sort(byName).map(c=>[c.id,c.name])},
+    {k:'acct',label:'Accounts',opts:sortAccts(S.accounts).filter(a=>tab==='gl'||tab==='tl'||isPL(a.type)).map(a=>[a.id,(a.code?a.code+' ':'')+a.name])},
+  ];
+  if(cs.length&&!(tab==='pl'&&S.rep.compare==='byclass'))ks.push({k:'cls',label:clsWords().many,none:clsWords().none,opts:cs.map(c=>[c.id,c.name])});
+  return ks.filter(x=>x.opts.length);
+}
+/** "Customers: A, B · Accounts: Rent" under the toolbar, with a way to clear it. */
+function filterBar(){
+  const f=repFilter();if(!f)return '';
+  const names={cust:id=>id==='__none'?T('No customer'):contactName(id),vend:id=>id==='__none'?T('No vendor'):contactName(id),acct:id=>acctName(id),cls:id=>id==='__none'?clsWords().none:clsName(id),tag:id=>id};
+  const lbl={cust:T('Customers'),vend:T('Vendors'),acct:T('Accounts'),cls:clsWords().many,tag:T('Tags')};
+  const parts=TallyRepFilter.KEYS.filter(k=>f[k]).map(k=>`<span><b>${esc(lbl[k])}:</b> <span translate="no">${esc(f[k].slice(0,4).map(names[k]).join(', '))}</span>${f[k].length>4?` +${f[k].length-4}`:''}</span>`);
+  return `<div class="toolbar rep-filters"><span class="muted">Filtered by</span>${parts.join('<span class="muted">·</span>')}<span class="grow"></span><button class="btn sm ghost" data-act="repfltclear">Clear filters</button></div>`;
+}
+/** The Filter form: a searchable list of checkboxes for each kind. Nothing ticked in a kind = no filter on it. */
+function filterForm(){
+  const cur=TallyRepFilter.clean(S.rep.flt)||{},ks=filterKinds();
+  const sec=x=>`<div class="rf-sec" data-rfk="${x.k}"><div class="acclib-head"><b>${esc(T(x.label))}</b><span class="muted" data-rfn></span><button type="button" class="btn sm ghost" data-rfnone>Clear</button></div>
+    ${x.none?`<label class="acclib-row rf-row"><input type="checkbox" value="__none" ${(cur[x.k]||[]).includes('__none')?'checked':''}><span>${esc(T(x.none))}</span></label>`:''}
+    ${x.opts.map(([id,n])=>`<label class="acclib-row rf-row" data-rfname="${esc(n.toLowerCase())}"><input type="checkbox" value="${esc(id)}" ${(cur[x.k]||[]).includes(id)?'checked':''}><span translate="no">${esc(n)}</span></label>`).join('')}</div>`;
+  const f=openModal('Filter this report',`<div class="muted" style="font-size:13px">Tick what to include. Different kinds of filter add up: a customer and an account shows that customer’s amounts in that account. Customers and vendors together show both.</div>
+    <input type="search" id="rfQ" placeholder="${esc(T('Find a name or account'))}" aria-label="${esc(T('Find a name or account'))}">
+    <div class="acclib">${ks.map(sec).join('')}</div>`,
+    `<button type="button" class="btn" data-rfall>Clear all</button><span class="grow"></span><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Apply</button>`,'wide');
+  f.classList.add('keep'); // filtering only changes what's on screen, so a view-only role can use it
+  const count=()=>$$('[data-rfk]',f).forEach(s=>{const n=$$('input:checked',s).length;$('[data-rfn]',s).textContent=n?`· ${n}`:''});count();
+  f.addEventListener('change',count);
+  $('#rfQ',f).oninput=()=>{const q=$('#rfQ',f).value.trim().toLowerCase();$$('[data-rfname]',f).forEach(r=>{r.hidden=!!q&&!r.dataset.rfname.includes(q)})};
+  $$('[data-rfnone]',f).forEach(b=>b.onclick=()=>{$$('input',b.closest('[data-rfk]')).forEach(i=>i.checked=false);count()});
+  $('[data-rfall]',f).onclick=()=>{$$('[data-rfk] input',f).forEach(i=>i.checked=false);count()};
+  f.onsubmit=e=>{e.preventDefault();const out={};
+    for(const s of $$('[data-rfk]',f)){const ids=$$('input:checked',s).map(i=>i.value);if(ids.length)out[s.dataset.rfk]=ids}
+    // A kind this report doesn't offer (a class on a P&L by class) is kept for the reports that do.
+    for(const k of TallyRepFilter.KEYS)if(!ks.some(x=>x.k===k)&&cur[k])out[k]=cur[k];
+    S.rep.flt=TallyRepFilter.clean(out);closeModal();renderMain()};
+}
+
+/* ---------- transaction list ----------
+   Every transaction in the period: date, type, number, name, memo, account, the other accounts (split), class and
+   amount. The account is the bank, card, A/R or A/P side; the amount is the transaction's total. With an account filter
+   the account column shows the filtered accounts and the amount is their net change (debits positive, credits negative). */
+const TL_COLS=[['date','Date'],['type','Type'],['num','No.'],['name','Name'],['memo','Memo'],['acct','Account'],['split','Other accounts'],['cls','Class'],['amt','Amount']];
+function rTxList(){
+  const{from,to}=S.rep,f=repFilter(),hasCls=(S.company.classes||[]).length>0;
+  const main=new Set(S.accounts.filter(a=>['bank','card','ar','ap'].includes(a.detail)).map(a=>a.id));
+  const an=id=>{const a=acct(id);return a?(a.code?a.code+' ':'')+a.name:'(deleted account)'};
+  const rows=TallyRepFilter.txRows(repPostingsF(),{from,to,filter:f,isMain:id=>main.has(id)}).map(r=>{const e=r.e;return{...r,
+    type:tl(TLABEL[e.type]||e.type),num:e.ref||'',name:contactName(e.contactId)||(e.type==='payrun'?tl('Payroll'):''),memo:e.memo||'',
+    acct:r.accounts.map(an).join(', '),split:r.split.length>1?tl(`${r.split.length} accounts`):r.split.map(an).join(''),splitAll:r.split.map(an).join(', '),cls:e.cls?clsName(e.cls):''}});
+  const so=S.rep.tlSort&&TL_COLS.some(c=>c[0]===S.rep.tlSort.col)?S.rep.tlSort:{col:'date',dir:'asc'};
+  const sorted=TallyRepFilter.sortRows(rows,r=>so.col==='amt'?r.amount:so.col==='split'?r.splitAll:r[so.col],so.dir);
+  const cols=TL_COLS.filter(c=>c[0]!=='cls'||hasCls).map(c=>c[0]==='cls'?[c[0],clsWords().one]:c);
+  const total=r2(sorted.reduce((s,r)=>s+r.amount,0)),max=shownCount('tl',sorted.length,500);
+  const th=([k,l])=>`<th class="${k==='amt'?'n':''}"><button type="button" class="link rep-sort" data-tlsort="${k}" aria-sort="${so.col===k?(so.dir==='asc'?'ascending':'descending'):'none'}"><span>${esc(l)}</span>${so.col===k?`<span aria-hidden="true">${so.dir==='asc'?' ▲':' ▼'}</span>`:''}</button></th>`;
+  const td=(r,k)=>k==='date'?`<td style="white-space:nowrap">${fmtDate(r.date)}</td>`:k==='type'?`<td style="white-space:nowrap">${esc(r.type)}</td>`:k==='num'?`<td class="mono">${esc(r.num)}</td>`
+    :k==='amt'?`<td class="n">${mcell(r.amount)}</td>`:k==='split'?`<td class="trunc muted" translate="no" title="${esc(r.splitAll)}">${esc(r.split)}</td>`:`<td class="trunc${k==='memo'?' muted':''}" translate="no">${esc(r[k])}</td>`;
+  const body=sorted.slice(0,max).map(r=>`<tr class="click" data-entry="${r.e.id}">${cols.map(([k])=>td(r,k)).join('')}</tr>`).join('');
+  const csv=[cols.map(c=>c[1]),...sorted.map(r=>cols.map(([k])=>k==='date'?r.date:k==='amt'?r.amount:k==='split'?r.splitAll:r[k]))];
+  csv.push(cols.map(([k],i)=>i===0?'Total':k==='amt'?total:''));
+  const sub=`${fmtDate(from)} – ${fmtDate(to)}${basisSub()}${filtSub()}`,n=sorted.length;
+  const html=`<div class="report wide" style="max-width:none">${rh('Transaction list',sub)}<div class="tbl-wrap"><table class="gl tl"><thead><tr>${cols.map(th).join('')}</tr></thead><tbody>
+    ${body||`<tr><td colspan="${cols.length}" class="muted" style="padding:16px">No transactions in this period.</td></tr>`}${moreRow('tl',max,n,cols.length,'Export CSV and PDF include every line.')}</tbody>
+    ${n?`<tfoot><tr class="grand"><td colspan="${cols.length-1}">${n} transaction${n===1?'':'s'}</td><td class="n">${money(total)}</td></tr></tfoot>`:''}</table></div>
+    ${f&&f.acct?`<div class="muted" style="font-size:12.5px;padding:8px 16px 14px">With an account filter, the amount is the change in those accounts: debits are positive, credits negative.</div>`:''}</div>`;
+  // PDF: one line for each transaction (date, type, number, name and account), then the amount.
+  const pdf=sorted.map(r=>({cls:'item',data:true,label:`${fmtDate(r.date)}  ${r.type}${r.num?' #'+r.num:''}  ${r.name||r.memo}  · ${r.acct}`,cells:[r.amount]}));
+  pdf.push({cls:'grand',label:'Total',cells:[total]});
+  return{html,csv,name:`transaction-list_${from}_${to}${repBasis()==='cash'?'_cash':''}`,title:'Transaction list',sub,head:['Amount'],rows:pdf,wide:true};
+}
+function tlSort(col){const s=S.rep.tlSort||{col:'date',dir:'asc'};S.rep.tlSort={col,dir:s.col===col&&s.dir==='asc'?'desc':'asc'};renderMain()}
+
+/** Every report on the Reports page, by tab. */
+const REPORT_FNS={pl:()=>rPL(),bs:()=>rBS(),cf:()=>rCF(),tb:()=>tbReport(),gl:()=>rGL(),ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:()=>rSalesByCustomer(),si:()=>rSalesByItem(),ev:()=>rExpensesByVendor(),bva:()=>rBudgetVsActual(),iv:()=>rInventoryValuation(),tl:()=>rTxList()};
