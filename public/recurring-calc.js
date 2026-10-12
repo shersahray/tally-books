@@ -56,7 +56,7 @@
 
   /** The lines of a journal entry with an amount, as posting lines (debit and credit rounded to cents). */
   const journalLines = lines => (Array.isArray(lines) ? lines : []).filter(l => l && (cents(l.debit) || cents(l.credit)))
-    .map(l => ({ account: String(l.account || ''), debit: cents(l.debit) / 100, credit: cents(l.credit) / 100, memo: String(l.memo || '').slice(0, 500) }));
+    .map(l => ({ account: String(l.account || ''), debit: cents(l.debit) / 100, credit: cents(l.credit) / 100, memo: String(l.memo || '').slice(0, 500), ...(typeof l.cls === 'string' ? { cls: l.cls.slice(0, 40) } : {}) }));
 
   /** What's wrong with a journal entry's lines, in plain words, or '' when it balances. */
   function journalProblem(lines) {
@@ -86,5 +86,12 @@
     return 0;
   }
 
-  return { dayFor, after, isDue, plan, journalLines, journalProblem, transferLines, total };
+  /** What a template passes to each transaction it makes besides its lines: its class and its tags (only those the company still has). */
+  function carry(r, knownTags) {
+    const k = knownTags ? new Set(knownTags) : null;
+    const tags = (Array.isArray(r && r.tags) ? r.tags : []).filter(id => !k || k.has(id));
+    return { ...(r && r.cls ? { cls: r.cls } : {}), ...(tags.length ? { tags } : {}) };
+  }
+
+  return { dayFor, after, isDue, plan, journalLines, journalProblem, transferLines, total, carry };
 });

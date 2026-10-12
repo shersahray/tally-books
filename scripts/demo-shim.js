@@ -8,7 +8,7 @@
   const DATA = window.__TALLY_DEMO__;
   const PROVS = DATA.provinces, DEFAULT_ACCOUNTS = DATA.defaultAccounts;
   // Every list in the books (src/server/db.js COLLECTIONS), so products, projects, purchase orders and the rest can be added too.
-  const COLS = ['accounts', 'contacts', 'items', 'budgets', 'trips', 'pos', 'projects', 'times', 'assets', 'vehicles', 'employees', 'rules', 'recurring', 'docs', 'estimates', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts', 'attachments', 'questions'];
+  const COLS = ['accounts', 'contacts', 'items', 'budgets', 'trips', 'pos', 'projects', 'times', 'assets', 'vehicles', 'employees', 'rules', 'recurring', 'docs', 'delayed', 'estimates', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts', 'attachments', 'questions'];
   const clone = o => JSON.parse(JSON.stringify(o));
   const cos = DATA.companies.map(c => ({ ...c.entry }));
   const books = {};
@@ -66,6 +66,13 @@
     if (w.op === 'set') { const rec = { ...w.data, id: w.id }; if (i >= 0) arr[i] = rec; else arr.push(rec); }
     else {
       if (i >= 0) arr.splice(i, 1);
+    }
+    // Delayed charges and credits follow the invoice they're on (delayed-calc.js), as on the server.
+    if (w.collection === 'docs' && typeof TallyDelayed !== 'undefined') {
+      const dl = b.delayed || (b.delayed = []);
+      for (const u of TallyDelayed.sync(dl, w.id, w.op === 'set' ? w.data : null)) { const j = dl.findIndex(x => x.id === u.id); if (j >= 0) dl[j] = { ...u.data, id: u.id }; }
+    }
+    if (w.op !== 'set') {
       if (w.collection === 'entries') b.bankTxns.forEach(t => { if (t.entryId === w.id) { t.status = 'new'; t.entryId = ''; } });
     }
   }

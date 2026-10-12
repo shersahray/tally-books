@@ -596,3 +596,7 @@ tr.tag-grp td{background:var(--surface-2)}
 /* Bill approvals */
 .ap-hist{margin:6px 0 0;padding-left:18px;font-size:13px;display:flex;flex-direction:column;gap:4px}
 .ap-pick{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;padding:4px 0}
+/* Delayed charges and credits waiting to be added to an invoice */
+.dlcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:8px}
+.dlcard{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface-2);display:flex;flex-direction:column;gap:4px;font-size:13.5px;min-width:0}
+.dlcard.dlall{justify-content:center;align-items:flex-start;background:transparent;border-style:dashed}
