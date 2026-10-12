@@ -1396,6 +1396,24 @@ function createApp(opts) {
       });
       return { ok: true, rev: docIds.length ? ctx.bump() : ctx.rev };
     }],
+    // Batch "Mark as sent": invoices that went out some other way (by hand, by post, from another mailbox) get the
+    // same "sent" record an email adds, with no address. Like the email record, it isn't a change to the books,
+    // so it's allowed in a closed period.
+    ['POST', /^\/docs\/mark-sent$/, async (ctx, req) => {
+      const body = (await readJson(req)) || {};
+      if (!Array.isArray(body.docIds) || !body.docIds.length) throw new ValidationError('Pick at least one invoice.');
+      if (body.docIds.length > 1000) throw new ValidationError('Mark at most 1,000 invoices at a time.');
+      const ids = [...new Set(body.docIds.map(x => String(x).slice(0, 120)))];
+      const docs = ids.map(id => ctx.store.get('docs', id));
+      if (docs.some(d => !d)) throw new ValidationError('One of those invoices no longer exists. Refresh and try again.', 404);
+      if (docs.some(d => d.kind !== 'invoice')) throw new ValidationError('Only invoices can be marked as sent.');
+      const at = Date.now(), by = ctx.user.name || ctx.user.username;
+      ctx.store.transaction(() => {
+        for (const d of docs) ctx.store.put('docs', d.id, { ...d, sent: [...(d.sent || []).slice(-19), { at, to: '', by, what: 'marked' }] });
+        ctx.store.audit(ctx.user, 'email', { summary: `marked ${docs.length} invoice${docs.length === 1 ? '' : 's'} as sent: ${docs.map(d => d.number || d.id).join(', ').slice(0, 160)}` });
+      });
+      return { ok: true, marked: docs.length, rev: ctx.bump() };
+    }],
     // ---------- online payments (Stripe) ----------
     ['GET', /^\/pay$/, ctx => { const p = stripe.publicStripe(ctx.store.getSetting('stripe')); return ctx.user.role === 'client' ? { configured: p.configured } : p; }],
     ['PUT', /^\/pay$/, async (ctx, req) => {

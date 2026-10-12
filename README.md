@@ -20,6 +20,7 @@ It runs two ways from the same code:
   - You pick the fiscal year-end, and can copy the chart of accounts from another client.
   - Archive former clients to hide them without deleting anything.
 - **Sales:** invoices with line items and sales tax, partial and full payments, and a status on every invoice (open, partial, overdue, paid).
+  - **Batch actions:** tick invoices, credit notes and sales receipts on the Sales list (or all of them) and send them all by email, download them as one PDF, send reminders for the overdue ones, or mark invoices as sent. Emails go one at a time with a progress count; one that fails doesn't stop the rest, and a summary lists what was sent, skipped (no email address) and failed, with the reason. Bills have no PDF, so Expenses has no batch actions.
 - **Expenses:** vendor bills, bill payments, expenses paid by bank or credit card, and deposits.
 - **Banking:** transfers between accounts, credit card payments, and a register for each account with a running balance.
 - **Bank statement import:** import CSV, OFX, QFX or QBO files downloaded from online banking, including headerless CSVs like TD's and CIBC's. Lines already imported are skipped, so date ranges can overlap.
@@ -303,6 +304,7 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   sales-extras.js  Estimates, recurring transactions, online payments
   yearend.js       Year-end package (.zip) for the accountant; opening a client's books as a new company
   docout.js        Invoice, credit note and statement PDFs; email; statements and reminders
+  batch.js         Batch actions on the Sales list: which ticked documents each action takes, sending one at a time
   convert-parse.js Reading QuickBooks and Sage exports (CSV, .xlsx, .zip) into an import plan
   convert.js       The Bring over from QuickBooks or Sage wizard
   importer.js      Import data: matching spreadsheet columns, checking rows, grouping lines into documents

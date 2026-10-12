@@ -82,8 +82,10 @@
         if (!sz || !sz.w || !sz.h) return null;
         const k = Math.min(maxW / sz.w, maxH / sz.h);
         const w = sz.w * k, h = sz.h * k;
-        const name = 'Im' + (images.length + 1);
-        images.push({ name, bytes: b, ...sz });
+        // The same image again (the logo on each invoice of a combined PDF) is stored once.
+        const seen = images.find(im => im.src === bytes);
+        const name = seen ? seen.name : 'Im' + (images.length + 1);
+        if (!seen) images.push({ name, bytes: b, src: bytes, ...sz });
         cur.ops.push(`q ${num(w)} 0 0 ${num(h)} ${num(x)} ${num(PH - y - h)} cm /${name} Do Q`);
         return { w, h };
       },
