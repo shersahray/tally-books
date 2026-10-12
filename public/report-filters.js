@@ -9,7 +9,8 @@
  * vendors: a transaction has one name, so those two together mean "this customer or that vendor".
  * Tags don't exist in the books yet; a filter on them works once transactions carry tags: [ids].
  *
- * Postings are the app's: { e (the transaction), account, debit, credit, memo, date }. ctx tells the module about names:
+ * Postings are the app's: { e (the transaction), account, debit, credit, memo, date, cls }. cls is the line's class
+ * (classes on each line) or else the transaction's; postings without it use the transaction's. ctx tells the module about names:
  * { kind: contactId -> 'customer' | 'vendor' | '', projCust: projectId -> customer id or '' }.
  */
 (function (root, factory) {
@@ -44,6 +45,8 @@
     if (e.proj) { const c = ctx.projCust(e.proj); if (c) return c; }
     return '';
   }
+  /** A posting's class ('' for none): its own when it carries one, else its transaction's. */
+  const clsOf = p => (p.cls !== undefined ? p.cls || '' : (p.e && p.e.cls) || '');
   /** The vendor on a transaction, or ''. */
   const vendOf = (e, ctx) => (e.contactId && ctx.kind(e.contactId) === 'vendor' ? e.contactId : '');
 
@@ -56,7 +59,7 @@
     return p => {
       const e = p.e;
       if (ac && !ac.has(p.account)) return false;
-      if (cl && !cl.has(e.cls || '__none')) return false;
+      if (cl && !cl.has(clsOf(p) || '__none')) return false;
       if (tg && !(Array.isArray(e.tags) && e.tags.some(t => tg.has(t)))) return false;
       if (cu || ve) {
         const okC = cu && cu.has(custOf(e, ctx) || '__none'), okV = ve && ve.has(vendOf(e, ctx) || '__none');
@@ -124,7 +127,9 @@
         shown = [main.account]; amount = r2(ps.reduce((s, p) => s + p.debit, 0));
       }
       const all = [...new Set((e.lines || []).map(l => l.account).concat(accts))];
-      out.push({ e, date: ps[0].date, accounts: shown, split: all.filter(a => !shown.includes(a)), amount });
+      // classes: the classes on the transaction's lines in the report (several when it's split by class).
+      const classes = [...new Set(ps.map(clsOf).filter(Boolean))];
+      out.push({ e, date: ps[0].date, accounts: shown, split: all.filter(a => !shown.includes(a)), amount, classes });
     }
     return out;
   }
@@ -145,5 +150,5 @@
     return m;
   }
 
-  return { KEYS, clean, key, without, custOf, vendOf, matcher, apply, rankCustomers, custTest, custKey, txRows, sortRows, sums };
+  return { KEYS, clean, key, without, custOf, vendOf, clsOf, matcher, apply, rankCustomers, custTest, custKey, txRows, sortRows, sums };
 });

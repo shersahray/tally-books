@@ -130,7 +130,8 @@ const strip=o=>{const c={...o};delete c.id;return c};
 
 /* ---------- ledger math ---------- */
 let PC=null;
-function postings(){if(PC)return PC;PC=[];for(const e of S.entries)for(const l of(e.lines||[]))PC.push({e,account:l.account,debit:+l.debit||0,credit:+l.credit||0,memo:l.memo||'',date:e.date});return PC}
+// cls: the line's own class when it has one (classes on each line), else the transaction's ('' = none).
+function postings(){if(PC)return PC;PC=[];for(const e of S.entries)for(const l of(e.lines||[]))PC.push({e,account:l.account,debit:+l.debit||0,credit:+l.credit||0,memo:l.memo||'',date:e.date,cls:(l.cls!=null?l.cls:e.cls)||''});return PC}
 const acct=id=>S.accounts.find(a=>a.id===id);
 // Look up a transaction by id without scanning every transaction (rebuilt whenever the books reload).
 let EB=null,EBsrc=null,EBn=-1;
@@ -975,8 +976,9 @@ function calcLines(rows,amt,purchase){
   return{ls,sub,tax,parts,all:allStd,total:r2(sub+tax)};
 }
 // Total per account and tax code, so each posting line remembers its tax code for the sales tax return.
-function groupBy(ls){const m={};ls.forEach(l=>{const k=l.account+'|'+taxCodeOf(l);m[k]=r2((m[k]||0)+(l.post??l.net))});return m}
-const gLine=(k,v,side)=>{const[account,taxCode]=k.split('|');return side==='credit'?(v>=0?{account,debit:0,credit:v,taxCode}:{account,debit:-v,credit:0,taxCode}):(v>=0?{account,debit:v,credit:0,taxCode}:{account,debit:0,credit:-v,taxCode})};
+// With classes on each line, lines of different classes stay apart so each posting line keeps its class.
+function groupBy(ls){const m={};ls.forEach(l=>{const k=l.account+'|'+taxCodeOf(l)+(l.cls!=null?'|'+l.cls:'');m[k]=r2((m[k]||0)+(l.post??l.net))});return m}
+const gLine=(k,v,side)=>{const[account,taxCode,cls]=k.split('|'),o=side==='credit'?(v>=0?{account,debit:0,credit:v,taxCode}:{account,debit:-v,credit:0,taxCode}):(v>=0?{account,debit:v,credit:0,taxCode}:{account,debit:0,credit:-v,taxCode});if(cls!==undefined)o.cls=cls;return o};
 const delBtn=show=>show?`<button type="button" class="btn danger left" data-del>Delete</button>`:'<span class="left"></span>';
 const saveFoot=(del,label='Save',extra='')=>`${delBtn(del)}${extra}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${label}</button>`;
 function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${label}" account in Chart of accounts first.`,true);return a}
@@ -1026,7 +1028,7 @@ function docPostLines(kind,c,ctl,fx){
   return lines;
 }
 /** A saved document's record: its lines as entered, and its totals. */
-const docRecord=(c)=>({lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),...(l.cost!=null?{cost:l.cost}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
+const docRecord=(c)=>({lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),...(l.cost!=null?{cost:l.cost}:{}),...(l.cls!=null?{cls:l.cls}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
 function docForm(kind,doc,preset){
   if(doc&&doc.carried)return carriedDocForm(kind,doc);
   const sale=saleKind(kind),cred=isCreditKind(kind),sr=kind==='sreceipt',L=DOCL[kind],ck=sale?'customer':'vendor',t=today();
@@ -1048,16 +1050,18 @@ function docForm(kind,doc,preset){
     ${settledNote?`<div class="banner" style="margin:0"><span>${settledNote}</span></div>`:''}${doc&&kind==='invoice'?S.entries.filter(e=>e.type==='depapply'&&e.applyTo===doc.id).map(e=>`<div class="muted" style="font-size:13px"><span>Deposit received</span> ${money(e.amount)} · <span>from estimate</span> <span class="mono">${esc((S.estimates.find(x=>x.id===e.estimateId)||{}).number||'')}</span></div>`).join(''):''}`,
     `${delBtn(!!doc)}${doc&&typeof docActions==='function'?docActions(doc):''}<button type="button" class="btn" data-close>Cancel</button>${doc&&!cred&&docStatus(doc).bal>0&&!(typeof apHeld==='function'&&apHeld(doc))?`<button type="button" class="btn" data-paynow>${sale?'Receive payment':'Pay bill'}</button>`:''}${doc&&cred&&docStatus(doc).bal>0?'<button type="button" class="btn" data-refund>Refund</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'dC');presetContact(f,'dC',preset);
-  let rows=[];const cols=[...itemCol(sale,()=>!!contactCode()),{key:'desc',label:'Description',type:'text'},{key:'account',label:sale?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:sale?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
+  const perLine=clsPerLine(d)&&!!$('#dCls',f);
+  let rows=[];const cols=[...itemCol(sale,()=>!!contactCode()),{key:'desc',label:'Description',type:'text'},{key:'account',label:sale?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:sale?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},...(perLine?[clsCol()]:[]),{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
   const contactCode=()=>contact($('#dC',f).value)?.taxCode||'';
-  cols.defaults=()=>({qty:1,taxCode:contactCode()||'std',account:defA});
+  cols.defaults=()=>({qty:1,taxCode:contactCode()||'std',account:defA,...(perLine?{cls:topCls(f,'dCls')}:{})});
   const totalNow=()=>calcLines(rows,x=>(+x.qty||0)*(+x.rate||0),!sale).total;
   // Another currency: the customer's or vendor's (fixed once the document has payments), with the day's exchange rate.
   const docCurNow=()=>doc?doc.currency||'':contactCur($('#dC',f).value);
   const showHome=()=>{const el=$('[data-fxhome]',f);if(!el)return;const cur=docCurNow(),r=FXW?FXW.rate():1;el.textContent=cur&&r>0?`${T('Total in Canadian dollars:')} ${money(r2(totalNow()*r))}`:''};
   let FXW=null;
-  const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{rows=r;const c=calcLines(r,x=>(+x.qty||0)*(+x.rate||0),!sale);setTotals(f,c);const cur=docCurNow();if(cur&&typeof moneyC==='function'){$('[data-t=sub]',f).textContent=moneyC(c.sub,cur);$('[data-t=tax]',f).textContent=moneyC(c.tax,cur);$('[data-t=tot]',f).textContent=moneyC(c.total,cur)}showHome()});
+  const le=lineEditor($('[data-le]',f),cols,perLine?withLineCls(d.lines,d.cls):d.lines,r=>{rows=r;const c=calcLines(r,x=>(+x.qty||0)*(+x.rate||0),!sale);setTotals(f,c);const cur=docCurNow();if(cur&&typeof moneyC==='function'){$('[data-t=sub]',f).textContent=moneyC(c.sub,cur);$('[data-t=tax]',f).textContent=moneyC(c.tax,cur);$('[data-t=tot]',f).textContent=moneyC(c.total,cur)}showHome()});
   if(typeof wireFx==='function')FXW=wireFx(f,'dFx',docCurNow,'#dD',showHome);
+  if(perLine)wireLineCls(f,'dCls');
   // Credits: which open invoices (or bills) of this customer (or vendor) the credit is used on.
   const mine=a=>(d.applied||[]).find(x=>x.docId===a)?.amount||0;
   const drawApply=()=>{
@@ -1242,12 +1246,15 @@ function moneyForm(kind,entry,preset){
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="mMemo">Memo</label><textarea id="mMemo">${esc(src?.memo||'')}</textarea></div>${totalsHTML()}</div>`,
     saveFoot(!!entry,'Save',preset&&preset.recurringId||typeof recMakeBtn!=='function'?'':recMakeBtn()),'wide');
   wireContactSelect(f,'mC');presetContact(f,'mC',preset);
-  const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions}];
+  const perLine=clsPerLine(fm)&&!!$('#mCls',f);
+  const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},...(perLine?[clsCol()]:[])];
   const mCode=()=>contact($('#mC',f).value)?.taxCode||(out?'std':'none');
-  cols.defaults=()=>({taxCode:mCode(),account:defA});
+  cols.defaults=()=>({taxCode:mCode(),account:defA,...(perLine?{cls:topCls(f,'mCls')}:{})});
   // A bank or card account in another currency: amounts are in that currency, at the day's exchange rate.
   let MFX=null;const mHome=()=>{const el=$('[data-fxhome]',f),cur=acctCur($('#mBank',f).value);if(el)el.textContent=cur&&MFX&&MFX.rate()>0?`${T('Total in Canadian dollars:')} ${money(r2(calcLines(le.read(),x=>+x.amount||0,out).total*MFX.rate()))}`:''};
-  const le=lineEditor($('[data-le]',f),cols,(fm.lines||[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}]).map(l=>({...l,taxCode:taxCodeOf(l)})),r=>{setTotals(f,calcLines(r,x=>+x.amount||0,out));if(MFX)mHome()});
+  const mRows=(fm.lines||[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}]).map(l=>({...l,taxCode:taxCodeOf(l)}));
+  const le=lineEditor($('[data-le]',f),cols,perLine?withLineCls(mRows,src?.cls):mRows,r=>{setTotals(f,calcLines(r,x=>+x.amount||0,out));if(MFX)mHome()});
+  if(perLine)wireLineCls(f,'mCls');
   if(typeof wireFx==='function'){MFX=wireFx(f,'mFx',()=>acctCur($('#mBank',f).value),'#mDate',mHome);$('#mBank',f).addEventListener('change',()=>MFX.refresh(false))}
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox(`Delete this ${kind}?`,'It will be removed from your books.'))return;await del('entries',entry.id);closeModal();toast(`${out?'Expense':'Deposit'} deleted`)};
   // Make recurring: a template from what's on the form now (saved or not).
@@ -1263,7 +1270,7 @@ function moneyForm(kind,entry,preset){
     const id=entry?.id||preset?.id||uid(),rcId=preset?.recurringId||entry?.recurringId;
     const mcur=acctCur(bank),mfx=mcur&&MFX?MFX.rate():1,fxx={};
     if(mcur){if(!(mfx>0))return f.err(`Enter the exchange rate for ${mcur}.`);const conv=toHome(lines,mfx,bank);lines.length=0;lines.push(...conv);const bl=lines.find(l=>l.account===bank);if(bl)bl.fx={cur:mcur,amt:Math.abs(c.total)};Object.assign(fxx,{currency:mcur,fx:mfx})}
-    if(await put('entries',id,{...fxx,type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',...classOf(f,'mCls'),...(typeof tagsOf==='function'?(tagsOf(f,'mTags')||(entry&&entry.tags?{tags:entry.tags}:{})):{}),...(typeof projOf==='function'?projOf(f,'mProj'):{}),...(typeof vehOf==='function'?vehOf(f,'mVeh'):{}),form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{}),...(rcId?{recurringId:rcId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
+    if(await put('entries',id,{...fxx,type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',...classOf(f,'mCls'),...(typeof tagsOf==='function'?(tagsOf(f,'mTags')||(entry&&entry.tags?{tags:entry.tags}:{})):{}),...(typeof projOf==='function'?projOf(f,'mProj'):{}),...(typeof vehOf==='function'?vehOf(f,'mVeh'):{}),form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst',...(l.cls!=null?{cls:l.cls}:{})}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{}),...(rcId?{recurringId:rcId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
   };
 }
 
@@ -1292,8 +1299,12 @@ function journalForm(entry,preset){
   const f=openModal(entry?'Journal entry':'New journal entry',`${preset&&preset.note||''}<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${src?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(src?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(src?.memo||'')}">`,true)}${classField('jCls',src?.cls)}${typeof projField==='function'?projField('jProj',src?.proj):''}${typeof vehField==='function'?vehField('jVeh',src?.veh):''}${typeof tagField==='function'?tagField('jTags',src?.tags):''}</div><div data-le></div>
     ${ME&&ME.role!=='client'?`<div class="fields" style="align-items:end"><label class="check" style="align-self:center"><input type="checkbox" id="jAdj" ${entry?.adjusting?'checked':''}> Adjusting entry (shown in its own column on the working trial balance)</label>
       ${fld('jRev','Reverse on (optional)',`<input type="date" id="jRev" value="${esc(entry?.reverseOn||'')}"><span class="hint">Posts the opposite entry on this date, for example the first day of the next period</span>`)}</div>`:''}<div class="totals"><div>Total debits</div><div data-j="d">0.00</div><div>Total credits</div><div data-j="c">0.00</div><div class="big">Difference</div><div class="big" data-j="x">0.00</div></div>`,saveFoot(!!entry,'Save',preset&&preset.recurringId||typeof recMakeBtn!=='function'||entry?.reversalOf?'':recMakeBtn()),'wide');
-  const rows=(src?.lines||[{},{}]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||''}));
-  const le=lineEditor($('[data-le]',f),[{key:'account',label:'Account',type:'acct'},{key:'memo',label:'Description',type:'text'},{key:'debit',label:'Debit',type:'num'},{key:'credit',label:'Credit',type:'num'}],rows,r=>{const d=r2(r.reduce((s,x)=>s+(+x.debit||0),0)),c=r2(r.reduce((s,x)=>s+(+x.credit||0),0));$('[data-j=d]',f).textContent=money(d);$('[data-j=c]',f).textContent=money(c);const x=$('[data-j=x]',f);x.textContent=money(r2(d-c));x.className='big '+(Math.abs(d-c)>0.004?'neg':'')});
+  const perLine=clsPerLine(src)&&!!$('#jCls',f);
+  const rows=(src?.lines||[{},{}]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||'',...(perLine?{cls:l.cls!=null?l.cls:src?.cls||''}:{})}));
+  const jCols=[{key:'account',label:'Account',type:'acct'},{key:'memo',label:'Description',type:'text'},...(perLine?[clsCol()]:[]),{key:'debit',label:'Debit',type:'num'},{key:'credit',label:'Credit',type:'num'}];
+  if(perLine)jCols.defaults=()=>({cls:topCls(f,'jCls')});
+  const le=lineEditor($('[data-le]',f),jCols,rows,r=>{const d=r2(r.reduce((s,x)=>s+(+x.debit||0),0)),c=r2(r.reduce((s,x)=>s+(+x.credit||0),0));$('[data-j=d]',f).textContent=money(d);$('[data-j=c]',f).textContent=money(c);const x=$('[data-j=x]',f);x.textContent=money(r2(d-c));x.className='big '+(Math.abs(d-c)>0.004?'neg':'')});
+  if(perLine)wireLineCls(f,'jCls');
   const mk=$('[data-mkrec]',f);if(mk)mk.onclick=()=>{const date=$('#jDate',f).value||today(),memo=$('#jMemo',f).value.trim();closeModal();
     recurringForm(null,'journal',{name:memo||T('Journal entry'),memo,ref:$('#jRef',f).value.trim(),lines:le.read().filter(l=>l.account||+l.debit||+l.credit),...recFrom(date)})};
   const rvId=entry?'rv_'+entry.id:'',hasRev=!!(entry&&S.entries.some(x=>x.id===rvId));
@@ -1302,7 +1313,7 @@ function journalForm(entry,preset){
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const ls=le.read().filter(l=>l.account||+l.debit||+l.credit);
     for(const l of ls){if(!l.account)return f.err('Every line with an amount needs an account.');if(+l.debit&&+l.credit)return f.err('Put each line in either Debit or Credit, not both.');if(+l.debit<0||+l.credit<0)return f.err('Use positive amounts; switch columns instead of using negatives.')}
-    const lines=ls.filter(l=>+l.debit||+l.credit).map(l=>({account:l.account,debit:r2(l.debit),credit:r2(l.credit),memo:l.memo||''}));
+    const lines=ls.filter(l=>+l.debit||+l.credit).map(l=>({account:l.account,debit:r2(l.debit),credit:r2(l.credit),memo:l.memo||'',...(perLine?{cls:l.cls||''}:{})}));
     const d=r2(lines.reduce((s,l)=>s+l.debit,0)),c=r2(lines.reduce((s,l)=>s+l.credit,0));
     if(lines.length<2||!d)return f.err('A journal entry needs at least one debit and one credit.');if(Math.abs(d-c)>0.004)return f.err(`Debits and credits are out by ${money(r2(d-c))}.`);
     const id=entry?.id||preset?.id||uid(),date=$('#jDate',f).value||today(),ref=$('#jRef',f).value.trim(),memo=$('#jMemo',f).value.trim();
@@ -1315,7 +1326,7 @@ function journalForm(entry,preset){
     const w=[{op:'set',collection:'entries',id,data}],rid='rv_'+id;
     // The reversing entry: the same lines with debits and credits swapped.
     if(reverseOn)w.push({op:'set',collection:'entries',id:rid,data:{type:'journal',date:reverseOn,ref:ref?ref+'-R':'',memo:`Reversal of ${memo||'journal entry'} (${fmtDate(date)})`,contactId:'',reversalOf:id,...(entry?.example?{example:true}:{}),
-      lines:lines.map(l=>({account:l.account,debit:l.credit,credit:l.debit,memo:l.memo})),created:(S.entries.find(x=>x.id===rid)||{}).created||Date.now()+1}});
+      lines:lines.map(l=>({account:l.account,debit:l.credit,credit:l.debit,memo:l.memo,...(l.cls!=null?{cls:l.cls}:{})})),created:(S.entries.find(x=>x.id===rid)||{}).created||Date.now()+1}});
     else if(S.entries.some(x=>x.id===rid))w.push({op:'delete',collection:'entries',id:rid});
     if(await batch(w)){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(reverseOn?`Journal entry saved, reversing on ${fmtDate(reverseOn)}`:'Journal entry saved')}};
 }
@@ -1403,12 +1414,25 @@ function classSelect(id,val,attrs=''){
 }
 function classField(id,val){const s=classSelect(id,val);return s?fld(id,esc(clsWords().one),s):''}
 const classOf=(f,id)=>{const s=$('#'+id,f);return s&&s.value?{cls:s.value}:{}};
+/* Classes on each line (company setting classPerLine), like QuickBooks Online: one bill or invoice split across classes.
+   The forms show a class column on their lines; the class at the top fills every line. The column also shows on a
+   transaction that already has line classes, so saving it with the setting off keeps them. */
+const clsPerLine=src=>(S.company.classes||[]).length>0&&(!!S.company.classPerLine||((src&&src.lines)||[]).some(l=>l&&l.cls!=null));
+function classOpts(val){const cs=(S.company.classes||[]).filter(c=>c.active!==false||c.id===val);return `<option value="">${esc(clsWords().none)}</option>${cs.map(c=>`<option value="${esc(c.id)}" ${c.id===val?'selected':''} translate="no">${esc(c.name)}</option>`).join('')}`}
+const clsCol=()=>({key:'cls',label:clsWords().one,type:'sel',options:classOpts});
+/** Lines for the editor, each with its class (else the transaction's class, as it posted before). */
+const withLineCls=(lines,top)=>lines.map(l=>({...l,cls:l.cls!=null?l.cls:top||''}));
+/** Picking a class at the top of a form sets it on every line. */
+function wireLineCls(f,topId){const top=$('#'+topId,f);if(top)top.addEventListener('change',()=>{$$('[data-le] [data-k=cls]',f).forEach(s=>s.value=top.value)})}
+const topCls=(f,id)=>($('#'+id,f)||{}).value||'';
 function classesPanel(){
   if(!ME||ME.role==='client')return '';
   const cs=S.company.classes||[],ro=ME.readOnly,w=clsWords(),lab=S.company.classLabel||'class';
-  const used=id=>S.entries.some(e=>e.cls===id)||S.docs.some(d=>d.cls===id)||S.rules.some(r=>r.cls===id);
+  const lineUse=(r,id)=>(r.lines||[]).some(l=>l&&l.cls===id);
+  const used=id=>S.entries.some(e=>e.cls===id||lineUse(e,id))||S.docs.some(d=>d.cls===id||lineUse(d,id))||S.rules.some(r=>r.cls===id);
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(w.many)}</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="muted" style="font-size:13px">${esc(T('Sort income and expenses by branch, location, department or line of business. Pick one on an invoice, bill, sales receipt, expense, deposit, journal entry or bank line, then see the profit and loss for each one side by side in Reports.'))}</div>
+    ${ro?'':`<label class="check" style="align-items:flex-start"><input type="checkbox" id="clsPerLine" ${S.company.classPerLine?'checked':''}> <span><b>${esc(T('Track classes on each line'))}</b><br><span class="muted" style="font-size:12.5px">${esc(T('Pick a class on each line of an invoice, bill, sales receipt, credit, expense, deposit or journal entry, so one bill can be split, for example between two stores. The class at the top fills in every line.'))}</span></span></label>`}
     ${ro?'':`<div class="fields">${fld('clsLabel','Call them',`<select id="clsLabel">${Object.entries(CLASS_WORDS).map(([k,v])=>`<option value="${k}" ${lab===k?'selected':''}>${esc(T(v.many))}</option>`).join('')}</select><span class="hint">${esc(T('The name used on forms and reports, for example Locations for a business with two stores.'))}</span>`)}</div>`}
     ${cs.length?`<div class="tbl-wrap"><table><tbody>${cs.map(c=>`<tr><td><span translate="no">${esc(c.name)}</span>${c.active===false?' <span class="pill quiet">Inactive</span>':''}</td><td class="n" style="white-space:nowrap">${ro?'':`<button class="btn sm ghost" data-clsren="${esc(c.id)}">Rename</button><button class="btn sm ghost" data-clsact="${esc(c.id)}">${c.active===false?'Turn on':'Turn off'}</button>${used(c.id)?'':`<button class="btn sm ghost" data-clsdel="${esc(c.id)}">Remove</button>`}`}</td></tr>`).join('')}</tbody></table></div>`:`<div class="muted">${esc(T('None yet.'))}</div>`}
     ${ro?'':`<form id="clsAdd" style="display:flex;gap:8px"><input type="text" id="clsName" maxlength="60" placeholder="${esc(T('e.g. Ottawa office'))}" aria-label="${esc(w.add)}" style="flex:1"><button class="btn" type="submit">${esc(w.add)}</button></form>`}
@@ -1416,6 +1440,7 @@ function classesPanel(){
 }
 function bindClasses(m){
   const saveCls=async(list,msg)=>{if(await putCompany({...strip(S.company),classes:list}))toast(msg)};
+  const pl=$('#clsPerLine',m);if(pl)pl.onchange=async()=>{if(await putCompany({...strip(S.company),classPerLine:pl.checked}))toast('Saved')};
   const lb=$('#clsLabel',m);if(lb)lb.onchange=async()=>{if(await putCompany({...strip(S.company),classLabel:lb.value}))toast('Saved')};
   const add=$('#clsAdd',m);if(add)add.onsubmit=async e=>{e.preventDefault();const n=$('#clsName',add).value.trim();if(!n)return;if((S.company.classes||[]).some(c=>c.name.toLowerCase()===n.toLowerCase()))return toast(T('There’s already one with that name.'),true);await saveCls([...(S.company.classes||[]),{id:uid(),name:n,active:true}],`${n} added`)};
   if(m._clsBound)return;m._clsBound=true;

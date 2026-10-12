@@ -2818,3 +2818,10 @@ addFr({
   'This estimate is already an invoice. Send the invoice’s pay link instead.':'Cette soumission est déjà une facture. Envoyez plutôt le lien de paiement de la facture.',
   'There’s no deposit left to pay on this estimate.':'Il ne reste aucun dépôt à payer sur cette soumission.',
 });
+
+/* ---------- classes on each line ---------- */
+addFr({
+  'Track classes on each line':'Suivre les catégories analytiques sur chaque ligne',
+  'Pick a class on each line of an invoice, bill, sales receipt, credit, expense, deposit or journal entry, so one bill can be split, for example between two stores. The class at the top fills in every line.':'Choisissez une catégorie analytique sur chaque ligne d’une facture, d’une facture fournisseur, d’un reçu de vente, d’un crédit, d’une dépense, d’un dépôt ou d’une écriture de journal, pour répartir une même facture, par exemple entre deux magasins. La catégorie choisie en haut s’applique à toutes les lignes.',
+  'Line {0} has a class that doesn’t exist. Add it under Settings first.':'La ligne {0} a une catégorie analytique qui n’existe pas. Ajoutez-la d’abord dans Paramètres.',
+});
