@@ -15,8 +15,10 @@ const DI_HELP={
 };
 S.di=null;
 const diNew=type=>({type:type||'',file:'',table:null,map:{},dateFormat:'',addContacts:false,show:'all',busy:false,reading:false,done:null});
-const diStaff=()=>ME&&ME.role!=='client'&&!ME.readOnly;
-function diOpen(type){$('#newMenu').hidden=true;S.di=diNew(DI_TYPES[type]?type:'');go('dataimport')}
+const diStaff=()=>ME&&ME.role!=='client'&&!ME.readOnly&&viewOk('dataimport');
+// A custom role imports only what it can change (the server checks every record too).
+const diTypes=()=>Object.entries(DI_TYPES).filter(([k])=>importOk(k));
+function diOpen(type){$('#newMenu').hidden=true;S.di=diNew(DI_TYPES[type]&&importOk(type)?type:'');go('dataimport')}
 const diLabel=(type,k)=>{const f=Importer.fieldsOf(type).find(x=>x.key===k);return f?f.en:k};
 const diNoun=(type,n)=>DI_NOUN[type][n===1?0:1];
 const diRows=n=>n===1?'1 row':`${n} rows`;
@@ -94,7 +96,7 @@ function vDataImport(){
   if(D.done)return h+diDoneHTML();
   // 1. What
   h+=`<div class="panel" style="max-width:900px"><h3>1. What do you want to import?</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
-    <div class="actions" role="group" aria-label="What to import">${Object.entries(DI_TYPES).map(([k,v])=>`<button class="btn sm ${D.type===k?'primary':''}" data-ditype="${k}" aria-pressed="${D.type===k}">${esc(v)}</button>`).join('')}</div>
+    <div class="actions" role="group" aria-label="What to import">${diTypes().map(([k,v])=>`<button class="btn sm ${D.type===k?'primary':''}" data-ditype="${k}" aria-pressed="${D.type===k}">${esc(v)}</button>`).join('')}</div>
     ${D.type?`<div class="muted" style="font-size:13px">${esc(DI_HELP[D.type])}</div><div><button class="btn sm ghost" data-ditpl="${D.type}">Download a template (CSV)</button></div>`:''}
   </div></div>`;
   if(!D.type)return h;

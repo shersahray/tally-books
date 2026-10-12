@@ -23,7 +23,7 @@ function repPostings(){
   const ctl=new Set(S.accounts.filter(a=>a.detail==='ar'||a.detail==='ap').map(a=>a.id));
   CPS={src:ps,out:TallyCash.cashPostings(S.entries,S.docs,ctl)};return CPS.out;
 }
-/* ---------- filters (report-filters.js): by customer, vendor, account, class (and tag, once transactions have tags) ----------
+/* ---------- filters (report-filters.js): by customer, vendor, account, class and tag ----------
    They stack with the period, comparison, class and accounting method. The balance sheet, cash flow and trial
    balance aren't filtered: part of the books doesn't balance. */
 const FILTER_TABS=['pl','gl','sc','ev','tl'];
@@ -485,7 +485,7 @@ function rSalesByItem(){
 }
 
 /* ---------- filters: the Filter button and the list of what's filtered ---------- */
-/** The kinds of filter a report offers, with the choices for each. Tags join this list once transactions have them. */
+/** The kinds of filter a report offers, with the choices for each. */
 function filterKinds(){
   const tab=S.rep.tab,byName=(a,b)=>a.name.localeCompare(b.name),cs=S.company.classes||[];
   const ks=[
@@ -494,12 +494,14 @@ function filterKinds(){
     {k:'acct',label:'Accounts',opts:sortAccts(S.accounts).filter(a=>tab==='gl'||tab==='tl'||isPL(a.type)).map(a=>[a.id,(a.code?a.code+' ':'')+a.name])},
   ];
   if(cs.length&&!(tab==='pl'&&S.rep.compare==='byclass'))ks.push({k:'cls',label:clsWords().many,none:clsWords().none,opts:cs.map(c=>[c.id,c.name])});
+  // Tags (tags-ui.js): "Event: Trade show" for a tag in a group.
+  if(typeof tagList==='function')ks.push({k:'tag',label:'Tags',opts:tagList().map(t=>[t.id,tagLabel(t)]).sort((a,b)=>a[1].localeCompare(b[1]))});
   return ks.filter(x=>x.opts.length);
 }
 /** "Customers: A, B · Accounts: Rent" under the toolbar, with a way to clear it. */
 function filterBar(){
   const f=repFilter();if(!f)return '';
-  const names={cust:id=>id==='__none'?T('No customer'):contactName(id),vend:id=>id==='__none'?T('No vendor'):contactName(id),acct:id=>acctName(id),cls:id=>id==='__none'?clsWords().none:clsName(id),tag:id=>id};
+  const names={cust:id=>id==='__none'?T('No customer'):contactName(id),vend:id=>id==='__none'?T('No vendor'):contactName(id),acct:id=>acctName(id),cls:id=>id==='__none'?clsWords().none:clsName(id),tag:id=>typeof tagById==='function'&&tagById(id)?tagLabel(tagById(id)):id};
   const lbl={cust:T('Customers'),vend:T('Vendors'),acct:T('Accounts'),cls:clsWords().many,tag:T('Tags')};
   const parts=TallyRepFilter.KEYS.filter(k=>f[k]).map(k=>`<span><b>${esc(lbl[k])}:</b> <span translate="no">${esc(f[k].slice(0,4).map(names[k]).join(', '))}</span>${f[k].length>4?` +${f[k].length-4}`:''}</span>`);
   return `<div class="toolbar rep-filters"><span class="muted">Filtered by</span>${parts.join('<span class="muted">·</span>')}<span class="grow"></span><button class="btn sm ghost" data-act="repfltclear">Clear filters</button></div>`;

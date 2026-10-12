@@ -7,7 +7,8 @@
   'use strict';
   const DATA = window.__TALLY_DEMO__;
   const PROVS = DATA.provinces, DEFAULT_ACCOUNTS = DATA.defaultAccounts;
-  const COLS = ['accounts', 'contacts', 'employees', 'rules', 'recurring', 'docs', 'estimates', 'entries', 'bankTxns', 'recons', 'filings', 'payruns'];
+  // Every list in the books (src/server/db.js COLLECTIONS), so products, projects, purchase orders and the rest can be added too.
+  const COLS = ['accounts', 'contacts', 'items', 'budgets', 'trips', 'pos', 'projects', 'times', 'assets', 'vehicles', 'employees', 'rules', 'recurring', 'docs', 'estimates', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts', 'attachments', 'questions'];
   const clone = o => JSON.parse(JSON.stringify(o));
   const cos = DATA.companies.map(c => ({ ...c.entry }));
   const books = {};
@@ -140,6 +141,7 @@
     if (path === '/api/auth/logout') return { ok: true };
     if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480, firm: demoFirms[0], roles: demoRoles.map(r => ({ ...r, users: 0 })), customRoles: true };
     // Custom roles (roles.js), kept until the page reloads.
+    if (path === '/api/roles' && method === 'GET') return { roles: demoRoles.map(r => ({ ...r, users: 0 })), available: true };
     if (path === '/api/roles' && method === 'POST') { const r = { id: 'r_' + Date.now().toString(36), ...TallyRoles.cleanRole(body, demoRoles) }; demoRoles.push(r); return { ok: true, role: r }; }
     m0 = path.match(/^\/api\/roles\/([^/]+)$/);
     if (m0) {
@@ -175,6 +177,11 @@
     if (path === '/api/ai') {
       if (method === 'GET') return { configured: true, demo: true, model: 'claude-haiku-4-5', capUsd: 20, spentUsd: 0, linesThisMonth: 0, source: 'env', keyHint: '(demo)', models: [{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (lowest cost)' }, { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (more accurate)' }] };
       throw new ApiError(400, 'AI settings aren’t available in the demo.');
+    }
+    // Monthly invoices to firms (Firms page): nobody to bill in the demo.
+    if (path === '/api/invoicing') {
+      if (method === 'GET') return { companyId: '', tax: true, companies: cos.filter(c => !c.archived).map(c => ({ id: c.id, name: c.name })), amounts: {}, plans: typeof TallyPlans !== 'undefined' ? TallyPlans.PLANS : {}, addons: typeof TallyPlans !== 'undefined' ? TallyPlans.ADDONS : {}, customers: [] };
+      throw new ApiError(400, 'Billing firms isn’t available in the demo, because nothing in it is saved.');
     }
     if (path === '/api/inbound') {
       if (method === 'GET') return { admin: true, on: false, domain: '', secret: '', ready: false, addresses: 0, webhook: '' };
@@ -267,6 +274,7 @@
     if (rest.startsWith('/pay')) throw new ApiError(400, 'Card payments aren’t available in the demo, because nothing in it is saved.');
     if (rest.startsWith('/mail') || rest === '/logo') throw new ApiError(400, 'Email and logos aren’t available in the demo, because nothing in it is saved. You can still download invoices and statements as PDFs.');
     if (rest === '/import') throw new ApiError(400, 'Importing isn’t available in the demo, because nothing in it is saved. You can still choose files to see how they’re read and checked.');
+    if (rest === '/assistant') throw new ApiError(400, 'The AI assistant needs a Claude API key, so it isn’t available in the demo.');
     if (rest === '/ai/read') throw new ApiError(400, 'Reading receipts needs a Claude API key, so it isn’t available in the demo. Try “Suggest with AI” under Banking instead.');
     if (rest === '/ai/suggest') {
       if (!b.company.ai) throw new ApiError(409, 'AI suggestions are turned off for this company. Turn them on in Settings.');

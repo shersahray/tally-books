@@ -7,7 +7,8 @@
  * A filter is { cust: [...], vend: [...], acct: [...], cls: [...], tag: [...] } (ids; '__none' in cust, vend or cls means
  * "without one"). Filters of different kinds stack (a posting must pass every one that's set), except customers and
  * vendors: a transaction has one name, so those two together mean "this customer or that vendor".
- * Tags don't exist in the books yet; a filter on them works once transactions carry tags: [ids].
+ * Tags are the transaction's own (tags: [ids], tags.js), so a posting passes when its transaction has any of the tags
+ * ticked; with classes on each line a transaction is still tagged as a whole.
  *
  * Postings are the app's: { e (the transaction), account, debit, credit, memo, date, cls }. cls is the line's class
  * (classes on each line) or else the transaction's; postings without it use the transaction's. ctx tells the module about names:

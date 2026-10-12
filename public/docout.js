@@ -449,7 +449,7 @@ const batchDocs=()=>TallyBatch.order(S.docs.filter(d=>batchSel().has(d.id)));
 function batchBar(){
   if(!batchOn())return '';
   const n=batchSel().size;
-  return `<span class="bbar" data-bbar ${n?'':'hidden'}><span class="muted" data-bcount>${n} selected</span><select data-bact aria-label="Batch actions"><option value="">Batch actions</option><option value="send">Send</option><option value="print">Print or download PDFs</option><option value="remind">Send reminders</option><option value="mark">Mark as sent</option></select><button type="button" class="btn sm ghost" data-bclear>Clear</button></span>`;
+  return `<span class="bbar" data-bbar ${n?'':'hidden'}><span class="muted" data-bcount>${n} selected</span><select data-bact aria-label="Batch actions"><option value="">Batch actions</option><option value="send">Send</option><option value="print">Print or download PDFs</option><option value="remind">Send reminders</option>${perm('sales','edit')?'<option value="mark">Mark as sent</option>':''}</select><button type="button" class="btn sm ghost" data-bclear>Clear</button></span>`;
 }
 const batchHeadCell=ids=>batchOn()?`<th class="bsel"><input type="checkbox" data-bselall aria-label="Select all" ${ids.length&&ids.every(id=>batchSel().has(id))?'checked':''}></th>`:'';
 const batchCell=d=>batchOn()?`<td class="bsel"><input type="checkbox" data-bsel="${d.id}" aria-label="Select" ${batchSel().has(d.id)?'checked':''}></td>`:'';

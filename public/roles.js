@@ -26,6 +26,8 @@
 
   /** Can someone with these permissions do this? null permissions (owners, plain staff, clients) aren't limited here. */
   const can = (perms, area, level = 'view') => !perms || RANK[perms[area] || 'none'] >= RANK[level];
+  /** Can these permissions make this write (see writeAreas)? */
+  const canWrite = (perms, col, data, before) => writeAreas(col, data, before).every(a => (Array.isArray(a) ? a : [a]).some(x => can(perms, x, 'edit')));
   /** Has Edit in at least one area. */
   const editsSomething = perms => !perms || Object.keys(AREAS).some(a => perms[a] === 'edit');
 
@@ -65,8 +67,12 @@
   /**
    * The areas a write needs Edit in. A transaction changed only by ticking it as cleared (reconciliation), or a
    * bank account's import settings, need Banking; anything else needs the area of the record before and after the change.
+   * An entry that's a list (['sales', 'accounting']) means Edit in any one of them.
    */
   function writeAreas(col, data, before) {
+    // Taking the first deposit on an estimate sets up the Customer deposits account (deposits-calc.js), so Sales can
+    // do it as well as Accounting: a new liability account for it, or marking an existing one as it, and nothing else.
+    if (col === 'accounts' && data && data.detail === 'custdep' && data.type === 'Liability' && (!before || (!before.detail && JSON.stringify(sortKeys(data, ['detail'])) === JSON.stringify(sortKeys(before, ['detail']))))) return [['sales', 'accounting']];
     const bankOnly = BANK_FIELDS[col];
     if (bankOnly && data && before && JSON.stringify(sortKeys(data, bankOnly)) === JSON.stringify(sortKeys(before, bankOnly))) return ['banking'];
     const out = new Set();
@@ -80,13 +86,16 @@
   const sortKeys = (o, skip) => Object.keys(o).filter(k => k !== 'id' && !skip.includes(k)).sort().reduce((m, k) => { m[k] = o[k]; return m; }, {});
 
   // Company settings that belong to an area other than Settings (saved from that area's screens).
+  // Anything not listed (name, address, fiscal year, features, the reports' default method reportBasis, which is on the
+  // Settings form) is Settings. Bill approvals (approvals) are Settings too, and only an owner can change them anyway.
   const SETTING_AREA = {
     payroll: 'payroll',
     quickMethod: 'salestax', qstRate: 'salestax', pstRate: 'salestax', pstName: 'salestax', pstFreq: 'salestax', filingFreq: 'salestax', taxName: 'salestax', taxRate: 'salestax',
     savedReports: 'reports', cashForecast: 'reports',
-    notDuplicates: 'accounting', classes: 'accounting', ccaOpening: 'accounting', tags: 'accounting', tagGroups: 'accounting',
+    notDuplicates: 'accounting', classes: 'accounting', classPerLine: 'accounting', classLabel: 'accounting', ccaOpening: 'accounting', tags: 'accounting', tagGroups: 'accounting',
     mileage: 'expenses',
     lateFee: 'sales', invoiceNote: 'sales', docStyle: 'sales', customFields: 'sales', etransfer: 'sales',
+    approvals: 'settings', reportBasis: 'settings',
   };
   const settingArea = key => SETTING_AREA[key] || 'settings';
 
@@ -102,5 +111,9 @@
     return { name, perms, approveBills: !!data.approveBills };
   }
 
-  return { AREAS, LEVELS, MAX_ROLES, can, editsSomething, recordArea, writeAreas, settingArea, cleanRole, ENTRY_AREA };
+  // What each kind of spreadsheet import (Import data) adds, by area: the screen offers only the kinds a role can change,
+  // and the server checks each record it adds (an invoice import's new customers are Sales too).
+  const IMPORT_AREA = { customers: 'sales', vendors: 'expenses', items: 'sales', accounts: 'accounting', invoices: 'sales', bills: 'expenses', journal: 'accounting' };
+
+  return { AREAS, LEVELS, MAX_ROLES, can, canWrite, editsSomething, recordArea, writeAreas, settingArea, cleanRole, ENTRY_AREA, IMPORT_AREA };
 });

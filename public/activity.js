@@ -5,6 +5,16 @@ S.act={rows:[],users:[],user:'',collection:'',done:false,loading:false,co:null};
 const ACT_COL={entries:'Transaction',docs:'Invoice or bill',accounts:'Account',contacts:'Customer or vendor',employees:'Employee',payruns:'Pay run',bankTxns:'Bank line',rules:'Bank rule',recons:'Reconciliation',filings:'Sales tax filing',settings:'Company settings'};
 const ACT_ACTION={create:'Created company',add:'Added',change:'Changed',delete:'Deleted',settings:'Changed',import:'Imported',restore:'Restored backup',examples:'Loaded examples',approve:'Approved',reject:'Rejected',resubmit:'Sent for approval again'};
 
+// The server writes each summary starting with the kind of record ("depapply 2026-10-12 $200.00 · …"): show that
+// kind by its name (Deposit used, Bill…), and the rest (dates, numbers, memos) as it was written.
+const ACT_DOC={invoice:'Invoice',bill:'Bill',credit:'Credit note',vcredit:'Vendor credit',sreceipt:'Sales receipt',estimate:'Estimate',po:'Purchase order'};
+function actSummary(r,html){
+  const s=String(r.summary||''),i=s.indexOf(' '),w=i<0?s:s.slice(0,i);
+  const lbl=r.collection==='entries'?TLABEL[w]:r.collection==='docs'||r.collection==='estimates'?ACT_DOC[w]:'';
+  if(!lbl)return html?`<span translate="no">${esc(s)}</span>`:s;
+  const rest=i<0?'':s.slice(i);
+  return html?`<span>${esc(lbl)}</span><span translate="no">${esc(rest)}</span>`:T(lbl)+rest;
+}
 async function loadActivity(more){
   const A=S.act;if(A.loading)return;
   if(!more||A.co!==CO){A.rows=[];A.done=false;A.co=CO}
@@ -26,7 +36,7 @@ function vActivity(){
     <select id="actCol" aria-label="Kind of record"><option value="">All kinds of records</option>${opts(Object.entries(ACT_COL),A.collection)}</select>
     <span class="grow"></span></div>
   <div class="tbl-wrap"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Record</th><th>Details</th></tr></thead><tbody>
-  ${A.rows.length?A.rows.map(r=>`<tr class="click" data-act-row="${r.seq}"><td class="muted" style="white-space:nowrap">${fmtWhen(r.at)}</td><td>${esc(r.name)}</td><td>${ACT_ACTION[r.action]||esc(r.action)}</td><td>${esc(ACT_COL[r.collection]||r.collection||'')}</td><td class="trunc">${esc(r.summary)}</td></tr>`).join(''):emptyRow(5,A.loading?'Loading…':'No changes recorded',A.loading?'':'Changes made from now on are listed here.')}
+  ${A.rows.length?A.rows.map(r=>`<tr class="click" data-act-row="${r.seq}"><td class="muted" style="white-space:nowrap">${fmtWhen(r.at)}</td><td>${esc(r.name)}</td><td>${ACT_ACTION[r.action]||esc(r.action)}</td><td>${esc(ACT_COL[r.collection]||r.collection||'')}</td><td class="trunc">${actSummary(r,true)}</td></tr>`).join(''):emptyRow(5,A.loading?'Loading…':'No changes recorded',A.loading?'':'Changes made from now on are listed here.')}
   </tbody></table></div>${A.rows.length&&!A.done?`<div class="pad"><button class="btn" data-actmore ${A.loading?'disabled':''}>Show older changes</button></div>`:''}</div>`;
 }
 async function actClick(e,t,d){
@@ -50,13 +60,13 @@ async function actDetail(seq){
   const target=r.collection==='entries'&&S.entries.find(x=>x.id===r.record_id)||r.collection==='docs'&&S.docs.find(x=>x.id===r.record_id);
   const f=openModal(`${ACT_ACTION[r.action]||r.action}: ${ACT_COL[r.collection]||r.collection||''}`,`
     <div class="muted">${esc(r.name)} (${esc(r.username)}) · ${fmtWhen(r.at)}</div>
-    <div>${esc(r.summary)}</div>
+    <div>${actSummary(r,true)}</div>
     ${keys.length?`<div class="tbl-wrap"><table class="diff"><thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead><tbody>${keys.map(k=>`<tr><td>${esc(label(k))}</td><td>${show(b[k])}</td><td>${show(a[k])}</td></tr>`).join('')}</tbody></table></div>`:''}`,
     `${target?'<button type="button" class="btn left" data-actopen>Open it</button>':'<span class="left"></span>'}<button type="button" class="btn primary" data-close>Close</button>`,'wide');
   const o=$('[data-actopen]',f);if(o)o.onclick=()=>{closeModal();r.collection==='docs'?docForm(target.kind,target):openEntry(target)};
 }
 function actCSV(){
-  const rows=[['When','Username','Name','Action','Record','Details']].concat(S.act.rows.map(r=>[new Date(r.at).toISOString(),r.username,r.name,ACT_ACTION[r.action]||r.action,ACT_COL[r.collection]||r.collection,r.summary]));
+  const rows=[['When','Username','Name','Action','Record','Details']].concat(S.act.rows.map(r=>[new Date(r.at).toISOString(),r.username,r.name,ACT_ACTION[r.action]||r.action,ACT_COL[r.collection]||r.collection,actSummary(r,false)]));
   const text=rows.map(row=>row.map(v=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
   saveFile(`activity-log_${today()}.csv`,new Blob(['﻿'+text],{type:'text/csv;charset=utf-8'}));
 }

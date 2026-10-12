@@ -2825,3 +2825,31 @@ addFr({
   'Pick a class on each line of an invoice, bill, sales receipt, credit, expense, deposit or journal entry, so one bill can be split, for example between two stores. The class at the top fills in every line.':'Choisissez une catégorie analytique sur chaque ligne d’une facture, d’une facture fournisseur, d’un reçu de vente, d’un crédit, d’une dépense, d’un dépôt ou d’une écriture de journal, pour répartir une même facture, par exemple entre deux magasins. La catégorie choisie en haut s’applique à toutes les lignes.',
   'Line {0} has a class that doesn’t exist. Add it under Settings first.':'La ligne {0} a une catégorie analytique qui n’existe pas. Ajoutez-la d’abord dans Paramètres.',
 });
+
+/* ---------- fitting the features together: screens found untranslated in the whole-app check ---------- */
+addFr({
+  'Add what you sell, like “Monthly bookkeeping” or “Hourly consulting”. Then pick it on invoices and the price, account and tax fill in.':'Ajoutez ce que vous vendez, comme « Tenue de livres mensuelle » ou « Consultation à l’heure ». Choisissez-le ensuite sur les factures : le prix, le compte et la taxe se remplissent.',
+  'Purchase orders aren’t in your books until you turn them into a bill.':'Les bons de commande ne sont pas dans vos livres tant que vous ne les transformez pas en facture fournisseur.',
+  'Send a vendor an order; when the bill comes in, turn the order into the bill in one click.':'Envoyez une commande à un fournisseur; quand sa facture arrive, transformez la commande en facture fournisseur en un clic.',
+  'Kilometres in {0}':'Kilomètres en {0}',
+  'Value at CRA rates':'Valeur aux taux de l’ARC',
+  'Log each business trip: the date, where, why and the kilometres. The CRA asks for this log if you claim a vehicle allowance.':'Inscrivez chaque déplacement d’affaires : la date, la destination, la raison et les kilomètres. L’ARC demande ce registre si vous réclamez une allocation pour véhicule.',
+  'Split this line across several categories':'Répartir cette ligne entre plusieurs catégories',
+  'Equipment, vehicles and buildings: amortization for the books and the CCA schedule for the T{0}':'Matériel, véhicules et bâtiments : l’amortissement comptable et l’annexe de la DPA pour la T{0}',
+  'Amounts at the end of the fiscal year.':'Montants à la fin de l’exercice.',
+  'No assets yet':'Aucune immobilisation pour l’instant',
+  'Add equipment, vehicles, computers or buildings the business owns, with what they cost and when they were bought.':'Ajoutez le matériel, les véhicules, les ordinateurs ou les bâtiments de l’entreprise, avec leur coût et leur date d’achat.',
+  'Make a project for a job, then pick it on invoices, bills, expenses and time to see what the job earned.':'Créez un projet pour un contrat, puis choisissez-le sur les factures, les factures fournisseurs, les dépenses et le temps pour voir ce que le contrat a rapporté.',
+  'Make a budget for the fiscal year, then compare it with your actual income and expenses here.':'Établissez un budget pour l’exercice, puis comparez-le ici avec vos revenus et dépenses réels.',
+  'No inventory on hand.':'Aucun stock en main.',
+  'Inventory asset account balance on that date:':'Solde du compte d’actif Stocks à cette date :',
+  'Projects with their income, costs and profit; time tracking billed to customers':'Projets avec leurs revenus, coûts et profits; suivi du temps facturé aux clients',
+  'Quantities on hand, average cost, cost of goods sold posted on each sale':'Quantités en main, coût moyen, coût des marchandises vendues inscrit à chaque vente',
+  'Customers, vendors and bank accounts in US dollars and other currencies, with exchange gains and losses':'Clients, fournisseurs et comptes bancaires en dollars américains et autres devises, avec les gains et pertes de change',
+  'Asset register, amortization entries and the capital cost allowance schedule':'Registre des immobilisations, écritures d’amortissement et annexe de la déduction pour amortissement',
+  'The books are in Canadian dollars. Set a currency on a customer, vendor, or bank or credit card account, and their invoices, bills and payments are in that currency, with the Bank of Canada’s rate filled in.':'Les livres sont en dollars canadiens. Choisissez une devise pour un client, un fournisseur ou un compte bancaire ou de carte de crédit : ses factures, factures fournisseurs et paiements sont dans cette devise, au taux de la Banque du Canada.',
+  'For scrap yards and auto recyclers: vehicles bought by VIN, purchase vouchers for sellers paid in cash, parts pulled from each car, weigh tickets, an environmental checklist and profit per vehicle.':'Pour les cours à ferraille et les recycleurs d’autos : véhicules achetés par NIV, bons d’achat pour les vendeurs payés comptant, pièces retirées de chaque auto, billets de pesée, liste de vérification environnementale et profit par véhicule.',
+  'Not available in the demo: nothing is saved':'Non offert dans la démo : rien n’est enregistré',
+  'Billing firms isn’t available in the demo, because nothing in it is saved.':'La facturation des cabinets n’est pas offerte dans la démo, puisque rien n’y est enregistré.',
+  'The AI assistant needs a Claude API key, so it isn’t available in the demo.':'L’assistant IA a besoin d’une clé API Claude : il n’est donc pas offert dans la démo.',
+});
