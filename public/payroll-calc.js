@@ -315,18 +315,128 @@
     ['ei', 'EI (employer)', 'cra'], ['qpip', 'QPIP (employer)', 'rq'], ['hsf', 'Health Services Fund', 'rq']
   ];
 
-  // Regular remitters: due the 15th of the month after the pay date (both CRA and Revenu Québec).
-  function remittanceDue(payDate) {
-    const [y, m] = payDate.split('-').map(Number);
-    const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
-    return `${ny}-${String(nm).padStart(2, '0')}-15`;
+  /* ---------- remitting periods and due dates ----------
+     CRA ("When to remit", canada.ca/cra-remit-due-date) and Revenu Québec ("Frequency of remittances"):
+       monthly    regular remitter: the calendar month, due the 15th of the next month
+       quarterly  the calendar quarter, due the 15th after it (April 15, July 15, October 15, January 15)
+       accel1     CRA threshold 1 / Revenu Québec twice-monthly: 1st–15th due the 25th; 16th–end due the 10th of the next month
+       accel2     CRA threshold 2 / Revenu Québec weekly: 1st–7th, 8th–14th, 15th–21st, 22nd–end, each due the 3rd
+                  working day after the period ends
+       annual     Revenu Québec only: the calendar year, due January 15
+     A due date on a Saturday, Sunday or public holiday moves to the next business day (both agencies).
+     Period keys: 'YYYY' · 'YYYY-Qn' · 'YYYY-MM' · 'YYYY-MM-H1'/'H2' · 'YYYY-MM-W1'…'W4'. */
+  const REMIT_FREQS = { cra: ['monthly', 'quarterly', 'accel1', 'accel2'], rq: ['monthly', 'quarterly', 'accel1', 'accel2', 'annual'] };
+  const REMIT_FREQ_LABEL = {
+    cra: { monthly: 'Monthly (regular remitter)', quarterly: 'Quarterly', accel1: 'Twice a month (accelerated, threshold 1)', accel2: 'Up to four times a month (accelerated, threshold 2)' },
+    rq: { monthly: 'Monthly', quarterly: 'Quarterly', accel1: 'Twice a month', accel2: 'Weekly (four times a month)', annual: 'Once a year' },
+  };
+  const monthEnd = (y, m) => ymd(y, m, new Date(Date.UTC(y, m, 0)).getUTCDate());
+  const nextMonth = (y, m) => (m === 12 ? [y + 1, 1] : [y, m + 1]);
+  const WEEKS = [[1, 7], [8, 14], [15, 21], [22, 31]];
+
+  /** The holidays each agency counts when moving a due date (not the employment-standards holidays below).
+      CRA: its list of public holidays for due dates (canada.ca/cra-public-holidays): Saint-Jean-Baptiste Day for
+      Quebec only, the Civic Holiday everywhere but Quebec. Revenu Québec: the days its offices are closed
+      (revenuquebec.ca/en/contact-us/holidays), which include January 2 and December 24 and 31; its 2026 schedule
+      also moves a weekly due date past Remembrance Day, so that counts too.
+      Revenu Québec closes on the next weekday when a fixed-date holiday is on a weekend (2026: Boxing Day on Saturday,
+      closed Monday the 28th). CRA's list keeps the weekend date, so its due dates are never moved later than it says. */
+  const DUE_HOLIDAYS = {
+    cra: prov => ['newyear', 'goodfriday', 'eastermonday', 'victoria', ...(prov === 'QC' ? ['stjean24'] : []), 'canada', ...(prov === 'QC' ? [] : ['civic']), 'labour', 'truth', 'thanksgiving', 'remembrance', 'christmas', 'boxing'],
+    rq: () => ['newyear', 'jan2', 'goodfriday', 'eastermonday', 'patriots', 'stjean24', 'canada', 'labour', 'thanksgiving', 'remembrance', 'dec24', 'christmas', 'boxing', 'dec31'],
+  };
+  const DUE_EXTRA = {
+    eastermonday: y => addD(easter(y), 1), stjean24: y => ymd(y, 6, 24), jan2: y => ymd(y, 1, 2), dec24: y => ymd(y, 12, 24), boxing: y => ymd(y, 12, 26), dec31: y => ymd(y, 12, 31),
+  };
+  const FIXED = new Set(['newyear', 'jan2', 'stjean24', 'canada', 'truth', 'remembrance', 'dec24', 'christmas', 'boxing', 'dec31']);
+  const weekend = s => { const w = D(s).getUTCDay(); return w === 0 || w === 6; };
+  const dueHolCache = new Map();
+  /** Days an agency is closed in a year (besides weekends), as a Set of YYYY-MM-DD. */
+  function dueHolidays(agency, year, prov) {
+    const ck = `${agency}|${year}|${agency === 'cra' && prov === 'QC' ? 'QC' : ''}`;
+    if (dueHolCache.has(ck)) return dueHolCache.get(ck);
+    const raw = (DUE_HOLIDAYS[agency] || DUE_HOLIDAYS.cra)(prov).map(k => ({ k, d: (DUE_EXTRA[k] || HOLIDAY_RULES[k][1])(year) })).sort((a, b) => a.d.localeCompare(b.d));
+    const out = new Set();
+    for (const h of raw) {
+      let d = h.d;
+      if (agency === 'rq' && FIXED.has(h.k)) while (weekend(d) || out.has(d)) d = addD(d, 1);
+      out.add(d);
+    }
+    dueHolCache.set(ck, out);
+    return out;
+  }
+  /** A day the agency is open: not a weekend, not one of its holidays. */
+  function isBusinessDay(date, agency = 'cra', prov = '') {
+    if (weekend(date)) return false;
+    const y = +date.slice(0, 4);
+    return !dueHolidays(agency, y, prov).has(date) && !dueHolidays(agency, y - 1, prov).has(date);
+  }
+  /** The date itself when it's a business day, otherwise the next one. */
+  function nextBusinessDay(date, agency = 'cra', prov = '') {
+    let d = date;
+    for (let i = 0; i < 20 && !isBusinessDay(d, agency, prov); i++) d = addD(d, 1);
+    return d;
+  }
+  /** The nth business day after a date (the date itself not counted). */
+  function addBusinessDays(date, n, agency = 'cra', prov = '') {
+    let d = date;
+    for (let i = 0; i < n;) { d = addD(d, 1); if (isBusinessDay(d, agency, prov)) i++; }
+    return d;
   }
 
-  /** The remitting period a bank or CRA asks for, as YYYY-MM: the month employees were paid,
-      or the last month of the quarter for quarterly remitters. Takes a period key ('2026-09' or '2026-Q3'). */
+  /** What a period key covers: { freq, from, to }, or null when it isn't a period key. */
+  function periodOfKey(key) {
+    let m;
+    const k = String(key || '');
+    if ((m = /^(\d{4})$/.exec(k))) return { freq: 'annual', from: `${m[1]}-01-01`, to: `${m[1]}-12-31` };
+    if ((m = /^(\d{4})-Q([1-4])$/.exec(k))) { const y = +m[1], q = +m[2]; return { freq: 'quarterly', from: ymd(y, q * 3 - 2, 1), to: monthEnd(y, q * 3) }; }
+    if ((m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(k))) return { freq: 'monthly', from: ymd(+m[1], +m[2], 1), to: monthEnd(+m[1], +m[2]) };
+    if ((m = /^(\d{4})-(0[1-9]|1[0-2])-H([12])$/.exec(k))) { const y = +m[1], mo = +m[2]; return { freq: 'accel1', from: ymd(y, mo, m[3] === '1' ? 1 : 16), to: m[3] === '1' ? ymd(y, mo, 15) : monthEnd(y, mo) }; }
+    if ((m = /^(\d{4})-(0[1-9]|1[0-2])-W([1-4])$/.exec(k))) { const y = +m[1], mo = +m[2], w = WEEKS[+m[3] - 1]; return { freq: 'accel2', from: ymd(y, mo, w[0]), to: w[1] === 31 ? monthEnd(y, mo) : ymd(y, mo, w[1]) }; }
+    return null;
+  }
+  /** When a period's remittance is due, moved off weekends and the agency's holidays. */
+  function remitDueFor(key, agency = 'cra', prov = '') {
+    const p = periodOfKey(key);
+    if (!p) return '';
+    const [y, m] = p.to.split('-').map(Number), [ny, nm] = nextMonth(y, m);
+    if (p.freq === 'accel2') return addBusinessDays(p.to, 3, agency, prov);
+    if (p.freq === 'accel1') return nextBusinessDay(p.to.slice(8) === '15' ? ymd(y, m, 25) : ymd(ny, nm, 10), agency, prov);
+    return nextBusinessDay(ymd(ny, nm, 15), agency, prov);
+  }
+  /** The period key a pay date falls in, for a remitting frequency. */
+  function remitKey(payDate, freq = 'monthly') {
+    const y = payDate.slice(0, 4), m = +payDate.slice(5, 7), d = +payDate.slice(8, 10), ym = payDate.slice(0, 7);
+    if (freq === 'annual') return y;
+    if (freq === 'quarterly') return `${y}-Q${Math.ceil(m / 3)}`;
+    if (freq === 'accel1') return `${ym}-H${d <= 15 ? 1 : 2}`;
+    if (freq === 'accel2') return `${ym}-W${Math.min(4, Math.ceil(d / 7))}`;
+    return ym;
+  }
+  /** The period a pay date's deductions are remitted in, with its due date.
+      paidKeys: periods that already have a payment recorded for this agency. After a change of frequency, a pay date
+      inside a period that was paid under the old frequency stays in that period, so the payment still matches it. */
+  function remitPeriodFor(payDate, freq = 'monthly', agency = 'cra', prov = '', paidKeys = []) {
+    let key = remitKey(payDate, freq);
+    if (!paidKeys.includes(key)) {
+      const old = paidKeys.filter(k => { const p = periodOfKey(k); return p && p.freq !== freq && p.from <= payDate && payDate <= p.to; })
+        .sort((a, b) => periodOfKey(a).to.localeCompare(periodOfKey(b).to))[0]; // the one ending soonest (the shortest)
+      if (old) key = old;
+    }
+    const p = periodOfKey(key);
+    return { key, freq: p.freq, from: p.from, to: p.to, due: remitDueFor(key, agency, prov) };
+  }
+  // The due date for a pay date's deductions (regular remitters: the 15th of the next month, moved off a weekend or holiday).
+  function remittanceDue(payDate, freq = 'monthly', agency = 'cra', prov = '') {
+    return remitDueFor(remitKey(payDate, freq), agency, prov);
+  }
+
+  /** The remitting period a bank or CRA asks for: YYYY-MM for monthly, quarterly and annual remitters (the month
+      employees were paid, or the period's last month), and the period's end date YYYY-MM-DD for accelerated remitters. */
   function remitPeriodEnd(key) {
-    const q = /^(\d{4})-Q([1-4])$/.exec(key || '');
-    return q ? `${q[1]}-${String(q[2] * 3).padStart(2, '0')}` : String(key || '').slice(0, 7);
+    const p = periodOfKey(key);
+    if (!p) return String(key || '').slice(0, 7);
+    return p.freq === 'accel1' || p.freq === 'accel2' ? p.to : p.to.slice(0, 7);
   }
   /** Account number check for paying online: '' when fine, or what's wrong. CRA: 123456789RP0001; Revenu Québec: 1234567890RS0001. */
   function remitAccountProblem(agency, acct) {
@@ -353,12 +463,9 @@
     for (let i = 0; i < 9; i++) { let n = +d[i]; if (i % 2 === 1) { n *= 2; if (n > 9) n -= 9; } sum += n; }
     return sum % 10 === 0 && d[0] !== '0' && d[0] !== '8' ? '' : 'invalid';
   }
-  /** Slips are due the last day of February; on a weekend, the next Monday. */
+  /** Slips are due the last day of February; on a weekend or CRA public holiday, the next business day. */
   function slipsDue(year) {
-    const d = new Date(Date.UTC(year + 1, 2, 0)); // last day of February
-    const dow = d.getUTCDay();
-    if (dow === 6) d.setUTCDate(d.getUTCDate() + 2); else if (dow === 0) d.setUTCDate(d.getUTCDate() + 1);
-    return d.toISOString().slice(0, 10);
+    return nextBusinessDay(iso(new Date(Date.UTC(year + 1, 2, 0))), 'cra'); // last day of February
   }
   /** Health Services Fund rate (Revenu Québec's table). `payroll` is TOTAL payroll: every province,
       plus the payroll of associated employers. The rate is then applied to Quebec payroll only. */
@@ -720,7 +827,7 @@
     ['M', 'Dismissal or suspension'], ['N', 'Leave of absence'], ['P', 'Parental'], ['Z', 'Compassionate care / family caregiver'],
   ];
 
-  return { calc, remitSplit, remittanceDue, remitPeriodEnd, remitAccountProblem, tableFor, BENEFIT_KINDS, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
+  return { calc, remitSplit, remittanceDue, remitPeriodEnd, remitKey, remitPeriodFor, remitDueFor, periodOfKey, REMIT_FREQS, REMIT_FREQ_LABEL, isBusinessDay, nextBusinessDay, addBusinessDays, dueHolidays, remitAccountProblem, tableFor, BENEFIT_KINDS, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
     yearEnd, sinProblem, slipsDue, hsfRateFor, YEAR_LIMITS,
     holidays, holidaysBetween, holidayWindow, holidayPay, vacationRate, serviceYears, roe, roePeriods, ROE_PERIODS, ROE_REASONS, addDays: addD, daysBetween };
 });

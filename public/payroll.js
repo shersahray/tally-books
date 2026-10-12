@@ -118,17 +118,30 @@ function payAccounts(needRq,needVac){
   return{writes,ids};
 }
 
-/* ---------- remittances ---------- */
-function remitPeriod(date){
-  const y=date.slice(0,4),m=+date.slice(5,7);
-  if(payCfg().remitFreq==='quarterly'){const q=Math.ceil(m/3);return{key:`${y}-Q${q}`,label:`Q${q} ${y}`,due:PR.remittanceDue(`${y}-${pad(q*3)}-01`)}}
-  return{key:date.slice(0,7),label:pd(date.slice(0,7)+'-01').toLocaleDateString(LOC(),{month:'long',year:'numeric'}),due:PR.remittanceDue(date)};
+/* ---------- remittances ----------
+   Periods and due dates are worked out in payroll-calc.js (remitPeriodFor). CRA and Revenu Québec each have their own
+   frequency; Revenu Québec's is the same as CRA's unless set. A payment keeps the period key it was recorded for, so after
+   a change of frequency the old payments still match: pay dates inside a paid period stay in it. */
+const remitFreqOf=ag=>{const c=payCfg();return ag==='rq'?(c.remitFreqRq||c.remitFreq||'monthly'):(c.remitFreq||'monthly')};
+const remitPaidKeys=ag=>[...new Set(S.entries.filter(e=>e.type==='payremit'&&e.agency===ag).map(e=>e.period))];
+/** How a period reads: "October 2026", "Q3 2026", "Oct 1, 2026 – Oct 15, 2026", "2026". */
+function remitLabel(key){
+  const p=PR.periodOfKey(key);if(!p)return key;
+  if(p.freq==='annual')return key;
+  if(p.freq==='quarterly')return `Q${key.slice(-1)} ${key.slice(0,4)}`;
+  if(p.freq==='monthly')return pd(p.from).toLocaleDateString(LOC(),{month:'long',year:'numeric'});
+  return `${fmtDate(p.from)} – ${fmtDate(p.to)}`;
+}
+/** The period a pay date is remitted in, for one agency: { key, label, due, from, to }. */
+function remitPeriod(date,ag='cra',paid){
+  const p=PR.remitPeriodFor(date,remitFreqOf(ag),ag,S.company.province||'',paid||remitPaidKeys(ag));
+  return{...p,label:remitLabel(p.key)};
 }
 function remittances(){
-  const m={};
+  const m={},paid={cra:remitPaidKeys('cra'),rq:remitPaidKeys('rq')};
   for(const r of S.payruns.slice().sort(runOrder)){
-    const p=remitPeriod(r.payDate);
     for(const ag of['cra','rq']){
+      const p=remitPeriod(r.payDate,ag,paid[ag]);
       const k=ag+'|'+p.key;
       for(const l of r.lines){
         const items=[...PR.EMPLOYEE_ITEMS.filter(x=>x[2]===ag).map(x=>[x[1],+l.ded?.[x[0]]||0]),...PR.EMPLOYER_ITEMS.filter(x=>x[2]===ag).map(x=>[x[1],+l.er?.[x[0]]||0])];
@@ -141,7 +154,7 @@ function remittances(){
   }
   for(const e of S.entries.filter(e=>e.type==='payremit')){
     const k=e.agency+'|'+e.period;
-    const x=m[k]=m[k]||{agency:e.agency,key:e.period,label:e.periodLabel||e.period,due:'',owed:0,paid:0,gross:0,parts:{},emps:new Set(),lastRun:null};
+    const x=m[k]=m[k]||{agency:e.agency,key:e.period,label:PR.periodOfKey(e.period)?remitLabel(e.period):e.periodLabel||e.period,due:PR.remitDueFor(e.period,e.agency,S.company.province||''),owed:0,paid:0,gross:0,parts:{},emps:new Set(),lastRun:null};
     x.paid=r2(x.paid+(+e.amount||0));
   }
   return Object.values(m).map(x=>{const bal=r2(x.owed-x.paid);x.bal=bal;x.st=bal<=0.004?{k:'paid',label:'Paid'}:x.due&&x.due<today()?{k:'overdue',label:'Overdue'}:{k:"open",label:"Due"};
@@ -149,6 +162,15 @@ function remittances(){
     .sort((a,b)=>b.key.localeCompare(a.key)||a.agency.localeCompare(b.agency));
 }
 const overdueRemits=()=>S.payruns.length?remittances().filter(x=>x.st.k==='overdue').length:0;
+
+/** How often an agency is paid and when, from its frequency (each part its own text, so it translates). */
+function remitFreqNote(ag){
+  const f=remitFreqOf(ag);
+  const when={monthly:'Due the 15th of the month after you pay employees.',quarterly:'Due the 15th of the month after each quarter.',
+    accel1:'Pays from the 1st to the 15th are due the 25th; pays from the 16th to the end of the month are due the 10th of the next month.',
+    accel2:'Four periods a month (1st–7th, 8th–14th, 15th–21st, 22nd–end), each due the 3rd business day after it ends.',annual:'Due January 15 for the year before.'}[f];
+  return `<span class="remit-freq"><b>${ag==='cra'?'CRA':'Revenu Québec'}</b> · <span>${esc(PR.REMIT_FREQ_LABEL[ag][f]||f)}</span>. <span>${when}</span></span>`;
+}
 
 /* ---------- views ---------- */
 function vPayroll(){
@@ -166,7 +188,8 @@ function vPayroll(){
   }
   if(P.tab==='remit'){
     const rs=remittances();
-    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${payCfg().remitFreq==='quarterly'?'Quarterly remitter':'Regular (monthly) remitter'}: payment due the 15th of the month after ${payCfg().remitFreq==='quarterly'?'each quarter':'you pay employees'}. Change this in Settings.</span></div>
+    const qc=S.employees.some(e=>e.prov==='QC')||rs.some(x=>x.agency==='rq');
+    return h+`<div class="panel"><div class="toolbar"><div class="grow muted" style="display:flex;flex-direction:column;gap:2px">${remitFreqNote('cra')}${qc?remitFreqNote('rq'):''}<span>Due dates on a weekend or holiday move to the next business day. Change how often you remit in Settings.</span></div></div>
     <div class="tbl-wrap"><table><thead><tr><th>Agency</th><th>Period</th><th>Due</th><th class="n">Owed</th><th class="n">Paid</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${rs.length?rs.map(x=>`<tr class="click" data-remit="${x.agency}|${x.key}"><td>${AGENCY_NAME[x.agency]}</td><td>${esc(x.label)}</td><td class="${x.st.k==='overdue'?'neg':'muted'}" style="white-space:nowrap">${fmtDate(x.due)}</td><td class="n">${money(x.owed)}</td><td class="n">${money(x.paid)}</td><td class="n">${money(x.bal)}</td><td><span class="pill ${x.st.k}">${x.st.label}</span></td><td class="n" style="white-space:nowrap">${x.bal>0.004?`<button class="btn sm primary" data-remit-guide="${x.agency}|${x.key}">${x.agency==='cra'?'Pay CRA':'Pay Revenu Québec'}</button> <button class="btn sm" data-remit-pay="${x.agency}|${x.key}">Record payment</button>`:''}</td></tr>`).join(''):emptyRow(8,'Nothing to remit yet','Source deductions show up here after your first pay run.')}</tbody></table></div></div>`;
   }
   const runs=S.payruns.slice().sort((a,b)=>runOrder(b,a));
@@ -198,7 +221,8 @@ function employeeForm(emp){
   const vr=PR.vacationRate(e.prov||'ON',e.hireDate,today());
   const f=openModal(emp?emp.name:'New employee',`
     ${paid?`<div class="actions" style="justify-content:flex-end;margin-top:-4px"><button type="button" class="btn sm" data-roe="${emp.id}">Record of employment (ROE)</button></div>`:''}
-    <div class="fields">${fld('eName','Name',`<input type="text" id="eName" value="${v(e.name)}" required>`)}${fld('eEmail','Email',`<input type="email" id="eEmail" value="${v(e.email)}">`)}
+    <div class="fields">${fld('eName','Name',`<input type="text" id="eName" value="${v(e.name)}" required>`)}${fld('eEmail','Email',`<input type="email" id="eEmail" value="${v(e.email)}"><span class="hint">For emailing pay stubs</span>`)}
+      ${fld('eLang','Language for pay stubs',`<select id="eLang"><option value="" ${e.lang?'':'selected'}>${S.company.lang==='fr'?'Company’s (French)':'Company’s (English)'}</option><option value="en" ${e.lang==='en'?'selected':''}>In English</option><option value="fr" ${e.lang==='fr'?'selected':''}>In French</option></select>`)}
       ${fld('eProv','Province of employment',`<select id="eProv">${PR.PROVINCES.map(k=>`<option value="${k}" ${e.prov===k?'selected':''}>${esc(provName(k))}</option>`).join('')}</select>`)}
       ${fld('eHire','Hire date',`<input type="date" id="eHire" value="${v(e.hireDate)}">`)}
       ${fld('eSin','Social insurance number',`<input type="text" id="eSin" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789" value="${v(e.sin?String(e.sin).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3'):'')}" translate="no"><span class="hint">For the T4 and RL-1 (box 12). Kept only in this company’s books.</span>`)}
@@ -265,7 +289,7 @@ function employeeForm(emp){
     const prevO=emp&&emp.openingYtd;
     const keepPrev=prevO&&String(prevO.year)!==yr&&+prevO.gross&&Object.keys(oy).length===1;
     if(prevO&&String(prevO.year)!==yr&&+prevO.gross&&!keepPrev&&!await confirmBox('Replace earlier opening amounts?',`${name} has opening year-to-date amounts for ${prevO.year}. Saving opening amounts for ${yr} replaces them, and the ${prevO.year} T4 will no longer include them. File the ${prevO.year} T4 first.`,'Replace'))return;
-    const data={...(emp?strip(emp):{created:Date.now()}),name,email:$('#eEmail',f).value.trim(),address:$('#eAddr',f).value.trim(),prov,hireDate:$('#eHire',f).value,
+    const data={...(emp?strip(emp):{created:Date.now()}),name,email:$('#eEmail',f).value.trim(),lang:$('#eLang',f).value,address:$('#eAddr',f).value.trim(),prov,hireDate:$('#eHire',f).value,
       freq:$('#eFreq',f).value,payType:$('#eType',f).value,rate:val('eRate'),hours:val('eHours'),
       td1Fed:val('eTd1'),td1Prov:qc?'':val('eTd1p'),td1Qc:qc?val('eTd1q'):'',extraTax:val('eExtra'),extraQcTax:qc?val('eExtraQ'):'',dependants:prov==='ON'?val('eDep'):'',
       rrsp:val('eRrsp'),union:val('eUnion'),sin:$('#eSin',f).value.replace(/\D/g,''),dental:+$('#eDental',f).value||0,rppNo:$('#ePen',f).value==='rpp'?$('#eRppNo',f).value.replace(/\D/g,''):'',pensionType:$('#ePen',f).value,cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
@@ -450,14 +474,15 @@ function payRunView(run){
   const f=openModal(`Pay run · ${fmtDate(run.payDate)}`,`
     <div class="muted">${run.from?`Pay period ${fmtDate(run.from)} – ${fmtDate(run.to)} · `:''}${PR.FREQ_LABEL[run.freq]||''} · paid from ${esc(acctName(run.bank))}</div>
     <div class="tbl-wrap"><table><thead><tr><th>Employee</th><th class="n">Gross</th><th class="n">${qc?'CPP/QPP':'CPP'}</th><th class="n">EI${qc?'/QPIP':''}</th><th class="n">Income tax</th><th class="n">Other</th><th class="n">Net pay</th><th></th></tr></thead><tbody>
-    ${run.lines.map((l,i)=>`<tr><td>${esc(l.name)}${l.overridden&&l.overridden.length?' <span class="pill quiet" title="Amounts changed by hand">Edited</span>':''}</td><td class="n">${money(l.gross)}</td><td class="n">${money(l.ded.cpp+l.ded.cpp2+l.ded.qpp+l.ded.qpp2)}</td><td class="n">${money(l.ded.ei+l.ded.qpip)}</td><td class="n">${money(l.ded.fedTax+l.ded.provTax+l.ded.qcTax)}</td><td class="n">${money((+l.rrsp||0)+(+l.union||0))}</td><td class="n"><b>${money(l.net)}</b></td><td class="n"><button type="button" class="btn sm" data-stub="${i}">Pay stub</button></td></tr>`).join('')}
+    ${run.lines.map((l,i)=>`<tr><td>${esc(l.name)}${l.overridden&&l.overridden.length?' <span class="pill quiet" title="Amounts changed by hand">Edited</span>':''}</td><td class="n">${money(l.gross)}</td><td class="n">${money(l.ded.cpp+l.ded.cpp2+l.ded.qpp+l.ded.qpp2)}</td><td class="n">${money(l.ded.ei+l.ded.qpip)}</td><td class="n">${money(l.ded.fedTax+l.ded.provTax+l.ded.qcTax)}</td><td class="n">${money((+l.rrsp||0)+(+l.union||0))}</td><td class="n"><b>${money(l.net)}</b></td><td class="n" style="white-space:nowrap">${stubSentPill(l)}<button type="button" class="btn sm" data-stub="${i}">Pay stub</button> <button type="button" class="btn sm" data-stub-mail="${i}" ${stubEmail(l)?'':`disabled title="${esc(T('No email address'))}"`}>Email stub</button></td></tr>`).join('')}
     </tbody><tfoot><tr><td><b>Total</b></td><td class="n">${money(t.gross)}</td><td colspan="4"></td><td class="n"><b>${money(t.net)}</b></td><td></td></tr></tfoot></table></div>
     <div class="totals" style="min-width:280px"><div>Employer contributions</div><div>${money(t.er)}</div><div>Owed to CRA</div><div>${money(t.cra)}</div>${t.rq?`<div>Owed to Revenu Québec</div><div>${money(t.rq)}</div>`:''}${t.vacAcc||t.vacOut?`<div>Vacation pay set aside</div><div>${money(r2(t.vacAcc-t.vacOut))}</div>`:''}<div class="big">Total cost</div><div class="big">${money(t.cost)}</div></div>`,
-    `<button type="button" class="btn danger left" data-del>Delete pay run</button>${ddLines(run).length?`<button type="button" class="btn" data-dd>Direct deposit file</button>`:''}<button type="button" class="btn" data-stub="all">Print all pay stubs</button><button type="button" class="btn primary" data-close>Done</button>`,'wide');
-  f.addEventListener('click',ev=>{const b=ev.target.closest('[data-stub]');if(b)printStubs(run,b.dataset.stub==='all'?run.lines:[run.lines[+b.dataset.stub]]);if(ev.target.closest('[data-dd]'))ddFile(run)});
+    `<button type="button" class="btn danger left" data-del>Delete pay run</button>${ddLines(run).length?`<button type="button" class="btn" data-dd>Direct deposit file</button>`:''}<button type="button" class="btn" data-stub="all">Print all pay stubs</button><button type="button" class="btn" data-stub-mail="all">Email pay stubs</button><button type="button" class="btn primary" data-close>Done</button>`,'wide');
+  f.addEventListener('click',ev=>{const b=ev.target.closest('[data-stub]');if(b)printStubs(run,b.dataset.stub==='all'?run.lines:[run.lines[+b.dataset.stub]]);if(ev.target.closest('[data-dd]'))ddFile(run);
+    const m=ev.target.closest('[data-stub-mail]');if(m)emailStubs(run,m.dataset.stubMail==='all'?run.lines:[run.lines[+m.dataset.stubMail]])});
   $('[data-del]',f).onclick=async()=>{
     const e=S.entries.find(x=>x.id===run.entryId);const rec=e&&Object.values(e.clear||{}).includes('r');
-    const paidRemit=remittances().some(x=>x.key===remitPeriod(run.payDate).key&&x.paid>0);
+    const paidRemit=remittances().some(x=>x.key===remitPeriod(run.payDate,x.agency).key&&x.paid>0);
     if(!await confirmBox('Delete this pay run?',`The pay run and its journal entry will be removed. Year-to-date amounts on later pay stubs will change.${rec?' Its bank payment is already reconciled.':''}${paidRemit?' You have already recorded a remittance for this period.':''}`))return;
     const w=[{op:'delete',collection:'payruns',id:run.id}];if(e)w.push({op:'delete',collection:'entries',id:e.id});
     if(await batch(w)){closeModal();toast('Pay run deleted')}};
@@ -495,27 +520,40 @@ async function ddFile(run){
   const cheque=run.lines.filter(l=>l.net>0&&!lines.includes(l)).map(l=>l.name);
   toast(T(`Direct deposit file ${no}: ${out.count} deposit${out.count===1?'':'s'}, ${money(out.total)}. Upload it to your business banking.`)+(cheque.length?' '+T('Not in the file (paid by cheque or other):')+' '+cheque.join(', '):''));
 }
-function stubHTML(run,l){
+/* The figures on a pay stub, once, for the printed stub (HTML) and the emailed one (PDF, paystub.js). Never the SIN;
+   a direct deposit account only as its last 3 digits. */
+function stubData(run,l){
   const y=ytdFor(l.employeeId,run,true),e=employee(l.employeeId)||{};
-  const row=(label,cur,ytd)=>`<tr><td>${esc(label)}</td><td class="n">${money(cur)}</td><td class="n">${ytd===null?'':money(ytd)}</td></tr>`;
-  const ded=PR.EMPLOYEE_ITEMS.filter(([k])=>l.ded[k]||y.ded[k]).map(([k,n])=>row(n,l.ded[k]||0,y.ded[k]||0)).join('')+(l.rrsp||y.rrsp?row('RRSP / pension',l.rrsp||0,y.rrsp):'')+(l.union||y.union?row('Union dues',l.union||0,y.union):'');
-  const er=PR.EMPLOYER_ITEMS.filter(([k])=>l.er[k]||y.er[k]).map(([k,n])=>row(n,l.er[k]||0,y.er[k]||0)).join('');
+  const row=(key,cur,ytd,x={})=>({key,cur:+cur||0,ytd,...x});
+  const earnings=[l.payType==='hourly'&&l.hours?row('Regular pay',l.regular,null,{h:l.hours,rate:l.rate}):row('Regular pay',l.regular??l.gross,null)];
+  if(l.holiday)earnings.push(row('Holiday pay',l.holiday,y.hol||0,{names:(l.holidays||[]).map(h=>h.name)}));
+  if(l.other)earnings.push(row('Other pay',l.other,null));if(l.bonus)earnings.push(row('Bonus',l.bonus,null));if(l.allowance)earnings.push(row('Taxable allowance',l.allowance,null));
+  if(l.vacPay||y.vac)earnings.push(l.vacMode==='accrue'?row('Vacation pay paid out',l.vacPay||0,y.vac||0):row('Vacation pay',l.vacPay||0,y.vac||0,{rate:l.vacRate}));
+  const deductions=PR.EMPLOYEE_ITEMS.filter(([k])=>l.ded[k]||y.ded[k]).map(([k,n])=>row(n,l.ded[k]||0,y.ded[k]||0));
+  if(l.rrsp||y.rrsp)deductions.push(row('RRSP / pension',l.rrsp||0,y.rrsp));if(l.union||y.union)deductions.push(row('Union dues',l.union||0,y.union));
+  const acct=String((e.bank||{}).account||'').replace(/\D/g,'');
+  return{company:{name:S.company.name,bn:S.company.bn||''},payDate:run.payDate,from:run.from||'',to:run.to||'',name:l.name,address:e.address||'',
+    earnings,gross:[l.gross,y.gross],
+    benefits:l.benefits||y.benefits?{rows:PR.BENEFIT_KINDS.filter(b=>(l.benefits||{})[b.k]).map(b=>row(b.label,l.benefits[b.k],null)),total:[benTotal(l),y.benefits||0],qc:(l.prov||e.prov)==='QC'}:null,
+    deductions,totalDed:[lineDed(l),lineDed(y)],net:l.net,
+    vac:l.vacMode==='accrue'?{balance:vacBalance(l.employeeId,run,true),set:l.vacAccrued||0,rate:l.vacRate}:null,
+    employer:PR.EMPLOYER_ITEMS.filter(([k])=>l.er[k]||y.er[k]).map(([k,n])=>row(n,l.er[k]||0,y.er[k]||0)),
+    deposit:e.payMethod==='deposit'&&acct.length>=3?acct.slice(-3):''};
+}
+function stubHTML(run,l){
+  const s=stubData(run,l);
+  const tr_=r=>`<tr><td>${esc(r.key==='Regular pay'&&r.h?`Regular, ${r.h} h × ${money(r.rate)}`:r.key==='Holiday pay'&&r.names&&r.names.length?`Holiday pay (${r.names.map(n=>(typeof tr==='function'&&tr(n))||n).join(', ')})`:r.key==='Vacation pay'?`Vacation pay (${r.rate}%)`:r.key)}</td><td class="n">${money(r.cur)}</td><td class="n">${r.ytd===null?'':money(r.ytd)}</td></tr>`;
+  const tbl=(head,rows,foot,cls)=>`<table${cls?` class="${cls}"`:''}><thead><tr><th>${head}</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${rows.map(tr_).join('')||'<tr><td colspan="3" class="muted">None</td></tr>'}</tbody>${foot?`<tfoot><tr><td><b>${foot[0]}</b></td><td class="n"><b>${money(foot[1])}</b></td><td class="n"><b>${money(foot[2])}</b></td></tr></tfoot>`:''}</table>`;
   return `<section class="stub">
-    <header><div><b>${esc(S.company.name)}</b>${S.company.bn?`<div class="muted">BN ${esc(S.company.bn)}</div>`:''}</div><div style="text-align:right"><b>Pay stub</b><div class="muted">Pay date ${fmtDate(run.payDate)}</div>${run.from?`<div class="muted">Period ${fmtDate(run.from)} – ${fmtDate(run.to)}</div>`:''}</div></header>
-    <div class="stub-emp"><b>${esc(l.name)}</b>${e.address?`<div class="muted" style="white-space:pre-line">${esc(e.address)}</div>`:''}</div>
-    <table><thead><tr><th>Earnings</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>
-      ${l.payType==='hourly'&&l.hours?row(`Regular, ${l.hours} h × ${money(l.rate)}`,l.regular,null):row('Regular pay',l.regular??l.gross,null)}
-      ${l.holiday?row(`Holiday pay${(l.holidays||[]).length?` (${l.holidays.map(h=>(typeof tr==='function'&&tr(h.name))||h.name).join(', ')})`:''}`,l.holiday,y.hol||0):''}
-      ${l.other?row('Other pay',l.other,null):''}${l.bonus?row('Bonus',l.bonus,null):''}${l.allowance?row('Taxable allowance',l.allowance,null):''}
-      ${l.vacPay||y.vac?row(l.vacMode==='accrue'?'Vacation pay paid out':`Vacation pay (${l.vacRate}%)`,l.vacPay||0,y.vac||0):''}</tbody>
-      <tfoot><tr><td><b>Gross pay</b></td><td class="n"><b>${money(l.gross)}</b></td><td class="n"><b>${money(y.gross)}</b></td></tr></tfoot></table>
-    ${l.benefits||y.benefits?`<table><thead><tr><th>Taxable benefits (not paid to you)</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${PR.BENEFIT_KINDS.filter(b=>(l.benefits||{})[b.k]).map(b=>row(b.label,l.benefits[b.k],null)).join('')}</tbody>
-      <tfoot><tr><td><b>Total taxable benefits</b></td><td class="n"><b>${money(benTotal(l))}</b></td><td class="n"><b>${money(y.benefits||0)}</b></td></tr></tfoot></table><div class="muted" style="font-size:12px;margin:-4px 0 8px">${(l.prov||e.prov)==='QC'?'Included in your taxable income and on your T4 and RL-1. Tax on them is taken from your pay.':'Included in your taxable income and on your T4. Tax on them is taken from your pay.'}</div>`:''}
-    <table><thead><tr><th>Deductions</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${ded||'<tr><td colspan="3" class="muted">None</td></tr>'}</tbody>
-      <tfoot><tr><td><b>Total deductions</b></td><td class="n"><b>${money(lineDed(l))}</b></td><td class="n"><b>${money(lineDed(y))}</b></td></tr></tfoot></table>
-    <div class="stub-net"><span>Net pay</span><b>${money(l.net)}</b></div>
-    ${l.vacMode==='accrue'?`<div class="stub-vac"><span>Vacation pay owed to you after this pay:</span> <b>${money(vacBalance(l.employeeId,run,true))}</b> · <span>Set aside this pay: ${money(l.vacAccrued||0)}, at ${l.vacRate}%</span></div>`:''}
-    ${er?`<table class="stub-er"><thead><tr><th>Paid by your employer</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${er}</tbody></table>`:''}
+    <header><div><b>${esc(s.company.name)}</b>${s.company.bn?`<div class="muted">BN ${esc(s.company.bn)}</div>`:''}</div><div style="text-align:right"><b>Pay stub</b><div class="muted">Pay date ${fmtDate(s.payDate)}</div>${s.from?`<div class="muted">Period ${fmtDate(s.from)} – ${fmtDate(s.to)}</div>`:''}</div></header>
+    <div class="stub-emp"><b>${esc(s.name)}</b>${s.address?`<div class="muted" style="white-space:pre-line">${esc(s.address)}</div>`:''}</div>
+    ${tbl('Earnings',s.earnings,['Gross pay',...s.gross])}
+    ${s.benefits?tbl('Taxable benefits (not paid to you)',s.benefits.rows,['Total taxable benefits',...s.benefits.total])+`<div class="muted" style="font-size:12px;margin:-4px 0 8px">${s.benefits.qc?'Included in your taxable income and on your T4 and RL-1. Tax on them is taken from your pay.':'Included in your taxable income and on your T4. Tax on them is taken from your pay.'}</div>`:''}
+    ${tbl('Deductions',s.deductions,['Total deductions',...s.totalDed])}
+    <div class="stub-net"><span>Net pay</span><b>${money(s.net)}</b></div>
+    ${s.deposit?`<div class="muted" style="font-size:12px">Deposited to the account ending in ${esc(s.deposit)}</div>`:''}
+    ${s.vac?`<div class="stub-vac"><span>Vacation pay owed to you after this pay:</span> <b>${money(s.vac.balance)}</b> · <span>Set aside this pay: ${money(s.vac.set)}, at ${s.vac.rate}%</span></div>`:''}
+    ${s.employer.length?`<table class="stub-er"><thead><tr><th>Paid by your employer</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${s.employer.map(tr_).join('')}</tbody></table>`:''}
   </section>`;
 }
 function printStubs(run,lines){
@@ -525,6 +563,39 @@ function printStubs(run,lines){
   const done=()=>{document.body.classList.remove('printing');root.innerHTML='';window.removeEventListener('afterprint',done)};
   window.addEventListener('afterprint',done);
   setTimeout(()=>{window.print();setTimeout(()=>{if(document.body.classList.contains('printing'))done()},1500)},50);
+}
+
+/* ---------- emailed pay stubs ----------
+   Each employee with an email gets their stub as a PDF, in their language, through the company's mailbox
+   (POST /api/mail/send, which counts toward the 200-a-day limit and records "sent" on the pay run line).
+   One at a time, like batch invoice sends; a failure doesn't stop the rest, the daily limit does. */
+const PS=typeof TallyStub!=='undefined'?TallyStub:null;
+const stubEmail=l=>String((employee(l.employeeId)||{}).email||'').trim();
+const stubLang=l=>{const e=employee(l.employeeId)||{};return e.lang==='fr'||e.lang==='en'?e.lang:S.company.lang==='fr'?'fr':'en'};
+const stubSentPill=l=>{const s=(l.sent||[]).slice(-1)[0];return s?`<span class="pill paid" title="${esc(`Emailed to ${s.to}`)}">Emailed ${fmtDate(new Date(s.at).toISOString().slice(0,10))}</span> `:''};
+async function emailStubs(run,lines){
+  const p=PS.plan(lines,stubEmail);
+  if(!p.go.length)return confirmBox('No email address','Add an email address to the employee, then send again.','OK');
+  await loadMail();
+  if(!MAILCFG||!MAILCFG.configured){toast('Set up email for this company first (Settings → Email).',true);return}
+  const n=p.go.length,sk=p.skip.length;
+  const again=p.go.filter(l=>(l.sent||[]).length).length;
+  if(!await confirmBox(T(n===1?`Email ${n} pay stub?`:`Email ${n} pay stubs?`),`${T('Each employee gets their own pay stub as a PDF, from this company’s email, one at a time.')}${sk?' '+T(sk===1?`${sk} is skipped (listed at the end).`:`${sk} are skipped (listed at the end).`):''}${again?' '+T(again===1?`${again} was already sent.`:`${again} were already sent.`):''}`,T('Send')))return;
+  const f=openModal('Email pay stubs',`<div aria-live="polite"><b data-bstep>Sending…</b><div class="bprog"><span data-bfill style="width:0%"></span></div></div>`,`<button type="button" class="btn" data-close disabled>Close</button>`);
+  const co=S.company.name;
+  const results=await TallyBatch.runSequential(p.go,async l=>{
+    const lang=stubLang(l),date=PS.date(run.payDate,lang);
+    const[subject,text]=PS.message(payCfg().stubMail,lang,{name:l.name,date,company:co});
+    const bytes=PS.pdf(TallyPDF,stubData(run,l),lang);
+    await api('POST','/api/mail/send',{to:stubEmail(l),subject,text,attachments:[{name:PS.fileName(lang,run.payDate,l.name),data:toB64(bytes)}],what:'paystub',payrunId:run.id,employeeId:l.employeeId});
+  },(i,k)=>{if(!f.isConnected)return;$('[data-bstep]',f).textContent=T(`Sending ${i} of ${k}…`);$('[data-bfill]',f).style.width=Math.round((i-1)/k*100)+'%'});
+  await load();
+  const t=TallyBatch.tally(results,p.skip),bad=results.filter(r=>!r.ok);
+  const row=(l,why)=>`<tr><td translate="no">${esc(l.name)}</td><td>${why}</td></tr>`;
+  openModal('Email pay stubs',`<div class="chips" style="margin:0 0 12px"><div class="chip"><div class="lbl">Sent</div><div class="val">${t.sent}</div></div><div class="chip"><div class="lbl">Skipped</div><div class="val">${t.skipped}</div></div><div class="chip"><div class="lbl">Failed</div><div class="val ${t.failed?'neg':''}">${t.failed}</div></div></div>
+    ${bad.length||p.skip.length?`<div class="tbl-wrap"><table><thead><tr><th>Employee</th><th>Why</th></tr></thead><tbody>${bad.map(r=>row(r.item,`<span class="neg">${esc(r.error)}</span>`)).join('')}${p.skip.map(s=>row(s.line,'<span class="muted">No email address</span>')).join('')}</tbody></table></div>`:''}
+    ${p.skip.length?'<div class="muted" style="font-size:13px;margin-top:10px">Add an email address to those employees, then send again.</div>':''}`,
+    `<button type="button" class="btn" data-again>Back to the pay run</button><button type="button" class="btn primary" data-close>Done</button>`).addEventListener('click',ev=>{if(ev.target.closest('[data-again]'))payRunView(S.payruns.find(r=>r.id===run.id))});
 }
 
 /* ---------- remittance payments ---------- */
@@ -545,17 +616,17 @@ function remitGuide(key){
   const x=remittances().find(r=>r.agency+'|'+r.key===key);if(!x)return;
   const cra=x.agency==='cra',c=payCfg(),acct=String((cra?c.craAccount:c.rqId)||'').replace(/\s+/g,'').toUpperCase();
   const prob=PR.remitAccountProblem(x.agency,acct),period=PR.remitPeriodEnd(x.key),amt=r2(x.bal).toFixed(2);
-  const quarterly=/-Q[1-4]$/.test(x.key);
+  const pk=PR.periodOfKey(x.key)||{freq:'monthly'},quarterly=pk.freq==='quarterly',accel=pk.freq==='accel1'||pk.freq==='accel2';
   const row=(label,shown,copy,hint)=>`<tr><td><div class="flabel">${label}</div><div style="font-size:16px;font-weight:600"${copy!=null?' translate="no"':''}>${shown}</div>${hint?`<div class="muted" style="font-size:12px">${hint}</div>`:''}</td><td class="n" style="vertical-align:middle">${copy!=null?`<button type="button" class="btn sm" data-copy="${esc(copy)}">Copy</button>`:''}</td></tr>`;
   const acctRow=prob?`<tr><td colspan="2"><div class="banner" style="margin:0"><span>${prob==='missing'?(cra?'Add your CRA payroll account number (123456789RP0001) in Settings → Payroll.':'Add your Revenu Québec identification number (1234567890RS0001) in Settings → Payroll.'):(cra?'The CRA payroll account number in Settings → Payroll doesn’t look right. It should be 9 digits, RP and 4 digits (123456789RP0001).':'The Revenu Québec identification number in Settings → Payroll doesn’t look right. It should be 10 digits, RS and 4 digits (1234567890RS0001).')}</span> <button type="button" class="link" data-go-settings>Open Settings</button></div></td></tr>`
     :row(cra?'Account number (payroll account)':'Identification number',esc(acct),acct,cra?'Your business number + RP + 4 digits':'');
   const late=x.due&&x.due<today();
   const f=openModal(`${cra?'Pay CRA':'Pay Revenu Québec'} · ${x.label}`,`
     <div class="tbl-wrap"><table><tbody>
-      ${row('Payee',cra?'CRA – payroll deductions':'Revenu Québec – source deductions',null,cra?`Most banks list it as “Federal – payroll deductions – ${quarterly?'quarterly':'regular'}” or similar. Search “payroll” when adding the payee.`:'Search “Revenu Québec” or “retenues à la source” when adding the payee.')}
+      ${row('Payee',cra?'CRA – payroll deductions':'Revenu Québec – source deductions',null,cra?`Most banks list it as “Federal – payroll deductions – ${quarterly?'quarterly':pk.freq==='accel1'?'threshold 1':pk.freq==='accel2'?'threshold 2':'regular'}” or similar. Search “payroll” when adding the payee.`:'Search “Revenu Québec” or “retenues à la source” when adding the payee.')}
       ${acctRow}
       ${row('Amount',money(x.bal),amt)}
-      ${row('Remitting period',esc(period),period,quarterly?'The last month of the quarter':'The month you paid employees, not the month you’re paying in')}
+      ${row('Remitting period',esc(period),period,accel?'The last day of the remitting period':quarterly?'The last month of the quarter':pk.freq==='annual'?'The last month of the year':'The month you paid employees, not the month you’re paying in')}
       ${row('Due',`<span class="${late?'neg':''}">${fmtDate(x.due)}</span>`,null,late?'This is past due. Pay as soon as you can; CRA can charge a penalty and interest on late remittances.':'Bank payments can take 1 to 3 business days to reach the government. Pay a few days early so it arrives by the due date.')}
     </tbody></table></div>
     <div class="muted" style="font-size:13px">${cra?'You can also pay with CRA My Payment or a pre-authorized debit in CRA My Business Account.':'You can also pay through Mon dossier for businesses at Revenu Québec.'} Once it’s paid, record it here so your books show the remittance as paid.</div>`,
@@ -588,14 +659,21 @@ function remitForm(key,entry){
 
 /* ---------- settings panel ---------- */
 function payrollSettingsPanel(){
-  const c=payCfg(),dd=c.dd||{};
+  const c=payCfg(),dd=c.dd||{},sm=c.stubMail||{};
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Payroll</h3><form class="pad" id="paySetForm" style="display:flex;flex-direction:column;gap:14px">
-    <div class="fields">${fld('psFreq','Remitting source deductions',`<select id="psFreq"><option value="monthly" ${c.remitFreq==='monthly'?'selected':''}>Monthly (regular remitter)</option><option value="quarterly" ${c.remitFreq==='quarterly'?'selected':''}>Quarterly</option></select><span class="hint">CRA tells you which in your remitter letter</span>`)}
+    <div class="fields">${fld('psFreq','Remitting source deductions to CRA',`<select id="psFreq">${PR.REMIT_FREQS.cra.map(k=>`<option value="${k}" ${(c.remitFreq||'monthly')===k?'selected':''}>${esc(PR.REMIT_FREQ_LABEL.cra[k])}</option>`).join('')}</select><span class="hint">CRA tells you which in your remitter letter. Threshold 1: average monthly withholding of $25,000 to $99,999.99; threshold 2: $100,000 or more.</span>`)}
+    ${fld('psFreqRq','Remitting to Revenu Québec',`<select id="psFreqRq"><option value="">Same as CRA</option>${PR.REMIT_FREQS.rq.map(k=>`<option value="${k}" ${c.remitFreqRq===k?'selected':''}>${esc(PR.REMIT_FREQ_LABEL.rq[k])}</option>`).join('')}</select><span class="hint">Only for employees in Quebec. Revenu Québec sets its own frequency, which can differ from CRA’s.</span>`)}
     ${fld('psHsf','Quebec Health Services Fund rate (%)',`<input type="number" id="psHsf" min="0" max="10" step="0.01" value="${esc(c.hsfRate)}"><span class="hint">Only for employees in Quebec. 1.65% for most small employers.</span>`)}
     ${fld('psCra','CRA payroll account number',`<input type="text" id="psCra" maxlength="15" placeholder="123456789RP0001" value="${esc(c.craAccount||'')}" translate="no"><span class="hint">Your business number + RP + 4 digits. T4 box 54.</span>`)}
     ${fld('psRq','Revenu Québec identification number',`<input type="text" id="psRq" maxlength="16" placeholder="1234567890RS0001" value="${esc(c.rqId||'')}" translate="no"><span class="hint">For RL-1 slips and the RL-1 Summary, if you have employees in Quebec.</span>`)}</div>
     <div class="fields">${fld('psAssoc','Payroll of associated employers',`<input type="number" id="psAssoc" step="0.01" min="0" value="${c.assocPayroll||''}"><span class="hint">Only if this business is associated with others. Revenu Québec sets the Health Services Fund rate from everyone’s total payroll.</span>`)}</div>
     <label class="check"><input type="checkbox" id="psPrim" ${c.hsfPrimary?'checked':''}> Primary or manufacturing business (lower Health Services Fund rate)</label>
+    <h3 class="fsec">Emailed pay stubs</h3>
+    <div class="muted" style="font-size:13px">Each employee gets their pay stub as a PDF, in their language, from this company’s email. Leave these blank for the usual wording. {name} is the employee’s name, {date} the pay date and {company} your company’s name.</div>
+    <div class="fields">${fld('psSmSubEn','Subject (English)',`<input type="text" id="psSmSubEn" maxlength="200" placeholder="${esc(PS.DEFAULT_MAIL.en.subject)}" value="${esc(sm.en?.subject||'')}" translate="no">`)}
+      ${fld('psSmSubFr','Subject (French)',`<input type="text" id="psSmSubFr" maxlength="200" placeholder="${esc(PS.DEFAULT_MAIL.fr.subject)}" value="${esc(sm.fr?.subject||'')}" translate="no">`)}</div>
+    <div class="fields">${fld('psSmTxtEn','Message (English)',`<textarea id="psSmTxtEn" maxlength="2000" rows="4" placeholder="${esc(PS.DEFAULT_MAIL.en.text)}" translate="no">${esc(sm.en?.text||'')}</textarea>`)}
+      ${fld('psSmTxtFr','Message (French)',`<textarea id="psSmTxtFr" maxlength="2000" rows="4" placeholder="${esc(PS.DEFAULT_MAIL.fr.text)}" translate="no">${esc(sm.fr?.text||'')}</textarea>`)}</div>
     <h3 class="fsec">Direct deposit</h3>
     <div class="muted" style="font-size:13px">Sumlora makes a direct deposit file (CPA-005) for each pay run. You upload it to your business online banking, and your bank pays your employees from your account. Your bank sets up the service and gives you the numbers below.</div>
     <div class="fields">${fld('psDdOrig','Originator ID',`<input type="text" id="psDdOrig" maxlength="10" autocomplete="off" value="${esc(dd.originatorId||'')}" translate="no"><span class="hint">10 letters or digits, from your bank</span>`)}
@@ -608,6 +686,7 @@ function payrollSettingsPanel(){
       ${fld('psDdNext','Next file number',`<input type="number" id="psDdNext" min="1" max="9999" step="1" value="${(dd.lastFileNo||0)%9999+1}"><span class="hint">Goes up by one with each file. Your bank refuses a number it has already received.</span>`)}</div>
     <div><button class="btn" type="submit">Save payroll settings</button></div></form></div>`;
 }
-function bindPayrollSettings(m){const f=$('#paySetForm',m);if(!f)return;f.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),payroll:{...payCfg(),remitFreq:$('#psFreq',f).value,hsfRate:+$('#psHsf',f).value||0,craAccount:$('#psCra',f).value.trim(),rqId:$('#psRq',f).value.trim(),hsfPrimary:$('#psPrim',f).checked,assocPayroll:+$('#psAssoc',f).value||0,
+function bindPayrollSettings(m){const f=$('#paySetForm',m);if(!f)return;f.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),payroll:{...payCfg(),remitFreq:$('#psFreq',f).value,remitFreqRq:$('#psFreqRq',f).value,
+    stubMail:{en:{subject:$('#psSmSubEn',f).value.trim(),text:$('#psSmTxtEn',f).value.trim()},fr:{subject:$('#psSmSubFr',f).value.trim(),text:$('#psSmTxtFr',f).value.trim()}},hsfRate:+$('#psHsf',f).value||0,craAccount:$('#psCra',f).value.trim(),rqId:$('#psRq',f).value.trim(),hsfPrimary:$('#psPrim',f).checked,assocPayroll:+$('#psAssoc',f).value||0,
     dd:{...(payCfg().dd||{}),originatorId:$('#psDdOrig',f).value.trim(),dataCentre:$('#psDdDc',f).value.trim(),shortName:$('#psDdShort',f).value.trim(),longName:$('#psDdLong',f).value.trim(),
       returnInst:$('#psDdInst',f).value.trim(),returnTransit:$('#psDdTr',f).value.trim(),returnAccount:$('#psDdAcct',f).value.trim(),lastFileNo:Math.max(0,Math.min(9998,(parseInt($('#psDdNext',f).value,10)||1)-1))}}}))toast('Payroll settings saved')}}

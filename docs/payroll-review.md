@@ -40,9 +40,6 @@ example 2 do.
 
 ## Still open (from the code review)
 
-High:
-- **Accelerated remitters** (threshold 1 and 2) aren't supported — only monthly and quarterly.
-
 Medium:
 - No **void / reversing entry** for a posted pay run; deleting one doesn't recompute later runs' CPP/EI.
 - **ROE** includes pay from before an earlier ROE for the same employee.
@@ -50,11 +47,9 @@ Medium:
 - Ontario **overtime** (1.5× after 44 hours a week) isn't calculated.
 - **Vacation pay** isn't earned on non-discretionary bonuses; Ontario **holiday pay** leaves out vacation pay
   on the current run.
-- No Ontario **EHT**, **WSIB** or emailed pay stubs.
+- No Ontario **EHT** or **WSIB**.
 
 Low:
-- Remittance due dates on a weekend or holiday aren't moved to the next business day.
-- One remittance frequency covers both CRA and Revenu Québec.
 - Client-role users can post and delete pay runs and see full SINs — confirm that's intended.
 - The flat bonus rate for very low incomes is 15% (10% in Quebec) — confirm with PDOC that it's still 15%
   now that the lowest federal rate is 14%.
@@ -78,3 +73,51 @@ number) is in Settings → Payroll, from the employer's bank.
 - Bank account numbers are masked (last 3 digits) in the activity log, and for clients and view-only users.
 - **Before the first real payroll with a bank:** send the bank a test file. Banks add their own rules on top of the
   standard (data centre code, segments per record, line endings), so confirm with each bank a client uses.
+
+## Remittance schedules and emailed pay stubs (added October 2026)
+
+**Remitting frequencies.** Settings → Payroll has one setting for CRA and one for Revenu Québec (blank = the same as
+CRA). Periods and due dates are in `payroll-calc.js` (`remitPeriodFor`, `remitDueFor`), checked in `test/remit-stubs.test.js`:
+
+| Frequency | Period key | Periods | Due |
+|---|---|---|---|
+| Monthly (regular) | `2026-10` | calendar month | 15th of the next month |
+| Quarterly | `2026-Q4` | calendar quarter | 15th after the quarter |
+| CRA threshold 1 / RQ twice a month | `2026-10-H1`, `-H2` | 1st–15th, 16th–end | 25th; 10th of the next month |
+| CRA threshold 2 / RQ weekly | `2026-10-W1`…`-W4` | 1st–7th, 8th–14th, 15th–21st, 22nd–end | 3rd working day after the period ends |
+| Yearly (Revenu Québec only) | `2026` | calendar year | January 15 |
+
+Sources: CRA "When to remit" (canada.ca/cra-remit-due-date) and Revenu Québec "Frequency of remittances" and
+"Remittance schedules", checked October 12, 2026.
+
+- **Weekends and holidays.** A due date on a Saturday, Sunday or holiday moves to the next business day, and threshold 2's
+  "working days" skip them. CRA: its list of public holidays for due dates (canada.ca/cra-public-holidays): New Year's,
+  Good Friday, Easter Monday, Victoria Day, Saint-Jean-Baptiste (Quebec only), Canada Day, Civic Holiday (not Quebec),
+  Labour Day, Truth and Reconciliation, Thanksgiving, Remembrance Day, Christmas and Boxing Day. The CRA province is the
+  company's province. Revenu Québec: its office closing days (January 2, December 24 and 31 too; a holiday on a weekend is
+  taken the next weekday) plus Remembrance Day. With these, Sumlora's dates match Revenu Québec's published 2026 schedule
+  for every monthly, twice-monthly and weekly period (tested).
+- **To confirm:** CRA's page lists Boxing Day 2026 on Saturday the 26th with no substitute day, so Sumlora does not move
+  CRA due dates past Monday December 28. If CRA ever publishes substitute days, add them to `DUE_HOLIDAYS`. Revenu
+  Québec's last-December period can be paid by January 15 without penalty (interest still runs from the due date); Sumlora
+  shows the normal due date.
+- **T4/RL-1 due date** now also skips a holiday, not just a weekend.
+- **Changing frequency mid-year.** A payment keeps the period key it was recorded for. A pay date inside a period that
+  already has a payment under another frequency stays in that period, so the payment still matches; later pay dates use
+  the new frequency. Payments for periods with no pay runs still show, with their own due date. The cash flow forecast
+  uses the same periods.
+- The remittance guide gives the remitting period as the period's end date (YYYY-MM-DD) for accelerated remitters, and
+  names the threshold 1 or 2 payee.
+
+**Emailed pay stubs.** **Email pay stubs** on a posted pay run, or **Email stub** on one line. Each employee with an email
+address gets a PDF of their stub (`paystub.js`, drawn with `pdf.js` from the same figures as the printed stub) in their
+language: a new **Language for pay stubs** on the employee, defaulting to the company's. The subject and message can be set
+per language in Settings → Payroll ({name}, {date}, {company}); blank uses Sumlora's wording.
+
+- Sent one at a time through the company's mailbox (`POST /mail/send` with `what: 'paystub'`), so each counts toward the
+  200-a-day limit; a failure doesn't stop the rest, reaching the limit does. A summary lists sent, skipped (no email)
+  and failed.
+- The server only sends a stub to the employee's own email address on file (no Cc), for a line in that pay run, and
+  needs payroll view access and the payroll feature. It records `sent` (when, to whom, by whom) on the pay run line; the
+  pay run shows "Emailed" with the date.
+- Stubs never show the SIN. For direct deposit, only the last 3 digits of the account are shown. No password protection.

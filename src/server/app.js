@@ -1537,6 +1537,18 @@ function createApp(opts) {
       const subject = m[1] === 'test' ? `Test email from Sumlora (${company.name})` : String(body.subject || '').slice(0, 200);
       const text = m[1] === 'test' ? `This is a test from Sumlora. Email for ${company.name} is working.` : String(body.text || '').slice(0, 20000);
       if (!subject.trim()) throw new ValidationError('Enter a subject.');
+      // A pay stub: recorded on its pay run line, and it only goes to that employee's own email address.
+      let stub = null;
+      if (m[1] === 'send' && body.what === 'paystub') {
+        needArea(ctx.user, 'payroll', 'view');
+        needFeature(ctx.id, 'payroll', ctx.store);
+        const run = ctx.store.get('payruns', String(body.payrunId || ''));
+        const li = run ? (run.lines || []).findIndex(l => l.employeeId === String(body.employeeId || '')) : -1;
+        if (li < 0) throw new ValidationError('That pay stub isn’t in this pay run.', 404);
+        const emp = ctx.store.get('employees', run.lines[li].employeeId) || {};
+        if (to.length !== 1 || cc.length || to[0].toLowerCase() !== String(emp.email || '').trim().toLowerCase()) throw new ValidationError('A pay stub goes only to the employee’s own email address.');
+        stub = { run, li };
+      }
       const attachments = [];
       let total = 0;
       for (const a of (m[1] === 'send' && Array.isArray(body.attachments) ? body.attachments : []).slice(0, 5)) {
@@ -1557,9 +1569,13 @@ function createApp(opts) {
           const d = ctx.store.get('docs', id);
           if (d) ctx.store.put('docs', id, { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: to.join(', '), by: ctx.user.name || ctx.user.username, what: ['invoice', 'reminder', 'statement', 'credit', 'sreceipt', 'po'].includes(body.what) ? body.what : 'document' }] });
         }
+        if (stub) {
+          const r = ctx.store.get('payruns', stub.run.id), l = r.lines[stub.li];
+          ctx.store.put('payruns', r.id, { ...r, lines: r.lines.map((x, i) => (i === stub.li ? { ...l, sent: [...(l.sent || []).slice(-9), { at: Date.now(), to: to[0], by: ctx.user.name || ctx.user.username }] } : x)) });
+        }
         ctx.store.audit(ctx.user, 'email', { summary: `${m[1] === 'test' ? 'test email' : 'emailed'} “${subject.slice(0, 80)}” to ${to.join(', ').slice(0, 120)}` });
       });
-      return { ok: true, rev: docIds.length ? ctx.bump() : ctx.rev };
+      return { ok: true, rev: docIds.length || stub ? ctx.bump() : ctx.rev };
     }],
     // ---------- bill approvals ----------
     // The people who could be approvers (Settings → Bill approvals): owners and staff of the firm.

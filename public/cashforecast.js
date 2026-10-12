@@ -55,7 +55,7 @@ function fcItems(cfg,t,end){
     const last={};for(const r of S.payruns.slice().sort(runOrder))last[r.freq||'biweekly']=r;
     const schedules=Object.entries(last).map(([freq,r])=>{const x=runTotals(r);return{freq,last:{payDate:r.payDate,net:x.net,cra:x.cra,rq:x.rq}}});
     const unpaid=remittances().filter(x=>x.bal>0.004).map(x=>({agency:x.agency,key:x.key,due:x.due,amount:x.bal}));
-    items.push(...F.payrollItems({schedules,unpaid,remitFreq:payCfg().remitFreq,today:t,end}));
+    items.push(...F.payrollItems({schedules,unpaid,remitFreq:payCfg().remitFreq,periodOf:(d,ag)=>remitPeriod(d,ag),today:t,end}));
   }
   // Sales tax: each return not filed yet, on its due date. Returns more than 90 days overdue are left out:
   // books that never use Sumlora's filing would otherwise show years of returns as due today.

@@ -7,6 +7,7 @@ const REPFILTER = require('../../public/report-filters.js');
 const TAGS = require('../../public/tags.js');
 const APPROVALS = require('../../public/approvals.js');
 const DEP = require('../../public/deposits-calc.js');
+const PAYCALC = require('../../public/payroll-calc.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -209,6 +210,12 @@ function validateEntry(data, store, id) {
     if (!doc) throw new ValidationError('The invoice or bill this payment applies to doesn’t exist.');
     if (!(Number(data.amount) > 0)) throw new ValidationError('Payment amount must be above zero.');
   }
+  // A remittance payment is for one agency and one remitting period (payroll-calc.js period keys). The key stays on the
+  // payment, so a change of remitting frequency later doesn't unmatch it.
+  if (data.type === 'payremit') {
+    if (!['cra', 'rq'].includes(data.agency)) throw new ValidationError('A remittance is paid to CRA or Revenu Québec.');
+    if (!PAYCALC.periodOfKey(data.period)) throw new ValidationError('The remitting period isn’t valid.');
+  }
   // Adjusting entries are marked for the working trial balance; a reversing entry points at the one it undoes.
   const out = { ...data, lines };
   if (DEP.TYPES.includes(data.type)) validateDepositEntry(out, store, id);
@@ -342,6 +349,8 @@ function validateEmployee(data) {
     if (sin.length !== 9) throw new ValidationError('A social insurance number has 9 digits.');
     out.sin = sin;
   } else out.sin = '';
+  // Language for emailed pay stubs ('' = the company's).
+  out.lang = ['en', 'fr'].includes(data.lang) ? data.lang : '';
   out.dental = [1, 2, 3, 4, 5].includes(Number(data.dental)) ? Number(data.dental) : 0; // 0 = not chosen yet
   // Direct deposit: the employee's bank account (institution, transit, account).
   out.payMethod = data.payMethod === 'deposit' ? 'deposit' : 'cheque';
@@ -458,6 +467,8 @@ function validatePayrun(data, store) {
       extra.holidays = l.holidays.map(h => ({ date: isDate(h && h.date) ? h.date : '', name: str(h && h.name, 80) })).filter(h => h.date);
     }
     if (l.final !== undefined) extra.final = !!l.final;
+    // When the pay stub was emailed (recorded by the mail route): kept as it was, never more than the last 10.
+    if (l.sent !== undefined) extra.sent = (Array.isArray(l.sent) ? l.sent : []).filter(isObj).slice(-10).map(s => ({ at: Number(s.at) || 0, to: str(s.to, 200), by: str(s.by, 120) }));
     return { ...l, ...extra, gross: gross / 100, rrsp: cents(numOr0(l.rrsp)) / 100, union: cents(numOr0(l.union)) / 100, ded, er, net: n / 100 };
   });
   if (data.entryId && !store.get('entries', data.entryId)) throw new ValidationError('The journal entry for this pay run doesn’t exist.');
@@ -817,15 +828,29 @@ function validateDirectDeposit(d) {
 function validatePayrollSettings(p) {
   if (!isObj(p)) return { hsfRate: 1.65, remitFreq: 'monthly' };
   const hsf = Number(p.hsfRate);
-  return {
+  const out = {
     hsfRate: Number.isFinite(hsf) && hsf >= 0 && hsf <= 10 ? hsf : 1.65,
-    remitFreq: ['monthly', 'quarterly'].includes(p.remitFreq) ? p.remitFreq : 'monthly',
+    // How often source deductions are remitted (payroll-calc.js REMIT_FREQS): CRA, and Revenu Québec on its own
+    // ('' or left out: the same as CRA's).
+    remitFreq: PAYCALC.REMIT_FREQS.cra.includes(p.remitFreq) ? p.remitFreq : 'monthly',
     craAccount: str(p.craAccount, 20).toUpperCase().replace(/\s/g, ''),
     rqId: str(p.rqId, 20).toUpperCase().replace(/\s/g, ''),
     hsfPrimary: !!p.hsfPrimary,
     assocPayroll: optAmount(p.assocPayroll, 'Associated employers’ payroll') || 0,
     dd: validateDirectDeposit(p.dd),
   };
+  if (PAYCALC.REMIT_FREQS.rq.includes(p.remitFreqRq)) out.remitFreqRq = p.remitFreqRq;
+  // Emailed pay stubs: the subject and message in each language (blank: Sumlora's own wording).
+  if (isObj(p.stubMail)) {
+    const m = {};
+    for (const l of ['en', 'fr']) {
+      const x = isObj(p.stubMail[l]) ? p.stubMail[l] : {};
+      const subject = str(x.subject, 200).replace(/[\r\n]+/g, ' ').trim(), text = str(x.text, 2000).trim();
+      if (subject || text) m[l] = { subject, text };
+    }
+    if (Object.keys(m).length) out.stubMail = m;
+  }
+  return out;
 }
 
 function validateCompany(data) {
