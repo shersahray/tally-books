@@ -592,3 +592,7 @@ th.bsel,td.bsel{width:28px;padding-right:0}
 .review .tagpick .tagin{min-width:50px}
 tr.tag-grp td{background:var(--surface-2)}
 #tagsPanel .tagacts{display:flex;flex-wrap:wrap;gap:2px;justify-content:flex-end}
+
+/* Bill approvals */
+.ap-hist{margin:6px 0 0;padding-left:18px;font-size:13px;display:flex;flex-direction:column;gap:4px}
+.ap-pick{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;padding:4px 0}

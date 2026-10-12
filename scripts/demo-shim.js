@@ -52,6 +52,13 @@
       if (w.collection === 'docs' && b.entries.some(e => e.applyTo === w.id)) throw new ApiError(409, 'Delete the payments on this invoice or bill first.');
     }
   }
+  // Bill approvals, as the server decides them (approvals.js), so the demo shows bills waiting for approval.
+  function demoApproval(b, w) {
+    if (w.op !== 'set' || w.collection !== 'docs' || !w.data || w.data.kind !== 'bill' || typeof TallyApprovals === 'undefined') return;
+    const prev = b.docs.find(x => x.id === w.id) || null, s = b.company.approvals;
+    const a = TallyApprovals.onSave(prev, w.data, s, TallyApprovals.active(s, true), { username: 'demo', name: 'Demo user' });
+    w.data = { ...w.data }; if (a) w.data.approval = a; else delete w.data.approval;
+  }
   function apply(b, w) {
     check(b, w);
     const arr = b[w.collection] || (b[w.collection] = []), i = arr.findIndex(x => x.id === w.id);
@@ -194,9 +201,9 @@
     if (am) { const row = log.find(x => x.seq === Number(am[1])); if (!row) throw new ApiError(404, 'Not found'); return row; }
     if (rest === '/state') return { ...clone(b), companyId: id };
     let r = rest.match(/^\/records\/([A-Za-z]+)\/([^/]+)$/);
-    if (r && method === 'PUT') { const w0 = { op: 'set', collection: r[1], id: decodeURIComponent(r[2]), data: body }; note(w0); return transact(id, w => apply(w, w0)); }
+    if (r && method === 'PUT') { const w0 = { op: 'set', collection: r[1], id: decodeURIComponent(r[2]), data: body }; demoApproval(b, w0); note(w0); return transact(id, w => apply(w, w0)); }
     if (r && method === 'DELETE') { const w0 = { op: 'delete', collection: r[1], id: decodeURIComponent(r[2]) }; note(w0); return transact(id, w => apply(w, w0)); }
-    if (rest === '/batch') { body.writes.forEach(note); return transact(id, w => body.writes.forEach(x => apply(w, x))); }
+    if (rest === '/batch') { body.writes.forEach(x => demoApproval(b, x)); body.writes.forEach(note); return transact(id, w => body.writes.forEach(x => apply(w, x))); }
     // Import data (a spreadsheet) only adds records, so it works like a batch here.
     if (rest === '/import' && body.addOnly) { body.writes.forEach(note); const out = transact(id, w => body.writes.forEach(x => apply(w, x))); const counts = {}; body.writes.forEach(x => { counts[x.collection] = (counts[x.collection] || 0) + 1; }); return { ...out, counts }; }
     if (rest === '/settings') { const out = transact(id, w => { w.company = { ...w.company, ...body }; }); cos.find(c => c.id === id).name = body.name; return out; }
@@ -234,6 +241,15 @@
     if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Sumlora, receipts go to this screen from a phone or a computer.');
     if (rest === '/closing') { const out = transact(id, w => { w.company = { ...w.company, closingDate: body.date || '', closingPassword: body.password !== undefined ? !!body.password : !!w.company.closingPassword }; }); return out; }
     if (rest === '/closing/unlock') return { ok: true, minutes: 15 };
+    // Bill approvals: the demo user is the only owner, so they can approve their own bills.
+    if (rest === '/approvers') return { people: [] };
+    m = rest.match(/^\/approvals\/([^/]+)$/);
+    if (m && method === 'POST') {
+      const d = b.docs.find(x => x.id === decodeURIComponent(m[1]));
+      if (!d || !d.approval) throw new ApiError(404, 'That bill doesn’t exist.');
+      if (body.action === 'reject' && !String(body.comment || '').trim()) throw new ApiError(400, 'Say why the bill is rejected, so the person who entered it knows what to fix.');
+      return transact(id, w => { const i = w.docs.findIndex(x => x.id === d.id); w.docs[i] = TallyApprovals.decide(w.docs[i], body.action, demoUser, String(body.comment || '').trim()); });
+    }
     if (rest === '/code') {
       if (!body.remove && !/^\d{4}$/.test(String(body.code))) throw new ApiError(400, 'The company code has to be 4 digits.');
       if (body.remove) delete codes[id]; else codes[id] = String(body.code);

@@ -96,6 +96,7 @@ function createApp(opts) {
   const PLANS = require('../../public/plans.js');
   const IND = require('../../public/industries.js');
   const ROLES = require('../../public/roles.js');
+  const APPROVALS = require('../../public/approvals.js');
   /* Custom roles (public/roles.js): a staff member with one of the firm's own roles sees and changes only
      the areas it allows. Owners, plain staff and clients have no perms, so nothing here limits them. */
   const canArea = (user, area, level = 'view') => !(user && user.perms) || ROLES.can(user.perms, area, level);
@@ -597,6 +598,9 @@ function createApp(opts) {
     if (ctx.user && (ctx.user.role === 'client' || ctx.user.readOnly) && out.employees) out.employees = out.employees.map(maskPrivate);
     if (ctx.user && ctx.user.perms) roleView(ctx.user, out);
     out.assistant = assistantInfo(ctx.id, ctx.store);
+    // Bill approvals: how many owners the firm has (one owner may approve their own bills).
+    const cf = reg.get(ctx.id);
+    out.approvalOwners = cf ? auth.firmUsers(cf.firmId).filter(u => u.role === 'owner' && !u.disabled).length : 1;
     // Add-ons on for this company (the AI assistant has its own details above).
     const co = reg.get(ctx.id) || {};
     out.addons = Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, !!co[k]]));
@@ -651,6 +655,23 @@ function createApp(opts) {
       if (collection === 'filings' && ['quick', 'charity', 'npo'].includes(d.method)) {
         const prev = store.get('filings', id);
         if (!(prev && prev.method === d.method)) needFeature(ctx.id, 'specialTax', store);
+      }
+    }
+    // Bill approvals (approvals.js): the server decides a bill's approval on every save; a bill waiting for approval
+    // (or rejected) can't be paid. Payments already on it stay as they are and can still be ticked as cleared.
+    if (op === 'set' && collection === 'docs' && w.data && w.data.kind === 'bill') {
+      const prev = store.get('docs', id), settings = (store.getSetting('company') || {}).approvals;
+      const on = !!ctx && !ctx.importing && APPROVALS.active(settings, featureOn(ctx.id, 'billApprovals', store));
+      const a = APPROVALS.onSave(prev && prev.kind === 'bill' ? prev : null, w.data, settings, on, user);
+      w.data = { ...w.data }; if (a) w.data.approval = a; else delete w.data.approval;
+    }
+    if (op === 'set' && collection === 'entries' && w.data && w.data.type === 'billpayment' && w.data.applyTo && ctx && !ctx.importing) {
+      const doc = store.get('docs', String(w.data.applyTo)), prev = store.get('entries', id);
+      const more = !prev || prev.applyTo !== w.data.applyTo || (Number(w.data.amount) || 0) > (Number(prev.amount) || 0) + 0.004;
+      if (more && APPROVALS.held(doc, APPROVALS.active((store.getSetting('company') || {}).approvals, featureOn(ctx.id, 'billApprovals', store)))) {
+        throw new ValidationError(doc.approval.status === 'rejected'
+          ? `Bill${doc.number ? ' #' + doc.number : ''} was rejected, so it can’t be paid. Correct it and send it for approval again.`
+          : `Bill${doc.number ? ' #' + doc.number : ''} is waiting for approval, so it can’t be paid yet.`, 409);
       }
     }
     // Receipts are created only by the upload route (or a restore), never by a plain write.
@@ -1440,6 +1461,16 @@ function createApp(opts) {
       }
       // Plan features: can't be turned on here when the plan doesn't include them (settings already saved stay as they were).
       if (company.quickMethod && company.quickMethod.on && !(before && before.quickMethod && before.quickMethod.on)) needFeature(ctx.id, 'specialTax', ctx.store);
+      // Bill approvals: only owners decide them (staff could otherwise make themselves approvers), and only on a plan that has them.
+      // Approvers must be people in this firm.
+      const firmId = (reg.get(ctx.id) || {}).firmId;
+      const inFirm = a => ({ ...a, approvers: a.approvers.filter(uid => { const u = auth.byId(uid); return u && u.firmId === firmId && u.role !== 'client'; }) });
+      company.approvals = inFirm(company.approvals);
+      const prevAp = inFirm(APPROVALS.clean(before && before.approvals));
+      if (JSON.stringify(company.approvals) !== JSON.stringify(prevAp)) {
+        if (ctx.user.role !== 'owner') throw new ValidationError('Only an owner can change bill approvals.', 403);
+        if (company.approvals.on && !prevAp.on) needFeature(ctx.id, 'billApprovals', ctx.store);
+      }
       if (!featureOn(ctx.id, 'advancedReports', ctx.store) && JSON.stringify(company.savedReports || []) !== JSON.stringify((before && before.savedReports) || [])) {
         const added = (company.savedReports || []).some(r => !((before && before.savedReports) || []).some(b => b.id === r.id));
         if (added) needFeature(ctx.id, 'advancedReports', ctx.store);
@@ -1516,6 +1547,43 @@ function createApp(opts) {
     // Batch "Mark as sent": invoices that went out some other way (by hand, by post, from another mailbox) get the
     // same "sent" record an email adds, with no address. Like the email record, it isn't a change to the books,
     // so it's allowed in a closed period.
+    // ---------- bill approvals ----------
+    // The people who could be approvers (Settings → Bill approvals): owners and staff of the firm.
+    ['GET', /^\/approvers$/, ctx => {
+      notClient(ctx.user);
+      const c = reg.get(ctx.id);
+      return { people: auth.firmUsers(c.firmId).filter(u => u.role !== 'client' && !u.disabled && auth.canSee(u, ctx.id)).map(u => { const cr = auth.customRoleOf(u); return { id: u.id, name: u.name, username: u.username, role: u.role, roleName: cr ? cr.name : '', approveBills: !!(cr && cr.approveBills) }; }) };
+    }],
+    // Approve or reject a bill waiting for approval (with a comment), or send a rejected bill for approval again.
+    ['POST', /^\/approvals\/([^/]+)$/, async (ctx, req, m) => {
+      notClient(ctx.user);
+      needFeature(ctx.id, 'billApprovals', ctx.store);
+      const settings = (ctx.store.getSetting('company') || {}).approvals;
+      if (!APPROVALS.clean(settings).on) throw new ValidationError('Bill approvals are turned off for this company.', 409);
+      const body = (await readJson(req)) || {};
+      const action = ['approve', 'reject', 'resubmit'].includes(body.action) ? body.action : '';
+      if (!action) throw new ValidationError('Choose approve or reject.');
+      const comment = String(body.comment || '').trim().slice(0, 500);
+      const id = decodeURIComponent(m[1]), doc = ctx.store.get('docs', id);
+      if (!doc || doc.kind !== 'bill') throw new ValidationError('That bill doesn’t exist.', 404);
+      if (action === 'resubmit') {
+        needArea(ctx.user, 'expenses', 'edit');
+        if (!doc.approval || doc.approval.status !== 'rejected') throw new ValidationError('Only a rejected bill can be sent for approval again.', 409);
+      } else {
+        needArea(ctx.user, 'expenses', 'view');
+        if (action === 'reject' && !comment) throw new ValidationError('Say why the bill is rejected, so the person who entered it knows what to fix.');
+        const owners = auth.firmUsers((reg.get(ctx.id) || {}).firmId).filter(u => u.role === 'owner' && !u.disabled).length;
+        const why = APPROVALS.whyNot(ctx.user, settings, doc, owners);
+        if (why) throw new ValidationError(why, why.startsWith('This bill') ? 409 : 403);
+      }
+      const after = APPROVALS.decide(doc, action, ctx.user, comment);
+      ctx.store.transaction(() => {
+        ctx.store.put('docs', id, after);
+        const word = { approve: 'approved', reject: 'rejected', resubmit: 'sent for approval again' }[action];
+        ctx.store.audit(ctx.user, action, { collection: 'docs', id, summary: `bill${doc.number ? ' #' + doc.number : ''} ${doc.date} $${(Number(doc.total) || 0).toFixed(2)} ${word}${comment ? ': ' + comment.slice(0, 120) : ''}`, before: doc, after });
+      });
+      return { ok: true, status: after.approval.status, rev: ctx.bump() };
+    }],
     ['POST', /^\/docs\/mark-sent$/, async (ctx, req) => {
       const body = (await readJson(req)) || {};
       if (!Array.isArray(body.docIds) || !body.docIds.length) throw new ValidationError('Pick at least one invoice.');
@@ -2017,6 +2085,8 @@ function createApp(opts) {
       const mine = fs.readdirSync(snapDir).filter(f => f.startsWith(ctx.id + '-before-import-')).sort();
       for (const f of mine.slice(0, -10)) fs.rmSync(path.join(snapDir, f), { force: true });
       const counts = {};
+      // Bills brought over from other software were already approved (and often paid) there: approvals don't apply.
+      ctx.importing = true;
       ctx.store.transaction(() => {
         body.writes.forEach((w, i) => {
           try { applyWrite(ctx.store, w, ctx.user, ctx); } catch (e) {

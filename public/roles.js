@@ -97,7 +97,8 @@
     if (others.some(r => r.name.toLowerCase() === name.toLowerCase())) throw new Error('There’s already a role with that name.');
     const src = data.perms && typeof data.perms === 'object' ? data.perms : {};
     const perms = Object.fromEntries(Object.keys(AREAS).map(a => [a, LEVELS.includes(src[a]) ? src[a] : 'none']));
-    return { name, perms };
+    // Bill approvals: people with this role can approve bills waiting for approval (approvals.js).
+    return { name, perms, approveBills: !!data.approveBills };
   }
 
   return { AREAS, LEVELS, MAX_ROLES, can, editsSomething, recordArea, writeAreas, settingArea, cleanRole, ENTRY_AREA };

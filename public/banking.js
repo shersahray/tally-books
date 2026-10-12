@@ -32,7 +32,8 @@ function matchesFor(b){
   if(kind==='bill'||a.detail==='bank'){
     for(const d of S.docs.filter(d=>d.kind===kind)){
       const st=docStatus(d);
-      if(st.bal>0&&Math.abs(st.bal-Math.abs(b.amount))<0.005)out.push({value:'m:doc:'+d.id,gap:Math.abs(daysBetween(d.due||d.date,b.date)),label:`${kind==='invoice'?'Payment for invoice':'Pay bill'}${d.number?' #'+d.number:''} · ${contactName(d.contactId)}`});
+      // A bill waiting for approval (or rejected) can't be paid, so it isn't offered as a match.
+      if(st.bal>0&&Math.abs(st.bal-Math.abs(b.amount))<0.005&&!(typeof apHeld==='function'&&apHeld(d)))out.push({value:'m:doc:'+d.id,gap:Math.abs(daysBetween(d.due||d.date,b.date)),label:`${kind==='invoice'?'Payment for invoice':'Pay bill'}${d.number?' #'+d.number:''} · ${contactName(d.contactId)}`});
     }
   }
   return out.sort((x,y)=>x.gap-y.gap);

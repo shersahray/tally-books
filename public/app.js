@@ -88,7 +88,7 @@ async function load(){
   if(!CO)return;
   const co=CO;
   loading=(async()=>{
-    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.rev=s.rev;S.connErr=false}
+    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.approvalOwners=s.approvalOwners||1;S.rev=s.rev;S.connErr=false}
     catch(e){S.connErr=true}
     S.loaded=true;scheduleRender();
   })();
@@ -173,6 +173,7 @@ function renderMain(){
   const nb=S.bankTxns.filter(b=>b.status==='new').length;const bc=$('#bankCount');bc.hidden=!nb;bc.textContent=nb;
   const nt=overdueReturns();const tc=$('#taxCount');tc.hidden=!nt;tc.textContent=nt;
   const np=overdueRemits();const pc=$('#payCount');pc.hidden=!np;pc.textContent=np;
+  const na=typeof apCount==='function'?apCount():0;const ac=$('#apCount');if(ac){ac.hidden=!na;ac.textContent=na}
   const nr=S.receipts.filter(r=>r.status==='inbox').length;const rc=$('#rcCount');if(rc){rc.hidden=!nr;rc.textContent=nr}
   const pnb=$('#nav [data-view=payroll]');if(pnb)pnb.hidden=!feat('payroll');
   if(S.view==='payroll'&&!feat('payroll'))S.view='dashboard';
@@ -258,7 +259,7 @@ function chart6(){
 
 function vDocs(kind){
   const inv=kind==='invoice',st=inv?S.sales:S.exp,ck=inv?'customer':'vendor';
-  const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button>${inv?`<button role="tab" data-dtab="estimates" aria-selected="${st.tab==='estimates'}">Estimates</button>`:''}<button role="tab" data-dtab="recurring" aria-selected="${st.tab==='recurring'}">Recurring</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button>${inv?`<button role="tab" data-dtab="items" aria-selected="${st.tab==='items'}">Products and services</button>`:`<button role="tab" data-dtab="pos" aria-selected="${st.tab==='pos'}">Purchase orders</button><button role="tab" data-dtab="mileage" aria-selected="${st.tab==='mileage'}">Mileage</button>`}</div>`;
+  const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button>${inv?`<button role="tab" data-dtab="estimates" aria-selected="${st.tab==='estimates'}">Estimates</button>`:''}<button role="tab" data-dtab="recurring" aria-selected="${st.tab==='recurring'}">Recurring</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button>${inv?`<button role="tab" data-dtab="items" aria-selected="${st.tab==='items'}">Products and services</button>`:`${typeof apOn==='function'&&apOn()?`<button role="tab" data-dtab="approvals" aria-selected="${st.tab==='approvals'}">Waiting for approval</button>`:''}<button role="tab" data-dtab="pos" aria-selected="${st.tab==='pos'}">Purchase orders</button><button role="tab" data-dtab="mileage" aria-selected="${st.tab==='mileage'}">Mileage</button>`}</div>`;
   const actions=inv?`${typeof salesMailButtons==='function'?salesMailButtons():''}<button class="btn" data-new="credit">Credit note</button><button class="btn" data-new="payment">Receive payment</button><button class="btn" data-new="sreceipt">Sales receipt</button><button class="btn primary" data-new="invoice">New invoice</button>`:`${typeof aiReceiptButton==='function'?aiReceiptButton():''}<button class="btn" data-new="vcredit">Vendor credit</button><button class="btn" data-new="billpayment">Pay bill</button><button class="btn" data-new="expense">Expense</button><button class="btn primary" data-new="bill">New bill</button>`;
   const h=head(inv?'Sales':'Expenses',inv?'Invoices you send and the customers who owe you':'Bills you receive and the vendors you pay',actions)+tabs;
   const ckind=inv?'credit':'vcredit';
@@ -267,6 +268,7 @@ function vDocs(kind){
   const receipts=inv?S.docs.filter(d=>d.kind==='sreceipt').map(d=>({d,s:docStatus(d)})):[];
   if(st.tab==='items'&&inv)return h+vItems();
   if(st.tab==='pos'&&!inv)return h+vPos();
+  if(st.tab==='approvals'&&!inv){if(typeof apOn==='function'&&apOn())return h+vApprovals();st.tab='docs'}
   if(st.tab==='mileage'&&!inv)return h+vMileage();
   if(st.tab==='estimates'&&inv)return h+vEstimates();
   if(st.tab==='recurring')return h+vRecurring(kind);
@@ -282,7 +284,7 @@ function vDocs(kind){
   // Batch actions (docout.js): on Sales only, since bills have no PDF to send or print.
   const bt=inv&&typeof batchBar==='function',shown=list.slice(0,shownCount('docs',list.length)),nc=bt&&batchOn()?9:8;
   return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option>${inv?'<option value="receipts">Sales receipts</option>':''}</select><span class="grow"></span>${bt?batchBar():''}${diStaffBtn(inv?'invoices':'bills')}</div>
-  <div class="tbl-wrap"><table><thead><tr>${bt?batchHeadCell(shown.map(x=>x.d.id)):''}<th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?shown.map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}">${bt?batchCell(x.d):''}<td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}${typeof tagPills==='function'?tagPills(x.d.tags):''}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${moneyC(cr?-x.d.total:x.d.total,x.d.currency)}</td><td class="n">${moneyC(cr?-x.s.bal:x.s.bal,x.d.currency)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,nc):emptyRow(nc,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
+  <div class="tbl-wrap"><table><thead><tr>${bt?batchHeadCell(shown.map(x=>x.d.id)):''}<th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?shown.map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}">${bt?batchCell(x.d):''}<td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}${typeof tagPills==='function'?tagPills(x.d.tags):''}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${moneyC(cr?-x.d.total:x.d.total,x.d.currency)}</td><td class="n">${moneyC(cr?-x.s.bal:x.s.bal,x.d.currency)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span>${!inv&&typeof apPill==='function'&&x.s.bal>0?' '+apPill(x.d):''}</td><td class="n">${!cr&&x.s.bal>0&&!(typeof apHeld==='function'&&apHeld(x.d))?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,nc):emptyRow(nc,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
 }
 
 function vTx(){
@@ -495,6 +497,7 @@ function vSettings(){
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${featuresPanel()}
+  ${typeof approvalsPanel==='function'?approvalsPanel():''}
   ${ME&&ME.role!=='client'&&!ME.readOnly?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Import data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Add customers, vendors, products and services, accounts, invoices, bills or journal entries from a spreadsheet (CSV or Excel).</span><button class="btn" data-diopen="">Import data</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
@@ -541,6 +544,7 @@ function bindMain(m){
     if(typeof yardClick==='function'&&await yardClick(e,t,d))return;
     if(typeof salesExtraClick==='function'&&salesExtraClick(e,t,d))return;
     if(typeof fcClick==='function'&&fcClick(e,t,d))return;
+    if(typeof approvalsClick==='function'&&approvalsClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
     if(d.plact)return plaidAction(d.plact);
@@ -616,6 +620,7 @@ function bindMain(m){
   if(typeof bindBatch==='function')bindBatch(m);
   if(S.view==='settings')bindClasses(m);
   if(S.view==='settings'&&typeof bindTags==='function')bindTags(m);
+  if(S.view==='settings'&&typeof bindApprovals==='function')bindApprovals(m);
   if(typeof bindProjects==='function')bindProjects(m);
   if(typeof bindAssets==='function')bindAssets(m);
   if(typeof bindYard==='function')bindYard(m);
@@ -1031,13 +1036,13 @@ function docForm(kind,doc,preset){
   const refunded=doc?r2(S.entries.filter(e=>e.applyTo===doc.id).reduce((s,e)=>s+(+e.amount||0),0)):0;
   const settledNote=!doc||!paid?'':cred?`${money(paid)} of this credit has been used${refunded?`, including ${money(refunded)} refunded`:''}. ${money(r2(d.total-paid))} is still available.`:`${money(paid)} has been ${sale?'received':'paid'} on this ${kind==='invoice'?'invoice':'bill'}. Balance due ${money(r2(d.total-paid))}.`;
   const f=openModal(doc?`${L.t} ${d.number?'#'+d.number:''}`:L.n,
-    `${preset&&preset.note||''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${sr?fld('dDep','Deposit to',`<select id="dDep">${acctOptions(defBank,banks)}</select>`):cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}${sale&&typeof fieldInputs==='function'?fieldInputs(d,false):''}${typeof classField==='function'?classField('dCls',d.cls):''}${typeof projField==='function'?projField('dProj',d.proj):''}${typeof vehField==='function'?vehField('dVeh',d.veh):''}${typeof tagField==='function'?tagField('dTags',d.tags):''}</div>
+    `${preset&&preset.note||''}${doc&&typeof apBox==='function'?apBox(doc):''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${sr?fld('dDep','Deposit to',`<select id="dDep">${acctOptions(defBank,banks)}</select>`):cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}${sale&&typeof fieldInputs==='function'?fieldInputs(d,false):''}${typeof classField==='function'?classField('dCls',d.cls):''}${typeof projField==='function'?projField('dProj',d.proj):''}${typeof vehField==='function'?vehField('dVeh',d.veh):''}${typeof tagField==='function'?tagField('dTags',d.tags):''}</div>
     ${typeof fxRowHTML==='function'?fxRowHTML('dFx',d.currency||contactCur(d.contactId),d.fx):''}<div class="muted fx-home" data-fxhome></div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${L.memo}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
     ${cred?`<div class="apply" data-apply></div>`:''}
     ${settledNote?`<div class="banner" style="margin:0"><span>${settledNote}</span></div>`:''}`,
-    `${delBtn(!!doc)}${doc&&typeof docActions==='function'?docActions(doc):''}<button type="button" class="btn" data-close>Cancel</button>${doc&&!cred&&docStatus(doc).bal>0?`<button type="button" class="btn" data-paynow>${sale?'Receive payment':'Pay bill'}</button>`:''}${doc&&cred&&docStatus(doc).bal>0?'<button type="button" class="btn" data-refund>Refund</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
+    `${delBtn(!!doc)}${doc&&typeof docActions==='function'?docActions(doc):''}<button type="button" class="btn" data-close>Cancel</button>${doc&&!cred&&docStatus(doc).bal>0&&!(typeof apHeld==='function'&&apHeld(doc))?`<button type="button" class="btn" data-paynow>${sale?'Receive payment':'Pay bill'}</button>`:''}${doc&&cred&&docStatus(doc).bal>0?'<button type="button" class="btn" data-refund>Refund</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'dC');presetContact(f,'dC',preset);
   let rows=[];const cols=[...itemCol(sale,()=>!!contactCode()),{key:'desc',label:'Description',type:'text'},{key:'account',label:sale?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:sale?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
   const contactCode=()=>contact($('#dC',f).value)?.taxCode||'';
@@ -1065,6 +1070,7 @@ function docForm(kind,doc,preset){
   const pn=$('[data-paynow]',f);if(pn)pn.onclick=()=>payForm(sale?'payment':'billpayment',null,doc.id);
   const rf=$('[data-refund]',f);if(rf)rf.onclick=()=>refundForm(doc);
   if(doc&&typeof bindDocActions==='function')bindDocActions(f,doc);
+  if(doc&&typeof bindApBox==='function')bindApBox(f,doc);
   const lc=L.t.toLowerCase();
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{
     if(cred?refunded:paid){f.err(cred?'Delete the refunds from this credit first.':`Delete the payments on this ${lc} first.`);return}
@@ -1107,7 +1113,7 @@ function docForm(kind,doc,preset){
     if(typeof tagsOf==='function')setTags(dd,tagsOf(f,'dTags'));if(dd.tags)base.tags=dd.tags;
     if(cred)dd.applied=applied;
     if(!await batch([{op:'set',collection:'docs',id,data:dd},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:sr?'salesreceipt':kind,ref:num,docId:id,lines,created:dd.created}}]))return;
-    closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(L.saved);
+    closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else if(kind==='bill'&&typeof apSavedToast==='function')apSavedToast(id,L.saved);else toast(L.saved);
   };
 }
 // Paying out (to a customer) or receiving back (from a vendor) what's left on a credit.
@@ -1152,7 +1158,11 @@ function carriedDocForm(kind,doc){
 
 function payForm(kind,entry,presetDoc){
   const recv=kind==='payment',dk=recv?'invoice':'bill';
-  const open=S.docs.filter(d=>d.kind===dk&&(docStatus(d).bal>0||d.id===entry?.applyTo||d.id===presetDoc)).sort((a,b)=>(a.due||'').localeCompare(b.due||''));
+  // Bill approvals: bills waiting for approval (or rejected) can't be paid; the one an existing payment is on stays listed.
+  const held=d=>typeof apHeld==='function'&&apHeld(d)&&d.id!==entry?.applyTo;
+  const pd=presetDoc&&S.docs.find(d=>d.id===presetDoc);if(pd&&held(pd)){toast(apHeldMsg(pd),true);return}
+  const nHeld=recv?0:S.docs.filter(d=>d.kind==='bill'&&docStatus(d).bal>0&&held(d)).length;
+  const open=S.docs.filter(d=>d.kind===dk&&(docStatus(d).bal>0||d.id===entry?.applyTo||d.id===presetDoc)&&!held(d)).sort((a,b)=>(a.due||'').localeCompare(b.due||''));
   const balOf=id=>{const d=S.docs.find(x=>x.id===id);return d?r2(d.total-paidOn(id,entry?.id)):0};
   const banks=a=>a.detail==='bank'||(!recv&&a.detail==='card');
   const sel=entry?.applyTo||presetDoc||'';
@@ -1167,6 +1177,7 @@ function payForm(kind,entry,presetDoc){
     ${typeof fxRowHTML==='function'?fxRowHTML('pFx','',entry?.fx,'Exchange rate on the payment date'):''}
     <div class="fields" data-pcadrow hidden>${fld('pCad',recv?'Canadian dollars deposited':'Canadian dollars paid',`<input type="number" id="pCad" step="0.01" inputmode="decimal" value="${esc(entry?.cad??'')}">`)}</div>
     <div class="muted fx-home" data-pgl></div>
+    ${nHeld?`<div class="muted" style="font-size:13px">${nHeld===1?'1 bill is waiting for approval and can’t be paid yet.':`${nHeld} bills are waiting for approval and can’t be paid yet.`}</div>`:''}
     ${open.length?'':`<div class="muted">No unpaid ${dk}s. Create ${dk==='invoice'?'an invoice':'a bill'} first, or use ${recv?'Deposit':'Expense'} for money that isn't tied to one.</div>`}`,
     saveFoot(!!entry,recv?'Save payment':'Save payment'));
   // Another currency: the amount is in the document's currency. Into an account in that currency, at the day's rate;

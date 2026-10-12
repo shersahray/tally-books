@@ -3,7 +3,7 @@
    Kept by the server (see the audit table in db.js); owners and staff can read it, clients can't. */
 S.act={rows:[],users:[],user:'',collection:'',done:false,loading:false,co:null};
 const ACT_COL={entries:'Transaction',docs:'Invoice or bill',accounts:'Account',contacts:'Customer or vendor',employees:'Employee',payruns:'Pay run',bankTxns:'Bank line',rules:'Bank rule',recons:'Reconciliation',filings:'Sales tax filing',settings:'Company settings'};
-const ACT_ACTION={create:'Created company',add:'Added',change:'Changed',delete:'Deleted',settings:'Changed',import:'Imported',restore:'Restored backup',examples:'Loaded examples'};
+const ACT_ACTION={create:'Created company',add:'Added',change:'Changed',delete:'Deleted',settings:'Changed',import:'Imported',restore:'Restored backup',examples:'Loaded examples',approve:'Approved',reject:'Rejected',resubmit:'Sent for approval again'};
 
 async function loadActivity(more){
   const A=S.act;if(A.loading)return;
