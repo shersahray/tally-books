@@ -7,21 +7,25 @@
 /* Fast sums: each account's postings by date with running totals, so many columns stay quick. */
 let RIX=null;
 /** The class the P&L (or budget vs actual) is filtered to: '' all, '__none' transactions without a class. */
-const repCls=()=>['pl','bva'].includes(S.rep.tab)&&(S.company.classes||[]).length?S.rep.cls||'':'';
-function rix(){
-  const ps=postings(),cls=repCls();if(RIX&&RIX.ps===ps&&RIX.cls===cls)return RIX;
+const repCls=()=>['pl','bva'].includes(S.rep.tab)&&(S.company.classes||[]).length&&!(S.rep.tab==='pl'&&S.rep.compare==='byclass')?S.rep.cls||'':'';
+/** Running sums for one class ('' = every transaction, '__none' = those without a class). One cache per class,
+    so a profit and loss by class (a column for each class) stays quick. `cls` left out = the report's class filter. */
+function rix(cls){
+  if(cls===undefined)cls=repCls();
+  const ps=postings();if(!RIX||RIX.ps!==ps)RIX={ps,by:new Map()};
+  const hit=RIX.by.get(cls);if(hit)return hit;
   const m=new Map();
   for(const p of ps){if(cls&&(cls==='__none'?!!p.e.cls:p.e.cls!==cls))continue;let a=m.get(p.account);if(!a)m.set(p.account,a=[]);a.push([p.date,p.debit-p.credit])}
   for(const a of m.values()){a.sort((x,y)=>x[0]<y[0]?-1:x[0]>y[0]?1:0);let c=0;a.cum=a.map(x=>c+=x[1])}
-  return RIX={ps,m,cls};
+  const out={m,cls};RIX.by.set(cls,out);return out;
 }
 const firstOnOrAfter=(a,d)=>{let lo=0,hi=a.length;while(lo<hi){const mid=(lo+hi)>>1;if(a[mid][0]<d)lo=mid+1;else hi=mid}return lo};
-function rawSum(id,from,to){
-  const a=rix().m.get(id);if(!a||!a.length)return 0;
+function rawSum(id,from,to,cls){
+  const a=rix(cls).m.get(id);if(!a||!a.length)return 0;
   const i=from?firstOnOrAfter(a,from):0,j=to?firstOnOrAfter(a,to+'~'):a.length;
   return r2((j>0?a.cum[j-1]:0)-(i>0?a.cum[i-1]:0));
 }
-function fbal(id,from,to){const a=acct(id),r=rawSum(id,from,to);return a&&!debitNormal(a.type)?r2(-r):r}
+function fbal(id,from,to,cls){const a=acct(id),r=rawSum(id,from,to,cls);return a&&!debitNormal(a.type)?r2(-r):r}
 function fNet(from,to){let n=0;for(const a of S.accounts){if(a.type==='Income')n+=fbal(a.id,from,to);else if(a.type==='Expense'||a.type==='Cost of Goods Sold')n-=fbal(a.id,from,to)}return r2(n)}
 
 /* ---------- periods and columns ---------- */
@@ -38,13 +42,23 @@ function rangeLabel(from,to){
   if(n)return `${monthLabel(from)} – ${monthLabel(to)}`;
   return `${fmtDate(from)} – ${fmtDate(to)}`;
 }
-const PL_COMPARE=[['','No comparison'],['prev','Previous period'],['prevyear','Same period last year'],['months','By month'],['quarters','By quarter']];
+const PL_COMPARE=[['','No comparison'],['prev','Previous period'],['prevyear','Same period last year'],['months','By month'],['quarters','By quarter'],['byclass','By class']];
 const BS_COMPARE=[['','No comparison'],['prevmonth','End of the previous month'],['prevyear','One year earlier'],['months','Each month-end this fiscal year']];
 /** Columns for a period report: [{label, from, to}], plus whether to add Total or change columns. */
 function periodCols(from,to,cmp){
   const base={label:rangeLabel(from,to),from,to};
   if(cmp==='prev'){const[a,b]=prevPeriod(from,to);return{cols:[base,{label:rangeLabel(a,b),from:a,to:b}],change:true}}
   if(cmp==='prevyear'){const a=shiftMonths(from,-12),b=shiftMonths(to,-12);return{cols:[base,{label:rangeLabel(a,b),from:a,to:b}],change:true}}
+  if(cmp==='byclass'){
+    // One column for each class (active ones, and inactive ones with activity in the period), then No class and Total.
+    const cs=S.company.classes||[];
+    if(!cs.length)return{cols:[base]};
+    const has=c=>S.accounts.some(a=>['Income','Expense','Cost of Goods Sold'].includes(a.type)&&Math.abs(rawSum(a.id,from,to,c))>=0.005);
+    const cols=cs.filter(c=>c.active!==false||has(c.id)).map(c=>({label:c.name,from,to,cls:c.id,data:true}));
+    if(has('__none'))cols.push({label:clsWords().none,from,to,cls:'__none'});
+    if(cols.length>36)return{error:'That’s too many columns. Turn off classes you no longer use.'};
+    return{cols,total:true};
+  }
   if(cmp==='months'||cmp==='quarters'){
     const step=cmp==='months'?1:3,cols=[];let s=from;
     while(s<=to){const x=pd(s),e0=iso(new Date(x.getFullYear(),x.getMonth()+step,0)),e=e0<to?e0:to;cols.push({label:rangeLabel(s,e),from:s,to:e});s=addDays(e,1);if(cols.length>36)return{error:'That’s too many columns. Choose a shorter period.'}}
@@ -87,7 +101,7 @@ function colReport({title,sub,C,rows,name}){
   }).join('');
   const csv=[['Account',...head]];
   for(const r of full)if(r.cls!=='spacer')csv.push([r.label,...(r.cells?r.cells.map(v=>v===null?'':v):[])]);
-  return{html:`<div class="report${many?' wide':''}" ${many?'style="max-width:none"':''}>${rh(esc(title),esc(sub))}<div class="tbl-wrap"><table class="${many?'cmp':''}">${many?`<thead><tr><th></th>${head.map(h=>`<th class="n">${esc(h)}</th>`).join('')}</tr></thead>`:''}${body}</table></div></div>`,
+  return{html:`<div class="report${many?' wide':''}" ${many?'style="max-width:none"':''}>${rh(esc(title),esc(sub))}<div class="tbl-wrap"><table class="${many?'cmp':''}">${many?`<thead><tr><th></th>${head.map((h,i)=>`<th class="n"${C.cols[i]&&C.cols[i].data?' translate="no"':''}>${esc(h)}</th>`).join('')}</tr></thead>`:''}${body}</table></div></div>`,
     csv,name,title,sub,head,rows:full,pctCol};
 }
 const errReport=(title,msg)=>({html:`<div class="banner err">${esc(msg)}</div>`,csv:[[title],[msg]],name:'report',title,sub:'',head:[],rows:[]});
@@ -98,7 +112,7 @@ function rPL(){
   if(C.error)return errReport(W('Profit and loss'),C.error);
   const rows=[],n=C.cols.length;
   const sec=(type,title)=>{
-    const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({a,vals:C.cols.map(c=>fbal(a.id,c.from,c.to))})).filter(x=>x.vals.some(v=>Math.abs(v)>=0.005));
+    const as=sortAccts(S.accounts.filter(a=>a.type===type)).map(a=>({a,vals:C.cols.map(c=>fbal(a.id,c.from,c.to,c.cls))})).filter(x=>x.vals.some(v=>Math.abs(v)>=0.005));
     if(!as.length&&type==='Cost of Goods Sold')return null;
     const tot=C.cols.map((c,i)=>r2(as.reduce((s,x)=>s+x.vals[i],0)));
     rows.push({cls:'sec',label:title});
@@ -110,8 +124,9 @@ function rPL(){
   if(cogs)rows.push({cls:'tot',label:W('Gross profit'),vals:inc.map((v,i)=>r2(v-cogs[i]))});
   const exp=sec('Expense','Expenses');
   rows.push({cls:'spacer'},{cls:'grand',label:W('Net income'),vals:inc.map((v,i)=>r2(v-(cogs||z)[i]-exp[i]))});
-  const cl=repCls(),cn=cl==='__none'?T('No class'):cl?(clsName(cl)||''):'';
-  return colReport({title:W('Profit and loss')+(cn?` · ${cn}`:''),sub:`${fmtDate(from)} – ${fmtDate(to)}`,C,rows,name:`profit-and-loss_${from}_${to}`});
+  const byCls=C.cols.some(c=>c.cls),cl=byCls?'':repCls(),cn=cl==='__none'?clsWords().none:cl?(clsName(cl)||''):'';
+  // Translated here: with a suffix the whole title wouldn't match the dictionary on screen.
+  return colReport({title:(byCls||cn?T(W('Profit and loss')):W('Profit and loss'))+(byCls?` · ${clsWords().by}`:cn?` · ${cn}`:''),sub:`${fmtDate(from)} – ${fmtDate(to)}`,C,rows,name:`profit-and-loss${byCls?'-by-'+clsWords().slug:''}_${from}_${to}`});
 }
 
 /* ---------- balance sheet ---------- */

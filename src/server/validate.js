@@ -210,7 +210,7 @@ function validateRule(data, store) {
   if (!a) throw new ValidationError('Choose the account this rule should use.');
   if (a.detail === 'bank' || a.detail === 'card') throw new ValidationError('A rule can’t categorize into a bank or card account; use a transfer instead.');
   if (data.contactId && !store.get('contacts', data.contactId)) throw new ValidationError('The payee on this rule doesn’t exist.');
-  return { ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: data.tax === 'gst' ? 'gst' : !!data.tax, contactId: data.contactId || '' };
+  return { ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: data.tax === 'gst' ? 'gst' : !!data.tax, contactId: data.contactId || '', cls: str(data.cls, 40) };
 }
 
 function validateRecon(data, store) {
@@ -780,12 +780,14 @@ function validateCompany(data) {
     // Opening UCC for each CCA class, at the start of the first fiscal year Sumlora works out (from the last T2 Schedule 8).
     ccaOpening: isObj(data.ccaOpening) ? Object.fromEntries(Object.entries(data.ccaOpening).filter(([k, v]) => /^[0-9]{1,2}(\.[0-9]{1,2})?$/.test(k) && isObj(v) && isDate(v.fy)).slice(0, 60).map(([k, v]) => [k, { fy: v.fy, ucc: Math.max(0, Math.round((Number(v.ucc) || 0) * 100) / 100) }])) : {},
     // Classes: a way to sort income and expenses (branch, department, line of business). One per transaction.
+    // What the company calls its classes.
+    classLabel: ['class', 'location', 'department', 'division'].includes(data.classLabel) ? data.classLabel : 'class',
     classes: (() => { const seen = new Set(); return (Array.isArray(data.classes) ? data.classes : []).filter(isObj).slice(0, 200).map(c => ({ id: str(c.id, 40), name: str(c.name, 60).trim(), active: c.active !== false })).filter(c => c.id && c.name && !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase())); })(),
     mileage: isObj(data.mileage) ? { expenseAccount: str(data.mileage.expenseAccount, 40), payAccount: str(data.mileage.payAccount, 40), territories: !!data.mileage.territories, rates: isObj(data.mileage.rates) ? Object.fromEntries(Object.entries(data.mileage.rates).filter(([y, v]) => /^\d{4}$/.test(y) && isObj(v)).slice(0, 20).map(([y, v]) => [y, { first: Math.max(0, Math.min(5, Number(v.first) || 0)), after: Math.max(0, Math.min(5, Number(v.after) || 0)) }])) : {} } : { expenseAccount: '', payAccount: '', territories: false, rates: {} },
     savedReports: (Array.isArray(data.savedReports) ? data.savedReports : []).slice(0, 30).filter(isObj).map(r => ({
       id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap', 'sc', 'si', 'ev', 'bva', 'iv'].includes(r.tab) ? r.tab : 'pl', ...(r.cls ? { cls: str(r.cls, 40) } : {}), ...(r.budget ? { budget: str(r.budget, 120) } : {}),
       period: ['month', 'lastmonth', 'quarter', 'ytd', 'fy', 'lastfy', 'all', 'custom'].includes(r.period) ? r.period : 'fy',
-      from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: r.tbAdj === 'aje' ? 'aje' : true } : {}),
+      from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth', 'byclass'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: r.tbAdj === 'aje' ? 'aje' : true } : {}),
     })).filter(r => r.id && r.name),
   };
   if (out.qstRate > 0 && out.pstRate > 0) throw new ValidationError('A company charges QST or PST, not both.');
