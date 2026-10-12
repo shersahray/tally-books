@@ -926,7 +926,7 @@ function calcLines(rows,amt,purchase){
 function groupBy(ls){const m={};ls.forEach(l=>{const k=l.account+'|'+taxCodeOf(l);m[k]=r2((m[k]||0)+(l.post??l.net))});return m}
 const gLine=(k,v,side)=>{const[account,taxCode]=k.split('|');return side==='credit'?(v>=0?{account,debit:0,credit:v,taxCode}:{account,debit:-v,credit:0,taxCode}):(v>=0?{account,debit:v,credit:0,taxCode}:{account,debit:0,credit:-v,taxCode})};
 const delBtn=show=>show?`<button type="button" class="btn danger left" data-del>Delete</button>`:'<span class="left"></span>';
-const saveFoot=(del,label='Save')=>`${delBtn(del)}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${label}</button>`;
+const saveFoot=(del,label='Save',extra='')=>`${delBtn(del)}${extra}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${label}</button>`;
 function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${label}" account in Chart of accounts first.`,true);return a}
 
 /* ---------- forms ---------- */
@@ -1155,6 +1155,13 @@ function payForm(kind,entry,presetDoc){
   };
 }
 
+/** The posting for an expense (out) or deposit: categories and recoverable tax on one side, the bank or card on the other. */
+function moneyLines(out,c,bank){
+  const g=groupBy(c.ls),lines=[];
+  if(out){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push(c.total>=0?{account:bank,debit:0,credit:c.total}:{account:bank,debit:-c.total,credit:0})}
+  else{lines.push(c.total>=0?{account:bank,debit:c.total,credit:0}:{account:bank,debit:0,credit:-c.total});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}))}
+  return lines;
+}
 function moneyForm(kind,entry,preset){
   const out=kind==='expense';
   const src=entry||preset;
@@ -1170,7 +1177,7 @@ function moneyForm(kind,entry,preset){
     ${typeof fxRowHTML==='function'?fxRowHTML('mFx',acctCur(defBank),src?.fx):''}<div class="muted fx-home" data-fxhome></div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="mMemo">Memo</label><textarea id="mMemo">${esc(src?.memo||'')}</textarea></div>${totalsHTML()}</div>`,
-    saveFoot(!!entry),'wide');
+    saveFoot(!!entry,'Save',preset&&preset.recurringId||typeof recMakeBtn!=='function'?'':recMakeBtn()),'wide');
   wireContactSelect(f,'mC');presetContact(f,'mC',preset);
   const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions}];
   const mCode=()=>contact($('#mC',f).value)?.taxCode||(out?'std':'none');
@@ -1180,24 +1187,28 @@ function moneyForm(kind,entry,preset){
   const le=lineEditor($('[data-le]',f),cols,(fm.lines||[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}]).map(l=>({...l,taxCode:taxCodeOf(l)})),r=>{setTotals(f,calcLines(r,x=>+x.amount||0,out));if(MFX)mHome()});
   if(typeof wireFx==='function'){MFX=wireFx(f,'mFx',()=>acctCur($('#mBank',f).value),'#mDate',mHome);$('#mBank',f).addEventListener('change',()=>MFX.refresh(false))}
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox(`Delete this ${kind}?`,'It will be removed from your books.'))return;await del('entries',entry.id);closeModal();toast(`${out?'Expense':'Deposit'} deleted`)};
+  // Make recurring: a template from what's on the form now (saved or not).
+  const mk=$('[data-mkrec]',f);if(mk)mk.onclick=()=>{const date=$('#mDate',f).value||today(),cid=$('#mC',f).value;closeModal();
+    recurringForm(null,kind,{name:(contactName(cid)||T(out?'Expense':'Deposit')),contactId:cid==='__new'?'':cid,bank:$('#mBank',f).value,ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),
+      lines:le.read().filter(l=>l.account||+l.amount).map(l=>({account:l.account,desc:l.desc||'',amount:l.amount,taxCode:l.taxCode})),...recFrom(date)})};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const c=calcLines(le.read(),x=>+x.amount||0,out);const bank=$('#mBank',f).value;
     if(!bank)return f.err('Choose a bank or card account.');if(!c.ls.length)return f.err('Add at least one line with a category and amount.');
     if(c.tax&&!taxReady(c.parts))return;
     let cid=$('#mC',f).value;if(cid==='__new'){cid=await resolveContact(f,'mC',out?'vendor':'customer');if(!cid)return f.err('Enter a name for the new contact.')}
-    const g=groupBy(c.ls);const lines=[];
-    if(out){Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'debit')));c.parts.forEach(p=>lines.push({account:p.account,debit:p.amount,credit:0,memo:p.name+' paid'}));lines.push(c.total>=0?{account:bank,debit:0,credit:c.total}:{account:bank,debit:-c.total,credit:0})}
-    else{lines.push(c.total>=0?{account:bank,debit:c.total,credit:0}:{account:bank,debit:0,credit:-c.total});Object.entries(g).forEach(([k,v])=>lines.push(gLine(k,v,'credit')));c.parts.forEach(p=>lines.push({account:p.account,debit:0,credit:p.amount,memo:p.name+' collected'}))}
-    const id=entry?.id||uid();
+    const lines=moneyLines(out,c,bank);
+    const id=entry?.id||preset?.id||uid(),rcId=preset?.recurringId||entry?.recurringId;
     const mcur=acctCur(bank),mfx=mcur&&MFX?MFX.rate():1,fxx={};
     if(mcur){if(!(mfx>0))return f.err(`Enter the exchange rate for ${mcur}.`);const conv=toHome(lines,mfx,bank);lines.length=0;lines.push(...conv);const bl=lines.find(l=>l.account===bank);if(bl)bl.fx={cur:mcur,amt:Math.abs(c.total)};Object.assign(fxx,{currency:mcur,fx:mfx})}
-    if(await put('entries',id,{...fxx,type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',...classOf(f,'mCls'),...(typeof projOf==='function'?projOf(f,'mProj'):{}),...(typeof vehOf==='function'?vehOf(f,'mVeh'):{}),form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
+    if(await put('entries',id,{...fxx,type:kind,date:$('#mDate',f).value||today(),ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),contactId:cid||'',...classOf(f,'mCls'),...(typeof projOf==='function'?projOf(f,'mProj'):{}),...(typeof vehOf==='function'?vehOf(f,'mVeh'):{}),form:{bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))},lines,created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(preset&&preset.receiptId?{receiptId:preset.receiptId}:{}),...(rcId?{recurringId:rcId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(`${out?'Expense':'Deposit'} saved`)}
   };
 }
 
-function transferForm(entry){
-  const fm=entry?.form||{};const bk=a=>a.detail==='bank'||a.detail==='card';
-  const f=openModal('Transfer',`<div class="fields">${fld('tFrom','From',`<select id="tFrom"><option value="">Choose account…</option>${acctOptions(fm.from,bk)}</select>`)}${fld('tTo','To',`<select id="tTo"><option value="">Choose account…</option>${acctOptions(fm.to,bk)}</select>`)}${fld('tDate','Date',`<input type="date" id="tDate" value="${entry?.date||today()}">`)}${fld('tAmt','Amount',`<input type="number" id="tAmt" step="0.01" inputmode="decimal" value="${fm.amount??''}">`)}<div data-trecv style="display:contents">${fld('tRecv','Amount received',`<input type="number" id="tRecv" step="0.01" inputmode="decimal" value="${fm.received??''}">`)}</div>${fld('tMemo','Memo',`<input type="text" id="tMemo" value="${esc(entry?.memo||'')}">`,true)}</div>${typeof fxRowHTML==='function'?fxRowHTML('tFx','',entry?.fx):''}<div class="muted" style="font-size:13px">Use a transfer to move money between bank accounts or to pay down a credit card.</div>`,saveFoot(!!entry));
+function transferForm(entry,preset){
+  const src=entry||preset,fm=src?.form||{};const bk=a=>a.detail==='bank'||a.detail==='card';
+  const f=openModal('Transfer',`${preset&&preset.note||''}<div class="fields">${fld('tFrom','From',`<select id="tFrom"><option value="">Choose account…</option>${acctOptions(fm.from,bk)}</select>`)}${fld('tTo','To',`<select id="tTo"><option value="">Choose account…</option>${acctOptions(fm.to,bk)}</select>`)}${fld('tDate','Date',`<input type="date" id="tDate" value="${src?.date||today()}">`)}${fld('tAmt','Amount',`<input type="number" id="tAmt" step="0.01" inputmode="decimal" value="${fm.amount??''}">`)}<div data-trecv style="display:contents">${fld('tRecv','Amount received',`<input type="number" id="tRecv" step="0.01" inputmode="decimal" value="${fm.received??''}">`)}</div>${fld('tMemo','Memo',`<input type="text" id="tMemo" value="${esc(src?.memo||'')}">`,true)}</div>${typeof fxRowHTML==='function'?fxRowHTML('tFx','',entry?.fx):''}<div class="muted" style="font-size:13px">Use a transfer to move money between bank accounts or to pay down a credit card.</div>`,saveFoot(!!entry,'Save',preset&&preset.recurringId||typeof recMakeBtn!=='function'?'':recMakeBtn()));
+  const mk=$('[data-mkrec]',f);if(mk)mk.onclick=()=>{const date=$('#tDate',f).value||today();closeModal();
+    recurringForm(null,'transfer',{name:T('Transfer'),from:$('#tFrom',f).value,to:$('#tTo',f).value,amount:$('#tAmt',f).value,memo:$('#tMemo',f).value.trim(),...recFrom(date)})};
   // Between currencies: the amount sent (in the From account's currency) and the amount received (in the To account's).
   const tc=()=>[acctCur($('#tFrom',f).value),acctCur($('#tTo',f).value)];
   const tSync=()=>{const[a,b]=tc();$('[data-trecv]',f).style.display=a!==b?'contents':'none';$('#tAmt',f).closest('.field').querySelector('label').textContent=a||b?`${T('Amount sent')}${a?` (${a})`:' (CAD)'}`:T('Amount');$('#tRecv',f).closest('.field').querySelector('label').textContent=`${T('Amount received')}${b?` (${b})`:' (CAD)'}`};
@@ -1210,15 +1221,18 @@ function transferForm(entry){
     // The Canadian dollar value: whichever side is in Canadian dollars, or the sent amount at the rate.
     let cad=amt;if(ca||cb){cad=!cb?recv:!ca?amt:r2(amt*(TFX?TFX.rate():0));if(!(cad>0))return f.err('Enter the exchange rate.')}
     const lb={account:b,debit:cad,credit:0,...(cb?{fx:{cur:cb,amt:recv}}:{})},la={account:a,debit:0,credit:cad,...(ca?{fx:{cur:ca,amt}}:{})};
-    const id=entry?.id||uid();if(await put('entries',id,{type:'transfer',date:$('#tDate',f).value||today(),memo:$('#tMemo',f).value.trim(),ref:'',form:{from:a,to:b,amount:amt,...(ca!==cb?{received:recv}:{})},...(ca||cb?{fx:ca&&cb?(TFX?TFX.rate():0):r2(cad/(ca?amt:recv)*1e6)/1e6}:{}),lines:[lb,la],created:entry?.created||Date.now(),...(entry?.example?{example:true}:{})})){closeModal();toast('Transfer saved')}};
+    const id=entry?.id||preset?.id||uid(),rcId=preset?.recurringId||entry?.recurringId;if(await put('entries',id,{type:'transfer',date:$('#tDate',f).value||today(),memo:$('#tMemo',f).value.trim(),ref:'',form:{from:a,to:b,amount:amt,...(ca!==cb?{received:recv}:{})},...(ca||cb?{fx:ca&&cb?(TFX?TFX.rate():0):r2(cad/(ca?amt:recv)*1e6)/1e6}:{}),lines:[lb,la],created:entry?.created||Date.now(),...(entry?.example?{example:true}:{}),...(rcId?{recurringId:rcId}:{})})){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast('Transfer saved')}};
 }
 
-function journalForm(entry){
-  const f=openModal(entry?'Journal entry':'New journal entry',`<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${entry?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(entry?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(entry?.memo||'')}">`,true)}${classField('jCls',entry?.cls)}${typeof projField==='function'?projField('jProj',entry?.proj):''}${typeof vehField==='function'?vehField('jVeh',entry?.veh):''}</div><div data-le></div>
+function journalForm(entry,preset){
+  const src=entry||preset;
+  const f=openModal(entry?'Journal entry':'New journal entry',`${preset&&preset.note||''}<div class="fields">${fld('jDate','Date',`<input type="date" id="jDate" value="${src?.date||today()}">`)}${fld('jRef','Journal no.',`<input type="text" id="jRef" value="${esc(src?.ref||'')}">`)}${fld('jMemo','Memo',`<input type="text" id="jMemo" value="${esc(src?.memo||'')}">`,true)}${classField('jCls',src?.cls)}${typeof projField==='function'?projField('jProj',src?.proj):''}${typeof vehField==='function'?vehField('jVeh',src?.veh):''}</div><div data-le></div>
     ${ME&&ME.role!=='client'?`<div class="fields" style="align-items:end"><label class="check" style="align-self:center"><input type="checkbox" id="jAdj" ${entry?.adjusting?'checked':''}> Adjusting entry (shown in its own column on the working trial balance)</label>
-      ${fld('jRev','Reverse on (optional)',`<input type="date" id="jRev" value="${esc(entry?.reverseOn||'')}"><span class="hint">Posts the opposite entry on this date, for example the first day of the next period</span>`)}</div>`:''}<div class="totals"><div>Total debits</div><div data-j="d">0.00</div><div>Total credits</div><div data-j="c">0.00</div><div class="big">Difference</div><div class="big" data-j="x">0.00</div></div>`,saveFoot(!!entry),'wide');
-  const rows=(entry?.lines||[{},{}]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||''}));
+      ${fld('jRev','Reverse on (optional)',`<input type="date" id="jRev" value="${esc(entry?.reverseOn||'')}"><span class="hint">Posts the opposite entry on this date, for example the first day of the next period</span>`)}</div>`:''}<div class="totals"><div>Total debits</div><div data-j="d">0.00</div><div>Total credits</div><div data-j="c">0.00</div><div class="big">Difference</div><div class="big" data-j="x">0.00</div></div>`,saveFoot(!!entry,'Save',preset&&preset.recurringId||typeof recMakeBtn!=='function'||entry?.reversalOf?'':recMakeBtn()),'wide');
+  const rows=(src?.lines||[{},{}]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||''}));
   const le=lineEditor($('[data-le]',f),[{key:'account',label:'Account',type:'acct'},{key:'memo',label:'Description',type:'text'},{key:'debit',label:'Debit',type:'num'},{key:'credit',label:'Credit',type:'num'}],rows,r=>{const d=r2(r.reduce((s,x)=>s+(+x.debit||0),0)),c=r2(r.reduce((s,x)=>s+(+x.credit||0),0));$('[data-j=d]',f).textContent=money(d);$('[data-j=c]',f).textContent=money(c);const x=$('[data-j=x]',f);x.textContent=money(r2(d-c));x.className='big '+(Math.abs(d-c)>0.004?'neg':'')});
+  const mk=$('[data-mkrec]',f);if(mk)mk.onclick=()=>{const date=$('#jDate',f).value||today(),memo=$('#jMemo',f).value.trim();closeModal();
+    recurringForm(null,'journal',{name:memo||T('Journal entry'),memo,ref:$('#jRef',f).value.trim(),lines:le.read().filter(l=>l.account||+l.debit||+l.credit),...recFrom(date)})};
   const rvId=entry?'rv_'+entry.id:'',hasRev=!!(entry&&S.entries.some(x=>x.id===rvId));
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this journal entry?',hasRev?'It and its reversing entry will be removed from your books.':'It will be removed from your books.'))return;
     const w=[{op:'delete',collection:'entries',id:entry.id}];if(hasRev)w.push({op:'delete',collection:'entries',id:rvId});if(await batch(w)){closeModal();toast('Journal entry deleted')}};
@@ -1228,18 +1242,18 @@ function journalForm(entry){
     const lines=ls.filter(l=>+l.debit||+l.credit).map(l=>({account:l.account,debit:r2(l.debit),credit:r2(l.credit),memo:l.memo||''}));
     const d=r2(lines.reduce((s,l)=>s+l.debit,0)),c=r2(lines.reduce((s,l)=>s+l.credit,0));
     if(lines.length<2||!d)return f.err('A journal entry needs at least one debit and one credit.');if(Math.abs(d-c)>0.004)return f.err(`Debits and credits are out by ${money(r2(d-c))}.`);
-    const id=entry?.id||uid(),date=$('#jDate',f).value||today(),ref=$('#jRef',f).value.trim(),memo=$('#jMemo',f).value.trim();
+    const id=entry?.id||preset?.id||uid(),date=$('#jDate',f).value||today(),ref=$('#jRef',f).value.trim(),memo=$('#jMemo',f).value.trim();
     // People who don't see these controls (clients) keep what the bookkeeper set.
     const adjusting=$('#jAdj',f)?$('#jAdj',f).checked:!!entry?.adjusting,reverseOn=$('#jRev',f)?$('#jRev',f).value:(entry?.reverseOn||'');
     if(reverseOn&&reverseOn<=date)return f.err('The reversing date has to be after the entry’s date.');
-    const data={...(entry?strip(entry):{}),type:'journal',date,ref,memo,contactId:entry?.contactId||'',lines,created:entry?.created||Date.now(),adjusting,reverseOn,...(entry?.example?{example:true}:{})};
+    const data={...(entry?strip(entry):{}),type:'journal',date,ref,memo,contactId:entry?.contactId||preset?.contactId||'',lines,created:entry?.created||Date.now(),adjusting,reverseOn,...(entry?.example?{example:true}:{}),...(preset?.recurringId?{recurringId:preset.recurringId}:{})};
     delete data.cls;delete data.proj;delete data.veh;Object.assign(data,classOf(f,'jCls'),typeof projOf==='function'?projOf(f,'jProj'):{},typeof vehOf==='function'?vehOf(f,'jVeh'):{});
     const w=[{op:'set',collection:'entries',id,data}],rid='rv_'+id;
     // The reversing entry: the same lines with debits and credits swapped.
     if(reverseOn)w.push({op:'set',collection:'entries',id:rid,data:{type:'journal',date:reverseOn,ref:ref?ref+'-R':'',memo:`Reversal of ${memo||'journal entry'} (${fmtDate(date)})`,contactId:'',reversalOf:id,...(entry?.example?{example:true}:{}),
       lines:lines.map(l=>({account:l.account,debit:l.credit,credit:l.debit,memo:l.memo})),created:(S.entries.find(x=>x.id===rid)||{}).created||Date.now()+1}});
     else if(S.entries.some(x=>x.id===rid))w.push({op:'delete',collection:'entries',id:rid});
-    if(await batch(w)){closeModal();toast(reverseOn?`Journal entry saved, reversing on ${fmtDate(reverseOn)}`:'Journal entry saved')}};
+    if(await batch(w)){closeModal();if(preset&&preset.onSaved)await preset.onSaved(id);else toast(reverseOn?`Journal entry saved, reversing on ${fmtDate(reverseOn)}`:'Journal entry saved')}};
 }
 
 // Undo an import's chart of accounts: the accounts it created go, unless something still uses them.

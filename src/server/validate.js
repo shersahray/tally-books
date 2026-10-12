@@ -2,6 +2,7 @@
 const GIFI = require('../../public/gifi.js');
 const PLANS = require('../../public/plans.js');
 const IND = require('../../public/industries.js');
+const RECUR = require('../../public/recurring-calc.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -662,7 +663,7 @@ function checkDelete(collection, id, store) {
   if (collection === 'accounts' && (store.list('bankTxns').some(b => b.account === id) || store.list('rules').some(r => r.account === id))) {
     throw new ValidationError('This account has imported bank transactions or bank rules, so it can’t be deleted. Mark it inactive instead.', 409);
   }
-  const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id;
+  const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id || r.from === id || r.to === id;
   if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines))) {
     throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
   }
@@ -866,24 +867,64 @@ function validateEstimate(data, store) {
   if (data.invoiceId && !store.get('docs', String(data.invoiceId))) throw new ValidationError('The invoice made from this estimate doesn’t exist.');
   return { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
 }
-/* Recurring invoices and bills: a template and a schedule. The client makes each one when it's due. */
-const REC_KINDS = ['invoice', 'bill'], REC_EVERY = ['week', 'month', 'quarter', 'year'];
+/* Recurring transactions: a template and a schedule. The client makes each one when it's due (or reminds someone).
+   Invoices and bills have a customer or vendor and item lines; expenses and deposits a bank or card account and
+   category lines; transfers two accounts and an amount; journal entries debit and credit lines that must balance. */
+const REC_KINDS = ['invoice', 'bill', 'expense', 'deposit', 'transfer', 'journal'], REC_EVERY = ['week', 'month', 'quarter', 'year'];
+// A recurring transaction in another currency would need each day's exchange rate, which isn't known ahead.
+function recBank(store, id, what) {
+  const a = store.get('accounts', String(id || ''));
+  if (!a || (a.detail !== 'bank' && a.detail !== 'card')) throw new ValidationError(`Choose ${what}.`);
+  if (a.currency) throw new ValidationError('Recurring transactions use Canadian-dollar bank and card accounts.');
+  return String(id);
+}
 function validateRecurring(data, store) {
-  if (!REC_KINDS.includes(data.kind)) throw new ValidationError('A recurring transaction must be an invoice or a bill.');
+  if (!REC_KINDS.includes(data.kind)) throw new ValidationError('A recurring transaction must be an invoice, bill, expense, deposit, transfer or journal entry.');
   if (!str(data.name).trim()) throw new ValidationError('Give the recurring transaction a name.');
-  const c = store.get('contacts', String(data.contactId || ''));
-  if (!c) throw new ValidationError(`Choose the ${data.kind === 'invoice' ? 'customer' : 'vendor'}.`);
+  const doc = data.kind === 'invoice' || data.kind === 'bill', money = data.kind === 'expense' || data.kind === 'deposit';
+  if (doc && !store.get('contacts', String(data.contactId || ''))) throw new ValidationError(`Choose the ${data.kind === 'invoice' ? 'customer' : 'vendor'}.`);
+  if (!doc && data.contactId && !store.get('contacts', String(data.contactId))) throw new ValidationError('The payee on this recurring transaction doesn’t exist.');
   if (!REC_EVERY.includes(data.every)) throw new ValidationError('Choose how often: every week, month, quarter or year.');
   const n = Math.round(Number(data.n) || 1);
   if (n < 1 || n > 12) throw new ValidationError('Repeat every 1 to 12 weeks, months, quarters or years.');
   if (!isDate(data.next)) throw new ValidationError('Choose the date of the next one.');
   if (data.end && !isDate(data.end)) throw new ValidationError('The end date must be YYYY-MM-DD.');
-  const lines = docLines(data.lines);
-  if (!lines.length) throw new ValidationError('Add at least one line.');
-  for (const l of lines) if (!store.get('accounts', l.account)) throw new ValidationError('Choose an account on every line.');
-  const terms = data.terms === '' || data.terms == null ? '' : Math.max(0, Math.min(365, Math.round(Number(data.terms) || 0)));
-  return { ...data, name: str(data.name, 100).trim(), memo: str(data.memo, 2000), n, lines, terms, end: data.end || '', mode: data.mode === 'remind' ? 'remind' : 'auto',
+  const day = data.day === undefined || data.day === '' || data.day === null || data.day === false ? undefined : Math.round(Number(data.day));
+  if (day !== undefined && !(day >= 1 && day <= 31)) throw new ValidationError('The day of the month must be 1 to 31.');
+  const out = { ...data, name: str(data.name, 100).trim(), memo: str(data.memo, 2000), n, end: data.end || '', mode: data.mode === 'remind' ? 'remind' : 'auto',
     email: data.kind === 'invoice' && !!data.email, active: data.active !== false, made: Math.max(0, Math.round(Number(data.made) || 0)) };
+  if (day !== undefined) out.day = day; else delete out.day;
+  if (!doc) out.contactId = data.contactId ? String(data.contactId) : '';
+  if (data.ref !== undefined) out.ref = str(data.ref, 40).trim();
+  if (doc || money) {
+    const lines = docLines(data.lines);
+    if (!lines.length) throw new ValidationError('Add at least one line.');
+    for (const l of lines) if (!store.get('accounts', l.account)) throw new ValidationError('Choose an account on every line.');
+    out.lines = lines;
+  }
+  if (doc) out.terms = data.terms === '' || data.terms == null ? '' : Math.max(0, Math.min(365, Math.round(Number(data.terms) || 0)));
+  if (money) {
+    out.bank = recBank(store, data.bank, data.kind === 'expense' ? 'the bank or card account it’s paid from' : 'the bank account it goes into');
+    if (!out.lines.some(l => l.amount)) throw new ValidationError('Add at least one line with an amount.');
+    if (out.lines.some(l => l.account === out.bank)) throw new ValidationError('A line can’t use the bank or card account itself.');
+  }
+  if (data.kind === 'transfer') {
+    out.from = recBank(store, data.from, 'the account the money comes from');
+    out.to = recBank(store, data.to, 'the account the money goes to');
+    if (out.from === out.to) throw new ValidationError('Pick two different accounts.');
+    const amount = cents(data.amount);
+    if (!(amount > 0)) throw new ValidationError('Enter an amount above zero.');
+    out.amount = amount / 100;
+    delete out.lines;
+  }
+  if (data.kind === 'journal') {
+    // Each one made from it goes straight into the books, so it has to balance now (the journal entry rule).
+    const bad = RECUR.journalProblem(data.lines);
+    if (bad) throw new ValidationError(bad);
+    out.lines = RECUR.journalLines(data.lines);
+    for (const l of out.lines) if (!store.get('accounts', l.account)) throw new ValidationError('A line uses an account that doesn’t exist.');
+  }
+  return out;
 }
 
 function validateQuestion(data, store) {
