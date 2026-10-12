@@ -19,6 +19,18 @@ class Registry {
     if (fs.existsSync(this.file)) this.data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
     this.stores = new Map();
     this.adoptLegacy();
+    this.migratePlans();
+  }
+
+  /** A client paying for their own company on Essentials or Plus moves to Seed or Thrive and keeps the old price (clientLegacy). */
+  migratePlans() {
+    let changed = false;
+    for (const c of this.data.companies) {
+      if (!PLANS.LEGACY[c.clientPlan]) continue;
+      const m = PLANS.migratePlan(c.clientPlan);
+      c.clientPlan = m.plan; c.clientLegacy = m.legacy; changed = true;
+    }
+    if (changed) this.save();
   }
 
   /** Books created before multi-company support become the first company. */
@@ -73,7 +85,8 @@ class Registry {
     if (patch.billing !== undefined) c.billing = patch.billing;
     // Add-ons (plans.js ADDONS), paid for separately: the AI assistant, the scrap yard tools…
     for (const k of Object.keys(PLANS.ADDONS)) if (patch[k] !== undefined) c[k] = !!patch[k];
-    if (patch.clientPlan !== undefined) c.clientPlan = patch.clientPlan;                  // the plan the client pays for                               // the client's subscription, when the client pays
+    if (patch.clientPlan !== undefined) { c.clientPlan = PLANS.planOf(patch.clientPlan); delete c.clientLegacy; }
+    if (patch.clientLegacy !== undefined) { if (PLANS.LEGACY[patch.clientLegacy]) c.clientLegacy = patch.clientLegacy; else delete c.clientLegacy; }                  // the plan the client pays for                               // the client's subscription, when the client pays
     this.save();
     return c;
   }

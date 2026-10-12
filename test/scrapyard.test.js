@@ -41,7 +41,7 @@ test('the industry and its add-on are defined together', () => {
 test('a company set up as a scrap yard gets its accounts, materials, weigh ticket field and the add-on', async () => {
   assert.equal(yard.scrapyard, true, 'the add-on is on');
   const s = await state(yard.id);
-  assert.deepEqual(s.addons, { assistant: false, scrapyard: true });
+  assert.deepEqual(s.addons, { assistant: false, scrapyard: true, payroll: false });
   const byCode = c => s.accounts.find(a => a.code === c);
   assert.equal(byCode('1410').name, 'Vehicles in yard (inventory)');
   assert.equal(byCode('4000').name, 'Scrap metal sales');

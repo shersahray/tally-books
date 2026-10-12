@@ -40,8 +40,10 @@ const COLS=['accounts','entries','docs','contacts','items','budgets','trips','po
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
-/** Is a plan feature on for the open company (in the firm's plan, and not switched off in its settings)? See plans.js. */
-const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
+/** Is a plan feature on for the open company (in the firm's plan or an add-on such as Payroll, and not switched off in its settings)? See plans.js. */
+const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'thrive',S.company&&S.company.features,k,S.featureAddons);
+/** "In the Grow plan" for a feature the firm's plan doesn't have (translated as a whole). */
+const inPlanPill=k=>`<span class="pill quiet">${esc(T(`In the ${TallyPlans.PLANS[TallyPlans.planFor(k)].label} plan`))}</span>`;
 /* Custom roles (roles.js): can the signed-in person see (or, with 'edit', change) this area of the books?
    Only a staff member with one of the firm's own roles is limited; the server enforces the same rules. */
 const perm=(a,l='view')=>TallyRoles.can(typeof ME!=='undefined'&&ME?ME.perms:null,a,l);
@@ -90,7 +92,7 @@ async function load(){
   if(!CO)return;
   const co=CO;
   loading=(async()=>{
-    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.approvalOwners=s.approvalOwners||1;S.rev=s.rev;S.connErr=false}
+    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.featureAddons=s.featureAddons||{};S.approvalOwners=s.approvalOwners||1;S.rev=s.rev;S.connErr=false}
     catch(e){S.connErr=true}
     S.loaded=true;scheduleRender();
   })();
@@ -451,16 +453,40 @@ const NPO_WORDS={'Profit and loss':'Statement of operations','Balance sheet':'St
 const W=s=>(isNpo()&&NPO_WORDS[s])||s;
 const ORG_TYPES=[['business','Business'],['npo','Non-profit organization'],['charity','Registered charity']];
 /* ---------- plan features for this company ----------
-   The firm's plan (Essentials or Plus, set by the server's administrator) decides what's available;
-   here the team switches off what this client doesn't use. Switching one off hides it and keeps its data. */
+   The firm's plan (Seed, Grow or Thrive, set by the server's administrator) decides what's available, and the Payroll
+   add-on brings payroll to a company on Seed or Grow; here the team switches off what this client doesn't use.
+   Switching one off hides it and keeps its data. */
 function featuresPanel(){
   if(!ME||ME.role==='client')return '';
-  const plan=TallyPlans.planOf(ME.firmPlan),P=TallyPlans.PLANS[plan],F=TallyPlans.FEATURES,off=(S.company.features)||{};
-  const rows=Object.entries(F).filter(([k,f])=>!f.firm).map(([k,f])=>{const inPlan=P.features.includes(k);
-    return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${inPlan&&off[k]!==false?'checked':''} ${inPlan&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${inPlan?'':` <span class="pill quiet">${esc(T('In the Plus plan'))}</span>`}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
+  const plan=TallyPlans.planOf(ME.firmPlan),P=TallyPlans.PLANS[plan],F=TallyPlans.FEATURES,off=(S.company.features)||{},add=S.featureAddons||{};
+  const rows=Object.entries(F).filter(([k,f])=>!f.firm).map(([k,f])=>{const has=TallyPlans.hasFeature(plan,k,add),viaAddon=has&&!P.features.includes(k);
+    return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${has&&off[k]!==false?'checked':''} ${has&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${viaAddon?` <span class="pill paid">${esc(T('Add-on'))}</span>`:has?'':' '+inPlanPill(k)}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Features</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
-    <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, banking, invoices and bills, GST/HST and QST returns and the standard reports are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>
-    ${rows}</div></div>`;
+    <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, the standard reports and the CaseWare export are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>
+    ${rows}</div></div>${payrollAddonPanel()}`;
+}
+/** Settings: the Payroll add-on for this company. Thrive includes payroll's base fee; employees paid are charged on every plan. */
+function payrollAddonPanel(){
+  if(!ME||ME.role==='client'||!CO||!S.loaded)return '';
+  const A=TallyPlans.ADDONS.payroll,plan=TallyPlans.planOf(ME.firmPlan),owner=ME.role==='owner'&&!ME.readOnly;
+  const on=!!(S.addons&&S.addons.payroll),incl=TallyPlans.addonIncluded(plan,'payroll');
+  const amt=typeof BILL!=='undefined'&&BILL&&BILL.configured&&BILL.offer&&BILL.offer.amounts,billed=amt&&!(BILL.firm&&BILL.firm.exempt);
+  // A licence code's plan decides payroll on a desktop copy (add-ons aren't sold with codes).
+  if(typeof LIC!=='undefined'&&LIC&&LIC.on)return '';
+  if(incl&&!billed)return '';
+  return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(T('Payroll'))} <span class="pill quiet">${esc(T('Add-on'))}</span></h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
+    <div class="muted" style="font-size:13px">${incl?esc(T('Payroll is part of the Thrive plan.')):esc(T('Payroll is part of the Thrive plan. On Seed and Grow, add it to the companies that need it.'))}</div>
+    ${incl?'':`<label class="check"><input type="checkbox" id="payAddon" ${on?'checked':''} ${owner?'':'disabled'}> ${esc(T('Add Payroll to this company'))}</label>`}
+    ${billed?`<div class="muted" style="font-size:12.5px">${incl?'':`<span translate="no">${centsMoney(amt.payroll||0)}</span> <span>a month for this company, on top of its plan,</span> <span>plus</span> `}<span translate="no">${centsMoney(amt.payrollEmployees||0)}</span> <span>for each employee paid in the month. Each employee counts once, however many times they’re paid.</span></div>`:''}
+    ${!owner&&!incl?`<div class="muted" style="font-size:12.5px">${esc(T('Only an owner can add or remove it.'))}</div>`:''}</div></div>`;
+}
+function bindPayrollAddon(m){
+  const cb=$('#payAddon',m);if(!cb)return;
+  cb.onchange=async()=>{const want=cb.checked;cb.disabled=true;
+    if(want&&!await confirmBox('Add Payroll?',`${T('Payroll appears in the menu for')} ${S.company.name}.${typeof BILL!=='undefined'&&BILL&&BILL.configured&&!(BILL.firm&&BILL.firm.exempt)?' '+T('The add-on is billed each month until you remove it.'):''}`,'Add it')){cb.checked=false;cb.disabled=false;return}
+    if(!want&&(S.employees.length||S.payruns.length)&&!await confirmBox('Remove Payroll?','Employees and pay runs stay in the books and come back if you add it again. Their transactions aren’t touched.','Remove')){cb.checked=true;cb.disabled=false;return}
+    try{await api('PUT',`/api/companies/${encodeURIComponent(CO)}`,{payroll:want});await load();toast(want?'Payroll added to this company':'Payroll removed from this company')}
+    catch(e){cb.checked=!want;toast(e.message,true)}finally{cb.disabled=false}};
 }
 /* Provincial sales tax charged on top of GST (not harmonized). Quebec's QST is set up from the Sales tax page. */
 const PST_PROV={BC:{name:'PST',rate:7},SK:{name:'PST',rate:6},MB:{name:'RST',rate:7}};
@@ -631,6 +657,7 @@ function bindMain(m){
   if(typeof bindAssets==='function')bindAssets(m);
   if(typeof bindYard==='function')bindYard(m);
   if(typeof bindYardPanel==='function'&&S.view==='settings')bindYardPanel(m);
+  if(S.view==='settings')bindPayrollAddon(m);
   if(typeof bindPayPanel==='function')bindPayPanel(m);
   if(S.view==='users'||S.view==='signins')bindUsers(m);
   if(S.view==='firms')bindFirms(m);
@@ -1430,14 +1457,18 @@ const topCls=(f,id)=>($('#'+id,f)||{}).value||'';
 function classesPanel(){
   if(!ME||ME.role==='client')return '';
   const cs=S.company.classes||[],ro=ME.readOnly||!perm('accounting','edit'),w=clsWords(),lab=S.company.classLabel||'class';
+  // Making classes is in Thrive; classes already made can still be used, renamed and reported on.
+  const canMake=feat('classes');
+  if(!canMake&&!cs.length)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(w.many)}</h3><div class="pad muted" style="font-size:13px"><span>${esc(T('Sort income and expenses by branch, location, department or line of business, and see the profit and loss for each one.'))}</span> ${inPlanPill('classes')}</div></div>`;
   const lineUse=(r,id)=>(r.lines||[]).some(l=>l&&l.cls===id);
   const used=id=>S.entries.some(e=>e.cls===id||lineUse(e,id))||S.docs.some(d=>d.cls===id||lineUse(d,id))||S.rules.some(r=>r.cls===id);
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(w.many)}</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="muted" style="font-size:13px">${esc(T('Sort income and expenses by branch, location, department or line of business. Pick one on an invoice, bill, sales receipt, expense, deposit, journal entry or bank line, then see the profit and loss for each one side by side in Reports.'))}</div>
-    ${ro?'':`<label class="check" style="align-items:flex-start"><input type="checkbox" id="clsPerLine" ${S.company.classPerLine?'checked':''}> <span><b>${esc(T('Track classes on each line'))}</b><br><span class="muted" style="font-size:12.5px">${esc(T('Pick a class on each line of an invoice, bill, sales receipt, credit, expense, deposit or journal entry, so one bill can be split, for example between two stores. The class at the top fills in every line.'))}</span></span></label>`}
+    ${ro||(!canMake&&!S.company.classPerLine)?'':`<label class="check" style="align-items:flex-start"><input type="checkbox" id="clsPerLine" ${S.company.classPerLine?'checked':''}> <span><b>${esc(T('Track classes on each line'))}</b><br><span class="muted" style="font-size:12.5px">${esc(T('Pick a class on each line of an invoice, bill, sales receipt, credit, expense, deposit or journal entry, so one bill can be split, for example between two stores. The class at the top fills in every line.'))}</span></span></label>`}
     ${ro?'':`<div class="fields">${fld('clsLabel','Call them',`<select id="clsLabel">${Object.entries(CLASS_WORDS).map(([k,v])=>`<option value="${k}" ${lab===k?'selected':''}>${esc(T(v.many))}</option>`).join('')}</select><span class="hint">${esc(T('The name used on forms and reports, for example Locations for a business with two stores.'))}</span>`)}</div>`}
     ${cs.length?`<div class="tbl-wrap"><table><tbody>${cs.map(c=>`<tr><td><span translate="no">${esc(c.name)}</span>${c.active===false?' <span class="pill quiet">Inactive</span>':''}</td><td class="n" style="white-space:nowrap">${ro?'':`<button class="btn sm ghost" data-clsren="${esc(c.id)}">Rename</button><button class="btn sm ghost" data-clsact="${esc(c.id)}">${c.active===false?'Turn on':'Turn off'}</button>${used(c.id)?'':`<button class="btn sm ghost" data-clsdel="${esc(c.id)}">Remove</button>`}`}</td></tr>`).join('')}</tbody></table></div>`:`<div class="muted">${esc(T('None yet.'))}</div>`}
-    ${ro?'':`<form id="clsAdd" style="display:flex;gap:8px"><input type="text" id="clsName" maxlength="60" placeholder="${esc(T('e.g. Ottawa office'))}" aria-label="${esc(w.add)}" style="flex:1"><button class="btn" type="submit">${esc(w.add)}</button></form>`}
+    ${!ro&&!canMake?`<div class="muted" style="font-size:12.5px"><span>${esc(T('These classes stay usable. Adding more needs the Thrive plan.'))}</span> ${inPlanPill('classes')}</div>`:''}
+    ${ro||!canMake?'':`<form id="clsAdd" style="display:flex;gap:8px"><input type="text" id="clsName" maxlength="60" placeholder="${esc(T('e.g. Ottawa office'))}" aria-label="${esc(w.add)}" style="flex:1"><button class="btn" type="submit">${esc(w.add)}</button></form>`}
   </div></div>`;
 }
 function bindClasses(m){

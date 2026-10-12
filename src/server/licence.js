@@ -2,7 +2,7 @@
 /* Licence codes for the desktop app.
  *
  * You (the seller) make a code for each client in your own Sumlora (the Licences page). A code says who
- * it's for, the plan (Essentials or Plus) and the last day it's good for, and it's signed with your private
+ * it's for, the plan (Seed, Grow or Thrive) and the last day it's good for, and it's signed with your private
  * key. The desktop app checks the signature with your public key, which the build puts in
  * electron/build-info.json, so it works without the internet and nobody else can make codes.
  *
@@ -21,8 +21,12 @@ const PREFIX = 'TB1-';
 const TRIAL_DAYS = 30;
 const GRACE_DAYS = 14;
 const WARN_DAYS = 30;
-const PLAN_CODES = { e: 'essentials', p: 'plus' };
-const CODE_FOR_PLAN = { essentials: 'e', plus: 'p' };
+const PLANS = require('../../public/plans.js');
+// Seed and Thrive keep the letters of the plans they replaced (Essentials, Plus), which had the same features,
+// so a copy of the app from before Grow existed still reads their codes. Codes with the old names read as the new plans.
+const PLAN_CODES = { e: 'seed', g: 'grow', p: 'thrive' };
+const CODE_FOR = { seed: 'e', grow: 'g', thrive: 'p' };
+const codeForPlan = plan => (PLANS.PLANS[plan] || PLANS.LEGACY[plan] ? CODE_FOR[PLANS.planOf(plan)] : undefined);
 // Who the licence is for: a bookkeeping firm (any number of client companies) or one business (one company).
 const KINDS = { firm: 'f', business: 'b' };
 const KIND_CODES = { f: 'firm', b: 'business' };
@@ -62,7 +66,7 @@ function privateKeyFrom(jwk) {
 
 /** Make a code. payload: { id, name, plan, until (YYYY-MM-DD), issued (YYYY-MM-DD), at (ms, when it was made) } */
 function makeCode(payload, privateKey) {
-  const body = Buffer.from(JSON.stringify({ v: 1, i: payload.id, n: payload.name, p: CODE_FOR_PLAN[payload.plan], u: payload.until, d: payload.issued, ...(payload.kind === 'business' ? { k: 'b' } : {}), ...(payload.kind !== 'business' && payload.maxCompanies ? { c: payload.maxCompanies } : {}), ...(payload.at ? { t: Math.floor(payload.at / 1000) } : {}) }));
+  const body = Buffer.from(JSON.stringify({ v: 1, i: payload.id, n: payload.name, p: codeForPlan(payload.plan), u: payload.until, d: payload.issued, ...(payload.kind === 'business' ? { k: 'b' } : {}), ...(payload.kind !== 'business' && payload.maxCompanies ? { c: payload.maxCompanies } : {}), ...(payload.at ? { t: Math.floor(payload.at / 1000) } : {}) }));
   const sig = crypto.sign(null, body, privateKey);
   return PREFIX + b64u(body) + '.' + b64u(sig);
 }
@@ -151,7 +155,7 @@ class Licence {
   status() {
     if (!this.on) return { on: false, state: 'off', plan: null, canChange: true };
     const today = this.today();
-    if (this.isIssuer()) return { on: true, state: 'issuer', plan: 'plus', kind: 'firm', canChange: true, name: '', until: '' };
+    if (this.isIssuer()) return { on: true, state: 'issuer', plan: 'thrive', kind: 'firm', canChange: true, name: '', until: '' };
     const lic = this.current();
     if (lic) {
       const left = dayNum(lic.until) - dayNum(today);
@@ -160,12 +164,12 @@ class Licence {
       if (-left <= GRACE_DAYS) return { ...base, state: 'grace', canChange: true, readOnlyFrom: addDays(lic.until, GRACE_DAYS + 1) };
       return { ...base, state: 'ended', canChange: false };
     }
-    if (this.trialDays === 0) return { on: true, state: 'none', plan: 'plus', kind: 'firm', canChange: false, needCode: true };
+    if (this.trialDays === 0) return { on: true, state: 'none', plan: 'thrive', kind: 'firm', canChange: false, needCode: true };
     const first = this.data.firstDay || today;
     const trialUntil = addDays(first, this.trialDays - 1);
     const left = dayNum(trialUntil) - dayNum(today);
-    if (left >= 0) return { on: true, state: 'trial', plan: 'plus', kind: 'firm', until: trialUntil, daysLeft: left, canChange: true };
-    return { on: true, state: 'trial-ended', plan: 'plus', kind: 'firm', until: trialUntil, canChange: false };
+    if (left >= 0) return { on: true, state: 'trial', plan: 'thrive', kind: 'firm', until: trialUntil, daysLeft: left, canChange: true };
+    return { on: true, state: 'trial-ended', plan: 'thrive', kind: 'firm', until: trialUntil, canChange: false };
   }
   /** Check a code without entering it: a LicenceError if it can't be used here. */
   check(code) {
@@ -241,8 +245,8 @@ class Issuer {
     const cur = this.load();
     if (cur && cur.key && cur.key.x !== pub) throw new LicenceError('There’s already a different licence key here.', 409);
     // Only well-formed entries come in with the key (they're shown on the Licence codes page).
-    const clean = x => (x && typeof x === 'object' && /^[0-9a-f]{6,20}$/.test(x.id) && CODE_FOR_PLAN[x.plan] && isDay(x.until) && isDay(x.issued) && typeof x.code === 'string' && x.code.startsWith(PREFIX)
-      ? { id: x.id, name: String(x.name || '').slice(0, 80), email: String(x.email || '').slice(0, 120), plan: x.plan, kind: KINDS[x.kind] ? x.kind : 'firm', ...(COMPANY_TIERS.includes(x.maxCompanies) ? { maxCompanies: x.maxCompanies } : {}), ...(PERIODS.includes(x.period) ? { period: x.period } : {}), until: x.until, issued: x.issued, note: String(x.note || '').slice(0, 200), code: x.code.slice(0, 1200), ...(/^[0-9a-f]{6,20}$/.test(x.renews) ? { renews: x.renews } : {}) }
+    const clean = x => (x && typeof x === 'object' && /^[0-9a-f]{6,20}$/.test(x.id) && codeForPlan(x.plan) && isDay(x.until) && isDay(x.issued) && typeof x.code === 'string' && x.code.startsWith(PREFIX)
+      ? { id: x.id, name: String(x.name || '').slice(0, 80), email: String(x.email || '').slice(0, 120), plan: PLANS.planOf(x.plan), kind: KINDS[x.kind] ? x.kind : 'firm', ...(COMPANY_TIERS.includes(x.maxCompanies) ? { maxCompanies: x.maxCompanies } : {}), ...(PERIODS.includes(x.period) ? { period: x.period } : {}), until: x.until, issued: x.issued, note: String(x.note || '').slice(0, 200), code: x.code.slice(0, 1200), ...(/^[0-9a-f]{6,20}$/.test(x.renews) ? { renews: x.renews } : {}) }
       : null);
     const issued = Array.isArray(body.issued) ? body.issued.map(clean).filter(Boolean).slice(-5000) : [];
     if (cur && Array.isArray(cur.issued)) for (const x of cur.issued) if (!issued.some(y => y.code === x.code)) issued.push(x);
@@ -255,7 +259,8 @@ class Issuer {
     if (!d || !d.key) throw new LicenceError('Create your licence key first.', 409);
     name = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
     if (!name) throw new LicenceError('Enter who the licence is for (the client’s business name).');
-    if (!CODE_FOR_PLAN[plan]) throw new LicenceError('Choose one of the plans.');
+    if (!codeForPlan(plan)) throw new LicenceError('Choose one of the plans.');
+    plan = PLANS.planOf(plan);
     if (!KINDS[kind]) throw new LicenceError('Choose who the licence is for: a firm or one business.');
     maxCompanies = kind === 'business' || maxCompanies === null || maxCompanies === '' || maxCompanies === undefined ? null : Number(maxCompanies);
     if (maxCompanies !== null && !COMPANY_TIERS.includes(maxCompanies)) throw new LicenceError('Choose how many client companies: 5, 10, 15, 20, 30 or unlimited.');

@@ -3,7 +3,11 @@
  * Paying for Sumlora on an online server, through the server owner's own Stripe account.
  *
  * - A firm (other than the server owner's) pays for each company it keeps, each month, on its firm's plan
- *   (Essentials or Plus). Companies whose client pays for themselves aren't counted.
+ *   (Seed, Grow or Thrive). Companies whose client pays for themselves aren't counted. A firm from before these
+ *   plans keeps its old price (Essentials or Plus, a price of its own) until the administrator changes it.
+ * - Add-ons (AI assistant, scrap yard, payroll) are a line each, for the companies that have them.
+ * - Payroll also costs a price for each employee paid in a month. That number is only known once the month is over,
+ *   so it's added to the next invoice as a one-time item (chargeEmployees), counted from the pay runs.
  * - A company can be marked "the client pays": its client pays for that one company.
  * - A free trial (14 days unless changed) the first time; the card is taken at the start, on Stripe's page.
  *
@@ -22,6 +26,8 @@ const stripe = require('./stripe');
 const { ValidationError } = require('./validate');
 const PLANS = require('../../public/plans.js');
 
+/** Everything with a price: [key, { label, cents }]. */
+const PRICED = () => [...Object.entries(PLANS.PLANS), ...Object.entries(PLANS.LEGACY), ...Object.entries(PLANS.ADDONS), ...Object.entries(PLANS.UNITS)];
 const GRACE_MS = 7 * 864e5;        // a failed payment: a week to fix the card before access stops
 const STALE_MS = 6 * 3600e3;       // read a subscription again after this long
 
@@ -29,10 +35,11 @@ class Billing {
   constructor(dir, o = {}) {
     this.file = path.join(dir, 'billing.json');
     this.fetch = o.fetch || ((...a) => fetch(...a));
-    this.data = { key: '', amounts: { essentials: 1500, plus: 3000 }, trialDays: 14, tax: false, prices: {} };
+    this.data = { key: '', amounts: {}, trialDays: 14, tax: false, prices: {} };
     try { Object.assign(this.data, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch { /* first run */ }
-    // Add-ons (plans.js ADDONS) have a price too, per company per month.
-    for (const [k, a] of Object.entries(PLANS.ADDONS)) if (!(this.data.amounts[k] > 0)) this.data.amounts[k] = a.cents;
+    // Every plan, old price, add-on and per-unit price (plans.js) has a price; the administrator can change each one.
+    // Old prices (essentials, plus) already in billing.json are kept as they were.
+    for (const [k, a] of PRICED()) if (!(this.data.amounts[k] > 0)) this.data.amounts[k] = a.cents;
   }
   save() {
     const tmp = this.file + '.tmp';
@@ -61,10 +68,10 @@ class Billing {
       }
       next.key = k;
     }
-    for (const plan of [...Object.keys(PLANS.PLANS), ...Object.keys(PLANS.ADDONS)]) {
+    for (const [plan] of PRICED()) {
       if (!body.amounts || body.amounts[plan] === undefined) continue;
       const c = Math.round(Number(body.amounts[plan]) * 100);
-      if (!Number.isFinite(c) || c < 100 || c > 100000) throw new ValidationError(PLANS.ADDONS[plan] ? 'Each add-on’s price must be between $1 and $1,000 a month.' : 'Each plan’s price must be between $1 and $1,000 a month.');
+      if (!Number.isFinite(c) || c < 100 || c > 100000) throw new ValidationError(PLANS.ADDONS[plan] || PLANS.UNITS[plan] ? 'Each add-on’s price must be between $1 and $1,000 a month.' : 'Each plan’s price must be between $1 and $1,000 a month.');
       if (c !== next.amounts[plan]) { next.amounts[plan] = c; delete next.prices[plan]; }
     }
     if (body.trialDays !== undefined) {
@@ -96,14 +103,18 @@ class Billing {
       throw e;
     }
   }
-  /** The Stripe price for a plan, made the first time it's needed. */
+  /**
+   * The Stripe price for a plan, made the first time it's needed. `plan` is a plan (seed, grow, thrive) or an
+   * old price a firm keeps (essentials, plus: see plans.js LEGACY).
+   */
   async price(plan) {
-    plan = PLANS.planOf(plan);
+    plan = PLANS.LEGACY[plan] ? plan : PLANS.planOf(plan);
     const amount = this.data.amounts[plan];
     const have = this.data.prices[plan];
     if (have && have.amount === amount && (have.exclusive || !this.data.tax)) return have.id;
-    const p = await this.call('POST', 'prices', { currency: 'cad', unit_amount: amount, recurring: { interval: 'month' }, tax_behavior: 'exclusive', nickname: `Sumlora ${PLANS.PLANS[plan].label} (per company, monthly)`,
-      product_data: { name: `Sumlora ${PLANS.PLANS[plan].label}` }, metadata: { sumlora_plan: plan } });
+    const label = (PLANS.PLANS[plan] || PLANS.LEGACY[plan]).label;
+    const p = await this.call('POST', 'prices', { currency: 'cad', unit_amount: amount, recurring: { interval: 'month' }, tax_behavior: 'exclusive', nickname: `Sumlora ${label} (per company, monthly)`,
+      product_data: { name: `Sumlora ${label}` }, metadata: { sumlora_plan: plan } });
     this.data.prices[plan] = { id: p.id, amount, exclusive: true };
     this.save();
     return p.id;
@@ -120,13 +131,25 @@ class Billing {
     this.save();
     return p.id;
   }
+  /** A one-time Stripe price for something counted each month (payroll employees), added to the next invoice. */
+  async unitPrice(key) {
+    const u = PLANS.UNITS[key];
+    if (!u) throw new ValidationError('That price doesn’t exist.');
+    const amount = this.data.amounts[key], have = this.data.prices[key];
+    if (have && have.amount === amount && (have.exclusive || !this.data.tax)) return have.id;
+    const p = await this.call('POST', 'prices', { currency: 'cad', unit_amount: amount, tax_behavior: 'exclusive', nickname: `Sumlora ${u.label} (each, per month)`,
+      product_data: { name: `Sumlora ${u.label}` }, metadata: { sumlora_unit: key } });
+    this.data.prices[key] = { id: p.id, amount, exclusive: true };
+    this.save();
+    return p.id;
+  }
   /**
    * Stripe's checkout page for a new subscription.
-   * @param {object} o  { kind: 'firm'|'company', id, plan, quantity, email, customer, trial, base,
+   * @param {object} o  { kind: 'firm'|'company', id, plan, legacy (an old price kept: 'essentials'|'plus'), quantity, email, customer, trial, base,
    *                     addons: { assistant: 2, scrapyard: 1 } (how many companies have each add-on; `assistant` alone still works) }
    */
   async checkout(o) {
-    const price = await this.price(o.plan);
+    const price = await this.price(PLANS.priceKey(o.plan, o.legacy));
     const counts = { ...(o.assistant > 0 ? { assistant: o.assistant } : {}), ...(o.addons || {}) };
     const extra = {};
     let n = 1;
@@ -162,6 +185,31 @@ class Billing {
     const sub = await this.call('GET', `subscriptions/${rec.sub}`);
     return recordOf(sub, rec.customer, rec);
   }
+  /**
+   * The firm's plan or price changed: point the plan's line at the new price (Stripe prorates the difference).
+   * `key` is a plan or an old price (PLANS.priceKey).
+   */
+  async setPlan(rec, key, plan) {
+    if (!rec || !rec.sub || !rec.item) return rec;
+    const id = await this.price(key);
+    if (rec.price === id) return rec;
+    const sub = await this.call('POST', `subscriptions/${rec.sub}`, { 'items[0][id]': rec.item, 'items[0][price]': id, 'metadata[sumlora_plan]': PLANS.planOf(plan || key) });
+    return recordOf(sub, rec.customer, rec);
+  }
+  /**
+   * Charge the employees paid in a month (YYYY-MM) on the subscription's next invoice, once per month.
+   * `count` is how many (PLANS.employeesPaid over the companies the subscription pays for). Returns the record,
+   * marked with the month so it's never charged twice.
+   */
+  async chargeEmployees(rec, month, count) {
+    if (!rec || !rec.sub || rec.employeesBilled === month || !/^\d{4}-\d{2}$/.test(month)) return rec;
+    const n = Math.max(0, count | 0);
+    if (n) {
+      await this.call('POST', 'invoiceitems', { customer: rec.customer, subscription: rec.sub, price: await this.unitPrice('payrollEmployees'), quantity: n,
+        description: `Payroll: ${n} employee${n === 1 ? '' : 's'} paid in ${month}`, metadata: { sumlora_unit: 'payrollEmployees', sumlora_month: month } });
+    }
+    return { ...rec, employeesBilled: month, employees: { month, count: n } };
+  }
   /** A firm's number of companies changed. */
   async setQuantity(rec, quantity) {
     const q = Math.max(1, quantity);
@@ -193,14 +241,18 @@ class Billing {
 function recordOf(sub, customer, prev = {}) {
   // The plan's line, and a line for each add-on (its price is marked with the add-on's name).
   const items = (sub.items && sub.items.data) || [];
-  const addonOf = it => (it && it.price && it.price.metadata && it.price.metadata.sumlora_addon) || '';
-  const item = items.find(it => !addonOf(it));
+  const meta = it => (it && it.price && it.price.metadata) || {};
+  const addonOf = it => meta(it).sumlora_addon || '';
+  const item = items.find(it => !addonOf(it) && !meta(it).sumlora_unit);
   const addons = {};
   for (const it of items) if (addonOf(it)) addons[addonOf(it)] = { item: String(it.id), quantity: Number(it.quantity) || 0 };
   const status = String(sub.status || '');
   const rec = {
     customer: String((sub.customer && sub.customer.id) || sub.customer || customer || prev.customer || ''),
     sub: String(sub.id), item: item ? String(item.id) : prev.item || '', quantity: item ? Number(item.quantity) || 1 : prev.quantity || 1,
+    price: item && item.price && item.price.id ? String(item.price.id) : prev.price || '',
+    // The last month of payroll employees charged (chargeEmployees), so a month is never charged twice.
+    ...(prev.employeesBilled ? { employeesBilled: prev.employeesBilled } : {}), ...(prev.employees ? { employees: prev.employees } : {}),
     status, cancelAtEnd: !!sub.cancel_at_period_end, trialEnd: sub.trial_end ? sub.trial_end * 1000 : 0,
     periodEnd: (sub.current_period_end || (item && item.current_period_end) || 0) * 1000, checked: Date.now(),
     hadTrial: !!(prev.hadTrial || sub.trial_end), plan: (sub.metadata && sub.metadata.sumlora_plan) || prev.plan || '', addons,
@@ -221,4 +273,4 @@ function describe(rec) {
   return { state: paid(rec) ? (rec.status === 'past_due' ? 'pastdue' : rec.status) : 'stopped', status: rec.status, trialEnd: rec.trialEnd, periodEnd: rec.periodEnd, cancelAtEnd: rec.cancelAtEnd, quantity: rec.quantity, hadTrial: !!rec.hadTrial, graceUntil: rec.pastDueSince ? rec.pastDueSince + GRACE_MS : 0 };
 }
 
-module.exports = { Billing, paid, stale, describe, recordOf };
+module.exports = { Billing, paid, stale, describe, recordOf, PRICED };

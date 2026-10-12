@@ -127,12 +127,12 @@ test('suspending a firm signs its people out; the administrator’s own firm can
   assert.equal((await req(bOwner, 'GET', '/api/ai')).json.firmAllowed, true);
 });
 
-test('plans: Essentials leaves out payroll, AI, advanced reports and special tax methods; Plus has them; each company can switch them off', async () => {
+test('plans: Seed leaves out payroll, AI, advanced reports and special tax methods; Thrive has them; each company can switch them off', async () => {
   const firms = (await req(admin, 'GET', '/api/firms')).json;
   const nl = firms.firms.find(f => f.name === 'North Ledger Inc.');
-  assert.equal(nl.plan, 'essentials'); assert.equal(firms.defaultPlan, 'essentials');
-  assert.equal(firms.firms.find(f => f.id === firms.myFirm).plan, 'plus', 'the administrator’s own firm has everything');
-  assert.equal((await req(bOwner, 'GET', '/api/auth/me')).json.user.firmPlan, 'essentials');
+  assert.equal(nl.plan, 'seed'); assert.equal(firms.defaultPlan, 'seed');
+  assert.equal(firms.firms.find(f => f.id === firms.myFirm).plan, 'thrive', 'the administrator’s own firm has everything');
+  assert.equal((await req(bOwner, 'GET', '/api/auth/me')).json.user.firmPlan, 'seed');
   const emp = { name: 'Pat Payroll', prov: 'NS', freq: 'biweekly', payType: 'salary', rate: 52000, td1Fed: '' };
   let r = await req(bOwner, 'PUT', `/api/c/${bCo}/records/employees/e1`, emp);
   assert.equal(r.status, 403); assert.match(r.json.error, /Payroll isn’t part/);
@@ -144,10 +144,10 @@ test('plans: Essentials leaves out payroll, AI, advanced reports and special tax
   // Ordinary bookkeeping is in every plan.
   assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/filings/f1`, { tax: 'gst', from: '2026-07-01', to: '2026-09-30', filedOn: '2026-10-15', lines: { 109: 100 } })).status, 200);
   // Only the administrator changes plans.
-  assert.equal((await req(bOwner, 'PUT', `/api/firms/${nl.id}`, { plan: 'plus' })).status, 403);
+  assert.equal((await req(bOwner, 'PUT', `/api/firms/${nl.id}`, { plan: 'thrive' })).status, 403);
   assert.equal((await req(admin, 'PUT', `/api/firms/${nl.id}`, { plan: 'gold' })).status, 400);
-  assert.equal((await req(admin, 'PUT', `/api/firms/${nl.id}`, { plan: 'plus' })).status, 200);
-  assert.equal((await req(bOwner, 'GET', '/api/auth/me')).json.user.firmPlan, 'plus');
+  assert.equal((await req(admin, 'PUT', `/api/firms/${nl.id}`, { plan: 'thrive' })).status, 200);
+  assert.equal((await req(bOwner, 'GET', '/api/auth/me')).json.user.firmPlan, 'thrive');
   assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/employees/e1`, emp)).status, 200);
   // A client who doesn't need payroll: switched off for this company only.
   r = await req(bOwner, 'PUT', `/api/c/${bCo}/settings`, { ...st, features: { payroll: false, ai: true, nonsense: false } });
@@ -159,9 +159,9 @@ test('plans: Essentials leaves out payroll, AI, advanced reports and special tax
   assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/employees/e2`, { ...emp, name: 'Sam' })).status, 200);
   // The plan new firms get when they sign up.
   assert.equal((await req(admin, 'PUT', '/api/firms/settings', { defaultPlan: 'gold' })).status, 400);
-  assert.equal((await req(admin, 'PUT', '/api/firms/settings', { defaultPlan: 'plus' })).status, 200);
-  assert.equal((await req(admin, 'GET', '/api/firms')).json.defaultPlan, 'plus');
-  await req(admin, 'PUT', '/api/firms/settings', { defaultPlan: 'essentials' });
+  assert.equal((await req(admin, 'PUT', '/api/firms/settings', { defaultPlan: 'thrive' })).status, 200);
+  assert.equal((await req(admin, 'GET', '/api/firms')).json.defaultPlan, 'thrive');
+  await req(admin, 'PUT', '/api/firms/settings', { defaultPlan: 'seed' });
 });
 
 test('open sign-ups sign the new firm straight in; at most 5 sign-up tries a day from one network', async () => {
