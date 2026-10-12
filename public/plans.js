@@ -1,7 +1,8 @@
 /*
  * Sumlora plans. Each firm on a server has a plan; the plan decides which extra features its companies
  * can use, and inside that, each company can switch features off (a client who doesn't need payroll).
- * Three plans: Seed, Grow and Thrive. Payroll is in Thrive, and an add-on on Seed and Grow.
+ * Three plans: Seed, Grow and Thrive. Payroll is hidden for now ("coming soon", see COMING_SOON below); when it's
+ * turned back on it is in Thrive, and an add-on on Seed and Grow.
  * Works in the browser (window.TallyPlans) and in Node (require), so the server enforces the same rules.
  */
 (function (root, factory) {
@@ -9,6 +10,15 @@
   else root.TallyPlans = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
+
+  /*
+   * Features built but not offered yet. They stay out of every plan, add-on, price and menu, and the server refuses
+   * them, while their code and any records already made are kept. To launch payroll, empty this list.
+   * A test (or a server started with SUMLORA_PAYROLL=on) can turn payroll back on.
+   */
+  const payrollOn = typeof process !== 'undefined' && process.env && process.env.SUMLORA_PAYROLL === 'on';
+  const COMING_SOON = payrollOn ? [] : ['payroll'];
+  const soon = key => COMING_SOON.includes(key);
 
   // Features beyond everyday bookkeeping. Bookkeeping itself (accounts, transactions, invoices, estimates and bills,
   // GST/HST and QST returns, bank statement import and reconciliation, bank rules, receipts, the standard reports,
@@ -31,18 +41,18 @@
     emailReceipts: { label: 'Receipts by email', desc: 'Each company gets its own email address: receipts forwarded to it go to the Receipts inbox' },
     cashForecast: { label: 'Cash flow forecast', desc: 'The money expected in the bank over the next 30, 60 or 90 days, from open invoices and bills, recurring transactions, payroll, sales tax and your own planned items' },
     // In Thrive; on Seed and Grow it comes with the Payroll add-on (ADDONS.payroll).
-    payroll: { label: 'Payroll', desc: 'Pay runs, source deductions and remittances, vacation and holiday pay, ROE, T4 and RL-1' },
+    payroll: { label: 'Payroll', desc: 'Pay runs, source deductions and remittances, vacation and holiday pay, ROE, T4 and RL-1', comingSoon: soon('payroll') },
     workflows: { label: 'Workflow reminders', desc: 'Rules that remind the right people about overdue invoices, bills coming due, bills waiting for approval, bank lines and receipts waiting, estimates to follow up, remittances and sales tax returns, and can email customers a payment reminder' },
     // For the whole firm, not each company: owners define roles under Users & security (see roles.js).
     customRoles: { label: 'Custom roles', desc: 'Your own roles for staff, with None, View or Edit for sales, expenses, banking, payroll, reports, accounting, sales tax and settings', firm: true },
   };
   const GROW = ['bankFeeds', 'ai', 'advancedReports', 'projects', 'fixedAssets', 'specialTax', 'budgets'];
-  const THRIVE = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'workflows', 'payroll'];
+  const THRIVE = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'workflows', 'payroll'].filter(k => !soon(k));
   // cents: the default monthly price per company (the server's administrator can change it in Settings).
   const PLANS = {
     seed: { label: 'Seed', fr: 'Semis', cents: 2000, features: [], blurb: 'Everyday bookkeeping: invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, reports and CaseWare export.' },
     grow: { label: 'Grow', fr: 'Croissance', cents: 4500, features: GROW, blurb: 'Everything in Seed, plus automatic bank feeds, AI suggestions, advanced reports, projects and time, fixed assets and CCA, special sales tax methods and budgets.' },
-    thrive: { label: 'Thrive', fr: 'Prospérité', cents: 7500, features: THRIVE, blurb: 'Everything in Grow, plus payroll, inventory, multi-currency, classes, custom roles, bill approvals, receipts by email, the cash flow forecast and workflow reminders.' },
+    thrive: { label: 'Thrive', fr: 'Prospérité', cents: 7500, features: THRIVE, blurb: 'Everything in Grow, plus ' + (soon('payroll') ? '' : 'payroll, ') + 'inventory, multi-currency, classes, custom roles, bill approvals, receipts by email, the cash flow forecast and workflow reminders.' },
   };
   /*
    * The plans before Seed, Grow and Thrive. A firm (or a company whose client pays) still on one of them moves to the
@@ -55,7 +65,7 @@
   };
   // Add-ons: bought separately for each company. Off unless an owner turns one on.
   // cents is the default monthly price per company; the server's administrator can change it in Settings.
-  const ADDONS = {
+  const ALL_ADDONS = {
     assistant: { label: 'AI assistant', desc: 'Ask questions about the books in plain words and get answers with the numbers, plus links to the right report', cents: 500 },
     // Turned on by itself when a company is set up as a scrap yard (industries.js), or by an owner in Settings.
     scrapyard: { label: 'Scrap yard', desc: 'For scrap yards and auto recyclers: vehicles bought by VIN, purchase vouchers for sellers paid in cash, parts pulled from each car, weigh tickets, an environmental checklist and profit per vehicle', cents: 1000 },
@@ -63,9 +73,12 @@
     payroll: { label: 'Payroll', desc: 'Pay runs, source deductions and remittances, vacation and holiday pay, ROE, T4 and RL-1', cents: 2000, feature: 'payroll', includedIn: ['thrive'], unit: 'payrollEmployees' },
   };
   /** Prices per unit rather than per company: payroll's charge for each employee paid in a month, on any plan. */
-  const UNITS = {
+  const ALL_UNITS = {
     payrollEmployees: { label: 'Payroll employees', desc: 'Each employee paid in the month', cents: 400, addon: 'payroll' },
   };
+  // What's sold today: add-ons and unit prices for features that are coming soon are left out (not priced, not billed).
+  const ADDONS = Object.fromEntries(Object.entries(ALL_ADDONS).filter(([, a]) => !(a.feature && soon(a.feature))));
+  const UNITS = Object.fromEntries(Object.entries(ALL_UNITS).filter(([, u]) => !(u.addon && !ADDONS[u.addon])));
   /** The add-on that comes with a type of business (industries.js), if any. */
   const ADDON_FOR_INDUSTRY = { scrapyard: 'scrapyard' };
   /** A plan key, today's name for an old one, or Thrive (firms from before plans existed had everything). */
@@ -75,7 +88,7 @@
   /** Does the firm's plan include this feature? */
   const inPlan = (plan, key) => PLANS[planOf(plan)].features.includes(key);
   /** Does the plan, or an add-on on this company ({ payroll: true }), give this feature? */
-  const hasFeature = (plan, key, addons) => inPlan(plan, key) || Object.entries(ADDONS).some(([k, a]) => a.feature === key && !!(addons && addons[k]));
+  const hasFeature = (plan, key, addons) => !soon(key) && (inPlan(plan, key) || Object.entries(ADDONS).some(([k, a]) => a.feature === key && !!(addons && addons[k])));
   /** Is the feature on for this company: in the plan (or an add-on), and not switched off in the company's settings? */
   const featureOn = (plan, companyFeatures, key, addons) => hasFeature(plan, key, addons) && !(companyFeatures && companyFeatures[key] === false);
   /** Does the plan already include this add-on's base fee (payroll on Thrive)? */
@@ -104,5 +117,8 @@
   /** The plan's name, in French when asked. */
   const planLabel = (plan, lang) => { const p = PLANS[planOf(plan)]; return lang === 'fr' ? p.fr : p.label; };
 
-  return { FEATURES, PLANS, LEGACY, ADDONS, UNITS, ADDON_FOR_INDUSTRY, planOf, planFor, inPlan, hasFeature, featureOn, addonIncluded, employeesPaid, prevMonth, migratePlan, priceKey, planLabel };
+  /** Is this feature built but not offered yet ("Coming soon")? */
+  const comingSoon = soon;
+
+  return { COMING_SOON, comingSoon, FEATURES, PLANS, LEGACY, ADDONS, UNITS, ADDON_FOR_INDUSTRY, planOf, planFor, inPlan, hasFeature, featureOn, addonIncluded, employeesPaid, prevMonth, migratePlan, priceKey, planLabel };
 });

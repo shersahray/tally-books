@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/server/index.js",
     "start:demo": "node src/server/index.js --demo",
-    "test": "node --test \"test/*.test.js\"",
+    "test": "node --test --import ./test/setup-payroll-on.js \"test/*.test.js\"",
     "desktop": "electron .",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",

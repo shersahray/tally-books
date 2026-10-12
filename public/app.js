@@ -464,7 +464,7 @@ function featuresPanel(){
   if(!ME||ME.role==='client')return '';
   const plan=TallyPlans.planOf(ME.firmPlan),P=TallyPlans.PLANS[plan],F=TallyPlans.FEATURES,off=(S.company.features)||{},add=S.featureAddons||{};
   const rows=Object.entries(F).filter(([k,f])=>!f.firm).map(([k,f])=>{const has=TallyPlans.hasFeature(plan,k,add),viaAddon=has&&!P.features.includes(k);
-    return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${has&&off[k]!==false?'checked':''} ${has&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${viaAddon?` <span class="pill paid">${esc(T('Add-on'))}</span>`:has?'':' '+inPlanPill(k)}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
+    return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${has&&off[k]!==false?'checked':''} ${has&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${viaAddon?` <span class="pill paid">${esc(T('Add-on'))}</span>`:has?'':f.comingSoon?` <span class="pill quiet">${esc(T('Coming soon'))}</span>`:' '+inPlanPill(k)}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Features</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, the standard reports and the CaseWare export are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>
     ${rows}</div></div>${payrollAddonPanel()}`;
@@ -473,6 +473,7 @@ function featuresPanel(){
 function payrollAddonPanel(){
   if(!ME||ME.role==='client'||!CO||!S.loaded)return '';
   const A=TallyPlans.ADDONS.payroll,plan=TallyPlans.planOf(ME.firmPlan),owner=ME.role==='owner'&&!ME.readOnly;
+  if(!A)return ''; // payroll is coming soon: no add-on to offer
   const on=!!(S.addons&&S.addons.payroll),incl=TallyPlans.addonIncluded(plan,'payroll');
   const amt=typeof BILL!=='undefined'&&BILL&&BILL.configured&&BILL.offer&&BILL.offer.amounts,billed=amt&&!(BILL.firm&&BILL.firm.exempt);
   // A licence code's plan decides payroll on a desktop copy (add-ons aren't sold with codes).

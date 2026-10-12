@@ -151,6 +151,7 @@ function createApp(opts) {
   };
   const needFeature = (cid, key, store) => {
     if (featureOn(cid, key, store)) return;
+    if (PLANS.comingSoon(key)) throw new ValidationError(`${PLANS.FEATURES[key].label} is coming soon to Sumlora. It isn’t available yet.`, 403);
     // Payroll on Seed or Grow: say how to get it (the add-on), not just that it's missing.
     if (key === 'payroll' && !licence.on && !companyHas(cid, key)) throw new ValidationError('Payroll isn’t part of this company’s plan. An owner can add the Payroll add-on in Settings → Features.', 403);
     throw new ValidationError(`${PLANS.FEATURES[key].label} isn’t part of this company’s plan.`, 403);
@@ -259,8 +260,10 @@ function createApp(opts) {
     const f = auth.firm(fid);
     if (!billing.configured() || !f || firmExempt(fid) || !f.billing || !billingPaid(f.billing)) return;
     try { auth.setFirmBilling(fid, await billing.setQuantity(f.billing, firmCount(fid))); } catch (e) { console.error('Sumlora subscription: couldn’t update the number of companies:', e.message); }
-    for (const k of Object.keys(PLANS.ADDONS)) {
-      try { auth.setFirmBilling(fid, await billing.setAddon(auth.firm(fid).billing, k, firmAddons(fid, k))); } catch (e) { console.error(`Sumlora subscription: couldn’t update the ${PLANS.ADDONS[k].label} add-on:`, e.message); }
+    // Add-ons on sale, plus any still on the subscription that aren't sold any more (payroll while it's coming soon), taken off.
+    const dropped = Object.keys((f.billing && f.billing.addons) || {}).filter(k => !PLANS.ADDONS[k]);
+    for (const k of [...Object.keys(PLANS.ADDONS), ...dropped]) {
+      try { auth.setFirmBilling(fid, await billing.setAddon(auth.firm(fid).billing, k, PLANS.ADDONS[k] ? firmAddons(fid, k) : 0)); } catch (e) { console.error(`Sumlora subscription: couldn’t update the ${(PLANS.ADDONS[k] || { label: k }).label} add-on:`, e.message); }
     }
   }
   /**
