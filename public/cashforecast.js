@@ -51,8 +51,8 @@ function fcItems(cfg,t,end){
   }
   items.push(...F.recurringItems(rec,{today:t,end}));
   // Payroll: the next pay runs on each schedule, like the last one, and the source deductions they'll owe.
-  if(feat('payroll')&&S.payruns.length&&typeof runTotals==='function'){
-    const last={};for(const r of S.payruns.slice().sort(runOrder))last[r.freq||'biweekly']=r;
+  if(feat('payroll')&&typeof liveRuns==='function'&&liveRuns().length){
+    const last={};for(const r of liveRuns().sort(runOrder))last[r.freq||'biweekly']=r;
     const schedules=Object.entries(last).map(([freq,r])=>{const x=runTotals(r);return{freq,last:{payDate:r.payDate,net:x.net,cra:x.cra,rq:x.rq}}});
     const unpaid=remittances().filter(x=>x.bal>0.004).map(x=>({agency:x.agency,key:x.key,due:x.due,amount:x.bal}));
     items.push(...F.payrollItems({schedules,unpaid,remitFreq:payCfg().remitFreq,today:t,end}));

@@ -12,7 +12,7 @@ function roeLines(e,all){
 }
 function roeAllLines(e){
   const out=[];
-  for(const r of S.payruns.slice().sort(runOrder))for(const l of r.lines){
+  for(const r of liveRuns().sort(runOrder))for(const l of r.lines){
     if(l.employeeId!==e.id)continue;
     const[from,to]=runPeriod(r);
     const hours=l.payType==='hourly'?(+l.hours||0)+(+l.holHours||0):(+l.hours||+e.hours||0);

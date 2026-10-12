@@ -14,11 +14,11 @@ const WF = require('../../public/workflows.js');
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
   Asset: ['', 'bank', 'ar', 'capital'],
-  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable', 'custdep'],
+  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable', 'wsib_payable', 'eht_payable', 'custdep'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
-  Expense: ['', 'wages', 'payroll_tax'],
+  Expense: ['', 'wages', 'payroll_tax', 'wsib', 'eht'],
 };
 const ENTRY_TYPES = ['invoice', 'salesreceipt', 'invadjust', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust', 'custdeposit', 'depapply', 'deprefund'];
 const PAY_PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
@@ -376,6 +376,9 @@ function validateEmployee(data) {
   out.vacRate = optAmount(data.vacRate, 'Vacation pay rate');
   if (out.vacRate !== '' && out.vacRate > 100) throw new ValidationError('The vacation pay rate is a percentage, 100 or less.');
   out.vacOpening = optAmount(data.vacOpening, 'Vacation pay owed');
+  // Overtime for a salaried employee (hourly employees always get it), and their workers' compensation rate group.
+  if (data.otEligible !== undefined) out.otEligible = !!data.otEligible;
+  if (data.wsibGroup !== undefined) out.wsibGroup = str(data.wsibGroup, 40);
   if (data.occupation !== undefined) out.occupation = str(data.occupation, 100).trim();
   if (data.termDate !== undefined && data.termDate !== '' && !isDate(data.termDate)) throw new ValidationError('The last day worked must be YYYY-MM-DD.');
   if (data.roes !== undefined) {
@@ -407,7 +410,7 @@ function validateEmployee(data) {
 const BENEFIT_KEYS = ['life', 'auto', 'nearcash', 'board', 'other']; // see BENEFIT_KINDS in payroll-calc.js
 const PAY_KEYS = ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'fedTax', 'provTax', 'qcTax'];
 const ER_KEYS = ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'hsf'];
-function validatePayrun(data, store) {
+function validatePayrun(data, store, id) {
   if (!isDate(data.payDate)) throw new ValidationError('Pay date must be YYYY-MM-DD.');
   if (data.from && !isDate(data.from) || data.to && !isDate(data.to) || (data.from && data.to && data.from > data.to)) throw new ValidationError('The pay period dates aren’t valid.');
   bankAccount(store, data.bank);
@@ -432,14 +435,15 @@ function validatePayrun(data, store) {
     net += n;
     // Earnings broken down (regular, holiday, other, bonus, vacation pay): they have to add up to gross pay.
     const parts = {};
-    for (const k of ['regular', 'holiday', 'other', 'bonus', 'allowance', 'vacPay', 'vacAccrued', 'holHours', 'hours', 'vacRate']) {
+    for (const k of ['regular', 'holiday', 'overtime', 'other', 'bonus', 'allowance', 'vacPay', 'vacAccrued', 'holHours', 'otHours', 'hours', 'vacRate']) {
       if (l[k] === undefined || l[k] === '') continue;
-      parts[k] = amt(l[k], { regular: 'regular pay', holiday: 'holiday pay', other: 'other pay', bonus: 'bonus', allowance: 'taxable allowance', vacPay: 'vacation pay', vacAccrued: 'vacation pay set aside', holHours: 'holiday hours', hours: 'hours', vacRate: 'vacation pay rate' }[k]) / 100;
+      parts[k] = amt(l[k], { regular: 'regular pay', holiday: 'holiday pay', overtime: 'overtime pay', other: 'other pay', bonus: 'bonus', allowance: 'taxable allowance', vacPay: 'vacation pay', vacAccrued: 'vacation pay set aside', holHours: 'holiday hours', otHours: 'overtime hours', hours: 'hours', vacRate: 'vacation pay rate' }[k]) / 100;
     }
-    if (parts.regular !== undefined && ['holiday', 'other', 'bonus', 'allowance', 'vacPay'].some(k => parts[k] !== undefined)) {
-      const sum = ['regular', 'holiday', 'other', 'bonus', 'allowance', 'vacPay'].reduce((t, k) => t + cents(parts[k] || 0), 0);
-      if (sum !== gross) throw new ValidationError(`${emp.name}: regular, holiday, other, bonus, allowance and vacation pay don’t add up to gross pay.`);
+    if (parts.regular !== undefined && ['holiday', 'overtime', 'other', 'bonus', 'allowance', 'vacPay'].some(k => parts[k] !== undefined)) {
+      const sum = ['regular', 'holiday', 'overtime', 'other', 'bonus', 'allowance', 'vacPay'].reduce((t, k) => t + cents(parts[k] || 0), 0);
+      if (sum !== gross) throw new ValidationError(`${emp.name}: regular, holiday, overtime, other, bonus, allowance and vacation pay don’t add up to gross pay.`);
     }
+    if (parts.otHours !== undefined && parts.hours !== undefined && parts.otHours > parts.hours) throw new ValidationError(`${emp.name}: overtime hours are more than the hours worked.`);
     // Taxable benefits not paid in cash: known kinds only, amounts zero or more.
     let benefits;
     if (l.benefits !== undefined) {
@@ -466,10 +470,65 @@ function validatePayrun(data, store) {
       extra.holidays = l.holidays.map(h => ({ date: isDate(h && h.date) ? h.date : '', name: str(h && h.name, 80) })).filter(h => h.date);
     }
     if (l.final !== undefined) extra.final = !!l.final;
+    if (l.bonusVac !== undefined) extra.bonusVac = !!l.bonusVac;
+    // Hours in each work week of the pay period (for overtime): up to 6 weeks, each 0 to 168 hours.
+    if (l.weekHours !== undefined) {
+      if (!Array.isArray(l.weekHours) || l.weekHours.length > 6 || l.weekHours.some(h => !Number.isFinite(Number(h)) || Number(h) < 0 || Number(h) > 168)) throw new ValidationError(`${emp.name}: the hours by week aren’t valid.`);
+      extra.weekHours = l.weekHours.map(h => cents(Number(h)) / 100);
+    }
+    // Workers' compensation premium: insurable earnings no more than pay plus benefits, premium = earnings × rate per $100.
+    if (l.wsib !== undefined && l.wsib !== null) {
+      const w = l.wsib;
+      if (!isObj(w)) throw new ValidationError(`${emp.name}: the workers’ compensation premium isn’t valid.`);
+      const rate = Number(w.rate), ins = amt(w.insurable, 'workers’ compensation earnings'), prem = amt(w.premium, 'workers’ compensation premium');
+      if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new ValidationError(`${emp.name}: the workers’ compensation rate isn’t valid.`);
+      if (ins > gross + benCents) throw new ValidationError(`${emp.name}: workers’ compensation earnings are more than pay plus taxable benefits.`);
+      if (Math.abs(prem - Math.round(ins * rate / 100)) > 1) throw new ValidationError(`${emp.name}: the workers’ compensation premium doesn’t match the earnings and rate.`);
+      extra.wsib = { group: str(w.group, 40), rate, insurable: ins / 100, premium: prem / 100 };
+    }
     return { ...l, ...extra, gross: gross / 100, rrsp: cents(numOr0(l.rrsp)) / 100, union: cents(numOr0(l.union)) / 100, ded, er, net: n / 100 };
   });
   if (data.entryId && !store.get('entries', data.entryId)) throw new ValidationError('The journal entry for this pay run doesn’t exist.');
-  return { ...data, lines, totalNet: net / 100 };
+  const out = { ...data, lines, totalNet: net / 100 };
+  // Voiding: the pay run stays as it was, marked void, with a reversing entry that undoes its journal entry.
+  const prev = id && store.get('payruns', id);
+  if (prev && prev.void) {
+    if (!isObj(data.void)) throw new ValidationError('This pay run is void. A void pay run can’t be brought back: post a new one.', 409);
+    if (JSON.stringify(prev.lines) !== JSON.stringify(lines) || prev.payDate !== data.payDate || prev.entryId !== data.entryId || prev.void.date !== data.void.date || prev.void.entryId !== data.void.entryId) throw new ValidationError('A void pay run can’t be changed.', 409);
+  }
+  if (data.void !== undefined && data.void !== null && data.void !== false) {
+    const v = data.void;
+    if (!isObj(v) || !isDate(v.date)) throw new ValidationError('Choose the date of the reversing entry.');
+    if (v.date < data.payDate) throw new ValidationError('The reversing entry can’t be dated before the pay date.');
+    if (!prev) throw new ValidationError('Only a posted pay run can be voided.');
+    if (!prev.void && (JSON.stringify(prev.lines) !== JSON.stringify(lines) || prev.payDate !== data.payDate)) throw new ValidationError('A pay run can’t be changed while it’s voided. Void it as it is.');
+    const orig = data.entryId && store.get('entries', data.entryId);
+    let entryId = '';
+    if (orig) {
+      const rev = store.get('entries', String(v.entryId || ''));
+      if (!rev || rev.reversalOf !== orig.id || rev.date !== v.date) throw new ValidationError('A void pay run needs a reversing entry for its journal entry, dated the day it’s voided.');
+      // The reversal has to undo the entry exactly: the same accounts, debits and credits swapped.
+      const key = (ls, swap) => ls.map(l => `${l.account}|${cents(swap ? l.credit : l.debit)}|${cents(swap ? l.debit : l.credit)}`).sort().join(';');
+      if (key(rev.lines, true) !== key(orig.lines, false)) throw new ValidationError('The reversing entry doesn’t undo the pay run’s journal entry.');
+      entryId = rev.id;
+    }
+    out.void = { date: v.date, reason: str(v.reason, 200).trim(), entryId, at: Number(v.at) || Date.now() };
+  } else delete out.void;
+  return out;
+}
+/** A pay run can be deleted only while nothing depends on it: no later pay run for the same employees (their
+    year-to-date amounts include it) and its bank payment not reconciled. Otherwise it's voided. */
+function checkPayrunDelete(id, store) {
+  const run = store.get('payruns', id);
+  if (!run) return;
+  // Pay runs for example employees go with the example data (Settings → Clear example data).
+  if ((run.lines || []).length && run.lines.every(l => (store.get('employees', l.employeeId) || {}).example)) return;
+  if (run.void) throw new ValidationError('A void pay run stays in the books with its reversing entry, so it can’t be deleted.', 409);
+  const ids = new Set((run.lines || []).map(l => l.employeeId));
+  const later = store.list('payruns').some(r => r.id !== id && !r.void && (r.payDate > run.payDate || (r.payDate === run.payDate && (r.created || 0) > (run.created || 0))) && (r.lines || []).some(l => ids.has(l.employeeId)));
+  if (later) throw new ValidationError('Only the latest pay run can be deleted, because later pay runs used its year-to-date amounts. Void it instead.', 409);
+  const e = run.entryId && store.get('entries', run.entryId);
+  if (e && Object.values(e.clear || {}).includes('r')) throw new ValidationError('This pay run’s bank payment is reconciled, so it can’t be deleted. Void it instead.', 409);
 }
 
 /* Receipts: the file and what AI read are set by the server (upload and reading routes).
@@ -732,7 +791,7 @@ function validateRecord(collection, id, data, store) {
     case 'recons': return validateRecon(data, store);
     case 'filings': return validateFiling({ ...data, id }, store);
     case 'employees': return validateEmployee(data);
-    case 'payruns': return validatePayrun(data, store);
+    case 'payruns': return validatePayrun(data, store, id);
     case 'receipts': return validateReceipt(data, store, id);
     case 'attachments': return validateAttachment(data, store);
     case 'questions': return validateQuestion(data, store);
@@ -797,9 +856,10 @@ function checkDelete(collection, id, store) {
   if (collection === 'employees' && store.list('payruns').some(r => (r.lines || []).some(l => l.employeeId === id))) {
     throw new ValidationError('This employee has been paid, so they can’t be deleted. Mark them inactive instead.', 409);
   }
-  if (collection === 'entries' && store.list('payruns').some(r => r.entryId === id)) {
+  if (collection === 'entries' && store.list('payruns').some(r => r.entryId === id || (r.void && r.void.entryId === id))) {
     throw new ValidationError('This transaction belongs to a pay run. Delete the pay run instead.', 409);
   }
+  if (collection === 'payruns') checkPayrunDelete(id, store);
   if (collection === 'docs' && store.list('docs').some(c => (c.applied || []).some(a => a.docId === id))) {
     throw new ValidationError('A credit is applied to this document. Remove it from the credit first.', 409);
   }
@@ -860,7 +920,36 @@ function validatePayrollSettings(p) {
     dd: validateDirectDeposit(p.dd),
     transmitter: validateTransmitter(p.transmitter),
     employerAddr: isObj(p.employerAddr) ? validateAddrParts(p.employerAddr, 'Employer') : null,
+    // Overtime: the company's own weekly threshold ('' = the province's rule).
+    otThreshold: (() => { const n = Number(p.otThreshold); return p.otThreshold === '' || p.otThreshold == null || !Number.isFinite(n) ? '' : Math.min(168, Math.max(1, Math.round(n * 100) / 100)); })(),
+    eht: validateEht(p.eht),
+    wsib: validateWsib(p.wsib),
   };
+}
+/** Ontario Employer Health Tax: eligible for the exemption, this employer's share of it, and associated employers' payroll. */
+function validateEht(e) {
+  if (!isObj(e)) return { eligible: true, exemption: '', groupPayroll: 0 };
+  const ex = optAmount(e.exemption, 'EHT exemption');
+  if (ex !== '' && ex > 1000000) throw new ValidationError('The EHT exemption is at most $1,000,000.');
+  return { eligible: e.eligible !== false, exemption: ex, groupPayroll: optAmount(e.groupPayroll, 'Associated employers’ Ontario payroll') || 0 };
+}
+/** Workers' compensation (WSIB in Ontario): account, reporting frequency, maximum insurable earnings and rate groups. */
+function validateWsib(w) {
+  if (!isObj(w)) return { on: false, account: '', freq: 'quarterly', max: '', groups: [] };
+  const groups = Array.isArray(w.groups) ? w.groups : [];
+  if (groups.length > 20) throw new ValidationError('At most 20 workers’ compensation rate groups.');
+  const seen = new Set();
+  const out = groups.map((g, i) => {
+    if (!isObj(g)) throw new ValidationError(`Rate group ${i + 1} isn’t valid.`);
+    const id = str(g.id, 40).trim() || 'g' + (i + 1);
+    if (seen.has(id)) throw new ValidationError('Two rate groups have the same id.');
+    seen.add(id);
+    const rate = Number(g.rate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new ValidationError(`Rate group ${i + 1}: the rate per $100 must be between 0 and 100.`);
+    return { id, name: str(g.name, 80).trim(), code: str(g.code, 20).trim(), rate: Math.round(rate * 10000) / 10000 };
+  });
+  if (w.on && !out.length) throw new ValidationError('Add at least one rate group with its rate per $100 of insurable earnings.');
+  return { on: !!w.on, account: str(w.account, 30).trim(), freq: ['monthly', 'quarterly', 'annual'].includes(w.freq) ? w.freq : 'quarterly', max: optAmount(w.max, 'Maximum insurable earnings'), groups: out };
 }
 
 function validateCompany(data) {

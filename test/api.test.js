@@ -542,7 +542,8 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   // Payroll settings round-trip through company settings.
   const s = (await call('GET', '/api/state')).json.company;
   assert.equal((await call('PUT', '/api/settings', { ...s, payroll: { remitFreq: 'quarterly', hsfRate: 1.25 } })).status, 200);
-  assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25, craAccount: '', rqId: '', hsfPrimary: false, assocPayroll: 0, dd: { files: [] }, transmitter: {}, employerAddr: null });
+  assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25, craAccount: '', rqId: '', hsfPrimary: false, assocPayroll: 0, dd: { files: [] }, transmitter: {}, employerAddr: null,
+    otThreshold: '', eht: { eligible: true, exemption: '', groupPayroll: 0 }, wsib: { on: false, account: '', freq: 'quarterly', max: '', groups: [] } });
   // Quick Method settings: a start date is needed; rates are kept within 0–20%.
   assert.equal((await call('PUT', '/api/settings', { ...s, quickMethod: { on: true } })).status, 400);
   assert.equal((await call('PUT', '/api/settings', { ...s, quickMethod: { on: true, from: '2026-01-01', type: 'goods', gstRate: 99, qstRate: '', credit: false, extra: 'x' } })).status, 200);
