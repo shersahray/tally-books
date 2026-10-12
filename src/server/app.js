@@ -644,6 +644,12 @@ function createApp(opts) {
     const dates = [before && before[field], w.op === 'set' && data && data[field]].filter(Boolean);
     if (!dates.some(d => String(d) <= cl.date)) return;
     if (w.op === 'set' && before && sameBut(before, data)) return;
+    // Voiding a pay run from a closed period is allowed: nothing in it changes, and its reversing entry is dated
+    // in an open period (that entry is checked on its own).
+    if (w.op === 'set' && w.collection === 'payruns' && before && !before.void && data && data.void) {
+      const { void: _v, ...rest } = data;
+      if (sameBut(before, rest)) return;
+    }
     if (isUnlocked(user, store)) return;
     const e = new ValidationError(user && user.role === 'client'
       ? `The books are closed through ${cl.date}. Ask your bookkeeper to make this change.`

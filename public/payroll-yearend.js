@@ -19,7 +19,7 @@ const yeCodes=s=>T4_CODES.filter(([k])=>s.other&&s.other[k]).map(([k,l])=>[k,l,s
 const DENTAL={1:'Not eligible',2:'Employee only',3:'Employee, spouse and dependent children',4:'Employee and spouse',5:'Employee and dependent children'};
 
 function yeYears(){
-  const ys=new Set(S.payruns.map(r=>+r.payDate.slice(0,4)));
+  const ys=new Set(liveRuns().map(r=>+r.payDate.slice(0,4)));
   S.employees.forEach(e=>{if(e.openingYtd&&+e.openingYtd.year&&+e.openingYtd.gross)ys.add(+e.openingYtd.year)});
   return [...ys].filter(y=>PR.YEAR_LIMITS[y]).sort((a,b)=>b-a);
 }

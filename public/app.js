@@ -990,7 +990,7 @@ function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-ex
   ({invoice:()=>docForm('invoice'),sreceipt:()=>docForm('sreceipt'),bill:()=>docForm('bill'),credit:()=>docForm('credit'),vcredit:()=>docForm('vcredit'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),dataimport:()=>diOpen(''),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
 async function openEntry(e){if(!e)return;
   if((e.vehBuy||e.vehDone)&&typeof vehFromEntry==='function'&&vehFromEntry(e))return;
-  if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id);if(r)return payRunView(r)}
+  if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id||(x.void&&x.void.entryId===e.id));if(r)return payRunView(r)}
   if(e.type==='payremit')return remitForm(e.agency+'|'+e.period,e);
   if(e.type==='qmadjust'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast('This adjustment was posted when the return was filed. To change it, undo the filing.');return}
   if(e.type==='taxpayment'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast(e.taxKind==='instalment'?'Instalments are listed in the Sales tax worksheets. To remove one, delete it from the account register.':'Sales tax payments are managed from the return they belong to.');return}
