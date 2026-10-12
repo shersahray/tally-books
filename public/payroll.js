@@ -209,7 +209,11 @@ function employeeForm(emp){
     <div class="fields">${fld('eFreq','Pay schedule',`<select id="eFreq">${Object.keys(PR.FREQUENCIES).map(k=>`<option value="${k}" ${e.freq===k?'selected':''}>${PR.FREQ_LABEL[k]}</option>`).join('')}</select>`)}
       ${fld('eType','Paid by',`<select id="eType"><option value="salary" ${e.payType==='salary'?'selected':''}>Salary</option><option value="hourly" ${e.payType==='hourly'?'selected':''}>The hour</option></select>`)}
       ${num('eRate',e.payType==='hourly'?'Hourly rate':'Annual salary',e.rate)}
-      ${num('eHours','Usual hours per pay',e.hours,'Filled in on each pay run')}</div>
+      ${num('eHours','Usual hours per pay',e.hours,'Filled in on each pay run')}
+      ${fld('ePayM','Net pay by',`<select id="ePayM"><option value="cheque" ${e.payMethod!=='deposit'?'selected':''}>Cheque or other</option><option value="deposit" ${e.payMethod==='deposit'?'selected':''}>Direct deposit</option></select>`)}
+      <div data-dd style="display:contents">${fld('eBkInst','Institution number',`<input type="text" id="eBkInst" inputmode="numeric" maxlength="3" placeholder="003" autocomplete="off" value="${v(e.bank?.inst)}" translate="no"><span class="hint">3 digits, from a void cheque or direct deposit form</span>`)}
+        ${fld('eBkTransit','Transit (branch) number',`<input type="text" id="eBkTransit" inputmode="numeric" maxlength="5" placeholder="12345" autocomplete="off" value="${v(e.bank?.transit)}" translate="no">`)}
+        ${fld('eBkAcct','Account number',`<input type="text" id="eBkAcct" inputmode="numeric" maxlength="14" autocomplete="off" value="${v(e.bank?.account)}" translate="no"><span class="hint">Kept only in this company’s books, and shown to clients and view-only users as the last 3 digits.</span>`)}</div></div>
     <h3 class="fsec">Vacation pay</h3>
     <div class="fields">${fld('eVacMode','Vacation pay',`<select id="eVacMode">${VAC_MODES.map(([k,l])=>`<option value="${k}" ${vacModeDefault(e)===k?'selected':''}>${l}</option>`).join('')}</select>`,true)}
       <div data-vac style="display:contents">${fld('eVacRate','Vacation pay rate (%)',`<input type="number" id="eVacRate" step="0.01" min="0" max="100" inputmode="decimal" value="${v(e.vacRate)}" placeholder="${vr.rate}"><span class="hint" data-vachint></span>`)}</div>
@@ -234,12 +238,13 @@ function employeeForm(emp){
     </details>`,saveFoot(!!emp&&!paid),'wide');
   const sync=()=>{const p=$('#eProv',f).value,qc=p==='QC';$$('[data-qc]',f).forEach(x=>x.style.display=qc?(x.classList.contains('check')?'':'contents'):'none');$$('[data-notqc]',f).forEach(x=>x.style.display=qc?'none':'contents');$$('[data-on]',f).forEach(x=>x.style.display=p==='ON'?'contents':'none');$('[data-cpplbl]',f).textContent=qc?'QPP':'CPP';
     $$('[data-rpp]',f).forEach(x=>x.style.display=$('#ePen',f).value==='rpp'?'contents':'none');
+    $$('[data-dd]',f).forEach(x=>x.style.display=$('#ePayM',f).value==='deposit'?'contents':'none');
     const vm=$('#eVacMode',f).value;$$('[data-vac]',f).forEach(x=>x.style.display=vm==='salary'?'none':'contents');$$('[data-vacacc]',f).forEach(x=>x.style.display=vm==='accrue'?'contents':'none');
     const r=PR.vacationRate(p,$('#eHire',f).value,today());$('#eVacRate',f).placeholder=r.rate;
     const hire=$('#eHire',f).value;
     $('[data-vachint]',f).innerHTML=!r.known?'<span>Blank = 4%. Check when your province’s minimum goes up with years of service.</span>':r.next&&hire?`<span>Blank = the minimum: ${r.rate}% now, ${r.next[1]}% after ${r.next[0]} years of service.</span>`:`<span>Blank = the minimum, ${r.rate}% now.</span>${hire||!r.next?'':' <span>Enter the hire date so it goes up with years of service.</span>'}`;
     const h=$('#eType',f).value==='hourly';$('label[for=eRate]',f).textContent=h?'Hourly rate':'Annual salary'};
-  $('#eProv',f).onchange=$('#eType',f).onchange=$('#ePen',f).onchange=$('#eVacMode',f).onchange=$('#eHire',f).onchange=sync;sync();
+  $('#eProv',f).onchange=$('#eType',f).onchange=$('#ePen',f).onchange=$('#ePayM',f).onchange=$('#eVacMode',f).onchange=$('#eHire',f).onchange=sync;sync();
   if(!emp)$('#eType',f).addEventListener('change',()=>{$('#eVacMode',f).value=$('#eType',f).value==='hourly'?'accrue':'salary';sync()});
   const rb=$('[data-roe]',f);if(rb)rb.onclick=()=>roeForm(emp);
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this employee?',`${emp.name} will be removed.`))return;if(await del('employees',emp.id)){closeModal();toast('Employee deleted')}};
@@ -248,6 +253,11 @@ function employeeForm(emp){
     const val=id=>{const x=$('#'+id,f).value;return x===''?'':Math.max(0,+x)};
     if(!(+$('#eRate',f).value>0))return f.err($('#eType',f).value==='hourly'?'Enter the hourly rate.':'Enter the annual salary.');
     const prov=$('#eProv',f).value,qc=prov==='QC';
+    const payMethod=$('#ePayM',f).value,acctIn=$('#eBkAcct',f).value.trim();
+    const bank={inst:$('#eBkInst',f).value.replace(/\D/g,''),transit:$('#eBkTransit',f).value.replace(/\D/g,''),account:/•/.test(acctIn)?acctIn:acctIn.replace(/\D/g,'')};
+    if(payMethod==='deposit'){const why=/•/.test(bank.account)?TallyDD.bankProblem({...bank,account:'00000'}):TallyDD.bankProblem(bank);
+      if(why)return f.err({missing:'Enter the employee’s bank institution, transit and account numbers for direct deposit.',inst:'The institution number has 3 digits.',transit:'The transit (branch) number has 5 digits.',account:'The account number has 5 to 12 digits.'}[why])}
+    const keepBank=payMethod==='deposit'||bank.inst||bank.transit||bank.account;
     const oy={year:+yr};['gross','pensionable','insurable','cpp','cpp2','qpp','qpp2','qpip','erQpip','ei','erEi','rrsp','union','fedTax','provTax','qcTax'].forEach(k=>{const raw=$('#eo_'+k,f).value,x=+raw||0;if(x||(raw!==''&&['pensionable','insurable','erEi'].includes(k)))oy[k]=r2(x)});
     if($('#eo_prov',f).value)oy.prov=$('#eo_prov',f).value;
     // The form only shows this year's opening amounts. Saving the employee with none entered must not wipe out an
@@ -259,7 +269,7 @@ function employeeForm(emp){
       freq:$('#eFreq',f).value,payType:$('#eType',f).value,rate:val('eRate'),hours:val('eHours'),
       td1Fed:val('eTd1'),td1Prov:qc?'':val('eTd1p'),td1Qc:qc?val('eTd1q'):'',extraTax:val('eExtra'),extraQcTax:qc?val('eExtraQ'):'',dependants:prov==='ON'?val('eDep'):'',
       rrsp:val('eRrsp'),union:val('eUnion'),sin:$('#eSin',f).value.replace(/\D/g,''),dental:+$('#eDental',f).value||0,rppNo:$('#ePen',f).value==='rpp'?$('#eRppNo',f).value.replace(/\D/g,''):'',pensionType:$('#ePen',f).value,cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
-      active:emp?!$('#eInactive',f).checked:true,openingYtd:keepPrev?prevO:oy,
+      active:emp?!$('#eInactive',f).checked:true,openingYtd:keepPrev?prevO:oy,payMethod,bank:keepBank?bank:null,
       occupation:$('#eOcc',f).value.trim(),vacMode:$('#eVacMode',f).value,vacRate:$('#eVacMode',f).value==='salary'?'':val('eVacRate'),vacOpening:$('#eVacMode',f).value==='accrue'?val('eVacOpen'):(emp?.vacOpening||'')};
     if(data.vacRate!==''&&data.vacRate>100)return f.err('The vacation pay rate is a percentage, 100 or less.');
     if(await put('employees',emp?.id||uid(),data)){closeModal();toast('Employee saved')}
@@ -443,14 +453,47 @@ function payRunView(run){
     ${run.lines.map((l,i)=>`<tr><td>${esc(l.name)}${l.overridden&&l.overridden.length?' <span class="pill quiet" title="Amounts changed by hand">Edited</span>':''}</td><td class="n">${money(l.gross)}</td><td class="n">${money(l.ded.cpp+l.ded.cpp2+l.ded.qpp+l.ded.qpp2)}</td><td class="n">${money(l.ded.ei+l.ded.qpip)}</td><td class="n">${money(l.ded.fedTax+l.ded.provTax+l.ded.qcTax)}</td><td class="n">${money((+l.rrsp||0)+(+l.union||0))}</td><td class="n"><b>${money(l.net)}</b></td><td class="n"><button type="button" class="btn sm" data-stub="${i}">Pay stub</button></td></tr>`).join('')}
     </tbody><tfoot><tr><td><b>Total</b></td><td class="n">${money(t.gross)}</td><td colspan="4"></td><td class="n"><b>${money(t.net)}</b></td><td></td></tr></tfoot></table></div>
     <div class="totals" style="min-width:280px"><div>Employer contributions</div><div>${money(t.er)}</div><div>Owed to CRA</div><div>${money(t.cra)}</div>${t.rq?`<div>Owed to Revenu Québec</div><div>${money(t.rq)}</div>`:''}${t.vacAcc||t.vacOut?`<div>Vacation pay set aside</div><div>${money(r2(t.vacAcc-t.vacOut))}</div>`:''}<div class="big">Total cost</div><div class="big">${money(t.cost)}</div></div>`,
-    `<button type="button" class="btn danger left" data-del>Delete pay run</button><button type="button" class="btn" data-stub="all">Print all pay stubs</button><button type="button" class="btn primary" data-close>Done</button>`,'wide');
-  f.addEventListener('click',ev=>{const b=ev.target.closest('[data-stub]');if(b)printStubs(run,b.dataset.stub==='all'?run.lines:[run.lines[+b.dataset.stub]])});
+    `<button type="button" class="btn danger left" data-del>Delete pay run</button>${ddLines(run).length?`<button type="button" class="btn" data-dd>Direct deposit file</button>`:''}<button type="button" class="btn" data-stub="all">Print all pay stubs</button><button type="button" class="btn primary" data-close>Done</button>`,'wide');
+  f.addEventListener('click',ev=>{const b=ev.target.closest('[data-stub]');if(b)printStubs(run,b.dataset.stub==='all'?run.lines:[run.lines[+b.dataset.stub]]);if(ev.target.closest('[data-dd]'))ddFile(run)});
   $('[data-del]',f).onclick=async()=>{
     const e=S.entries.find(x=>x.id===run.entryId);const rec=e&&Object.values(e.clear||{}).includes('r');
     const paidRemit=remittances().some(x=>x.key===remitPeriod(run.payDate).key&&x.paid>0);
     if(!await confirmBox('Delete this pay run?',`The pay run and its journal entry will be removed. Year-to-date amounts on later pay stubs will change.${rec?' Its bank payment is already reconciled.':''}${paidRemit?' You have already recorded a remittance for this period.':''}`))return;
     const w=[{op:'delete',collection:'payruns',id:run.id}];if(e)w.push({op:'delete',collection:'entries',id:e.id});
     if(await batch(w)){closeModal();toast('Pay run deleted')}};
+}
+/* ---------- direct deposit (CPA-005 file for the employer's bank) ---------- */
+/** The pay run's lines paid by direct deposit: employees set to direct deposit, with net pay. */
+function ddLines(run){return run.lines.filter(l=>l.net>0&&(employee(l.employeeId)||{}).payMethod==='deposit')}
+async function ddFile(run){
+  const cfg=payCfg(),dd=cfg.dd||{},lines=ddLines(run);
+  const bad=TallyDD.setupProblems(dd);
+  if(bad.length){
+    const names={originatorId:'originator ID',dataCentre:'destination data centre',shortName:'short name',longName:'long name',returnAccount:'your bank account'};
+    return confirmBox('Set up direct deposit first',`In Settings, under Payroll, enter what your bank gave you: ${bad.map(k=>T(names[k])).join(', ')}.`,'OK');
+  }
+  const payments=[];
+  for(const l of lines){
+    const e=employee(l.employeeId)||{},b=e.bank||{};
+    if(/•/.test(String(b.account||'')))return confirmBox('Only your bookkeeper can make this file','Bank account numbers are hidden from your account, so the direct deposit file has to be made by someone who can see them.','OK');
+    const why=TallyDD.bankProblem(b);
+    if(why)return confirmBox('A bank account is missing',`${l.name}: enter their bank institution, transit and account numbers on the employee, or change them to be paid by cheque.`,'OK');
+    payments.push({name:l.name,inst:b.inst,transit:b.transit,account:b.account,amount:l.net,ref:'PAY '+run.payDate});
+  }
+  const before=(dd.files||[]).filter(x=>x.run===run.id);
+  if(before.length){const x=before[before.length-1];
+    if(!await confirmBox('Make another file for this pay run?',`File number ${x.no} was already made for this pay run on ${fmtDate(x.date)}. If both files are uploaded to your bank, employees are paid twice. Only make a new one if your bank refused or never received the first.`,'Make a new file'))return}
+  if(run.payDate<=today()&&!await confirmBox('The pay date is today or already past',`Most banks need the file 1 or 2 business days before the pay date, ${fmtDate(run.payDate)}. Deposits may arrive late. Make the file anyway?`,'Make the file'))return;
+  const no=(+dd.lastFileNo||0)%9999+1;
+  let out;
+  try{out=TallyDD.cpa005({setup:dd,fileNo:no,created:today(),payDate:run.payDate,payments})}
+  catch(err){return confirmBox('The file couldn’t be made',err.message,'OK')}
+  // Save the file number first, so the same number is never handed out twice.
+  const files=[...(dd.files||[]),{run:run.id,no,date:today(),count:out.count,total:out.total}];
+  if(!await putCompany({...strip(S.company),payroll:{...cfg,dd:{...dd,lastFileNo:no,files}}}))return;
+  saveFile(`direct-deposit_${run.payDate}_file-${String(no).padStart(4,'0')}.txt`,new Blob([out.text],{type:'text/plain'}));
+  const cheque=run.lines.filter(l=>l.net>0&&!lines.includes(l)).map(l=>l.name);
+  toast(T(`Direct deposit file ${no}: ${out.count} deposit${out.count===1?'':'s'}, ${money(out.total)}. Upload it to your business banking.`)+(cheque.length?' '+T('Not in the file (paid by cheque or other):')+' '+cheque.join(', '):''));
 }
 function stubHTML(run,l){
   const y=ytdFor(l.employeeId,run,true),e=employee(l.employeeId)||{};
@@ -545,7 +588,7 @@ function remitForm(key,entry){
 
 /* ---------- settings panel ---------- */
 function payrollSettingsPanel(){
-  const c=payCfg();
+  const c=payCfg(),dd=c.dd||{};
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Payroll</h3><form class="pad" id="paySetForm" style="display:flex;flex-direction:column;gap:14px">
     <div class="fields">${fld('psFreq','Remitting source deductions',`<select id="psFreq"><option value="monthly" ${c.remitFreq==='monthly'?'selected':''}>Monthly (regular remitter)</option><option value="quarterly" ${c.remitFreq==='quarterly'?'selected':''}>Quarterly</option></select><span class="hint">CRA tells you which in your remitter letter</span>`)}
     ${fld('psHsf','Quebec Health Services Fund rate (%)',`<input type="number" id="psHsf" min="0" max="10" step="0.01" value="${esc(c.hsfRate)}"><span class="hint">Only for employees in Quebec. 1.65% for most small employers.</span>`)}
@@ -553,6 +596,18 @@ function payrollSettingsPanel(){
     ${fld('psRq','Revenu Québec identification number',`<input type="text" id="psRq" maxlength="16" placeholder="1234567890RS0001" value="${esc(c.rqId||'')}" translate="no"><span class="hint">For RL-1 slips and the RL-1 Summary, if you have employees in Quebec.</span>`)}</div>
     <div class="fields">${fld('psAssoc','Payroll of associated employers',`<input type="number" id="psAssoc" step="0.01" min="0" value="${c.assocPayroll||''}"><span class="hint">Only if this business is associated with others. Revenu Québec sets the Health Services Fund rate from everyone’s total payroll.</span>`)}</div>
     <label class="check"><input type="checkbox" id="psPrim" ${c.hsfPrimary?'checked':''}> Primary or manufacturing business (lower Health Services Fund rate)</label>
+    <h3 class="fsec">Direct deposit</h3>
+    <div class="muted" style="font-size:13px">Sumlora makes a direct deposit file (CPA-005) for each pay run. You upload it to your business online banking, and your bank pays your employees from your account. Your bank sets up the service and gives you the numbers below.</div>
+    <div class="fields">${fld('psDdOrig','Originator ID',`<input type="text" id="psDdOrig" maxlength="10" autocomplete="off" value="${esc(dd.originatorId||'')}" translate="no"><span class="hint">10 letters or digits, from your bank</span>`)}
+      ${fld('psDdDc','Destination data centre',`<input type="text" id="psDdDc" inputmode="numeric" maxlength="5" value="${esc(dd.dataCentre||'')}" translate="no"><span class="hint">5 digits, from your bank</span>`)}
+      ${fld('psDdShort','Short name',`<input type="text" id="psDdShort" maxlength="15" value="${esc(dd.shortName||'')}"><span class="hint">Up to 15 characters. Shows on employees’ bank statements.</span>`)}
+      ${fld('psDdLong','Long name',`<input type="text" id="psDdLong" maxlength="30" value="${esc(dd.longName||S.company.name||'')}"><span class="hint">Up to 30 characters</span>`)}
+      ${fld('psDdInst','Your institution number',`<input type="text" id="psDdInst" inputmode="numeric" maxlength="3" value="${esc(dd.returnInst||'')}" translate="no"><span class="hint">The account deposits are paid from, and returned to if one can’t be made</span>`)}
+      ${fld('psDdTr','Your transit number',`<input type="text" id="psDdTr" inputmode="numeric" maxlength="5" value="${esc(dd.returnTransit||'')}" translate="no">`)}
+      ${fld('psDdAcct','Your account number',`<input type="text" id="psDdAcct" inputmode="numeric" maxlength="12" autocomplete="off" value="${esc(dd.returnAccount||'')}" translate="no">`)}
+      ${fld('psDdNext','Next file number',`<input type="number" id="psDdNext" min="1" max="9999" step="1" value="${(dd.lastFileNo||0)%9999+1}"><span class="hint">Goes up by one with each file. Your bank refuses a number it has already received.</span>`)}</div>
     <div><button class="btn" type="submit">Save payroll settings</button></div></form></div>`;
 }
-function bindPayrollSettings(m){const f=$('#paySetForm',m);if(!f)return;f.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),payroll:{...payCfg(),remitFreq:$('#psFreq',f).value,hsfRate:+$('#psHsf',f).value||0,craAccount:$('#psCra',f).value.trim(),rqId:$('#psRq',f).value.trim(),hsfPrimary:$('#psPrim',f).checked,assocPayroll:+$('#psAssoc',f).value||0}}))toast('Payroll settings saved')}}
+function bindPayrollSettings(m){const f=$('#paySetForm',m);if(!f)return;f.onsubmit=async e=>{e.preventDefault();if(await putCompany({...strip(S.company),payroll:{...payCfg(),remitFreq:$('#psFreq',f).value,hsfRate:+$('#psHsf',f).value||0,craAccount:$('#psCra',f).value.trim(),rqId:$('#psRq',f).value.trim(),hsfPrimary:$('#psPrim',f).checked,assocPayroll:+$('#psAssoc',f).value||0,
+    dd:{...(payCfg().dd||{}),originatorId:$('#psDdOrig',f).value.trim(),dataCentre:$('#psDdDc',f).value.trim(),shortName:$('#psDdShort',f).value.trim(),longName:$('#psDdLong',f).value.trim(),
+      returnInst:$('#psDdInst',f).value.trim(),returnTransit:$('#psDdTr',f).value.trim(),returnAccount:$('#psDdAcct',f).value.trim(),lastFileNo:Math.max(0,Math.min(9998,(parseInt($('#psDdNext',f).value,10)||1)-1))}}}))toast('Payroll settings saved')}}

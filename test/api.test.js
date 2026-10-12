@@ -496,6 +496,21 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
     { op: 'set', collection: 'payruns', id: 'run1', data: { ...run, lines: [{ ...line, regular: 1900, holiday: 100, vacMode: 'each', vacAccrued: 80 }] } }] });
   assert.equal(acc.status, 400); assert.match(acc.json.error, /set aside/);
   assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, vacRate: 150 })).status, 400);
+  // Direct deposit: bank details are checked, and the account number is masked in the activity log.
+  assert.equal((await call('PUT', '/api/records/employees/e9', { ...emp, payMethod: 'deposit' })).status, 400, 'direct deposit needs a bank account');
+  assert.equal((await call('PUT', '/api/records/employees/e9', { ...emp, payMethod: 'deposit', bank: { inst: '3', transit: '12345', account: '1234567' } })).status, 400);
+  assert.equal((await call('PUT', '/api/records/employees/e9', { ...emp, payMethod: 'deposit', bank: { inst: '003', transit: '12-345', account: '987 6543' } })).status, 200);
+  const e9 = (await call('GET', '/api/state')).json.employees.find(x => x.id === 'e9');
+  assert.deepEqual([e9.payMethod, e9.bank], ['deposit', { inst: '003', transit: '12345', account: '9876543' }]);
+  // Saving back a masked number (as a client sees it) keeps the real one.
+  assert.equal((await call('PUT', '/api/records/employees/e9', { ...e9, bank: { ...e9.bank, account: '••••543' } })).status, 200);
+  assert.equal((await call('GET', '/api/state')).json.employees.find(x => x.id === 'e9').bank.account, '9876543');
+  const rows = (await call('GET', '/api/audit?record=e9')).json.rows;
+  assert.ok(rows.length >= 1);
+  const act = JSON.stringify(await Promise.all(rows.map(async r => (await call('GET', '/api/audit/' + r.seq)).json)));
+  assert.ok(act.includes('••••543'), 'the activity log shows the last 3 digits');
+  assert.ok(!act.includes('9876543'), 'the activity log never has the full account number');
+  assert.equal((await call('DELETE', '/api/records/employees/e9')).status, 200);
   assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, vacMode: 'sometimes' })).status, 400);
   assert.equal((await call('PUT', '/api/records/employees/e1', { ...emp, roes: 'x' })).status, 400);
   const parts2 = await call('POST', '/api/batch', { writes: [entry,
@@ -527,7 +542,7 @@ test('payroll: employees and pay runs are validated and post balanced entries', 
   // Payroll settings round-trip through company settings.
   const s = (await call('GET', '/api/state')).json.company;
   assert.equal((await call('PUT', '/api/settings', { ...s, payroll: { remitFreq: 'quarterly', hsfRate: 1.25 } })).status, 200);
-  assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25, craAccount: '', rqId: '', hsfPrimary: false, assocPayroll: 0 });
+  assert.deepEqual((await call('GET', '/api/state')).json.company.payroll, { remitFreq: 'quarterly', hsfRate: 1.25, craAccount: '', rqId: '', hsfPrimary: false, assocPayroll: 0, dd: { files: [] } });
   // Quick Method settings: a start date is needed; rates are kept within 0–20%.
   assert.equal((await call('PUT', '/api/settings', { ...s, quickMethod: { on: true } })).status, 400);
   assert.equal((await call('PUT', '/api/settings', { ...s, quickMethod: { on: true, from: '2026-01-01', type: 'goods', gstRate: 99, qstRate: '', credit: false, extra: 'x' } })).status, 200);
@@ -745,6 +760,12 @@ test('review fixes: replacing two-step needs the password, restore is owner-only
   assert.equal((await j('POST', `/api/c/${co}/restore`, { format: 'tally-books-backup', company: { name: 'x' } }, cc)).status, 403);
   assert.equal((await j('PUT', `/api/c/${co}/settings`, { name: 'x' }, cc)).status, 403);
   assert.equal((await j('POST', `/api/c/${co}/examples`, {}, cc)).status, 403);
+  // Clients see only the last 3 digits of an employee's bank account.
+  const emp = { name: 'Dee Posit', prov: 'ON', freq: 'biweekly', payType: 'salary', rate: 50000, payMethod: 'deposit', bank: { inst: '004', transit: '12345', account: '7654321' } };
+  const put = await j('PUT', `/api/c/${co}/records/employees/dd1`, emp, ck);
+  assert.equal(put.status, 200, JSON.stringify(put.json));
+  assert.equal((await j('GET', `/api/c/${co}/state`, null, ck)).json.employees[0].bank.account, '7654321', 'the owner sees it');
+  assert.equal((await j('GET', `/api/c/${co}/state`, null, cc)).json.employees[0].bank.account, '••••321', 'the client sees the last 3 digits');
   // Staff see backup status without paths, and can't run backups.
   const sl = (await j('POST', '/api/users', { name: 'S', username: 's@example.com', role: 'staff', invite: true }, ck)).json.user.link;
   const sc = (await j('POST', '/api/auth/link/accept', { token: sl, password: 'staff long phrase' })).cookie;
