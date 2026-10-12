@@ -94,6 +94,15 @@ function createApp(opts) {
   /** AI costs the server's owner money, so each firm uses it only when an administrator allows it. */
   const PLANS = require('../../public/plans.js');
   const IND = require('../../public/industries.js');
+  const ROLES = require('../../public/roles.js');
+  /* Custom roles (public/roles.js): a staff member with one of the firm's own roles sees and changes only
+     the areas it allows. Owners, plain staff and clients have no perms, so nothing here limits them. */
+  const canArea = (user, area, level = 'view') => !(user && user.perms) || ROLES.can(user.perms, area, level);
+  const needArea = (user, area, level = 'edit') => {
+    if (!canArea(user, area, level)) throw new ValidationError(level === 'edit' ? `Your role doesn’t allow changes in ${ROLES.AREAS[area].label}.` : `Your role doesn’t include ${ROLES.AREAS[area].label}.`, 403);
+  };
+  /** Every area at this level (for things that touch the whole books, like a backup or example data). */
+  const needAllAreas = (user, level) => { for (const a of Object.keys(ROLES.AREAS)) needArea(user, a, level); };
   /** Is a plan feature on for this company: in its firm's plan, and not switched off in its settings? */
   const featureOn = (cid, key, store) => {
     const c = reg.get(cid), f = c && auth.firm(c.firmId);
@@ -452,6 +461,16 @@ function createApp(opts) {
     }));
   }
 
+  /** The client list's figures, without the ones a custom role can't see. */
+  function roleSummary(user, c) {
+    if (!user.perms) return c;
+    const out = { ...c };
+    if (!canArea(user, 'sales', 'view')) Object.assign(out, { overdueCount: 0, overdue: 0, receivable: 0 });
+    if (!canArea(user, 'expenses', 'view')) out.payable = 0;
+    if (!canArea(user, 'banking', 'view')) Object.assign(out, { toReview: 0, lastReconciled: '' });
+    return out;
+  }
+
   function summary(c) {
     const store = reg.store(c.id);
     seedDefaults(store);
@@ -517,12 +536,58 @@ function createApp(opts) {
     return { ...r, bank: { ...r.bank, account: '••••' + String(r.bank.account).slice(-3) } };
   }
 
+  /**
+   * What a custom role can't see is left out of the books sent to the browser (as empty lists, so every screen still works).
+   * The ledger (all transactions) comes with Reports, Accounting, Banking or Sales tax, which need every posting for their totals;
+   * otherwise transactions follow their own area. Invoices, bills, customers, vendors, payroll and the rest follow their area.
+   */
+  function roleView(user, out) {
+    const see = a => canArea(user, a, 'view');
+    const ledger = see('reports') || see('accounting') || see('banking') || see('salestax');
+    for (const c of COLLECTIONS) {
+      if (c === 'accounts' || c === 'attachments' || c === 'questions' || (c === 'entries' && ledger)) continue;
+      out[c] = (out[c] || []).filter(r => (c === 'items' ? see('sales') || see('expenses') : see(ROLES.recordArea(c, r))));
+    }
+    // Files and questions go with the transaction they're on.
+    const ids = { entries: new Set(out.entries.map(r => r.id)), docs: new Set(out.docs.map(r => r.id)), bankTxns: new Set(out.bankTxns.map(r => r.id)) };
+    const onSeen = x => !!(ids[x.target] && ids[x.target].has(x.targetId));
+    out.attachments = out.attachments.filter(onSeen);
+    out.questions = out.questions.filter(onSeen);
+    // Payroll at View: social insurance numbers and bank account numbers stay hidden. Without Payroll, its settings too.
+    if (see('payroll') && !canArea(user, 'payroll', 'edit')) out.employees = out.employees.map(e => maskPrivate(e.sin ? { ...e, sin: '•••••' + String(e.sin).slice(-3) } : e));
+    if (!see('payroll')) { out.company = { ...out.company }; delete out.company.payroll; }
+  }
+
+  /**
+   * Company settings from someone with a custom role: each setting belongs to an area (payroll settings to Payroll,
+   * saved reports to Reports, the rest to Settings). Settings in an area they can't see were never sent, so they're
+   * kept as they were; changing one in an area they can only view is refused.
+   */
+  function roleSettings(user, company, before) {
+    for (const k of Object.keys(company)) {
+      const a = ROLES.settingArea(k);
+      if (canArea(user, a, 'edit')) continue;
+      if (!canArea(user, a, 'view')) { company[k] = before[k]; continue; }
+      if (JSON.stringify(company[k]) !== JSON.stringify(before[k])) needArea(user, a, 'edit');
+    }
+  }
+
+  /** An activity log row someone with a custom role may see: changes to records in areas their role can view. */
+  function auditVisible(user, r) {
+    if (!user.perms || !r.collection || !COLLECTIONS.includes(r.collection)) return true;
+    if (r.collection === 'contacts' || r.collection === 'items') return canArea(user, 'sales', 'view') || canArea(user, 'expenses', 'view');
+    const word = String(r.summary || '').split(' ')[0]; // summaries start with the kind of record: "invoice #1001 …", "payrun 2026-…"
+    const rec = r.after || r.before || { type: word, kind: word };
+    return ['attachments', 'questions'].includes(r.collection) || canArea(user, ROLES.recordArea(r.collection, rec), 'view');
+  }
+
   function state(ctx) {
     const cl = ctx.store.getSetting('closing') || {};
     const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}), closingDate: cl.date || '', closingPassword: !!cl.hash, hasCode: hasCode(ctx.store) } };
     for (const c of COLLECTIONS) out[c] = ctx.store.list(c);
     // Clients and view-only users see only the last 3 digits of employees' bank accounts.
     if (ctx.user && (ctx.user.role === 'client' || ctx.user.readOnly) && out.employees) out.employees = out.employees.map(maskPrivate);
+    if (ctx.user && ctx.user.perms) roleView(ctx.user, out);
     out.assistant = assistantInfo(ctx.id, ctx.store);
     // Add-ons on for this company (the AI assistant has its own details above).
     const co = reg.get(ctx.id) || {};
@@ -561,6 +626,12 @@ function createApp(opts) {
   function applyWrite(store, w, user, ctx) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
+    // Custom roles: Edit in the area of the record, before and after the change (an invoice turned into a bill needs both).
+    if (user && user.perms) {
+      const prev = store.get(collection, id);
+      if (collection === 'attachments') { const x = prev || {}; const t = x.target && store.get(x.target, x.targetId); needArea(user, ROLES.recordArea(x.target || 'entries', t), 'edit'); }
+      else for (const a of ROLES.writeAreas(collection, op === 'set' ? w.data || {} : null, prev)) needArea(user, a, 'edit');
+    }
     // Plan features: payroll records, and the special sales tax methods on returns.
     if (ctx && op === 'set') {
       const d = w.data || {};
@@ -802,14 +873,19 @@ function createApp(opts) {
       auth.changeOwnPassword(user, body.current, body.password);
       return { ok: true };
     }],
-    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); return { users: auth.list(user.firmId), idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa || 'off', forced2fa: auth.forced2fa, firm: auth.firm(user.firmId) }; }],
+    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); const { roles, ...firm } = auth.firm(user.firmId) || {}; return { users: auth.list(user.firmId), idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa || 'off', forced2fa: auth.forced2fa, firm, roles: auth.roles(user.firmId), customRoles: auth.firmHas(user.firmId, 'customRoles') }; }],
+    // Custom roles (Users & security → Roles): owners only, and only on a plan that includes them.
+    ['GET', /^\/api\/roles$/, (req, m, res, user) => { ownerOnly(user); return { roles: auth.roles(user.firmId), available: auth.firmHas(user.firmId, 'customRoles') }; }],
+    ['POST', /^\/api\/roles$/, async (req, m, res, user) => { ownerOnly(user); return { ok: true, role: auth.addRole(await readJson(req), user) }; }],
+    ['PUT', /^\/api\/roles\/([A-Za-z0-9_]+)$/, async (req, m, res, user) => { ownerOnly(user); return { ok: true, role: auth.updateRole(m[1], await readJson(req), user) }; }],
+    ['DELETE', /^\/api\/roles\/([A-Za-z0-9_]+)$/, (req, m, res, user) => { ownerOnly(user); auth.removeRole(m[1], user); return { ok: true }; }],
     ['POST', /^\/api\/users$/, async (req, m, res, user) => {
       ownerOnly(user);
       const b = await readJson(req);
       const mine = new Set(reg.list(user.firmId).map(c => c.id));
       if ((Array.isArray(b.companies) ? b.companies : []).some(id => !mine.has(String(id)))) throw new ValidationError('That company doesn’t exist.', 404);
       const u = auth.addUser({ ...b, mustChange: !b.invite, firmId: user.firmId, self: false });
-      auth.log('user-added', { username: u.username, by: user.username, role: u.role });
+      auth.log('user-added', { username: u.username, by: user.username, role: u.roleName ? `${u.role} (${u.roleName})` : u.role });
       // "They pay for Sumlora for this company": the client starts a subscription for it when they first sign in.
       if (u.role === 'client' && b.clientPays === true) {
         const plan = PLANS.PLANS[b.clientPlan] ? b.clientPlan : PLANS.planOf((auth.firm(user.firmId) || {}).plan);
@@ -1056,7 +1132,7 @@ function createApp(opts) {
       auth.deleteFirm(id, user, reg.list(id).length);
       return { ok: true };
     }],
-    ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list(user.firmId).filter(c => canSeeCo(user, c.id)).map(summary), provinces: PROVINCES,
+    ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list(user.firmId).filter(c => canSeeCo(user, c.id)).map(summary).map(c => roleSummary(user, c)), provinces: PROVINCES,
       ...(user.platformAdmin ? { pendingFirms: auth.data.firms.filter(f => f.status === 'pending').length } : {}) })],
     // Invite a single business in one step: its company, and its owner as a client who signs in to see it
     // (and, when subscriptions are on, pays for it themselves). Returns the invitation link to send.
@@ -1326,6 +1402,7 @@ function createApp(opts) {
       const before = ctx.store.getSetting('company');
       const company = validateCompany(await readJson(req));
       company.logoFile = (before && before.logoFile) || ''; // changed only through the logo route
+      if (ctx.user.perms) roleSettings(ctx.user, company, validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) }));
       // Plan features: can't be turned on here when the plan doesn't include them (settings already saved stay as they were).
       if (company.quickMethod && company.quickMethod.on && !(before && before.quickMethod && before.quickMethod.on)) needFeature(ctx.id, 'specialTax', ctx.store);
       if (!featureOn(ctx.id, 'advancedReports', ctx.store) && JSON.stringify(company.savedReports || []) !== JSON.stringify((before && before.savedReports) || [])) {
@@ -1346,7 +1423,7 @@ function createApp(opts) {
       return { ...mail.publicMail(m), sentToday: Number(ctx.store.getMeta('mail-sent:' + new Date().toISOString().slice(0, 10)) || 0) };
     }],
     ['PUT', /^\/mail$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       const body = (await readJson(req)) || {};
       const before = ctx.store.getSetting('mail');
       if (body.remove) {
@@ -1358,6 +1435,9 @@ function createApp(opts) {
       return mail.publicMail(m);
     }],
     ['POST', /^\/mail\/(test|send)$/, async (ctx, req, m) => {
+      // A test is part of setting up email; sending goes with what's sent (invoices, purchase orders, reports, pay stubs).
+      if (m[1] === 'test') needArea(ctx.user, 'settings');
+      else if (!['sales', 'expenses', 'reports', 'payroll'].some(a => canArea(ctx.user, a, 'view'))) needArea(ctx.user, 'sales', 'view');
       const cfg = ctx.store.getSetting('mail');
       if (!cfg || !cfg.host) throw new ValidationError('Set up email for this company first (Settings → Email).', 409);
       const dayKey = 'mail-sent:' + new Date().toISOString().slice(0, 10);
@@ -1399,7 +1479,7 @@ function createApp(opts) {
     // ---------- online payments (Stripe) ----------
     ['GET', /^\/pay$/, ctx => { const p = stripe.publicStripe(ctx.store.getSetting('stripe')); return ctx.user.role === 'client' ? { configured: p.configured } : p; }],
     ['PUT', /^\/pay$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       const body = (await readJson(req)) || {};
       if (body.remove) {
         ctx.store.transaction(() => { ctx.store.putSetting('stripe', {}); ctx.store.audit(ctx.user, 'stripe', { collection: 'settings', id: 'stripe', summary: 'online payments turned off' }); });
@@ -1414,7 +1494,7 @@ function createApp(opts) {
     }],
     // A "Pay now" link for an invoice's balance. Kept while the balance is the same; replaced when it changes.
     ['POST', /^\/pay\/link$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'sales');
       const cfg = ctx.store.getSetting('stripe');
       if (!cfg || !cfg.key) throw new ValidationError('Turn on online payments first (Settings → Online payments).', 409);
       const body = (await readJson(req)) || {};
@@ -1443,7 +1523,7 @@ function createApp(opts) {
     // made through an old link is still found. A payment that can't be recorded (more than what's owing) is kept on
     // the invoice as a problem to deal with, never dropped.
     ['POST', /^\/pay\/sync$/, async ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'sales');
       const cfg = ctx.store.getSetting('stripe');
       if (!cfg || !cfg.key) return { added: [], errors: [], rev: ctx.rev };
       const recorded = new Set(ctx.store.list('entries').filter(e => e.stripeSession).map(e => e.stripeSession));
@@ -1502,7 +1582,7 @@ function createApp(opts) {
     }],
     // A problem payment was dealt with by hand (refunded in Stripe, or recorded as a credit): stop showing it.
     ['POST', /^\/pay\/issue$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'sales');
       const body = (await readJson(req)) || {};
       const d = ctx.store.get('docs', String(body.docId || ''));
       if (!d || !(d.payIssues || []).some(x => x.session === body.session)) throw new ValidationError('That payment problem isn’t on this invoice.', 404);
@@ -1514,7 +1594,7 @@ function createApp(opts) {
     }],
     // ---------- logo on invoices ----------
     ['PUT', /^\/logo$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       const body = (await readJson(req, 3 * 1024 * 1024)) || {};
       const data = Buffer.from(String(body.data || ''), 'base64');
       if (!(data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)) throw new ValidationError('Choose a JPEG or PNG image for the logo.');
@@ -1530,7 +1610,7 @@ function createApp(opts) {
       return { ok: true, logoFile: fileId, rev: ctx.bump() };
     }],
     ['DELETE', /^\/logo$/, ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       const company = ctx.store.getSetting('company') || {};
       ctx.store.transaction(() => {
         if (company.logoFile) ctx.store.deleteFile(company.logoFile);
@@ -1575,6 +1655,7 @@ function createApp(opts) {
     }],
     ['POST', /^\/closing\/unlock$/, async (ctx, req) => {
       notClient(ctx.user);
+      if (!ROLES.editsSomething(ctx.user.perms)) throw new ValidationError('Your role doesn’t allow changes.', 403);
       const cl = ctx.store.getSetting('closing') || {};
       if (!cl.date) return { ok: true };
       const body = (await readJson(req)) || {};
@@ -1594,15 +1675,15 @@ function createApp(opts) {
       return { ok: true, minutes: 15 };
     }],
     // Bank feeds for this company. Only the bookkeeper's team connects banks (each connection costs money each month).
-    ['GET', /^\/feeds$/, ctx => { notClient(ctx.user); return { configured: plaid.configured(), items: plaid.list(ctx.id) }; }],
+    ['GET', /^\/feeds$/, ctx => { notClient(ctx.user); needArea(ctx.user, 'banking', 'view'); return { configured: plaid.configured(), items: plaid.list(ctx.id) }; }],
     ['POST', /^\/feeds\/link$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const body = await readJson(req);
       const company = ctx.store.getSetting('company') || {};
       return { linkToken: await plaid.linkToken({ userId: ctx.user.id || ctx.user.username, lang: body.lang || company.lang, itemId: body.itemId ? String(body.itemId) : '', companyId: ctx.id }) };
     }],
     ['POST', /^\/feeds$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const body = await readJson(req);
       const c = reg.get(ctx.id);
       const item = await plaid.connect({ publicToken: body.publicToken, institution: body.institution, companyId: ctx.id, firmId: c && c.firmId, userName: ctx.user.name || ctx.user.username });
@@ -1610,7 +1691,7 @@ function createApp(opts) {
       return { item };
     }],
     ['PUT', /^\/feeds\/([A-Za-z0-9_]+)$/, async (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const body = await readJson(req);
       const links = {};
       for (const [k, v] of Object.entries(body.links || {})) {
@@ -1627,19 +1708,20 @@ function createApp(opts) {
       return { item };
     }],
     ['POST', /^\/feeds\/([A-Za-z0-9_]+)\/sync$/, async (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const r = await syncFeed(ctx.id, m[1], ctx.user);
       return { ...r, item: plaid.data.items[m[1]] ? plaid.publicItem(m[1]) : null, rev: ctx.rev };
     }],
-    ['POST', /^\/feeds\/([A-Za-z0-9_]+)\/reconnected$/, (ctx, req, m) => { notClient(ctx.user); return { item: plaid.reconnected(m[1], ctx.id) }; }],
+    ['POST', /^\/feeds\/([A-Za-z0-9_]+)\/reconnected$/, (ctx, req, m) => { notClient(ctx.user); needArea(ctx.user, 'banking'); return { item: plaid.reconnected(m[1], ctx.id) }; }],
     ['DELETE', /^\/feeds\/([A-Za-z0-9_]+)$/, async (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const name = plaid.item(m[1], ctx.id).institution;
       const r = await plaid.remove(m[1], ctx.id);
       ctx.store.audit(ctx.user, 'feed', { collection: 'settings', id: 'feeds', summary: `disconnected the ${name} bank feed` });
       return { ok: true, ...r };
     }],
     ['POST', /^\/bank\/import$/, async (ctx, req) => {
+      needArea(ctx.user, 'banking');
       const body = await readJson(req, 20 * 1024 * 1024);
       const result = ctx.store.transaction(() => {
         const r = importBankRows(ctx.store, body);
@@ -1650,7 +1732,7 @@ function createApp(opts) {
     }],
     // AI suggestions for bank lines waiting for review. Suggestions are saved on each line; nothing is added to the books.
     ['POST', /^\/ai\/suggest$/, async (ctx, req) => {
-      notClient(ctx.user); // AI costs money: only the bookkeeper's team uses it
+      notClient(ctx.user); // AI costs money: only the bookkeeper's team uses it needArea(ctx.user, 'banking');
       needFirmAi(ctx.id);
       const body = await readJson(req);
       if (!Array.isArray(body.ids) || !body.ids.length) throw new ValidationError('Choose the bank lines to suggest categories for.');
@@ -1670,6 +1752,7 @@ function createApp(opts) {
     }],
     // The AI assistant add-on: answers questions about these books. Read-only; see assistant.js.
     ['POST', /^\/assistant$/, async (ctx, req) => {
+      needArea(ctx.user, 'reports', 'view'); // it answers from the whole books
       const info = assistantInfo(ctx.id, ctx.store);
       if (!info.on) throw new ValidationError('The AI assistant isn’t turned on for this company. An owner can add it in Settings.', 403);
       if (!info.ready) throw new ValidationError('The AI assistant isn’t set up on this server yet. The server’s administrator adds the AI key in Settings.', 409);
@@ -1694,6 +1777,7 @@ function createApp(opts) {
     // Receipts: a photo or PDF sent from the Receipts screen (often a client's phone).
     ['POST', /^\/receipts$/, async (ctx, req) => {
       // Count every upload today (deleted ones too), so the daily limit can't be dodged.
+      needArea(ctx.user, 'expenses');
       const dayKey = 'receipts-sent:' + new Date().toISOString().slice(0, 10);
       const sentToday = Number(ctx.store.getMeta(dayKey) || 0);
       if (sentToday >= 300) throw new ValidationError('That’s 300 receipts today for this company. Send the rest tomorrow.', 429);
@@ -1726,6 +1810,7 @@ function createApp(opts) {
       const target = ['entries', 'docs', 'bankTxns'].includes(body.target) ? body.target : '';
       const rec = target && ctx.store.get(target, String(body.targetId || ''));
       if (!rec) throw new ValidationError('That transaction isn’t here any more.', 404);
+      needArea(ctx.user, ROLES.recordArea(target, rec), 'view');
       const text = String(body.text || '').trim().slice(0, 2000);
       if (!text) throw new ValidationError('Type your question.');
       if (ctx.store.list('questions').filter(q => q.status !== 'resolved').length >= 500) throw new ValidationError('There are 500 open questions already. Resolve some first.', 409);
@@ -1740,6 +1825,7 @@ function createApp(opts) {
     ['POST', /^\/questions\/([A-Za-z0-9-]+)\/(reply|resolve|reopen)$/, async (ctx, req, m) => {
       const q = ctx.store.get('questions', m[1]);
       if (!q) throw new ValidationError('That question isn’t here any more.', 404);
+      needArea(ctx.user, ROLES.recordArea(q.target, ctx.store.get(q.target, q.targetId)), 'view');
       const client = ctx.user.role === 'client';
       let next;
       if (m[2] === 'reply') {
@@ -1757,6 +1843,7 @@ function createApp(opts) {
     ['DELETE', /^\/questions\/([A-Za-z0-9-]+)$/, (ctx, req, m) => {
       notClient(ctx.user);
       const q = ctx.store.get('questions', m[1]);
+      if (q) needArea(ctx.user, ROLES.recordArea(q.target, ctx.store.get(q.target, q.targetId)));
       if (q) ctx.store.transaction(() => { ctx.store.delete('questions', q.id); ctx.store.audit(ctx.user, 'delete', { collection: 'questions', id: q.id, summary: `question on ${q.label}`, before: q }); });
       return { ok: true, rev: ctx.bump() };
     }],
@@ -1767,6 +1854,7 @@ function createApp(opts) {
       const target = body.target === 'docs' ? 'docs' : 'entries', targetId = String(body.targetId || '');
       const rec0 = ctx.store.get(target, targetId);
       if (!rec0) throw new ValidationError('Save the transaction first, then attach files to it.', 404);
+      needArea(ctx.user, ROLES.recordArea(target, rec0));
       if (ctx.store.list('attachments').filter(x => x.target === target && x.targetId === targetId).length >= 20) throw new ValidationError('That’s 20 files on this transaction already.', 409);
       const data = Buffer.from(String(body.data || ''), 'base64');
       if (!data.length) throw new ValidationError('That file is empty.');
@@ -1786,6 +1874,11 @@ function createApp(opts) {
     ['GET', /^\/files\/([A-Za-z0-9-]+)$/, (ctx, req, m, res) => {
       const f = ctx.store.getFile(m[1]);
       if (!f) throw new ValidationError('That file isn’t here any more.', 404);
+      if (ctx.user.perms) { // a receipt is in Expenses; an attachment goes with its transaction (the logo is for everyone)
+        const at = ctx.store.list('attachments').find(x => x.fileId === m[1]);
+        if (at) needArea(ctx.user, ROLES.recordArea(at.target, ctx.store.get(at.target, at.targetId)), 'view');
+        else if (ctx.store.list('receipts').some(x => x.fileId === m[1])) needArea(ctx.user, 'expenses', 'view');
+      }
       const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[f.mediaType] || 'bin';
       const safe = (f.name || 'receipt').replace(/[^A-Za-z0-9 ._-]+/g, '').replace(/\.[A-Za-z0-9]+$/, '').slice(0, 60) || 'receipt';
       res.writeHead(200, { 'Content-Type': f.mediaType, 'Content-Length': f.data.length, 'Content-Disposition': `inline; filename="${safe}.${ext}"`,
@@ -1795,7 +1888,7 @@ function createApp(opts) {
       res.end(f.data);
     }],
     ['POST', /^\/receipts\/([A-Za-z0-9-]+)\/read$/, (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'expenses');
       const r = ctx.store.get('receipts', m[1]);
       if (!r) throw new ValidationError('That receipt isn’t here any more.', 404);
       if (r.status !== 'inbox') throw new ValidationError('Only receipts waiting for review are read.', 409);
@@ -1807,7 +1900,7 @@ function createApp(opts) {
     }],
     // Read a receipt or bill with AI and return a draft. Nothing is saved; the file isn't kept.
     ['POST', /^\/ai\/read$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'expenses');
       needFirmAi(ctx.id);
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       ai.precheck(company); // before reading a large upload
@@ -1854,7 +1947,7 @@ function createApp(opts) {
     // Undo the chart of accounts an import brought in: removes the accounts the import created (not the
     // starter accounts it matched or renamed), but only those nothing uses. The rest stay and are listed.
     ['POST', /^\/accounts\/remove-imported$/, ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'accounting');
       const imported = ctx.store.list('accounts').filter(a => a.imported);
       if (!imported.length) throw new ValidationError('There are no imported accounts in these books.', 404);
       // Records that can name an account outside journal lines (items, bank rules, budgets, assets, payroll, settings).
@@ -1872,13 +1965,14 @@ function createApp(opts) {
       return { ok: true, rev: ctx.bump(), removed: removed.length, kept };
     }],
     ['POST', /^\/examples$/, ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needAllAreas(ctx.user, 'edit');
       if ((ctx.store.getSetting('closing') || {}).date) throw new ValidationError('These books are closed, so example data can’t be added. Try it in a new company.', 423);
       loadExamples(ctx.store);
       ctx.store.audit(ctx.user, 'examples', { summary: 'loaded example data' });
       return { ok: true, rev: ctx.bump() };
     }],
     ['GET', /^\/backup$/, (ctx, req, m, res) => {
+      needAllAreas(ctx.user, 'view'); // a backup is the whole books
       const s = state(ctx);
       const body = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: s.company };
       for (const c of COLLECTIONS) body[c] = s[c];
@@ -1930,14 +2024,15 @@ function createApp(opts) {
       return fxRate(cur, date);
     }],
     ['GET', /^\/audit$/, (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings', 'view');
       const q = new URL(req.url, 'http://x').searchParams;
-      return { rows: ctx.store.auditList({ before: q.get('before'), from: q.get('from'), to: q.get('to'), username: q.get('user'), collection: q.get('collection'), recordId: q.get('record'), limit: q.get('limit') }), users: ctx.store.auditUsers() };
+      const rows = ctx.store.auditList({ before: q.get('before'), from: q.get('from'), to: q.get('to'), username: q.get('user'), collection: q.get('collection'), recordId: q.get('record'), limit: q.get('limit') });
+      return { rows: rows.filter(r => auditVisible(ctx.user, r)), users: ctx.store.auditUsers() };
     }],
     ['GET', /^\/audit\/(\d+)$/, (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings', 'view');
       const r = ctx.store.auditList({ before: Number(m[1]) + 1, limit: 1, full: true })[0];
-      if (!r || r.seq !== Number(m[1])) throw new ValidationError('That change isn’t in the log.', 404);
+      if (!r || r.seq !== Number(m[1]) || !auditVisible(ctx.user, r)) throw new ValidationError('That change isn’t in the log.', 404);
       return r;
     }],
   ];

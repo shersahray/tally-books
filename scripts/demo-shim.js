@@ -103,6 +103,7 @@
     { id: 'd2', name: 'Birch Bookkeeping (example)', email: '', plan: 'essentials', kind: 'firm', maxCompanies: 10, period: 'monthly', until: new Date(Date.now() + 12 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 353 * day).toISOString().slice(0, 10), note: 'Paid by e-transfer', code: 'TB1-DEMO.example-code-not-real' },
   ] };
   let auditSeq = 0;
+  let demoRoles = [{ id: 'r_ar', name: 'Accounts receivable clerk (example)', perms: { sales: 'edit', expenses: 'view', banking: 'none', payroll: 'none', reports: 'view', accounting: 'none', salestax: 'none', settings: 'none' } }];
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
@@ -130,7 +131,17 @@
     }
     if (path.startsWith('/api/licences')) throw new ApiError(400, 'Your licence key is made in your own copy of Sumlora, not in the demo.');
     if (path === '/api/auth/logout') return { ok: true };
-    if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480, firm: demoFirms[0] };
+    if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480, firm: demoFirms[0], roles: demoRoles.map(r => ({ ...r, users: 0 })), customRoles: true };
+    // Custom roles (roles.js), kept until the page reloads.
+    if (path === '/api/roles' && method === 'POST') { const r = { id: 'r_' + Date.now().toString(36), ...TallyRoles.cleanRole(body, demoRoles) }; demoRoles.push(r); return { ok: true, role: r }; }
+    m0 = path.match(/^\/api\/roles\/([^/]+)$/);
+    if (m0) {
+      const r = demoRoles.find(x => x.id === m0[1]);
+      if (!r) throw new ApiError(404, 'That role doesn’t exist.');
+      if (method === 'DELETE') { demoRoles = demoRoles.filter(x => x !== r); return { ok: true }; }
+      Object.assign(r, TallyRoles.cleanRole(body, demoRoles.filter(x => x !== r)));
+      return { ok: true, role: r };
+    }
     if (path === '/api/security/log') return { log: [] };
     // Firms: two made-up firms so the administrator's page has something to show. Changes last until the page reloads.
     if (path === '/api/firm') {

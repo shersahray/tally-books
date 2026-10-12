@@ -106,7 +106,7 @@ async function feedSync(id,say){
 }
 /** Opening Banking: bring in anything new from connections that haven't synced for an hour (at most every 15 minutes). */
 async function feedsAuto(){
-  if(!feedsOn()||Date.now()-feedsAutoAt<15*60000)return;
+  if(!feedsOn()||!perm('banking','edit')||Date.now()-feedsAutoAt<15*60000)return;
   feedsAutoAt=Date.now();
   try{
     const r=await api('GET','/api/feeds');

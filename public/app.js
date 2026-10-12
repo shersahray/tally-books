@@ -42,9 +42,20 @@ COLS.forEach(c=>{if(!S[c])S[c]=[]});
 let CO=null; // id of the company whose books are open
 /** Is a plan feature on for the open company (in the firm's plan, and not switched off in its settings)? See plans.js. */
 const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
+/* Custom roles (roles.js): can the signed-in person see (or, with 'edit', change) this area of the books?
+   Only a staff member with one of the firm's own roles is limited; the server enforces the same rules. */
+const perm=(a,l='view')=>TallyRoles.can(typeof ME!=='undefined'&&ME?ME.perms:null,a,l);
+const permAll=l=>Object.keys(TallyRoles.AREAS).every(a=>perm(a,l));
+// Every transaction comes with Reports, Accounting, Banking or Sales tax (their totals need the whole ledger).
+const ledgerOn=()=>perm('reports')||perm('accounting')||perm('banking')||perm('salestax');
+const VIEW_AREA={sales:'sales',projects:'sales',expenses:'expenses',receipts:'expenses',yard:'expenses',banking:'banking',salestax:'salestax',payroll:'payroll',review:'accounting',accounts:'accounting',assets:'accounting',reports:'reports',settings:'settings',activity:'settings'};
+const viewOk=v=>v==='transactions'||v==='register'?ledgerOn():v==='convert'?permAll('edit'):!VIEW_AREA[v]||perm(VIEW_AREA[v]);
+const NEW_AREA={invoice:'sales',sreceipt:'sales',payment:'sales',credit:'sales',bill:'expenses',billpayment:'expenses',expense:'expenses',vcredit:'expenses',deposit:'banking',transfer:'banking',import:'banking',journal:'accounting',account:'accounting',payrun:'payroll',employee:'payroll'};
+const newOk=k=>k==='contact'?perm('sales','edit')||perm('expenses','edit'):!NEW_AREA[k]||perm(NEW_AREA[k],'edit');
+let MODAL_AREA=null; // the area of the form being opened (set around each form; see the end of auth.js)
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|billing(?:\/|$)|invoicing$|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|billing(?:\/|$)|invoicing$|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -170,10 +181,17 @@ function renderMain(){
   for(const[v,k]of[['projects','projects'],['assets','fixedAssets']]){const b=$(`#nav [data-view=${v}]`);if(b)b.hidden=!feat(k)||(v==='assets'&&ME&&ME.role==='client');if(S.view===v&&!feat(k))S.view='dashboard'}
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
+  // A custom role: hide what it doesn't include, and the ways to change what it can only view.
+  const lim=!!(typeof ME!=='undefined'&&ME&&ME.perms);
+  if(lim){$$('#nav button').forEach(b=>{if(!viewOk(b.dataset.view))b.hidden=true});if(!noCo&&!viewOk(S.view))S.view='dashboard'}
+  document.body.classList.toggle('area-ro',lim&&!!VIEW_AREA[S.view]&&!perm(VIEW_AREA[S.view],'edit'));
+  document.body.classList.toggle('perm-limited',lim&&!permAll('edit'));
   const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
+  $$('[data-new]').forEach(b=>{b.hidden=!newOk(b.dataset.new)});
+  $$('#newMenu .col').forEach(c=>{c.hidden=!$$('[data-new]',c).some(b=>!b.hidden)});$('#newBtn').hidden=!$$('#newMenu [data-new]').some(b=>!b.hidden);
   bindMain(main);
   if(typeof syncAssistant==='function')syncAssistant();
   if(keepFocus){const el=document.getElementById(keepFocus);if(el){el.focus();if(el.setSelectionRange&&el.type==='search'){const n=el.value.length;el.setSelectionRange(n,n)}}}
@@ -419,7 +437,7 @@ const ORG_TYPES=[['business','Business'],['npo','Non-profit organization'],['cha
 function featuresPanel(){
   if(!ME||ME.role==='client')return '';
   const plan=TallyPlans.planOf(ME.firmPlan),P=TallyPlans.PLANS[plan],F=TallyPlans.FEATURES,off=(S.company.features)||{};
-  const rows=Object.entries(F).map(([k,f])=>{const inPlan=P.features.includes(k);
+  const rows=Object.entries(F).filter(([k,f])=>!f.firm).map(([k,f])=>{const inPlan=P.features.includes(k);
     return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${inPlan&&off[k]!==false?'checked':''} ${inPlan&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${inPlan?'':` <span class="pill quiet">${esc(T('In the Plus plan'))}</span>`}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Features</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, banking, invoices and bills, GST/HST and QST returns and the standard reports are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>
@@ -780,6 +798,8 @@ function openModal(title,body,foot,size=''){
   const root=$('#modalRoot');
   root.innerHTML=`<div class="scrim"><form class="modal ${size}" role="dialog" aria-modal="true" aria-label="${esc(title)}" novalidate><header><h2>${esc(title)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">×</button></header><div class="mbody">${body}<div class="err-msg" data-err></div></div><div class="mfoot">${foot}</div></form></div>`;
   const f=root.querySelector('form');
+  // A form in an area a custom role can only view: no Save or Delete.
+  const area=MODAL_AREA||VIEW_AREA[S.view];if(area&&!perm(area,'edit'))f.classList.add('ro');
   root.querySelector('.scrim').addEventListener('mousedown',e=>{if(e.target.classList.contains('scrim'))closeModal()});
   $$('[data-close]',f).forEach(b=>b.onclick=closeModal);
   modalKey=e=>{if(e.key==='Escape'&&!$('#confirmRoot').innerHTML)closeModal()};document.addEventListener('keydown',modalKey);

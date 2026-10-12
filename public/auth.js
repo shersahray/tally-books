@@ -5,7 +5,7 @@
  */
 let ME=null,IDLE_MIN=30,REQ2FA='off',lastActivity=Date.now(),unlockWaiters=[];
 const ROLE_LABEL={owner:'Owner',staff:'Staff',client:'Client'};
-const roleLabel=u=>ROLE_LABEL[u.role]+(u.readOnly?' · view only':'');
+const roleLabel=u=>u.roleName?`<span translate="no">${esc(u.roleName)}</span>${u.readOnly?' · <span>view only</span>':''}`:ROLE_LABEL[u.role]+(u.readOnly?' · view only':'');
 
 function lockShown(){return !!$('#lockRoot').innerHTML}
 /** Show a full-screen sign-in (or setup / new-password / code) card. Resolves once the user is in. */
@@ -312,6 +312,7 @@ function vUsers(){
   return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Users & security','Who can sign in, what they can see, and how sign-in is protected',`<button class="btn" data-signins>Sign-in activity</button><button class="btn primary" data-useradd>+ Add user</button>`)+
   `<div class="panel" style="margin-bottom:16px"><div class="pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span class="flabel" style="margin:0">Firm</span><b translate="no">${esc(firm.name||ME.firmName||'')}</b><span class="pill quiet">${esc(T(TallyPlans.PLANS[TallyPlans.planOf(firm.plan||ME.firmPlan)].label))}</span><button class="btn sm" data-firmname>Rename</button><span class="muted" style="font-size:13px">Everyone below belongs to this firm. Other firms on this server never see your people or companies.</span></div></div>`+
   `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Can see</th><th>Two-step</th><th>Last sign-in</th><th>Status</th></tr></thead><tbody>${USERS.users.map(u=>`<tr class="click" data-useredit="${u.id}"><td><b>${esc(u.name)}</b>${u.id===ME.id?' <span class="pill paid">You</span>':''}${u.platformAdmin?' <span class="pill quiet">Server administrator</span>':''}</td><td class="mono">${esc(u.username)}</td><td>${roleLabel(u)}</td><td class="trunc">${esc(access(u))}</td><td>${u.twoStep?'On':'<span class="muted">Off</span>'}</td><td class="muted">${u.lastLogin?fmtWhen(u.lastLogin):'Never'}</td><td>${status(u)}</td></tr>`).join('')}</tbody></table></div></div>
+  ${rolesPanel()}
   <div class="panel" style="max-width:760px;margin-top:16px"><h3>Security</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
     ${ME.platformAdmin?'':'<div class="muted" style="font-size:13px">These are set for the whole server by its administrator.</div>'}
     <div class="fields">
@@ -330,6 +331,8 @@ function bindUsers(m){
     if(t.hasAttribute('data-signins'))return showSignins();
     if(t.hasAttribute('data-back-users'))return showUsers();
     if(d.useredit)return userForm(USERS.users.find(u=>u.id===d.useredit));
+    if(t.hasAttribute('data-roleadd'))return roleForm(null);
+    if(d.roleedit)return roleForm(USERS.roles.find(r=>r.id===d.roleedit));
     if(d.go)return go(d.go);
   };
   const si=$('#secIdle',m);if(si)si.onchange=async()=>{try{const r=await api('PUT','/api/security',{idleMinutes:+si.value});IDLE_MIN=r.idleMinutes;toast(`The app now locks after ${si.options[si.selectedIndex].text}`)}catch(ex){toast(ex.message,true)}};
@@ -374,6 +377,7 @@ function userForm(u){
     ${fld('usUser','Email (used as their username)',u?`<div class="mono" style="padding:6px 0">${esc(u.username)}</div>`:`<input type="email" id="usUser" autocapitalize="none" spellcheck="false">`)}
     ${fld('usRole','Role',`<select id="usRole"><option value="client" ${role0==='client'?'selected':''}>Client: sees only their own company</option><option value="staff" ${role0==='staff'?'selected':''}>Staff: works in the companies below</option><option value="owner" ${role0==='owner'?'selected':''}>Owner: everything, including users and security</option></select>`,true)}
   </div>
+  ${rolePicker(u)}
   <label class="check" data-ro><input type="checkbox" id="usRO" ${u?(u.readOnly?'checked':''):'checked'}> View only: can see reports and transactions but can’t change anything</label>
   ${!u&&typeof BILL!=='undefined'&&BILL&&BILL.configured?`<label class="check" data-pays style="align-items:flex-start"><input type="checkbox" id="usPays" checked style="margin-top:3px"> <span><span>They pay for Sumlora for this company, monthly</span>${BILL.offer.trialDays?` <span>after a ${BILL.offer.trialDays}-day free trial</span>`:''}<span>. They enter a card the first time they sign in.</span>
     <select id="usPlan" aria-label="Plan they pay for" style="display:block;margin-top:6px">${Object.entries(BILL.plans).map(([k,p])=>`<option value="${k}" ${k==='essentials'?'selected':''}>${esc(T(p.label))}: ${planPrice(BILL,k)}</option>`).join('')}</select></span></label>`:''}
@@ -387,7 +391,7 @@ function userForm(u){
    :`<div class="muted" style="font-size:13px">You’ll get an invitation link to send them. They choose their own password${REQ2FA!=='off'?' and set up two-step sign-in':''}.</div>`}`,
   `${u&&u.id!==ME.id?`<button type="button" class="btn ${u.disabled?'':'danger'} left" data-usdis>${u.disabled?'Turn account back on':'Turn account off'}</button>${!u.lastLogin?'<button type="button" class="btn ghost" data-usdel>Remove</button>':''}`:'<span class="left"></span>'}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${u?'Save':'Add and get invitation link'}</button>`);
   const role=$('#usRole',f),all=$('#usAll',f);
-  const sync=()=>{const r=role.value;const adm=$('[data-adm]',f);if(adm)adm.hidden=r!=='owner';const pays=$('[data-pays]',f);if(pays)pays.hidden=r!=='client';$('[data-cos]',f).hidden=r==='owner';$('[data-ro]',f).hidden=r==='owner';$('[data-allrow]',f).hidden=r!=='staff';$('[data-colist]',f).hidden=r==='staff'&&all.checked;$('[data-coslabel]',f).textContent=r==='client'?'Their company (or companies)':'Companies this person can see'};
+  const sync=()=>{const r=role.value;const cr=$('[data-cr]',f);if(cr)cr.hidden=r!=='staff';const adm=$('[data-adm]',f);if(adm)adm.hidden=r!=='owner';const pays=$('[data-pays]',f);if(pays)pays.hidden=r!=='client';$('[data-cos]',f).hidden=r==='owner';$('[data-ro]',f).hidden=r==='owner';$('[data-allrow]',f).hidden=r!=='staff';$('[data-colist]',f).hidden=r==='staff'&&all.checked;$('[data-coslabel]',f).textContent=r==='client'?'Their company (or companies)':'Companies this person can see'};
   role.onchange=all.onchange=sync;sync();
   const dis=$('[data-usdis]',f);if(dis)dis.onclick=async()=>{try{await api('PUT','/api/users/'+u.id,{disabled:!u.disabled});closeModal();await showUsers();toast(u.disabled?`${u.name} can sign in again`:`${u.name} is signed out and can’t sign in`)}catch(ex){f.err(ex.message)}};
   const del=$('[data-usdel]',f);if(del)del.onclick=async()=>{if(!await confirmBox('Remove this person?',`${u.name} (${u.username}) has never signed in. Their invitation stops working and they’re taken off the list.`,'Remove'))return;
@@ -400,6 +404,7 @@ function userForm(u){
     const companies=r==='owner'||(r==='staff'&&all.checked)?[]:$$('[data-usco]',f).filter(c=>c.checked).map(c=>c.dataset.usco);
     if(r!=='owner'&&!(r==='staff'&&all.checked)&&!companies.length)return f.err(r==='client'?'Pick the client’s company.':'Pick at least one company, or tick “All companies”.');
     const body={name:$('#usName',f).value,role:r,companies,readOnly:r!=='owner'&&$('#usRO',f).checked};
+    const crs=$('#usCR',f);if(crs&&r==='staff'&&(crs.value||(u&&u.customRole)))body.customRole=crs.value;
     const adm=$('#usAdm',f);if(adm&&r==='owner'&&adm.checked!==!!u.platformAdmin)body.platformAdmin=adm.checked;
     try{
       if(u){await api('PUT','/api/users/'+u.id,body);closeModal();await showUsers();toast('Saved')}
@@ -407,13 +412,53 @@ function userForm(u){
     }catch(ex){f.err(ex.message)}};
 }
 
+/* ---------- custom roles (owners, on a plan with custom roles) ----------
+   A role gives each area of the books None, View or Edit (roles.js). Staff get one instead of full access. */
+const LEVEL_LABEL={none:'None',view:'View',edit:'Edit'};
+function rolesPanel(){
+  const roles=USERS.roles||[];
+  if(!USERS.customRoles&&!roles.length)return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Roles</h3><div class="pad muted" style="font-size:13px"><span>Custom roles let you choose what each staff member can see and change: sales, expenses, banking, payroll and more.</span> <span class="pill quiet">${esc(T('In the Plus plan'))}</span></div></div>`;
+  const A=TallyRoles.AREAS;
+  return `<div class="panel" style="margin-top:16px"><h3>Roles${USERS.customRoles?'<button class="btn sm" data-roleadd>+ Add role</button>':''}</h3>
+    <div class="pad muted" style="font-size:13px;padding-bottom:0">Give staff a role to limit what they see and change. Owners always have everything; staff without a role work in everything except users and security.${USERS.customRoles?'':` <span class="pill quiet">${esc(T('In the Plus plan'))}</span> <span>Your roles are kept, but can’t be given to anyone until your firm is on Plus.</span>`}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Role</th>${Object.values(A).map(a=>`<th>${esc(T(a.label))}</th>`).join('')}<th class="n">People</th></tr></thead><tbody>${roles.length?roles.map(r=>`<tr class="click" data-roleedit="${r.id}"><td><b translate="no">${esc(r.name)}</b></td>${Object.keys(A).map(k=>{const l=r.perms[k]||'none';return `<td><span class="pill ${l==='edit'?'paid':l==='view'?'open':'quiet'}">${esc(T(LEVEL_LABEL[l]))}</span></td>`}).join('')}<td class="n">${r.users}</td></tr>`).join(''):emptyRow(Object.keys(A).length+2,'No roles yet','Add a role, such as “Accounts receivable clerk” with Sales set to Edit and the rest to None or View.')}</tbody></table></div></div>`;
+}
+function rolePicker(u){
+  const roles=(USERS&&USERS.roles)||[];
+  if(!USERS||(!USERS.customRoles&&!(u&&u.customRole)))return '';
+  const cur=u&&u.customRole||'';
+  return `<div class="field" data-cr style="max-width:420px"><label for="usCR">What this staff member can do</label><select id="usCR"><option value="">${esc(T('Everything in their companies (no custom role)'))}</option>${roles.map(r=>`<option value="${r.id}" ${cur===r.id?'selected':''} translate="no">${esc(r.name)}</option>`).join('')}</select>${roles.length?'':'<span class="hint">Add roles under Users &amp; security → Roles.</span>'}</div>`;
+}
+function roleForm(r){
+  const A=TallyRoles.AREAS,p=r?r.perms:{};
+  const f=openModal(r?`Edit ${r.name}`:'Add role',`<div class="fields">${fld('rlName','Role name',`<input type="text" id="rlName" maxlength="40" value="${esc(r?r.name:'')}" placeholder="${esc(T('e.g. Accounts receivable clerk'))}">`,true)}</div>
+    <div class="muted" style="font-size:13px">For each area, None hides it, View shows it without changes, and Edit allows changes.</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Area</th>${TallyRoles.LEVELS.map(l=>`<th style="text-align:center">${esc(T(LEVEL_LABEL[l]))}</th>`).join('')}</tr></thead><tbody>${Object.entries(A).map(([k,a])=>`<tr><td><b>${esc(T(a.label))}</b><div class="muted" style="font-size:12.5px">${esc(T(a.desc))}</div></td>${TallyRoles.LEVELS.map(l=>`<td style="text-align:center"><input type="radio" name="rl_${k}" value="${l}" ${(p[k]||'none')===l?'checked':''} aria-label="${esc(T(a.label))}: ${esc(T(LEVEL_LABEL[l]))}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    ${r&&r.users?`<div class="muted" style="font-size:13px">${r.users===1?'1 person has this role. Changes apply the next time they open a company.':`${r.users} people have this role. Changes apply the next time they open a company.`}</div>`:''}`,
+    `${r?'<button type="button" class="btn ghost left" data-rldel>Remove role</button>':'<span class="left"></span>'}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${r?'Save':'Add role'}</button>`);
+  const del=$('[data-rldel]',f);if(del)del.onclick=async()=>{if(!await confirmBox('Remove this role?',r.name,'Remove'))return;
+    try{await api('DELETE','/api/roles/'+encodeURIComponent(r.id));closeModal();await showUsers();toast('Role removed')}catch(ex){f.err(ex.message)}};
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const body={name:$('#rlName',f).value,perms:Object.fromEntries(Object.keys(A).map(k=>[k,(f.querySelector(`input[name=rl_${k}]:checked`)||{}).value||'none']))};
+    try{if(r)await api('PUT','/api/roles/'+encodeURIComponent(r.id),body);else await api('POST','/api/roles',body);closeModal();await showUsers();toast(r?'Role saved':'Role added')}catch(ex){f.err(ex.message)}};
+}
+/* Forms opened in an area a custom role can only view show without Save (see openModal in app.js). */
+(function(){
+  const sale=k=>k==='invoice'||k==='sreceipt'||k==='credit'||k==='payment'||k==='customer';
+  const AREA_OF={docForm:k=>sale(k)?'sales':'expenses',payForm:k=>sale(k)?'sales':'expenses',moneyForm:k=>k==='deposit'?'banking':'expenses',refundForm:c=>c&&c.kind==='credit'?'sales':'expenses',
+    contactForm:(c,k)=>(c?c.kind:k)==='vendor'?'expenses':'sales',transferForm:()=>'banking',journalForm:()=>'accounting',accountForm:()=>'accounting',assetForm:()=>'accounting',ruleForm:()=>'banking',
+    estimateForm:()=>'sales',poForm:()=>'expenses',employeeForm:()=>'payroll',payRunForm:()=>'payroll',payRunView:()=>'payroll',remitForm:()=>'payroll'};
+  for(const[name,area]of Object.entries(AREA_OF)){const fn=window[name];if(typeof fn!=='function')continue;
+    window[name]=function(...a){const prev=MODAL_AREA;MODAL_AREA=area(...a);try{return fn.apply(this,a)}finally{MODAL_AREA=prev}}}
+})();
+
 /* ---------- sign-in activity (owners) ---------- */
-const SIGNIN_EVENT={login:'Signed in','login-failed':'Wrong password','code-failed':'Wrong code',locked:'Account locked',logout:'Signed out','2fa-on':'Two-step turned on','2fa-off':'Two-step turned off','recovery-code-used':'Used a recovery code','invite-accepted':'Accepted invitation','password-reset':'Reset password with link','password-changed':'Changed password','user-added':'User added','user-changed':'User changed','invite-link':'Invitation link made','reset-link':'Reset link made','security-changed':'Security settings changed'};
+const SIGNIN_EVENT={login:'Signed in','login-failed':'Wrong password','code-failed':'Wrong code',locked:'Account locked',logout:'Signed out','2fa-on':'Two-step turned on','2fa-off':'Two-step turned off','recovery-code-used':'Used a recovery code','invite-accepted':'Accepted invitation','password-reset':'Reset password with link','password-changed':'Changed password','user-added':'User added','user-changed':'User changed','invite-link':'Invitation link made','reset-link':'Reset link made','security-changed':'Security settings changed','role-added':'Role added','role-changed':'Role changed','role-removed':'Role removed'};
 async function showSignins(){S.view='signins';SIGNINS=null;renderMain();try{SIGNINS=(await api('GET','/api/security/log')).log}catch(e){toast(e.message,true)}if(S.view==='signins')renderMain()}
 function vSignins(){
   const bad=new Set(['login-failed','code-failed','locked']);
   return `<button class="btn ghost sm" data-back-users style="margin-bottom:8px">← Users &amp; security</button>`+head('Sign-in activity','Sign-ins, failed attempts and account changes, newest first')+
-  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>When</th><th>What</th><th>Who</th><th>Details</th></tr></thead><tbody>${!SIGNINS?emptyRow(4,'Loading…',''):SIGNINS.length?SIGNINS.map(e=>`<tr><td class="muted" style="white-space:nowrap">${fmtWhen(Date.parse(e.at))}</td><td class="${bad.has(e.event)?'neg':''}">${esc(SIGNIN_EVENT[e.event]||e.event)}</td><td class="mono">${esc(e.username||e.by||'')}</td><td class="muted trunc">${esc([e.by&&e.username?'by '+e.by:'',e.ip?'from '+e.ip:'',e.reason||'',e.role||'',e.changes?e.changes.join(', '):'',e.require2fa?'two-step: '+e.require2fa:'',e.idleMinutes?'lock after '+e.idleMinutes+' min':''].filter(Boolean).join(' · '))}</td></tr>`).join(''):emptyRow(4,'Nothing yet','')}</tbody></table></div></div>`;
+  `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>When</th><th>What</th><th>Who</th><th>Details</th></tr></thead><tbody>${!SIGNINS?emptyRow(4,'Loading…',''):SIGNINS.length?SIGNINS.map(e=>`<tr><td class="muted" style="white-space:nowrap">${fmtWhen(Date.parse(e.at))}</td><td class="${bad.has(e.event)?'neg':''}">${esc(SIGNIN_EVENT[e.event]||e.event)}</td><td class="mono">${esc(e.username||e.by||'')}</td><td class="muted trunc">${esc([e.by&&e.username?'by '+e.by:'',e.ip?'from '+e.ip:'',e.reason||'',e.role||'',e.roleNow?`role: ${e.roleWas} → ${e.roleNow}`:'',e.perms||'',e.was?'was '+e.was:'',e.changes?e.changes.join(', '):'',e.require2fa?'two-step: '+e.require2fa:'',e.idleMinutes?'lock after '+e.idleMinutes+' min':''].filter(Boolean).join(' · '))}</td></tr>`).join(''):emptyRow(4,'Nothing yet','')}</tbody></table></div></div>`;
 }
 
 /* ---------- the firm ---------- */
