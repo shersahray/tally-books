@@ -45,8 +45,6 @@ High:
 
 Medium:
 - No **void / reversing entry** for a posted pay run; deleting one doesn't recompute later runs' CPP/EI.
-- **ROE** includes pay from before an earlier ROE for the same employee.
-- No **T4 XML** or **ROE Web XML** files — slips must be typed into CRA's web forms.
 - Ontario **overtime** (1.5× after 44 hours a week) isn't calculated.
 - **Vacation pay** isn't earned on non-discretionary bonuses; Ontario **holiday pay** leaves out vacation pay
   on the current run.
@@ -78,3 +76,37 @@ number) is in Settings → Payroll, from the employer's bank.
 - Bank account numbers are masked (last 3 digits) in the activity log, and for clients and view-only users.
 - **Before the first real payroll with a bank:** send the bank a test file. Banks add their own rules on top of the
   standard (data centre code, segments per record, line endings), so confirm with each bank a client uses.
+
+## Electronic filing files (added October 2026)
+
+- **T4 XML** (Payroll → Year-end → *Download T4 XML*): the T619 electronic transmittal, a `<T4Slip>` for every slip on the
+  screen and the `<T4Summary>`, for CRA's **Internet file transfer (XML)** in My Business Account, Represent a Client or with a
+  web access code. Built from CRA's 2026 XML specifications ("T619, Electronic Transmittal" and "T4, Statement of Remuneration
+  Paid"): UTF-8, elements in the published order, empty optional tags left out, amounts with two decimals, the payroll account
+  number (BN + RP + 4 digits) on every slip and the summary, box 28 exemption codes, box 45, box 50/52 for an RPP, codes 30, 34
+  and 40 under `OTH_INFO`, and summary totals added up from the slips in the file. Since the 2025 T619 there's no MM555555
+  transmitter number: the file names the bn15 you sign in with, or a RepID when filing through Represent a Client. The
+  transmitter (name, contact, phone, email) and the business address are asked for in the download window and kept in the
+  payroll settings. The file is checked first (BN, SIN, dental code, RPP number, contact details, addresses) and problems are
+  listed. The XML doesn't make the employees' copies.
+- **ROE Web XML** (an employee's Record of employment → *Download ROE XML*, or Payroll → Employees → *Records of employment*
+  to put several in one file): Service Canada's payroll extract, FileVersion W-2.0 (ROE Web user requirements, Appendix D). Blocks
+  B3 (payroll reference: the employee's id), B5, B6, B8, B9 (name and address in parts), B10–B14, B15A (hours, rounded up),
+  B15C (pay period 1 is the final one, back to the period with the first day worked, 0.00 for periods with no pay), B16 (reason
+  code and contact), B17A (vacation pay on leaving, code 2), B17B, B17C (with Service Canada's code for the other money) and B18.
+  B2 is left blank for a new ROE. Every ROE goes in as a draft (`Issue="D"`): check and submit it in ROE Web, then save the
+  serial number on the employee. B15B is worked out by ROE Web.
+- **Employee addresses in parts** (street, apartment, city, province, postal code, country) on the employee form, which both
+  files need. For employees saved before, the parts are filled in from the old address text as a guess to check; the text is
+  kept until the parts are changed and saved. The server checks the province and the postal code format.
+- **Fixed: an ROE now counts only pay since the employee's previous ROE** (after its final pay period ending date, block 12).
+  Before, `roeLines` used every pay run ever, so a second ROE (for example after a leave of absence) counted the earlier pay
+  again. The first day worked defaults to the first pay after the last ROE.
+- Tests: `test/payroll-xml.test.js` parses both files with a small pure-JS XML reader (well-formed), checks the T4 file against
+  CRA's element order, required elements and value formats, checks the summary totals equal the sum of the slips, and checks the
+  ROE blocks and the pay-since-the-last-ROE fix. CRA's XSD package and Service Canada's `PayrollExtractXmlV2.xsd` weren't
+  downloadable from here, so the structure checks follow the published specification pages, not the XSD files.
+- **Before relying on them:** submit the first T4 XML file through Internet file transfer and read CRA's validation result
+  (CRA validates the schema and the data online and lists errors in the Return Error Report), and upload the first ROE file to
+  ROE Web and check the drafts before submitting them. If CRA publishes a new schema for the 2026 tax year in January 2027,
+  compare it with `public/payroll-xml.js`.

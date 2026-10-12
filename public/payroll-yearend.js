@@ -72,7 +72,7 @@ function vYearEnd(){
   const row=(l,v,b)=>`<tr><td>${b?`<span class="mono muted" translate="no">${b}</span> `:''}${esc(l)}</td><td class="n">${v}</td></tr>`;
   return `<div class="toolbar" style="margin-bottom:12px"><label class="flabel" for="yeYear">Tax year</label><select id="yeYear">${years.map(y=>`<option value="${y}" ${y===Y.year?'selected':''}>${y}</option>`).join('')}</select>
     <span class="grow muted">Slips and summaries are due ${fmtDate(Y.due)}. Employees must have their copies by then too.</span>
-    <button class="btn" data-yecsv>Export CSV</button><button class="btn" data-yeprint="all">Print worksheets</button></div>
+    <button class="btn" data-yecsv>Export CSV</button><button class="btn" data-yexml>Download T4 XML</button><button class="btn" data-yeprint="all">Print worksheets</button></div>
   ${setup.length?`<div class="banner err"><span><b>Before you file:</b> ${setup.map(esc).join(' ')}</span><button class="btn sm" data-go="settings">Settings</button></div>`:`<div class="banner"><span><b>Ready to file.</b> ${warns?`${warns} slip${warns===1?' has':'s have'} a check worth a look before you file.`:'Every slip passed the checks.'}</span></div>`}
   <div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Employee</th><th>Province</th><th class="n">Employment income (14)</th><th class="n">CPP/QPP (16/17)</th><th class="n">CPP2/QPP2</th><th class="n">EI (18)</th><th class="n">Income tax (22)</th><th>RL-1</th><th>Checks</th></tr></thead><tbody>
   ${Y.slips.map((s,i)=>{const lv=s.checks.some(x=>x.level==='error')?'overdue':s.checks.some(x=>x.level==='warn')?'partial':s.checks.length?'quiet':'paid';
@@ -100,9 +100,9 @@ function vYearEnd(){
     <div class="pad muted" style="font-size:13px">The Health Services Fund rate is set from total payroll (every province, plus associated employers from Settings → Payroll) and applied to Quebec payroll. ${R.wsdrf?'<b>Payroll is over $2 million:</b> the 1% workforce training contribution (WSDRF) may apply. ':''}CNESST workplace health and safety premiums are separate.</div></div>`:''}
   </div>
   <div class="panel" style="margin-top:16px"><h3>How to file</h3><div class="pad"><ol class="steps">
-    <li><b>T4 slips:</b> sign in to CRA My Business Account (or use a web access code) and open <b>T4 Web Forms</b>. Enter each slip from these figures, then the T4 Summary. Web Forms also prints the copies for your employees. More than 5 slips must be filed electronically.</li>
+    <li><b>T4 slips:</b> <span>Click Download T4 XML and upload the file with Internet file transfer (XML) in CRA’s My Business Account (or Represent a Client, or with a web access code). Or open T4 Web Forms and enter each slip from these figures, then the T4 Summary. More than 5 slips must be filed electronically.</span></li>
     ${R?`<li><b>RL-1 slips:</b> in Revenu Québec’s <b>My Account for businesses</b> (Mon dossier pour les entreprises), use the online service for RL-1 slips and the RL-1 Summary. Revenu Québec accepts printed RL-1s only from certified software, so don’t hand out these worksheets as slips.</li>`:''}
-    <li>Give each employee their copies by ${fmtDate(Y.due)}: on paper, or electronically if they agreed in writing.</li>
+    <li>Give each employee their copies by ${fmtDate(Y.due)}: on paper, or electronically if they agreed in writing. The XML file doesn’t make the employees’ copies: print them from T4 Web Forms or CRA’s fillable T4 slip.</li>
     <li>Pay any balance due by the same date.</li></ol></div></div>`;
 }
 
@@ -159,6 +159,72 @@ async function yeClick(e,t,d){
   if(d.yeslip!==undefined){yeSlipModal(+d.yeslip);return true}
   if(d.yeprint!==undefined){const Y=yeData();if(Y)yePrint(Y.slips,Y);return true}
   if(t.hasAttribute&&t.hasAttribute('data-yecsv')){yeCSV();return true}
+  if(t.hasAttribute&&t.hasAttribute('data-yexml')){yeXmlModal();return true}
   return false;
 }
 function bindYearEnd(m){const y=$('#yeYear',m);if(y)y.onchange=()=>{S.ye.year=+y.value;renderMain()}}
+
+/* ---------- T4 XML file for CRA's Internet file transfer ----------
+   TallyXML.t4Xml (payroll-xml.js) builds the T619 transmittal, a T4 slip for each slip here and the T4 Summary.
+   The transmitter (who sends the file and who CRA contacts) and the employer's address are kept in the payroll settings. */
+const T4X_PROBLEM={bn:'Add your CRA payroll account number (123456789RP0001) in Settings → Payroll.','employer-name':'Enter the business name in Settings.',
+  'transmitter-bn':'Enter the payroll account number you sign in with (or your RepID).',repid:'A RepID has up to 7 letters and digits.',
+  contact:'Enter the contact person’s name.',phone:'Enter the contact’s phone number with the area code.',email:'Enter the contact’s email address.',
+  'no-slips':'There are no T4 slips for this year.',surname:'The employee’s last name is missing.','slip-prov':'The province of employment isn’t valid.',
+  'addr-missing':'No address. Add it on the employee (CRA mails the slip there if needed).','addr-guessed':'The address parts were guessed from the address text. Open the employee and check them.'};
+const T4X_ADDR={line1:'street address',city:'city',prov:'province',postal:'postal code'};
+function t4xText(p){
+  const who=p.name?`<b translate="no">${esc(p.name)}</b> (${esc(p.prov)}): `:'';
+  const say=t=>`<span>${esc(t)}</span>`;
+  if(p.code==='addr')return who+say(`The address is missing the ${T4X_ADDR[p.part]||p.part}.`);
+  if(p.code==='employer-addr')return say(`Your business address is missing the ${T4X_ADDR[p.part]||p.part}.`);
+  if(p.code.startsWith('slip-')&&!T4X_PROBLEM[p.code])return who+say(checkText({code:p.code.slice(5)}));
+  return who+say(T4X_PROBLEM[p.code]||p.code);
+}
+function yeXmlModal(){
+  let Y;try{Y=yeData()}catch(e){toast(e.message,true);return}
+  if(!Y){toast('There are no T4 slips for this year.',true);return}
+  const c=payCfg(),co=S.company,tr=c.transmitter||{};
+  const ea=c.employerAddr||TallyXML.parseAddress(co.address);
+  const v=x=>esc(x??'');
+  const f=openModal(`T4 XML file · ${Y.year}`,`
+    <div class="muted" style="font-size:13px">${Y.slips.length===1?'This makes the file CRA accepts through Internet file transfer (XML) in My Business Account: the T619 transmittal, 1 T4 slip and the T4 Summary.':`This makes the file CRA accepts through Internet file transfer (XML) in My Business Account: the T619 transmittal, ${Y.slips.length} T4 slips and the T4 Summary.`} <span>The first time, upload it and check CRA’s validation result before you rely on it.</span></div>
+    <h3 class="fsec">Who sends it</h3>
+    <div class="fields">
+      ${fld('txName','Transmitter name',`<input type="text" id="txName" maxlength="35" value="${v(tr.name||co.name)}"><span class="hint">Usually your business name, or your firm’s if you file for clients</span>`)}
+      ${fld('txRep','RepID (only if you file through Represent a Client)',`<input type="text" id="txRep" maxlength="7" value="${v(tr.repId)}" translate="no"><span class="hint">Leave blank when the business files its own slips. The file then uses the payroll account number above, which must be the one you sign in with.</span>`)}
+      ${fld('txContact','Contact person',`<input type="text" id="txContact" maxlength="35" value="${v(tr.contact||(typeof ME!=='undefined'&&ME?ME.name:''))}" translate="no"><span class="hint">First name, then last name</span>`)}
+      ${fld('txPhone','Contact phone',`<input type="tel" id="txPhone" maxlength="30" placeholder="613-555-1234" value="${v(tr.phone||co.phone)}" translate="no">`)}
+      ${fld('txEmail','Contact email',`<input type="email" id="txEmail" maxlength="60" value="${v(tr.email||co.email||(typeof ME!=='undefined'&&ME?ME.email:''))}" translate="no"><span class="hint">CRA sends the result of its checks here</span>`)}
+      ${fld('txEmail2','Second email (optional)',`<input type="email" id="txEmail2" maxlength="60" value="${v(tr.email2)}" translate="no">`)}
+    </div>
+    <h3 class="fsec">Business address (T4 Summary)</h3>
+    <div class="fields">
+      ${fld('txA1','Street address',`<input type="text" id="txA1" maxlength="60" value="${v(ea.line1)}" translate="no">`)}
+      ${fld('txA2','Apartment, suite, etc.',`<input type="text" id="txA2" maxlength="60" value="${v(ea.line2)}" translate="no">`)}
+      ${fld('txCity','City',`<input type="text" id="txCity" maxlength="40" value="${v(ea.city)}" translate="no">`)}
+      ${fld('txProv','Province',`<select id="txProv"><option value=""></option>${PR.PROVINCES.map(k=>`<option value="${k}" ${ea.prov===k?'selected':''}>${esc(provName(k))}</option>`).join('')}</select>`)}
+      ${fld('txPostal','Postal code',`<input type="text" id="txPostal" maxlength="7" placeholder="K1A 0B1" value="${v(String(ea.postal||'').replace(/^(\w{3})(\w{3})$/,'$1 $2'))}" translate="no">`)}
+    </div>
+    <div data-t4xout></div>`,
+    `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Download T4 XML</button>`,'wide');
+  const g=id=>$('#'+id,f).value.trim();
+  const read=()=>({transmitter:{name:g('txName'),repId:g('txRep').toUpperCase(),contact:g('txContact'),phone:g('txPhone'),email:g('txEmail'),email2:g('txEmail2')},
+    employerAddr:{line1:g('txA1'),line2:g('txA2'),city:g('txCity'),prov:g('txProv'),postal:TallyXML.postalCA(g('txPostal')),country:'CAN'}});
+  const args=x=>({ye:Y,employees:S.employees,employer:{name:co.name,bn:c.craAccount,addr:x.employerAddr},transmitter:{...x.transmitter,bn:c.craAccount},lang:isFr()?'F':'E'});
+  const render=()=>{const ps=TallyXML.t4Problems(args(read())),err=ps.filter(p=>p.level==='error'),warn=ps.filter(p=>p.level==='warn');
+    $('[data-t4xout]',f).innerHTML=(err.length?`<div class="banner err" style="margin:0 0 8px"><span><b>Fix these first:</b><br>${err.map(t4xText).join('<br>')}</span></div>`:'')+
+      (warn.length?`<div class="banner" style="margin:0"><span><b>Worth checking:</b><br>${warn.map(t4xText).join('<br>')}</span></div>`:'')+
+      (!err.length&&!warn.length?`<div class="banner" style="margin:0"><span>Every check passed.</span></div>`:'')};
+  f.addEventListener('input',render);f.addEventListener('change',render);render();
+  f.onsubmit=async ev=>{ev.preventDefault();f.err('');
+    const x=read();let out;
+    try{out=TallyXML.t4Xml(args(x))}catch(e){render();return f.err(e.code==='PROBLEMS'?'Fix the problems listed first.':e.message)}
+    // Keep the transmitter and address for next year (and so a second file uses the same contact).
+    const prev=payCfg();
+    if(JSON.stringify(prev.transmitter||{})!==JSON.stringify(x.transmitter)||JSON.stringify(prev.employerAddr||null)!==JSON.stringify(x.employerAddr))
+      await putCompany({...strip(S.company),payroll:{...prev,transmitter:x.transmitter,employerAddr:x.employerAddr}});
+    saveFile(`T4_${Y.year}_${out.ref}.xml`,new Blob([out.xml],{type:'application/xml'}));
+    closeModal();toast(out.slips===1?'T4 XML file ready: 1 slip. Upload it with Internet file transfer in My Business Account.':`T4 XML file ready: ${out.slips} slips. Upload it with Internet file transfer in My Business Account.`);
+  };
+}

@@ -162,7 +162,8 @@ function vPayroll(){
   if(P.tab==='employees'){
     const list=S.employees.slice().sort((a,b)=>(a.active===false)-(b.active===false)||a.name.localeCompare(b.name));
     const vac=list.some(e=>vacMode(e)==='accrue'||vacBalance(e.id));
-    return h+`<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Province</th><th>Pay schedule</th><th class="n">Pay</th><th class="n">Gross, ${yr}</th>${vac?'<th class="n" title="Vacation pay set aside and not yet paid">Vacation pay owed</th>':''}<th>Status</th></tr></thead><tbody>${list.length?list.map(e=>`<tr class="click" data-pay-emp="${e.id}"><td>${esc(e.name)} ${e.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(provName(e.prov))}</td><td>${PR.FREQ_LABEL[e.freq]||''}</td><td class="n">${payOf(e)}</td><td class="n">${money(ytdFor(e.id,{payDate:t+'~'},false).gross)}</td>${vac?`<td class="n">${vacMode(e)==='accrue'||vacBalance(e.id)?money(vacBalance(e.id)):'<span class="muted">—</span>'}</td>`:''}<td>${e.active===false?`<span class="pill quiet">Inactive</span>${(e.roes||[]).length?' <span class="pill quiet">ROE</span>':''}`:'<span class="pill paid">Active</span>'}</td></tr>`).join(''):emptyRow(vac?7:6,'No employees yet','Add an employee with their TD1 amounts, then run payroll.')}</tbody></table></div></div>`;
+    const roes=list.reduce((n,e)=>n+(e.roes||[]).length,0);
+    return h+`<div class="panel">${roes?`<div class="toolbar"><span class="grow muted">${roes===1?'1 record of employment saved.':`${roes} records of employment saved.`}</span><button class="btn sm" data-roelist>Records of employment (ROE XML)</button></div>`:''}<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Province</th><th>Pay schedule</th><th class="n">Pay</th><th class="n">Gross, ${yr}</th>${vac?'<th class="n" title="Vacation pay set aside and not yet paid">Vacation pay owed</th>':''}<th>Status</th></tr></thead><tbody>${list.length?list.map(e=>`<tr class="click" data-pay-emp="${e.id}"><td>${esc(e.name)} ${e.example?'<span class="pill ex">Example</span>':''}</td><td>${esc(provName(e.prov))}</td><td>${PR.FREQ_LABEL[e.freq]||''}</td><td class="n">${payOf(e)}</td><td class="n">${money(ytdFor(e.id,{payDate:t+'~'},false).gross)}</td>${vac?`<td class="n">${vacMode(e)==='accrue'||vacBalance(e.id)?money(vacBalance(e.id)):'<span class="muted">—</span>'}</td>`:''}<td>${e.active===false?`<span class="pill quiet">Inactive</span>${(e.roes||[]).length?' <span class="pill quiet">ROE</span>':''}`:'<span class="pill paid">Active</span>'}</td></tr>`).join(''):emptyRow(vac?7:6,'No employees yet','Add an employee with their TD1 amounts, then run payroll.')}</tbody></table></div></div>`;
   }
   if(P.tab==='remit'){
     const rs=remittances();
@@ -178,6 +179,7 @@ function vPayroll(){
 async function payClick(e,t,d){
   if(await yeClick(e,t,d))return true;
   if(d.ptab){S.pay.tab=d.ptab;renderMain();return true}
+  if(t.hasAttribute&&t.hasAttribute('data-roelist')){roeListModal();return true}
   if(d.payEmp){employeeForm(d.payEmp==='new'?null:employee(d.payEmp));return true}
   if(d.payRun){if(d.payRun==='new')payRunForm();else payRunView(S.payruns.find(r=>r.id===d.payRun));return true}
   if(d.remitGuide){e.stopPropagation();remitGuide(d.remitGuide);return true}
@@ -186,6 +188,34 @@ async function payClick(e,t,d){
   return false;
 }
 function bindPayroll(m){bindYearEnd(m)}
+
+/* ---------- employee address ----------
+   The T4 and ROE files need the address in parts (street, city, province, postal code). Employees saved before
+   then have one block of text: the parts are filled in from it as a guess, to check, and the text is kept as it was
+   until the parts are saved. `address` stays as the text version for pay stubs and worksheets. */
+const addrText=a=>[a.line1,a.line2,[a.city,a.prov].filter(Boolean).join(' ')+(a.postal?'  '+String(a.postal).replace(/^(\w{3})(\w{3})$/,'$1 $2'):''),a.country&&a.country!=='CAN'?a.country:''].map(s=>String(s||'').trim()).filter(Boolean).join('\n');
+function empAddrFields(e){
+  const a=TallyXML.addressOf(e),v=x=>esc(x||''),us=a.country==='USA';
+  const guess=a.guessed&&(e.address||'').trim();
+  return `<div style="grid-column:1/-1" class="flabel">Address</div>
+    ${guess?`<div class="muted" style="grid-column:1/-1;font-size:12.5px"><span>Filled in from the address entered before. Check each part:</span> <span translate="no" style="white-space:pre-line">${esc(e.address)}</span></div>`:''}
+    ${fld('eA1','Street address',`<input type="text" id="eA1" maxlength="60" autocomplete="off" value="${v(a.line1)}" translate="no">`)}
+    ${fld('eA2','Apartment, suite, etc.',`<input type="text" id="eA2" maxlength="60" autocomplete="off" value="${v(a.line2)}" translate="no">`)}
+    ${fld('eACity','City',`<input type="text" id="eACity" maxlength="40" autocomplete="off" value="${v(a.city)}" translate="no">`)}
+    ${fld('eAProv','Province or state',`<select id="eAProv"><option value=""></option>${PR.PROVINCES.map(k=>`<option value="${k}" ${a.prov===k?'selected':''}>${esc(provName(k))}</option>`).join('')}${us&&a.prov&&!PR.PROVINCES.includes(a.prov)?`<option value="${v(a.prov)}" selected>${v(a.prov)}</option>`:''}</select><input type="text" id="eAState" maxlength="2" placeholder="NY" value="${us?v(a.prov):''}" ${us?'':'hidden'} translate="no">`)}
+    ${fld('eAPostal','Postal code',`<input type="text" id="eAPostal" maxlength="10" autocomplete="off" placeholder="K1A 0B1" value="${v(String(a.postal||'').replace(/^(\w{3})(\w{3})$/,'$1 $2'))}" translate="no"><span class="hint">For the T4 and the record of employment</span>`)}
+    ${fld('eACountry','Country',`<select id="eACountry"><option value="CAN" ${us?'':'selected'}>Canada</option><option value="USA" ${us?'selected':''}>United States</option></select>`)}`;
+}
+function readAddr(f,e){
+  const g=id=>$('#'+id,f).value.trim(),country=g('eACountry')||'CAN';
+  const addr={line1:g('eA1'),line2:g('eA2'),city:g('eACity'),prov:country==='CAN'?g('eAProv'):g('eAState').toUpperCase(),postal:TallyXML.postalCA(g('eAPostal')),country};
+  if(!addr.line1&&!addr.line2&&!addr.city&&!addr.postal)return{address:'',addr:null};
+  // Parts only guessed from the old text and left as they were: keep the text exactly as it was entered.
+  const old=e&&TallyXML.addressOf(e);
+  if(old&&old.guessed&&['line1','line2','city','prov','postal','country'].every(k=>String(old[k]||'')===String(addr[k]||'')))return{address:e.address||'',addr:e.addr||null};
+  return{address:addrText(addr),addr};
+}
+function bindAddr(f){const c=$('#eACountry',f);if(!c)return;const sync=()=>{const us=c.value==='USA';$('#eAProv',f).hidden=us;$('#eAState',f).hidden=!us};c.onchange=sync;sync()}
 
 /* ---------- employee form ---------- */
 function employeeForm(emp){
@@ -204,7 +234,7 @@ function employeeForm(emp){
       ${fld('eSin','Social insurance number',`<input type="text" id="eSin" inputmode="numeric" autocomplete="off" maxlength="11" placeholder="123 456 789" value="${v(e.sin?String(e.sin).replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3'):'')}" translate="no"><span class="hint">For the T4 and RL-1 (box 12). Kept only in this company’s books.</span>`)}
       ${fld('eDental','Dental benefits offered (T4 box 45)',`<select id="eDental">${e.dental?'':'<option value="" selected>Choose…</option>'}${[[1,'1 · Not eligible for any dental care insurance'],[2,'2 · Employee only'],[3,'3 · Employee, spouse and dependent children'],[4,'4 · Employee and spouse'],[5,'5 · Employee and dependent children']].map(([k,l])=>`<option value="${k}" ${e.dental===k?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${fld('eOcc','Occupation',`<input type="text" id="eOcc" maxlength="100" value="${v(e.occupation)}"><span class="hint">For the record of employment</span>`)}
-      ${fld('eAddr','Address',`<textarea id="eAddr">${esc(e.address||'')}</textarea>`,true)}</div>
+      ${empAddrFields(e)}</div>
     <h3 class="fsec">Pay</h3>
     <div class="fields">${fld('eFreq','Pay schedule',`<select id="eFreq">${Object.keys(PR.FREQUENCIES).map(k=>`<option value="${k}" ${e.freq===k?'selected':''}>${PR.FREQ_LABEL[k]}</option>`).join('')}</select>`)}
       ${fld('eType','Paid by',`<select id="eType"><option value="salary" ${e.payType==='salary'?'selected':''}>Salary</option><option value="hourly" ${e.payType==='hourly'?'selected':''}>The hour</option></select>`)}
@@ -246,6 +276,7 @@ function employeeForm(emp){
     const h=$('#eType',f).value==='hourly';$('label[for=eRate]',f).textContent=h?'Hourly rate':'Annual salary'};
   $('#eProv',f).onchange=$('#eType',f).onchange=$('#ePen',f).onchange=$('#ePayM',f).onchange=$('#eVacMode',f).onchange=$('#eHire',f).onchange=sync;sync();
   if(!emp)$('#eType',f).addEventListener('change',()=>{$('#eVacMode',f).value=$('#eType',f).value==='hourly'?'accrue':'salary';sync()});
+  bindAddr(f);
   const rb=$('[data-roe]',f);if(rb)rb.onclick=()=>roeForm(emp);
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this employee?',`${emp.name} will be removed.`))return;if(await del('employees',emp.id)){closeModal();toast('Employee deleted')}};
   f.onsubmit=async ev=>{ev.preventDefault();f.err('');
@@ -265,7 +296,9 @@ function employeeForm(emp){
     const prevO=emp&&emp.openingYtd;
     const keepPrev=prevO&&String(prevO.year)!==yr&&+prevO.gross&&Object.keys(oy).length===1;
     if(prevO&&String(prevO.year)!==yr&&+prevO.gross&&!keepPrev&&!await confirmBox('Replace earlier opening amounts?',`${name} has opening year-to-date amounts for ${prevO.year}. Saving opening amounts for ${yr} replaces them, and the ${prevO.year} T4 will no longer include them. File the ${prevO.year} T4 first.`,'Replace'))return;
-    const data={...(emp?strip(emp):{created:Date.now()}),name,email:$('#eEmail',f).value.trim(),address:$('#eAddr',f).value.trim(),prov,hireDate:$('#eHire',f).value,
+    const ad=readAddr(f,emp),adErr=ad.addr&&ad.addr.postal&&ad.addr.country==='CAN'&&!/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(ad.addr.postal)?'The postal code looks like A1A 1A1.':'';
+    if(adErr)return f.err(adErr);
+    const data={...(emp?strip(emp):{created:Date.now()}),name,email:$('#eEmail',f).value.trim(),address:ad.address,addr:ad.addr,prov,hireDate:$('#eHire',f).value,
       freq:$('#eFreq',f).value,payType:$('#eType',f).value,rate:val('eRate'),hours:val('eHours'),
       td1Fed:val('eTd1'),td1Prov:qc?'':val('eTd1p'),td1Qc:qc?val('eTd1q'):'',extraTax:val('eExtra'),extraQcTax:qc?val('eExtraQ'):'',dependants:prov==='ON'?val('eDep'):'',
       rrsp:val('eRrsp'),union:val('eUnion'),sin:$('#eSin',f).value.replace(/\D/g,''),dental:+$('#eDental',f).value||0,rppNo:$('#ePen',f).value==='rpp'?$('#eRppNo',f).value.replace(/\D/g,''):'',pensionType:$('#ePen',f).value,cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
