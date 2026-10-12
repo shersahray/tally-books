@@ -92,7 +92,7 @@ async function load(){
   if(!CO)return;
   const co=CO;
   loading=(async()=>{
-    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.featureAddons=s.featureAddons||{};S.approvalOwners=s.approvalOwners||1;S.rev=s.rev;S.connErr=false}
+    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.featureAddons=s.featureAddons||{};S.approvalOwners=s.approvalOwners||1;S.reminders=s.reminders||[];S.rev=s.rev;S.connErr=false}
     catch(e){S.connErr=true}
     S.loaded=true;scheduleRender();
   })();
@@ -172,6 +172,7 @@ function renderMain(){
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
   const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences'||S.view==='overview';
+  if(typeof drawReminders==='function')drawReminders();
   if(!noCo&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
@@ -533,6 +534,7 @@ function vSettings(){
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${featuresPanel()}
   ${typeof approvalsPanel==='function'?approvalsPanel():''}
+  ${typeof workflowsPanel==='function'?workflowsPanel():''}
   ${ME&&ME.role!=='client'&&!ME.readOnly&&viewOk('dataimport')?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Import data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Add customers, vendors, products and services, inventory, accounts, invoices, sales receipts, credits, bills or journal entries from a spreadsheet (CSV or Excel).</span><button class="btn" data-diopen="">Import data</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
@@ -657,6 +659,7 @@ function bindMain(m){
   if(S.view==='settings')bindClasses(m);
   if(S.view==='settings'&&typeof bindTags==='function')bindTags(m);
   if(S.view==='settings'&&typeof bindApprovals==='function')bindApprovals(m);
+  if(S.view==='settings'&&typeof bindWorkflows==='function')bindWorkflows(m);
   if(typeof bindProjects==='function')bindProjects(m);
   if(typeof bindAssets==='function')bindAssets(m);
   if(typeof bindYard==='function')bindYard(m);

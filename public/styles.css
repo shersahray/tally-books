@@ -600,3 +600,29 @@ tr.tag-grp td{background:var(--surface-2)}
 .dlcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:8px}
 .dlcard{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface-2);display:flex;flex-direction:column;gap:4px;font-size:13.5px;min-width:0}
 .dlcard.dlall{justify-content:center;align-items:flex-start;background:transparent;border-style:dashed}
+/* Workflow reminders: the bell beside the company name, its list, and Settings → Workflows. */
+.side-top{position:relative;display:flex;align-items:flex-start;gap:4px;min-width:0}
+.side-top .brand{flex:1}
+.rem-btn{all:unset;box-sizing:border-box;cursor:pointer;position:relative;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:6px;color:var(--muted);flex:none;margin-top:2px}
+.rem-btn[hidden]{display:none}
+.rem-btn:hover,.rem-btn[aria-expanded="true"]{background:var(--surface-2);color:var(--ink)}
+.rem-btn:focus-visible{outline:2px solid var(--accent)}
+.rem-btn .count{position:absolute;top:-2px;right:-4px;font-size:10.5px;min-width:17px;height:17px;line-height:17px;text-align:center;background:var(--neg);color:#fff;border-radius:9px;padding:0 4px;font-weight:600}
+.rem-btn .count[hidden]{display:none}
+.rem-panel{position:absolute;left:0;top:calc(100% + 6px);z-index:35;width:380px;max-width:calc(100vw - 32px);max-height:min(70vh,520px);overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:6px}
+.rem-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px 8px;border-bottom:1px solid var(--line)}
+.rem-list{list-style:none;margin:0;padding:0}
+.rem-list li{display:flex;flex-direction:column;gap:6px;padding:9px 8px;border-bottom:1px solid var(--line)}
+.rem-list li:last-child{border-bottom:0}
+.rem-go{all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:4px;align-items:flex-start;border-radius:5px;font-size:13.5px;color:var(--ink)}
+.rem-go:hover .rem-txt{text-decoration:underline}
+.rem-go:focus-visible{outline:2px solid var(--accent)}
+.rem-acts{display:flex;gap:6px;align-items:center;justify-content:flex-end}
+.rem-acts select{font-size:12.5px;padding:3px 6px}
+.wf-rule{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:10px}
+.wf-set{display:flex;flex-direction:column;gap:10px;padding-left:24px}
+.wf-set[hidden]{display:none}
+@media (max-width:800px){
+  .side-top{grid-column:1}
+  .rem-panel{left:auto;right:auto}
+}

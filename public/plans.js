@@ -32,16 +32,17 @@
     cashForecast: { label: 'Cash flow forecast', desc: 'The money expected in the bank over the next 30, 60 or 90 days, from open invoices and bills, recurring transactions, payroll, sales tax and your own planned items' },
     // In Thrive; on Seed and Grow it comes with the Payroll add-on (ADDONS.payroll).
     payroll: { label: 'Payroll', desc: 'Pay runs, source deductions and remittances, vacation and holiday pay, ROE, T4 and RL-1' },
+    workflows: { label: 'Workflow reminders', desc: 'Rules that remind the right people about overdue invoices, bills coming due, bills waiting for approval, bank lines and receipts waiting, estimates to follow up, remittances and sales tax returns, and can email customers a payment reminder' },
     // For the whole firm, not each company: owners define roles under Users & security (see roles.js).
     customRoles: { label: 'Custom roles', desc: 'Your own roles for staff, with None, View or Edit for sales, expenses, banking, payroll, reports, accounting, sales tax and settings', firm: true },
   };
   const GROW = ['bankFeeds', 'ai', 'advancedReports', 'projects', 'fixedAssets', 'specialTax', 'budgets'];
-  const THRIVE = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'payroll'];
+  const THRIVE = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'workflows', 'payroll'];
   // cents: the default monthly price per company (the server's administrator can change it in Settings).
   const PLANS = {
     seed: { label: 'Seed', fr: 'Semis', cents: 2000, features: [], blurb: 'Everyday bookkeeping: invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, reports and CaseWare export.' },
     grow: { label: 'Grow', fr: 'Croissance', cents: 4500, features: GROW, blurb: 'Everything in Seed, plus automatic bank feeds, AI suggestions, advanced reports, projects and time, fixed assets and CCA, special sales tax methods and budgets.' },
-    thrive: { label: 'Thrive', fr: 'Prospérité', cents: 7500, features: THRIVE, blurb: 'Everything in Grow, plus payroll, inventory, multi-currency, classes, custom roles, bill approvals, receipts by email and the cash flow forecast.' },
+    thrive: { label: 'Thrive', fr: 'Prospérité', cents: 7500, features: THRIVE, blurb: 'Everything in Grow, plus payroll, inventory, multi-currency, classes, custom roles, bill approvals, receipts by email, the cash flow forecast and workflow reminders.' },
   };
   /*
    * The plans before Seed, Grow and Thrive. A firm (or a company whose client pays) still on one of them moves to the

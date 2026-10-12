@@ -49,6 +49,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {object} [opts.plaid]     Plaid keys for bank feeds: { clientId, secret, env } (otherwise the administrator enters them in Settings).
  * @param {Function} [opts.plaidFetch] Tests only: answers in place of Plaid's API.
  * @param {boolean} [opts.autoFeeds] Sync bank feeds every few hours (default true; tests turn it off).
+ * @param {boolean} [opts.autoWorkflows] Check workflow reminders every hour (default true; tests turn it off).
  * @param {Function} [opts.billingFetch] Tests only: answers in place of Stripe's API for Sumlora subscriptions.
  * @param {boolean} [opts.requireTerms] People must agree to the Terms of service and Privacy policy before using Sumlora (the server and the desktop app turn this on).
  * @param {string} [opts.licenceDir]  Where the licence is kept (the desktop app's own folder, so it stays with the computer, not the books).
@@ -396,6 +397,121 @@ function createApp(opts) {
       else setImmediate(nextRead);
     }
   }
+  /* ---------- Workflow reminders (workflows.js, Plus) ----------
+     Each company's rules are checked every hour and when someone opens the company. What they find goes into the
+     company's `reminders` setting (only the server writes it), keyed by rule + record + date so a reminder is made once.
+     Customer emails go from the company's own mailbox (counted in its 200 a day); digests to staff from the server's. */
+  const WF = require('../../public/workflows.js');
+  const WF_USER = { username: 'workflow', name: 'Workflow reminders' };
+  const wfToday = () => localDay(opts.now ? opts.now() : new Date());
+  const wfBusy = new Set(), wfOpened = new Map(); // companies being checked; when each was last checked on opening
+  /** Everyone at the firm who can open these books (not clients), as the rules see them. */
+  function wfPeople(cid, settings) {
+    const c = reg.get(cid), ap = APPROVALS.clean(settings.approvals);
+    return auth.firmUsers(c.firmId).filter(u => !u.disabled && u.role !== 'client').map(u => auth.publicUser(u)).filter(u => auth.canSee(u, cid))
+      .map(u => ({ id: u.id, role: u.role, perms: u.perms, username: u.username, name: u.name, lang: u.lang, approver: u.role === 'owner' || ap.approvers.includes(u.id) || !!u.approveBills }));
+  }
+  const wfMailOpts = () => ({ insecureTls: !!opts.mailInsecureTls, allowLocal: !!opts.mailAllowLocal });
+  /** Check one company's rules now: add new reminders, close finished ones, send what's due. Returns what it did. */
+  async function checkWorkflows(cid) {
+    if (wfBusy.has(cid) || closing) return { skipped: true };
+    const c = reg.get(cid);
+    if (!c || c.archived || !featureOn(cid, 'workflows')) return { skipped: true };
+    if (licence.on && !licence.status().canChange) return { skipped: true }; // view only until the licence is renewed
+    wfBusy.add(cid);
+    try {
+      const ctx = ctxFor(cid), store = ctx.store, today = wfToday(), now = opts.now ? opts.now().getTime() : Date.now();
+      const settings = { ...DEFAULT_COMPANY, ...(store.getSetting('company') || {}) }, wf = WF.clean(settings.workflows);
+      const prev = store.getSetting('reminders');
+      if (!WF.anyOn(wf) && !Object.values(WF.cleanStore(prev).items).some(r => !r.done)) return { created: 0, emailed: 0, digests: 0 };
+      const people = wfPeople(cid, settings);
+      const books = { company: settings };
+      for (const k of ['accounts', 'contacts', 'docs', 'entries', 'estimates', 'bankTxns', 'receipts', 'payruns', 'filings']) books[k] = store.list(k);
+      const features = { payroll: featureOn(cid, 'payroll', store), billApprovals: APPROVALS.active(settings.approvals, featureOn(cid, 'billApprovals', store)) };
+      const hits = WF.evaluate({ settings: wf, books, people, today, features, owners: people.filter(p => p.role === 'owner').length });
+      const res = WF.sync(prev, hits, now);
+      let next = res.store, changed = res.changed;
+      for (const r of res.created) if (WF.rule(wf, r.rule).digest) r.digest = true;
+      if (changed) store.putSetting('reminders', next);
+      // Emails to customers: overdue invoices and estimates whose rule says so, at most once per repeat (or once per due date).
+      let emailed = 0;
+      const cfg = store.getSetting('mail');
+      for (const r of Object.values(next.items)) {
+        if (r.done || !['invoiceOverdue', 'estimateFollowup'].includes(r.rule)) continue;
+        const rule = WF.rule(wf, r.rule);
+        if (!rule.customer || !cfg || !cfg.host) continue;
+        const ck = `${r.col}|${r.id}|${r.due}`, last = next.cust[ck];
+        const every = r.rule === 'invoiceOverdue' ? rule.repeat : 0;
+        if (!WF.customerDue(last, today, every)) continue;
+        const rec = store.get(r.col, r.id), ct = rec && store.get('contacts', rec.contactId);
+        if (!rec) continue;
+        const to = ct && String(ct.email || '').split(/[,;]/)[0].trim();
+        const mark = (ok, why) => { next = { ...next, cust: { ...next.cust, [ck]: { day: today, ok } } }; changed = true; if (why) store.audit(WF_USER, 'email', { collection: r.col, id: r.id, summary: `workflow: ${why}` }); };
+        const what = r.rule === 'invoiceOverdue' ? `payment reminder for invoice${rec.number ? ' #' + rec.number : ''}` : `follow-up on estimate${rec.number ? ' #' + rec.number : ''}`;
+        if (!to || !mail.EMAIL_RE.test(to)) { mark(false, last ? '' : `no ${what} sent: the customer has no email address`); continue; } // logged once, tried again each day
+        const dayKey = 'mail-sent:' + new Date(now).toISOString().slice(0, 10), sentToday = Number(store.getMeta(dayKey) || 0);
+        if (sentToday + 1 > 200) { mark(false, `no ${what} sent: this company’s 200 emails today are used up`); continue; }
+        store.putMeta(dayKey, sentToday + 1);
+        const lang = settings.lang === 'fr' ? 'fr' : 'en', f = WF.fmt(lang);
+        const pay = settings.etransfer ? (lang === 'fr' ? `Paiement par virement Interac à ${settings.etransfer}${rec.number ? ` (indiquez ${r.col === 'docs' ? 'la facture' : 'la soumission'} ${rec.number})` : ''}.` : `Pay by Interac e-Transfer to ${settings.etransfer}${rec.number ? ` (include ${r.col === 'docs' ? 'invoice' : 'estimate'} ${rec.number} in the message)` : ''}.`) : '';
+        const [subject, text] = WF.customerEmail(r.col === 'docs' ? 'invoice' : 'estimate', { company: settings.name, name: ct.name, num: rec.number || '', amount: f.money(r.col === 'docs' ? r.vars.amount : rec.total, rec.currency), due: f.date(r.col === 'docs' ? rec.due : rec.expires), pay }, lang);
+        try {
+          await mail.send(cfg, { to: [to], subject, text }, wfMailOpts());
+          const cur = store.get(r.col, r.id);
+          store.transaction(() => {
+            if (cur) store.put(r.col, r.id, { ...cur, sent: [...(cur.sent || []).slice(-19), { at: Date.now(), to, by: WF_USER.name, what: r.col === 'docs' ? 'reminder' : 'followup' }] });
+            mark(true, `emailed ${what} to ${to}`);
+          });
+          emailed++;
+        } catch (e) { mark(false, `couldn’t email ${what} to ${to}: ${String(e.message).slice(0, 120)}`); }
+      }
+      // Daily digest to staff (from the server's mailbox): new reminders since their last one, at most one a day per company.
+      let digests = 0;
+      const sys = sysMail.get();
+      if (sys && sys.host) {
+        const dg = { ...(next.digest || {}) };
+        for (const p of people) {
+          if (dg[p.id] === today || !mail.EMAIL_RE.test(p.username)) continue;
+          const mine = Object.values(next.items).filter(r => r.digest && !r.mailed[p.id] && WF.shows(r, p.id, today));
+          if (!mine.length) continue;
+          const key = c.firmId + '|' + today, n = sysMailSent.get(key) || 0;
+          if (n >= 100) break;
+          sysMailSent.set(key, n + 1);
+          const lang = (p.lang || settings.lang) === 'fr' ? 'fr' : 'en';
+          const lines = mine.slice(0, 50).map(r => '• ' + WF.describe(r, lang, today)).join('\n');
+          const subject = lang === 'fr' ? `Rappels pour ${settings.name} : ${mine.length}` : `Reminders for ${settings.name}: ${mine.length}`;
+          const text = lang === 'fr' ? `Bonjour ${p.name},\n\nNouveaux rappels pour ${settings.name} :\n\n${lines}\n\nOuvrez Sumlora pour les voir dans Rappels.` : `Hello ${p.name},\n\nNew reminders for ${settings.name}:\n\n${lines}\n\nOpen Sumlora to see them under Reminders.`;
+          try { await mail.send(sys, { to: [p.username], subject, text }, wfMailOpts()); digests++; } catch (e) { console.error('Workflow digest couldn’t be emailed:', e.message); }
+          dg[p.id] = today; // tried today, sent or not: at most one a day
+          for (const r of mine) next.items[r.key] = { ...r, mailed: { ...r.mailed, [p.id]: now } };
+          changed = true;
+        }
+        next = { ...next, digest: dg };
+      }
+      if (changed) { store.putSetting('reminders', next); ctx.bump(); }
+      return { created: res.created.length, emailed, digests };
+    } finally { wfBusy.delete(cid); }
+  }
+  /** Every hour: every company that isn't archived. One company's problem doesn't stop the rest. */
+  async function checkAllWorkflows() {
+    for (const c of reg.list()) {
+      if (closing) return;
+      try { await checkWorkflows(c.id); } catch (e) { if (e.status !== 404) console.error('Workflow reminders:', e.message); }
+    }
+  }
+  /** When someone opens a company: check it (at most every 5 minutes), without making them wait. */
+  function checkWorkflowsSoon(cid) {
+    const t = wfOpened.get(cid) || 0;
+    if (Date.now() - t < 5 * 60e3) return;
+    wfOpened.set(cid, Date.now());
+    setImmediate(() => checkWorkflows(cid).catch(e => { if (e.status !== 404) console.error('Workflow reminders:', e.message); }));
+  }
+  let wfTimer = null;
+  if (opts.autoWorkflows !== false) {
+    setTimeout(() => checkAllWorkflows().catch(() => {}), 60 * 1000).unref();
+    wfTimer = setInterval(() => checkAllWorkflows().catch(() => {}), 60 * 60 * 1000);
+    wfTimer.unref();
+  }
   let closing = false;
   if (opts.backupFolder) backups.update({ folder: opts.backupFolder });
   if (opts.autoBackup !== false) backups.start();
@@ -695,6 +811,9 @@ function createApp(opts) {
     out.addons = Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, !!co[k]]));
     // Add-ons that bring a plan feature here (payroll on Seed or Grow), for the screens' feature checks.
     out.featureAddons = featureAddons(co);
+    // Workflow reminders for the person asking (only what their role can still see).
+    out.reminders = ctx.user && ctx.user.role !== 'client' && featureOn(ctx.id, 'workflows', ctx.store)
+      ? WF.forUser(ctx.store.getSetting('reminders'), ctx.user.id, wfToday(), a => canArea(ctx.user, a, 'view')) : [];
     return out;
   }
 
@@ -1319,7 +1438,7 @@ function createApp(opts) {
       if (body.payer !== undefined) patch.payer = body.payer === 'client' ? 'client' : 'firm';
       // Bringing an archived company back counts against a firm licence's limit.
       if (patch.archived === false && reg.get(id).archived) checkCompanyLimit({ restoring: true });
-      if (body.opened) patch.lastOpened = Date.now();
+      if (body.opened) { patch.lastOpened = Date.now(); checkWorkflowsSoon(id); }
       reg.update(id, patch);
       // Add-ons cost money each month, so they're only ever on when an owner turns them on here
       // (or picks a type of business that comes with one when making the company).
@@ -1591,6 +1710,11 @@ function createApp(opts) {
         const added = (company.savedReports || []).some(r => !((before && before.savedReports) || []).some(b => b.id === r.id));
         if (added) needFeature(ctx.id, 'advancedReports', ctx.store);
       }
+      // Workflow reminders: turned on or changed only when the plan includes them. Chosen people must be in this firm.
+      company.workflows = { rules: Object.fromEntries(Object.entries(company.workflows.rules).map(([k, r]) => [k, { ...r, people: r.people.filter(uid => { const u = auth.byId(uid); return u && u.firmId === firmId && u.role !== 'client'; }) }])) };
+      for (const [k, r] of Object.entries(company.workflows.rules)) if (r.on && r.who === 'people' && !r.people.length) throw new ValidationError(`${WF.TEMPLATES[k].label}: choose at least one person to remind.`);
+      const prevWf = (() => { try { return WF.clean(before && before.workflows); } catch { return { rules: {} }; } })();
+      if (JSON.stringify(company.workflows) !== JSON.stringify(prevWf) && WF.anyOn(company.workflows)) needFeature(ctx.id, 'workflows', ctx.store);
       // The cash flow forecast's own settings (planned items, lines left out) change only when the plan includes it.
       if (JSON.stringify(company.cashForecast) !== JSON.stringify(validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) }).cashForecast)) needFeature(ctx.id, 'cashForecast', ctx.store);
       ctx.store.transaction(() => {
@@ -1651,14 +1775,40 @@ function createApp(opts) {
       ctx.store.putMeta(dayKey, sentToday + to.length + cc.length);
       await mail.send(cfg, { to, cc, subject, text, attachments }, { insecureTls: !!opts.mailInsecureTls, allowLocal: !!opts.mailAllowLocal });
       const docIds = (Array.isArray(body.docIds) ? body.docIds : []).map(String).slice(0, 50);
+      // Estimates emailed are recorded too, so a workflow rule can follow up on ones sent and not accepted.
+      const estIds = (Array.isArray(body.estimateIds) ? body.estimateIds : []).map(String).slice(0, 50);
       ctx.store.transaction(() => {
         for (const id of docIds) {
           const d = ctx.store.get('docs', id);
           if (d) ctx.store.put('docs', id, { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: to.join(', '), by: ctx.user.name || ctx.user.username, what: ['invoice', 'reminder', 'statement', 'credit', 'sreceipt', 'po'].includes(body.what) ? body.what : 'document' }] });
         }
+        for (const id of estIds) {
+          const x = ctx.store.get('estimates', id);
+          if (x) ctx.store.put('estimates', id, { ...x, sent: [...(Array.isArray(x.sent) ? x.sent : []).slice(-19), { at: Date.now(), to: to.join(', '), by: ctx.user.name || ctx.user.username, what: 'estimate' }] });
+        }
         ctx.store.audit(ctx.user, 'email', { summary: `${m[1] === 'test' ? 'test email' : 'emailed'} “${subject.slice(0, 80)}” to ${to.join(', ').slice(0, 120)}` });
       });
-      return { ok: true, rev: docIds.length ? ctx.bump() : ctx.rev };
+      return { ok: true, rev: docIds.length || estIds.length ? ctx.bump() : ctx.rev };
+    }],
+    // ---------- workflow reminders ----------
+    // Dismiss a reminder, or snooze it for some days: only in the list of the person asking.
+    ['POST', /^\/reminders\/([^/]+)$/, async (ctx, req, m) => {
+      notClient(ctx.user);
+      needFeature(ctx.id, 'workflows', ctx.store);
+      const body = (await readJson(req)) || {};
+      let next;
+      try { next = WF.act(ctx.store.getSetting('reminders'), decodeURIComponent(m[1]), ctx.user.id, body.action, body.days, wfToday()); }
+      catch (e) { throw new ValidationError(e.message, /isn’t in your list/.test(e.message) ? 404 : 400); }
+      ctx.store.putSetting('reminders', next);
+      return { ok: true, rev: ctx.bump() };
+    }],
+    // Check the rules now (Settings → Workflows), instead of waiting for the hourly check.
+    ['POST', /^\/workflows\/check$/, async ctx => {
+      notClient(ctx.user); needArea(ctx.user, 'settings');
+      needFeature(ctx.id, 'workflows', ctx.store);
+      const out = await checkWorkflows(ctx.id);
+      if (out.skipped) throw new ValidationError('The rules are being checked already. Try again in a moment.', 409);
+      return { ok: true, ...out, rev: ctx.rev };
     }],
     // ---------- bill approvals ----------
     // The people who could be approvers (Settings → Bill approvals): owners and staff of the firm.
@@ -2462,7 +2612,8 @@ function createApp(opts) {
             if (!c || c.firmId !== user.firmId) throw new ValidationError('That company doesn’t exist.', 404);
             throw new ValidationError('You don’t have access to that company.', 403);
           }
-          if (user.readOnly && req.method !== 'GET' && cm[2] !== '/code/check') throw new ValidationError('Your account is view only, so you can’t make changes.', 403);
+          // Dismissing or snoozing one's own reminder isn't a change to the books, so view-only people can do it too.
+          if (user.readOnly && req.method !== 'GET' && cm[2] !== '/code/check' && !/^\/reminders\/[^/]+$/.test(cm[2])) throw new ValidationError('Your account is view only, so you can’t make changes.', 403);
           // A client who pays for this company opens it once their subscription is running. The bookkeeper's team isn't held up.
           if (user.role === 'client' && coNeedsPay(reg.get(cid))) throw new AuthError('Start your Sumlora subscription for this company to open it.', 402, { billing: 'company', companyId: cid });
           const ctx = ctxFor(cid);
@@ -2498,7 +2649,7 @@ function createApp(opts) {
     }
   });
 
-  server.on('close', () => { closing = true; backups.stop(); if (feedTimer) clearInterval(feedTimer); if (billTimer) clearInterval(billTimer); reg.closeAll(); });
+  server.on('close', () => { closing = true; backups.stop(); if (feedTimer) clearInterval(feedTimer); if (wfTimer) clearInterval(wfTimer); if (billTimer) clearInterval(billTimer); reg.closeAll(); });
   /** Stop accepting requests, end live-update streams, and close the databases. */
   server.shutdown = () => new Promise(resolve => {
     for (const res of clients) res.end();
@@ -2510,6 +2661,7 @@ function createApp(opts) {
   server.chargePayrollEmployees = chargePayrollEmployees;
   server.backups = backups;
   server.auth = auth;
+  server.checkWorkflows = checkWorkflows; // tests: run the hourly check now
   return server;
 }
 

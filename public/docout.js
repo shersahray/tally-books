@@ -205,7 +205,7 @@ async function sendMail(to,subject,text,pdfBytes,fileName,docIds,what){
   return api('POST','/api/mail/send',{to,subject,text,attachments:pdfBytes?[{name:fileName,data:toB64(pdfBytes)}]:[],docIds,what});
 }
 /** Compose and send one email with a document attached. */
-async function composeMail({kind,contactId,docIds,makePdf,fileName,vars}){
+async function composeMail({kind,contactId,docIds,estimateIds,makePdf,fileName,vars}){
   await loadMail();
   // An invoice with something owing: add how to pay (and make or refresh its card link).
   if((kind==='invoice'||kind==='reminder')&&docIds&&docIds.length===1&&typeof opHowToPay==='function'){const d=S.docs.find(x=>x.id===docIds[0]);if(d){if(!PAYCFG)await opLoad();vars={...vars,pay:opHowToPay(d,await opLinkFor(d))}}}
@@ -222,7 +222,7 @@ async function composeMail({kind,contactId,docIds,makePdf,fileName,vars}){
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const to=$('#mlTo',f).value.trim();if(!to)return f.err('Enter who the email goes to.');
     const btn=f.querySelector('[type=submit]');btn.disabled=true;btn.textContent='Sending…';
-    try{const pdf=await makePdf();await api('POST','/api/mail/send',{to,cc:$('#mlCc',f).value.trim(),subject:$('#mlSub',f).value,text:$('#mlText',f).value,attachments:[{name:fileName,data:toB64(pdf)}],docIds,what:kind});await load();closeModal();toast(`Sent to ${to}`)}
+    try{const pdf=await makePdf();await api('POST','/api/mail/send',{to,cc:$('#mlCc',f).value.trim(),subject:$('#mlSub',f).value,text:$('#mlText',f).value,attachments:[{name:fileName,data:toB64(pdf)}],docIds,estimateIds,what:kind});await load();closeModal();toast(`Sent to ${to}`)}
     catch(err){btn.disabled=false;btn.textContent='Send';f.err(err.message)}
   };
 }

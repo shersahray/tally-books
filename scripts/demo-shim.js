@@ -119,6 +119,17 @@
   ] };
   let auditSeq = 0;
   let demoRoles = [{ id: 'r_ar', name: 'Accounts receivable clerk (example)', perms: { sales: 'edit', expenses: 'view', banking: 'none', payroll: 'none', reports: 'view', accounting: 'none', salestax: 'none', settings: 'none' } }];
+  // Workflow reminders, worked out here as the server would (workflows.js), for the one demo user.
+  function demoReminders(id) {
+    if (typeof TallyWorkflows === 'undefined') return [];
+    const W = TallyWorkflows, b = books[id], t = todayIso();
+    const hits = W.evaluate({ settings: W.clean(b.company.workflows), books: b, people: [{ id: 'u_demo', role: 'owner', perms: null, username: 'demo', approver: true }], today: t,
+      features: { payroll: true, billApprovals: typeof TallyApprovals !== 'undefined' && TallyApprovals.active(b.company.approvals, true) }, owners: 1 });
+    const res = W.sync(remStores[id], hits);
+    remStores[id] = res.store;
+    return { list: W.forUser(res.store, 'u_demo', t), created: res.created.length };
+  }
+  const remStores = {};
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
@@ -213,7 +224,13 @@
     if (rest.split('?')[0] === '/audit') return { rows: log.slice(0, 200).map(({ before, after, ...r }) => r), users: log.length ? [{ username: 'demo', name: 'Demo user' }] : [] };
     const am = rest.match(/^\/audit\/(\d+)$/);
     if (am) { const row = log.find(x => x.seq === Number(am[1])); if (!row) throw new ApiError(404, 'Not found'); return row; }
-    if (rest === '/state') return { ...clone(b), companyId: id };
+    if (rest === '/state') return { ...clone(b), companyId: id, reminders: demoReminders(id).list || [] };
+    let rm = rest.match(/^\/reminders\/([^/]+)$/);
+    if (rm && method === 'POST') {
+      try { remStores[id] = TallyWorkflows.act(remStores[id], decodeURIComponent(rm[1]), 'u_demo', body.action, body.days, todayIso()); } catch (e) { throw new ApiError(400, e.message); }
+      return transact(id, () => {});
+    }
+    if (rest === '/workflows/check') return { ok: true, created: demoReminders(id).created || 0, emailed: 0, digests: 0, rev: b.rev };
     let r = rest.match(/^\/records\/([A-Za-z]+)\/([^/]+)$/);
     if (r && method === 'PUT') { const w0 = { op: 'set', collection: r[1], id: decodeURIComponent(r[2]), data: body }; demoApproval(b, w0); note(w0); return transact(id, w => apply(w, w0)); }
     if (r && method === 'DELETE') { const w0 = { op: 'delete', collection: r[1], id: decodeURIComponent(r[2]) }; note(w0); return transact(id, w => apply(w, w0)); }

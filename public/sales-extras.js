@@ -85,7 +85,7 @@ function estimateForm(x){
 async function estMail(x){
   // Asking for a deposit: how much to pay to accept, and how (e-Transfer, and a card link when Stripe is on).
   const pay=depReq(x)?depMailText(x,await opDepLinkFor(x)):'';x=S.estimates.find(y=>y.id===x.id)||x;
-  composeMail({kind:'estimate',contactId:x.contactId,docIds:[],fileName:pdfName('estimate',x.number),makePdf:()=>docPdf({...(S.estimates.find(y=>y.id===x.id)||x),kind:'estimate'}),
+  composeMail({kind:'estimate',contactId:x.contactId,docIds:[],estimateIds:[x.id],fileName:pdfName('estimate',x.number),makePdf:()=>docPdf({...(S.estimates.find(y=>y.id===x.id)||x),kind:'estimate'}),
     vars:{name:contactName(x.contactId),num:x.number||'',amount:dmoney(x.total),due:ddate(x.expires),pay}});
 }
 function estOpenInvoice(id){const d=S.docs.find(y=>y.id===id);if(d){docForm('invoice',d);addExtras('docs',d.id)}}

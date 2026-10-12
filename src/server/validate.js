@@ -8,6 +8,7 @@ const TAGS = require('../../public/tags.js');
 const APPROVALS = require('../../public/approvals.js');
 const DEP = require('../../public/deposits-calc.js');
 const DELAYED = require('../../public/delayed-calc.js');
+const WF = require('../../public/workflows.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -903,6 +904,8 @@ function validateCompany(data) {
       ...(isObj(r.sort) && ['date', 'type', 'num', 'name', 'memo', 'acct', 'split', 'cls', 'amt'].includes(r.sort.col) ? { sort: { col: r.sort.col, dir: r.sort.dir === 'desc' ? 'desc' : 'asc' } } : {}),
     })).filter(r => r.id && r.name),
     cashForecast: validateCashForecast(data.cashForecast),
+    // Workflow reminders (workflows.js): which ready-made rules are on, and how each is set.
+    workflows: (() => { try { return WF.clean(data.workflows); } catch (e) { throw new ValidationError(e.message); } })(),
   };
   if (out.qstRate > 0 && out.pstRate > 0) throw new ValidationError('A company charges QST or PST, not both.');
   if (out.pstRate > 0 && out.pstRate >= out.taxRate) throw new ValidationError('The sales tax rate must include GST plus PST.');
@@ -1014,6 +1017,8 @@ function validateEstimate(data, store, id) {
   checkLineClasses(lines, store, id && store.get('estimates', id));
   if (data.invoiceId && !store.get('docs', String(data.invoiceId))) throw new ValidationError('The invoice made from this estimate doesn’t exist.');
   const out = { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
+  // When it was emailed (recorded by the server's mail route), for workflow follow-ups.
+  if (data.sent !== undefined) out.sent = (Array.isArray(data.sent) ? data.sent : []).filter(isObj).slice(-20).map(e => ({ at: Number(e.at) || 0, to: str(e.to, 300), by: str(e.by, 120), what: ['estimate', 'followup'].includes(e.what) ? e.what : 'estimate' }));
   // Deposit requested: a percent of the total, or an amount up to the total.
   delete out.deposit;
   if (data.deposit && Number(data.deposit.value)) {
