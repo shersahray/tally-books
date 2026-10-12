@@ -23,12 +23,13 @@
     cashForecast: { label: 'Cash flow forecast', desc: 'The money expected in the bank over the next 30, 60 or 90 days, from open invoices and bills, recurring transactions, payroll, sales tax and your own planned items' },
     emailReceipts: { label: 'Receipts by email', desc: 'Each company gets its own email address: receipts forwarded to it go to the Receipts inbox' },
     billApprovals: { label: 'Bill approvals', desc: 'Bills over an amount, or from chosen vendors, wait for an owner or approver to approve them before they can be paid' },
+    workflows: { label: 'Workflow reminders', desc: 'Rules that remind the right people about overdue invoices, bills coming due, bills waiting for approval, bank lines and receipts waiting, estimates to follow up, remittances and sales tax returns, and can email customers a payment reminder' },
     // For the whole firm, not each company: owners define roles under Users & security (see roles.js).
     customRoles: { label: 'Custom roles', desc: 'Your own roles for staff, with None, View or Edit for sales, expenses, banking, payroll, reports, accounting, sales tax and settings', firm: true },
   };
   const PLANS = {
     essentials: { label: 'Essentials', features: [] },
-    plus: { label: 'Plus', features: ['payroll', 'ai', 'advancedReports', 'specialTax', 'projects', 'inventory', 'multiCurrency', 'fixedAssets', 'cashForecast', 'emailReceipts', 'billApprovals', 'customRoles'] },
+    plus: { label: 'Plus', features: ['payroll', 'ai', 'advancedReports', 'specialTax', 'projects', 'inventory', 'multiCurrency', 'fixedAssets', 'cashForecast', 'emailReceipts', 'billApprovals', 'workflows', 'customRoles'] },
   };
   // Add-ons: bought separately for each company, on top of either plan. Off unless an owner turns one on.
   // cents is the default monthly price per company; the server's administrator can change it in Settings.

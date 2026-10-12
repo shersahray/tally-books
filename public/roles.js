@@ -95,7 +95,7 @@
     notDuplicates: 'accounting', classes: 'accounting', classPerLine: 'accounting', classLabel: 'accounting', ccaOpening: 'accounting', tags: 'accounting', tagGroups: 'accounting',
     mileage: 'expenses',
     lateFee: 'sales', invoiceNote: 'sales', docStyle: 'sales', customFields: 'sales', etransfer: 'sales',
-    approvals: 'settings', reportBasis: 'settings',
+    approvals: 'settings', reportBasis: 'settings', workflows: 'settings',
   };
   const settingArea = key => SETTING_AREA[key] || 'settings';
 
