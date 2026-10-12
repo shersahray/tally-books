@@ -205,7 +205,7 @@ async function sendMail(to,subject,text,pdfBytes,fileName,docIds,what){
   return api('POST','/api/mail/send',{to,subject,text,attachments:pdfBytes?[{name:fileName,data:toB64(pdfBytes)}]:[],docIds,what});
 }
 /** Compose and send one email with a document attached. */
-async function composeMail({kind,contactId,docIds,makePdf,fileName,vars}){
+async function composeMail({kind,contactId,docIds,estimateIds,makePdf,fileName,vars}){
   await loadMail();
   // An invoice with something owing: add how to pay (and make or refresh its card link).
   if((kind==='invoice'||kind==='reminder')&&docIds&&docIds.length===1&&typeof opHowToPay==='function'){const d=S.docs.find(x=>x.id===docIds[0]);if(d){if(!PAYCFG)await opLoad();vars={...vars,pay:opHowToPay(d,await opLinkFor(d))}}}
@@ -222,7 +222,7 @@ async function composeMail({kind,contactId,docIds,makePdf,fileName,vars}){
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const to=$('#mlTo',f).value.trim();if(!to)return f.err('Enter who the email goes to.');
     const btn=f.querySelector('[type=submit]');btn.disabled=true;btn.textContent='Sending…';
-    try{const pdf=await makePdf();await api('POST','/api/mail/send',{to,cc:$('#mlCc',f).value.trim(),subject:$('#mlSub',f).value,text:$('#mlText',f).value,attachments:[{name:fileName,data:toB64(pdf)}],docIds,what:kind});await load();closeModal();toast(`Sent to ${to}`)}
+    try{const pdf=await makePdf();await api('POST','/api/mail/send',{to,cc:$('#mlCc',f).value.trim(),subject:$('#mlSub',f).value,text:$('#mlText',f).value,attachments:[{name:fileName,data:toB64(pdf)}],docIds,estimateIds,what:kind});await load();closeModal();toast(`Sent to ${to}`)}
     catch(err){btn.disabled=false;btn.textContent='Send';f.err(err.message)}
   };
 }
@@ -241,7 +241,7 @@ function bindDocActions(f,doc){
   const name=pdfName(doc.kind,doc.number);
   if(p)p.onclick=async()=>{try{if(doc.kind==='invoice'&&typeof opLinkFor==='function'&&PAYCFG&&PAYCFG.configured)await opLinkFor(doc);saveFile(name,new Blob([await docPdf(S.docs.find(x=>x.id===doc.id)||doc)],{type:'application/pdf'}))}catch(e){toast(e.message,true)}};
   const lk=$('[data-dolink]',f);if(lk)lk.onclick=async()=>{const url=await opLinkFor(doc);if(!url)return;try{await navigator.clipboard.writeText(url);toast('Pay link copied. Paste it in a message to the customer.')}catch(e){prompt('Copy this link:',url)}};
-  const rc=$('[data-dorec]',f);if(rc)rc.onclick=()=>{closeModal();recurringForm(null,doc.kind,{name:`${contactName(doc.contactId)} ${doc.kind==='invoice'?'invoice':'bill'}`.trim(),contactId:doc.contactId,memo:doc.memo||'',lines:doc.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode||(l.tax?'std':'none')})),...recFrom(doc.date)})};
+  const rc=$('[data-dorec]',f);if(rc)rc.onclick=()=>{closeModal();recurringForm(null,doc.kind,{name:`${contactName(doc.contactId)} ${doc.kind==='invoice'?'invoice':'bill'}`.trim(),contactId:doc.contactId,memo:doc.memo||'',...(doc.cls?{cls:doc.cls}:{}),...(doc.tags?{tags:doc.tags}:{}),lines:doc.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode||(l.tax?'std':'none'),...(l.cls!=null?{cls:l.cls}:{})})),...recFrom(doc.date)})};
   if(m)m.onclick=()=>{
     const st=docStatus(doc),late=doc.kind==='invoice'&&st.k==='overdue';
     closeModal();

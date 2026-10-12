@@ -220,7 +220,7 @@ function rcMailPanel(){
   if(!ME||ME.role==='client'||!RCM||RCM.unavailable||rcmFor!==CO)return '';
   const ro=ME.readOnly||!perm('settings','edit');
   const box=c=>`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Receipts by email</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">${c}</div></div>`;
-  if(!RCM.feature)return box(`<div class="muted" style="font-size:13px"><span class="pill quiet">${esc(T('In the Plus plan'))}</span> <span>Give this company its own email address, so receipts and bills forwarded to it go straight to the Receipts inbox.</span></div>`);
+  if(!RCM.feature)return box(`<div class="muted" style="font-size:13px">${inPlanPill('emailReceipts')} <span>Give this company its own email address, so receipts and bills forwarded to it go straight to the Receipts inbox.</span></div>`);
   if(!RCM.ready)return box('<div class="muted" style="font-size:13px">Receipts by email aren’t set up on this server yet. The server’s administrator turns them on in Settings.</div>');
   const rej=(RCM.rejected||[]).slice(0,5);
   return box(`<div class="muted" style="font-size:13px">${typeof aiOn==='function'&&aiOn()?'Forward receipts and bills to this address, or give it to your client. PDF and photo attachments go to Receipts and are read by AI. An email with no attachment is kept as a PDF of its text.':'Forward receipts and bills to this address, or give it to your client. PDF and photo attachments go to Receipts. An email with no attachment is kept as a PDF of its text.'}</div>

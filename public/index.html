@@ -22,7 +22,11 @@
 <body>
 <div class="app">
   <aside class="side">
-    <button class="brand" id="coSwitch" type="button" title="Switch company"><b class="logo" data-logo aria-label="Sumlora"></b><span class="co" id="coName" translate="no">Loading…</span><span class="switch">Switch company</span></button>
+    <div class="side-top">
+      <button class="brand" id="coSwitch" type="button" title="Switch company"><b class="logo" data-logo aria-label="Sumlora"></b><span class="co" id="coName" translate="no">Loading…</span><span class="switch">Switch company</span></button>
+      <button class="rem-btn" id="remBtn" type="button" aria-label="Reminders" aria-haspopup="true" aria-expanded="false" hidden><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-1.7 1.7A1 1 0 0 0 4 19.4h16a1 1 0 0 0 .7-1.7L19 16Z"/></svg><span class="count" id="remCount" hidden></span></button>
+      <div class="rem-panel" id="remPanel" role="dialog" aria-label="Reminders" hidden></div>
+    </div>
     <div class="newwrap">
       <button class="btn primary block" id="newBtn" aria-haspopup="true" aria-expanded="false">+ New</button>
       <div class="menu" id="newMenu" hidden>
@@ -32,6 +36,8 @@
           <button data-new="payment">Receive payment</button>
           <button data-new="deposit">Deposit</button>
           <button data-new="credit">Credit note</button>
+          <button data-new="delayedcharge">Delayed charge</button>
+          <button data-new="delayedcredit">Delayed credit</button>
         </div>
         <div class="col"><h4>Vendors</h4>
           <button data-new="bill">Bill</button>
@@ -106,12 +112,16 @@
 <script src="recurring-calc.js"></script>
 <script src="deposits-calc.js"></script>
 <script src="sales-extras.js"></script>
+<script src="delayed-calc.js"></script>
+<script src="delayed.js"></script>
 <script src="items.js"></script>
 <script src="inventory.js"></script>
 <script src="budgets.js"></script>
 <script src="purchasing.js"></script>
 <script src="approvals.js"></script>
 <script src="bill-approvals.js"></script>
+<script src="workflows.js"></script>
+<script src="workflows-ui.js"></script>
 <script src="projects.js"></script>
 <script src="assets.js"></script>
 <script src="scrapyard.js"></script>
@@ -128,6 +138,8 @@
 <script src="review.js"></script>
 <script src="payroll-calc.js"></script>
 <script src="payroll-dd.js"></script>
+<script src="paystub.js"></script>
+<script src="payroll-xml.js"></script>
 <script src="payroll.js"></script>
 <script src="payroll-yearend.js"></script>
 <script src="payroll-roe.js"></script>

@@ -21,7 +21,7 @@ function budgetAmount(b,acctId,from,to){
 
 function rBudgetVsActual(){
   const b=currentBudget(),{from,to}=S.rep;
-  if(!b)return{html:`<div class="empty"><b>No budget yet</b>Make a budget for the fiscal year, then compare it with your actual income and expenses here.${ME&&ME.role!=='client'&&!ME.readOnly?'<div style="margin-top:14px"><button class="btn primary" data-budget="new">+ New budget</button></div>':''}</div>`,csv:[['Budget vs actual'],['No budget yet']],name:'budget-vs-actual',title:'Budget vs actual',sub:'',head:[],rows:[]};
+  if(!b)return{html:`<div class="empty"><b>No budget yet</b>Make a budget for the fiscal year, then compare it with your actual income and expenses here.${ME&&ME.role!=='client'&&!ME.readOnly?(feat('budgets')?'<div style="margin-top:14px"><button class="btn primary" data-budget="new">+ New budget</button></div>':`<div style="margin-top:14px">${inPlanPill('budgets')}</div>`):''}</div>`,csv:[['Budget vs actual'],['No budget yet']],name:'budget-vs-actual',title:'Budget vs actual',sub:'',head:[],rows:[]};
   const bEnd=budgetEnd(b.start);
   const f=from<b.start?b.start:from,t=to>bEnd?bEnd:to;
   if(f>t)return{html:`<div class="empty"><b>${esc(b.name)} is for ${esc(fmtDate(b.start))} – ${esc(fmtDate(bEnd))}</b>Pick dates in that fiscal year, or another budget.</div>`,csv:[['Budget vs actual'],['No overlap with the budget’s year']],name:'budget-vs-actual',title:'Budget vs actual',sub:'',head:[],rows:[]};
@@ -44,7 +44,8 @@ function rBudgetVsActual(){
 }
 function budgetToolbar(){
   if(S.rep.tab!=='bva')return '';
-  const cur=currentBudget(),staff=ME&&ME.role!=='client'&&!ME.readOnly;
+  // Budgets are in Grow and Thrive: on Seed, budgets already made still show, but can't be added or changed.
+  const cur=currentBudget(),staff=ME&&ME.role!=='client'&&!ME.readOnly&&feat('budgets');
   return `${S.budgets.length?`<label class="flabel" for="repBudget">Budget</label><select id="repBudget">${S.budgets.slice().sort((a,b)=>b.start.localeCompare(a.start)||a.name.localeCompare(b.name)).map(x=>`<option value="${esc(x.id)}" ${cur&&cur.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}${staff?`${cur?'<button class="btn sm" data-budget="edit">Edit budget</button>':''}<button class="btn sm" data-budget="new">+ New budget</button>`:''}`;
 }
 const budgetEnd=start=>addDays(iso(new Date(pd(start).getFullYear()+1,pd(start).getMonth(),1)),-1);

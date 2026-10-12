@@ -1,5 +1,5 @@
 'use strict';
-/* ---------- Cash flow forecast (Reports → Cash flow forecast, Plus plan) ----------
+/* ---------- Cash flow forecast (Reports → Cash flow forecast, Thrive plan) ----------
    Like QuickBooks Online's Cash flow planner: today's bank balance, then the money expected in and out over the
    next 30, 60 or 90 days. This file gathers the lines from the books; the arithmetic is in forecast.js
    (TallyForecast), which the tests check. Settings (how it's worked out, planned items, lines left out) are kept
@@ -51,11 +51,10 @@ function fcItems(cfg,t,end){
   }
   items.push(...F.recurringItems(rec,{today:t,end}));
   // Payroll: the next pay runs on each schedule, like the last one, and the source deductions they'll owe.
-  if(feat('payroll')&&S.payruns.length&&typeof runTotals==='function'){
-    const last={};for(const r of S.payruns.slice().sort(runOrder))last[r.freq||'biweekly']=r;
-    const schedules=Object.entries(last).map(([freq,r])=>{const x=runTotals(r);return{freq,last:{payDate:r.payDate,net:x.net,cra:x.cra,rq:x.rq}}});
+  if(feat('payroll')&&typeof liveRuns==='function'&&liveRuns().length){
+    const schedules=paySchedules();// void pay runs left out (payroll.js)
     const unpaid=remittances().filter(x=>x.bal>0.004).map(x=>({agency:x.agency,key:x.key,due:x.due,amount:x.bal}));
-    items.push(...F.payrollItems({schedules,unpaid,remitFreq:payCfg().remitFreq,today:t,end}));
+    items.push(...F.payrollItems({schedules,unpaid,remitFreq:payCfg().remitFreq,periodOf:(d,ag)=>remitPeriod(d,ag),today:t,end}));
   }
   // Sales tax: each return not filed yet, on its due date. Returns more than 90 days overdue are left out:
   // books that never use Sumlora's filing would otherwise show years of returns as due today.

@@ -36,12 +36,14 @@ const S={more:{},accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Bu
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:'',tag:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
+const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','delayed','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
-/** Is a plan feature on for the open company (in the firm's plan, and not switched off in its settings)? See plans.js. */
-const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'plus',S.company&&S.company.features,k);
+/** Is a plan feature on for the open company (in the firm's plan or an add-on such as Payroll, and not switched off in its settings)? See plans.js. */
+const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'thrive',S.company&&S.company.features,k,S.featureAddons);
+/** "In the Grow plan" for a feature the firm's plan doesn't have (translated as a whole). */
+const inPlanPill=k=>`<span class="pill quiet">${esc(T(`In the ${TallyPlans.PLANS[TallyPlans.planFor(k)].label} plan`))}</span>`;
 /* Custom roles (roles.js): can the signed-in person see (or, with 'edit', change) this area of the books?
    Only a staff member with one of the firm's own roles is limited; the server enforces the same rules. */
 const perm=(a,l='view')=>TallyRoles.can(typeof ME!=='undefined'&&ME?ME.perms:null,a,l);
@@ -52,7 +54,7 @@ const VIEW_AREA={sales:'sales',projects:'sales',expenses:'expenses',receipts:'ex
 // Import data: open when the role can change at least one of the things it imports (TallyRoles.IMPORT_AREA).
 const importOk=k=>k==='items'?perm('sales','edit')||perm('expenses','edit'):perm(TallyRoles.IMPORT_AREA[k]||'accounting','edit');
 const viewOk=v=>v==='transactions'||v==='register'?ledgerOn():v==='convert'?permAll('edit'):v==='dataimport'?Object.keys(TallyRoles.IMPORT_AREA).some(importOk):!VIEW_AREA[v]||perm(VIEW_AREA[v]);
-const NEW_AREA={invoice:'sales',sreceipt:'sales',payment:'sales',credit:'sales',bill:'expenses',billpayment:'expenses',expense:'expenses',vcredit:'expenses',deposit:'banking',transfer:'banking',import:'banking',journal:'accounting',account:'accounting',payrun:'payroll',employee:'payroll'};
+const NEW_AREA={invoice:'sales',sreceipt:'sales',payment:'sales',credit:'sales',delayedcharge:'sales',delayedcredit:'sales',bill:'expenses',billpayment:'expenses',expense:'expenses',vcredit:'expenses',deposit:'banking',transfer:'banking',import:'banking',journal:'accounting',account:'accounting',payrun:'payroll',employee:'payroll'};
 const newOk=k=>k==='contact'?perm('sales','edit')||perm('expenses','edit'):k==='dataimport'?viewOk('dataimport'):!NEW_AREA[k]||perm(NEW_AREA[k],'edit');
 let MODAL_AREA=null; // the area of the form being opened (set around each form; see the end of auth.js)
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
@@ -90,7 +92,7 @@ async function load(){
   if(!CO)return;
   const co=CO;
   loading=(async()=>{
-    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.approvalOwners=s.approvalOwners||1;S.rev=s.rev;S.connErr=false}
+    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.featureAddons=s.featureAddons||{};S.approvalOwners=s.approvalOwners||1;S.reminders=s.reminders||[];S.rev=s.rev;S.connErr=false}
     catch(e){S.connErr=true}
     S.loaded=true;scheduleRender();
   })();
@@ -170,6 +172,7 @@ function renderMain(){
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
   const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences'||S.view==='overview';
+  if(typeof drawReminders==='function')drawReminders();
   if(!noCo&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
   const oc=$('#odCount');oc.hidden=!od;oc.textContent=od;
@@ -260,6 +263,8 @@ function chart6(){
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly income and expenses">${g}<line class="base" x1="${L}" x2="${W-R}" y1="${T+ch}" y2="${T+ch}"/>${bars}</svg>`;
 }
 
+/** The Show menu on the Sales and Expenses lists (Sales also has sales receipts and delayed charges). */
+const docStatusOptions=inv=>`<option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option>${inv?'<option value="receipts">Sales receipts</option><option value="delayed">Delayed charges</option>':''}`;
 function vDocs(kind){
   const inv=kind==='invoice',st=inv?S.sales:S.exp,ck=inv?'customer':'vendor';
   const tabs=`<div class="tabs" role="tablist"><button role="tab" data-dtab="docs" aria-selected="${st.tab==='docs'}">${inv?'Invoices':'Bills'}</button>${inv?`<button role="tab" data-dtab="estimates" aria-selected="${st.tab==='estimates'}">Estimates</button>`:''}<button role="tab" data-dtab="recurring" aria-selected="${st.tab==='recurring'}">Recurring</button><button role="tab" data-dtab="contacts" aria-selected="${st.tab==='contacts'}">${inv?'Customers':'Vendors'}</button>${inv?`<button role="tab" data-dtab="items" aria-selected="${st.tab==='items'}">Products and services</button>`:`${typeof apOn==='function'&&apOn()?`<button role="tab" data-dtab="approvals" aria-selected="${st.tab==='approvals'}">Waiting for approval</button>`:''}<button role="tab" data-dtab="pos" aria-selected="${st.tab==='pos'}">Purchase orders</button><button role="tab" data-dtab="mileage" aria-selected="${st.tab==='mileage'}">Mileage</button>`}</div>`;
@@ -284,10 +289,11 @@ function vDocs(kind){
   const t30=addDays(today(),-30);
   const paid30=r2(S.entries.filter(e=>e.type===(inv?'payment':'billpayment')&&e.date>=t30).reduce((s,e)=>s+(+e.amount||0),0));
   const chips=`<div class="chips"><div class="chip"><div class="lbl">Open</div><div class="val">${money(sum(x=>x.s.bal>0))}</div></div><div class="chip"><div class="lbl">Overdue</div><div class="val ${sum(x=>x.s.k==='overdue')?'neg':''}">${money(sum(x=>x.s.k==='overdue'))}</div></div><div class="chip"><div class="lbl">${inv?'Received':'Paid'}, last 30 days</div><div class="val">${money(paid30)}</div></div></div>`;
+  if(inv&&st.status==='delayed'&&typeof vDelayed==='function')return h+vDelayed();
   const list=docs.concat(credits,receipts).filter(x=>st.status==='all'||(st.status==='credits'?isCreditKind(x.d.kind):st.status==='receipts'?x.d.kind==='sreceipt':isCreditKind(x.d.kind)?false:(st.status==='unpaid'?x.s.bal>0:x.s.k===st.status))).sort((a,b)=>b.d.date.localeCompare(a.d.date)||String(b.d.number).localeCompare(String(a.d.number),undefined,{numeric:true}));
   // Batch actions (docout.js): on Sales only, since bills have no PDF to send or print.
   const bt=inv&&typeof batchBar==='function',shown=list.slice(0,shownCount('docs',list.length)),nc=bt&&batchOn()?9:8;
-  return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option>${inv?'<option value="receipts">Sales receipts</option>':''}</select><span class="grow"></span>${bt?batchBar():''}${diStaffBtn(inv?'invoices':'bills')}</div>
+  return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus>${docStatusOptions(inv)}</select><span class="grow"></span>${bt?batchBar():''}${diStaffBtn(inv?'invoices':'bills')}</div>
   <div class="tbl-wrap"><table><thead><tr>${bt?batchHeadCell(shown.map(x=>x.d.id)):''}<th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?shown.map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}">${bt?batchCell(x.d):''}<td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}${typeof tagPills==='function'?tagPills(x.d.tags):''}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${moneyC(cr?-x.d.total:x.d.total,x.d.currency)}</td><td class="n">${moneyC(cr?-x.s.bal:x.s.bal,x.d.currency)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span>${!inv&&typeof apPill==='function'&&x.s.bal>0?' '+apPill(x.d):''}</td><td class="n">${!cr&&x.s.bal>0&&!(typeof apHeld==='function'&&apHeld(x.d))?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,nc):emptyRow(nc,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
 }
 
@@ -451,16 +457,40 @@ const NPO_WORDS={'Profit and loss':'Statement of operations','Balance sheet':'St
 const W=s=>(isNpo()&&NPO_WORDS[s])||s;
 const ORG_TYPES=[['business','Business'],['npo','Non-profit organization'],['charity','Registered charity']];
 /* ---------- plan features for this company ----------
-   The firm's plan (Essentials or Plus, set by the server's administrator) decides what's available;
-   here the team switches off what this client doesn't use. Switching one off hides it and keeps its data. */
+   The firm's plan (Seed, Grow or Thrive, set by the server's administrator) decides what's available, and the Payroll
+   add-on brings payroll to a company on Seed or Grow; here the team switches off what this client doesn't use.
+   Switching one off hides it and keeps its data. */
 function featuresPanel(){
   if(!ME||ME.role==='client')return '';
-  const plan=TallyPlans.planOf(ME.firmPlan),P=TallyPlans.PLANS[plan],F=TallyPlans.FEATURES,off=(S.company.features)||{};
-  const rows=Object.entries(F).filter(([k,f])=>!f.firm).map(([k,f])=>{const inPlan=P.features.includes(k);
-    return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${inPlan&&off[k]!==false?'checked':''} ${inPlan&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${inPlan?'':` <span class="pill quiet">${esc(T('In the Plus plan'))}</span>`}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
+  const plan=TallyPlans.planOf(ME.firmPlan),P=TallyPlans.PLANS[plan],F=TallyPlans.FEATURES,off=(S.company.features)||{},add=S.featureAddons||{};
+  const rows=Object.entries(F).filter(([k,f])=>!f.firm).map(([k,f])=>{const has=TallyPlans.hasFeature(plan,k,add),viaAddon=has&&!P.features.includes(k);
+    return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${has&&off[k]!==false?'checked':''} ${has&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${viaAddon?` <span class="pill paid">${esc(T('Add-on'))}</span>`:has?'':' '+inPlanPill(k)}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Features</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
-    <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, banking, invoices and bills, GST/HST and QST returns and the standard reports are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>
-    ${rows}</div></div>`;
+    <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, the standard reports and the CaseWare export are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>
+    ${rows}</div></div>${payrollAddonPanel()}`;
+}
+/** Settings: the Payroll add-on for this company. Thrive includes payroll's base fee; employees paid are charged on every plan. */
+function payrollAddonPanel(){
+  if(!ME||ME.role==='client'||!CO||!S.loaded)return '';
+  const A=TallyPlans.ADDONS.payroll,plan=TallyPlans.planOf(ME.firmPlan),owner=ME.role==='owner'&&!ME.readOnly;
+  const on=!!(S.addons&&S.addons.payroll),incl=TallyPlans.addonIncluded(plan,'payroll');
+  const amt=typeof BILL!=='undefined'&&BILL&&BILL.configured&&BILL.offer&&BILL.offer.amounts,billed=amt&&!(BILL.firm&&BILL.firm.exempt);
+  // A licence code's plan decides payroll on a desktop copy (add-ons aren't sold with codes).
+  if(typeof LIC!=='undefined'&&LIC&&LIC.on)return '';
+  if(incl&&!billed)return '';
+  return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(T('Payroll'))} <span class="pill quiet">${esc(T('Add-on'))}</span></h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
+    <div class="muted" style="font-size:13px">${incl?esc(T('Payroll is part of the Thrive plan.')):esc(T('Payroll is part of the Thrive plan. On Seed and Grow, add it to the companies that need it.'))}</div>
+    ${incl?'':`<label class="check"><input type="checkbox" id="payAddon" ${on?'checked':''} ${owner?'':'disabled'}> ${esc(T('Add Payroll to this company'))}</label>`}
+    ${billed?`<div class="muted" style="font-size:12.5px">${incl?'':`<span translate="no">${centsMoney(amt.payroll||0)}</span> <span>a month for this company, on top of its plan,</span> <span>plus</span> `}<span translate="no">${centsMoney(amt.payrollEmployees||0)}</span> <span>for each employee paid in the month. Each employee counts once, however many times they’re paid.</span></div>`:''}
+    ${!owner&&!incl?`<div class="muted" style="font-size:12.5px">${esc(T('Only an owner can add or remove it.'))}</div>`:''}</div></div>`;
+}
+function bindPayrollAddon(m){
+  const cb=$('#payAddon',m);if(!cb)return;
+  cb.onchange=async()=>{const want=cb.checked;cb.disabled=true;
+    if(want&&!await confirmBox('Add Payroll?',`${T('Payroll appears in the menu for')} ${S.company.name}.${typeof BILL!=='undefined'&&BILL&&BILL.configured&&!(BILL.firm&&BILL.firm.exempt)?' '+T('The add-on is billed each month until you remove it.'):''}`,'Add it')){cb.checked=false;cb.disabled=false;return}
+    if(!want&&(S.employees.length||S.payruns.length)&&!await confirmBox('Remove Payroll?','Employees and pay runs stay in the books and come back if you add it again. Their transactions aren’t touched.','Remove')){cb.checked=true;cb.disabled=false;return}
+    try{await api('PUT',`/api/companies/${encodeURIComponent(CO)}`,{payroll:want});await load();toast(want?'Payroll added to this company':'Payroll removed from this company')}
+    catch(e){cb.checked=!want;toast(e.message,true)}finally{cb.disabled=false}};
 }
 /* Provincial sales tax charged on top of GST (not harmonized). Quebec's QST is set up from the Sales tax page. */
 const PST_PROV={BC:{name:'PST',rate:7},SK:{name:'PST',rate:6},MB:{name:'RST',rate:7}};
@@ -504,7 +534,8 @@ function vSettings(){
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${featuresPanel()}
   ${typeof approvalsPanel==='function'?approvalsPanel():''}
-  ${ME&&ME.role!=='client'&&!ME.readOnly&&viewOk('dataimport')?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Import data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Add customers, vendors, products and services, accounts, invoices, bills or journal entries from a spreadsheet (CSV or Excel).</span><button class="btn" data-diopen="">Import data</button></div></div>`:''}
+  ${typeof workflowsPanel==='function'?workflowsPanel():''}
+  ${ME&&ME.role!=='client'&&!ME.readOnly&&viewOk('dataimport')?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Import data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Add customers, vendors, products and services, inventory, accounts, invoices, sales receipts, credits, bills or journal entries from a spreadsheet (CSV or Excel).</span><button class="btn" data-diopen="">Import data</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
@@ -549,6 +580,7 @@ function bindMain(m){
     if(typeof assetsClick==='function'&&await assetsClick(e,t,d))return;
     if(typeof yardClick==='function'&&await yardClick(e,t,d))return;
     if(typeof salesExtraClick==='function'&&salesExtraClick(e,t,d))return;
+    if(typeof delayedClick==='function'&&delayedClick(e,t,d))return;
     if(typeof fcClick==='function'&&fcClick(e,t,d))return;
     if(typeof approvalsClick==='function'&&approvalsClick(e,t,d))return;
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
@@ -627,10 +659,12 @@ function bindMain(m){
   if(S.view==='settings')bindClasses(m);
   if(S.view==='settings'&&typeof bindTags==='function')bindTags(m);
   if(S.view==='settings'&&typeof bindApprovals==='function')bindApprovals(m);
+  if(S.view==='settings'&&typeof bindWorkflows==='function')bindWorkflows(m);
   if(typeof bindProjects==='function')bindProjects(m);
   if(typeof bindAssets==='function')bindAssets(m);
   if(typeof bindYard==='function')bindYard(m);
   if(typeof bindYardPanel==='function'&&S.view==='settings')bindYardPanel(m);
+  if(S.view==='settings')bindPayrollAddon(m);
   if(typeof bindPayPanel==='function')bindPayPanel(m);
   if(S.view==='users'||S.view==='signins')bindUsers(m);
   if(S.view==='firms')bindFirms(m);
@@ -912,10 +946,11 @@ function lineEditor(el,cols,rows,onChange){
     case 'sel':return `<select data-k="${c.key}" aria-label="${c.label}">${c.options(v)}</select>`;
     case 'item':return `<select data-k="${c.key}" aria-label="${c.label}">${itemOptions(v,c.sale)}</select>`;
     case 'calc':return `<span data-calc="${c.key}"></span>`;}};
-  const rowHTML=r=>`<tr>${cols.map(c=>`<td class="c-${c.type}" data-label="${esc(c.label)}">${cell(c,r)}</td>`).join('')}<td class="c-x"><button type="button" class="icon-btn" data-rm aria-label="Remove line">×</button></td></tr>`;
+  const rowHTML=r=>`<tr${r.dl?` data-dl-line="${esc(r.dl)}"`:''}>${cols.map(c=>`<td class="c-${c.type}" data-label="${esc(c.label)}">${cell(c,r)}</td>`).join('')}<td class="c-x"><button type="button" class="icon-btn" data-rm aria-label="Remove line">×</button></td></tr>`;
   el.innerHTML=`<div class="tbl-wrap"><table class="lines"><thead><tr>${cols.map(c=>`<th class="c-${c.type}">${c.label}</th>`).join('')}<th></th></tr></thead><tbody>${rows.map(rowHTML).join('')}</tbody></table></div><button type="button" class="btn ghost sm" data-add style="margin-top:6px">+ Add line</button>`;
   const tb=el.querySelector('tbody');
-  const readRow=tr=>{const o={};tr.querySelectorAll('[data-k]').forEach(i=>o[i.dataset.k]=i.type==='checkbox'?i.checked:i.type==='number'?(i.value===''?'':+i.value):i.value);return o};
+  // A line added from a delayed charge or credit remembers it (dl), so saving the invoice links them.
+  const readRow=tr=>{const o={};tr.querySelectorAll('[data-k]').forEach(i=>o[i.dataset.k]=i.type==='checkbox'?i.checked:i.type==='number'?(i.value===''?'':+i.value):i.value);if(tr.dataset.dlLine)o.dl=tr.dataset.dlLine;return o};
   const read=()=>[...tb.rows].map(readRow);
   const upd=()=>{[...tb.rows].forEach(tr=>{const o=readRow(tr);cols.filter(c=>c.type==='calc').forEach(c=>tr.querySelector(`[data-calc="${c.key}"]`).textContent=money(c.calc(o)))});onChange&&onChange(read())};
   // Picking a product or service fills in its description, price, account and tax code.
@@ -926,7 +961,10 @@ function lineEditor(el,cols,rows,onChange){
     const q=tr.querySelector('[data-k="qty"]');if(q&&q.value==='')q.value=1},true);
   el.addEventListener('input',upd);el.addEventListener('change',upd);
   el.addEventListener('click',e=>{if(e.target.closest('[data-add]')){tb.insertAdjacentHTML('beforeend',rowHTML(cols.defaults?cols.defaults():{}));upd();tb.lastElementChild.querySelector('select,input').focus()}const rm=e.target.closest('[data-rm]');if(rm){if(tb.rows.length>1)rm.closest('tr').remove();else rm.closest('tr').querySelectorAll('input').forEach(i=>i.type==='checkbox'?i.checked=false:i.value='');upd()}});
-  upd();return{read};
+  // Add lines from outside (delayed charges): an empty first line is replaced rather than kept.
+  const add=list=>{const empty=[...tb.rows].filter(tr=>{const o=readRow(tr);return !o.dl&&!o.desc&&!r2((+o.qty||0)*(+o.rate||0))});empty.forEach(tr=>tr.remove());
+    const defs=cols.defaults?cols.defaults():{};tb.insertAdjacentHTML('beforeend',list.map(r=>rowHTML({...defs,...r})).join(''));upd()};
+  upd();return{read,add};
 }
 const taxLbl=()=>`${esc(S.company.taxName||'Tax')} ${+S.company.taxRate||0}%`;
 function totalsHTML(){return `<div class="totals" data-totals><div>Subtotal</div><div data-t="sub">0.00</div><div>${taxLbl()}</div><div data-t="tax">0.00</div><div class="big">Total</div><div class="big" data-t="tot">0.00</div></div>`}
@@ -987,10 +1025,10 @@ function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${l
 
 /* ---------- forms ---------- */
 function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false');
-  ({invoice:()=>docForm('invoice'),sreceipt:()=>docForm('sreceipt'),bill:()=>docForm('bill'),credit:()=>docForm('credit'),vcredit:()=>docForm('vcredit'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),dataimport:()=>diOpen(''),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
+  ({invoice:()=>docForm('invoice'),sreceipt:()=>docForm('sreceipt'),delayedcharge:()=>delayedForm(null,'charge'),delayedcredit:()=>delayedForm(null,'credit'),bill:()=>docForm('bill'),credit:()=>docForm('credit'),vcredit:()=>docForm('vcredit'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),dataimport:()=>diOpen(''),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
 async function openEntry(e){if(!e)return;
   if((e.vehBuy||e.vehDone)&&typeof vehFromEntry==='function'&&vehFromEntry(e))return;
-  if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id);if(r)return payRunView(r)}
+  if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id||(x.void&&x.void.entryId===e.id));if(r)return payRunView(r)}
   if(e.type==='payremit')return remitForm(e.agency+'|'+e.period,e);
   if(e.type==='qmadjust'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast('This adjustment was posted when the return was filed. To change it, undo the filing.');return}
   if(e.type==='taxpayment'){S.stax.period=e.period?`${e.period.from}|${e.period.to}`:null;S.stax.tax=e.tax||'gst';go('salestax');toast(e.taxKind==='instalment'?'Instalments are listed in the Sales tax worksheets. To remove one, delete it from the account register.':'Sales tax payments are managed from the return they belong to.');return}
@@ -1030,7 +1068,7 @@ function docPostLines(kind,c,ctl,fx){
   return lines;
 }
 /** A saved document's record: its lines as entered, and its totals. */
-const docRecord=(c)=>({lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),...(l.cost!=null?{cost:l.cost}:{}),...(l.cls!=null?{cls:l.cls}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
+const docRecord=(c)=>({lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),...(l.cost!=null?{cost:l.cost}:{}),...(l.cls!=null?{cls:l.cls}:{}),...(l.dl?{dl:l.dl}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'})),sub:c.sub,tax:c.tax,taxParts:c.all.map(p=>({name:p.name,rate:p.rate,amount:p.amount})),total:c.total,taxRate:+S.company.taxRate||0});
 function docForm(kind,doc,preset){
   if(doc&&doc.carried)return carriedDocForm(kind,doc);
   const sale=saleKind(kind),cred=isCreditKind(kind),sr=kind==='sreceipt',L=DOCL[kind],ck=sale?'customer':'vendor',t=today();
@@ -1046,7 +1084,7 @@ function docForm(kind,doc,preset){
   const f=openModal(doc?`${L.t} ${d.number?'#'+d.number:''}`:L.n,
     `${preset&&preset.note||''}${doc&&typeof apBox==='function'?apBox(doc):''}${doc&&typeof rcLinkFor==='function'?rcLinkFor(doc):''}<div class="fields">${fld('dC',sale?'Customer':'Vendor',contactSelect('dC',d.contactId,ck))}${fld('dN',L.num,`<input type="text" id="dN" value="${esc(d.number)}">`)}${fld('dD',L.date,`<input type="date" id="dD" value="${esc(d.date)}">`)}${sr?fld('dDep','Deposit to',`<select id="dDep">${acctOptions(defBank,banks)}</select>`):cred?'':fld('dDue','Due date',`<input type="date" id="dDue" value="${esc(d.due||'')}">`)}${sale&&typeof fieldInputs==='function'?fieldInputs(d,false):''}${typeof classField==='function'?classField('dCls',d.cls):''}${typeof projField==='function'?projField('dProj',d.proj):''}${typeof vehField==='function'?vehField('dVeh',d.veh):''}${typeof tagField==='function'?tagField('dTags',d.tags):''}</div>
     ${typeof fxRowHTML==='function'?fxRowHTML('dFx',d.currency||contactCur(d.contactId),d.fx):''}<div class="muted fx-home" data-fxhome></div>
-    <div data-le></div>
+    ${kind==='invoice'&&typeof dlCardsHTML==='function'?'<div data-dlcards></div>':''}<div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="dM">${L.memo}</label><textarea id="dM">${esc(d.memo||'')}</textarea></div>${totalsHTML()}</div>
     ${cred?`<div class="apply" data-apply></div>`:''}
     ${settledNote?`<div class="banner" style="margin:0"><span>${settledNote}</span></div>`:''}${doc&&kind==='invoice'?S.entries.filter(e=>e.type==='depapply'&&e.applyTo===doc.id).map(e=>`<div class="muted" style="font-size:13px"><span>Deposit received</span> ${money(e.amount)} · <span>from estimate</span> <span class="mono">${esc((S.estimates.find(x=>x.id===e.estimateId)||{}).number||'')}</span></div>`).join(''):''}`,
@@ -1061,9 +1099,12 @@ function docForm(kind,doc,preset){
   const docCurNow=()=>doc?doc.currency||'':contactCur($('#dC',f).value);
   const showHome=()=>{const el=$('[data-fxhome]',f);if(!el)return;const cur=docCurNow(),r=FXW?FXW.rate():1;el.textContent=cur&&r>0?`${T('Total in Canadian dollars:')} ${money(r2(totalNow()*r))}`:''};
   let FXW=null;
-  const le=lineEditor($('[data-le]',f),cols,perLine?withLineCls(d.lines,d.cls):d.lines,r=>{rows=r;const c=calcLines(r,x=>(+x.qty||0)*(+x.rate||0),!sale);setTotals(f,c);const cur=docCurNow();if(cur&&typeof moneyC==='function'){$('[data-t=sub]',f).textContent=moneyC(c.sub,cur);$('[data-t=tax]',f).textContent=moneyC(c.tax,cur);$('[data-t=tot]',f).textContent=moneyC(c.total,cur)}showHome()});
+  let dlDraw=null;
+  const le=lineEditor($('[data-le]',f),cols,perLine?withLineCls(d.lines,d.cls):d.lines,r=>{rows=r;if(dlDraw)dlDraw(r);const c=calcLines(r,x=>(+x.qty||0)*(+x.rate||0),!sale);setTotals(f,c);const cur=docCurNow();if(cur&&typeof moneyC==='function'){$('[data-t=sub]',f).textContent=moneyC(c.sub,cur);$('[data-t=tax]',f).textContent=moneyC(c.tax,cur);$('[data-t=tot]',f).textContent=moneyC(c.total,cur)}showHome()});
   if(typeof wireFx==='function')FXW=wireFx(f,'dFx',docCurNow,'#dD',showHome);
   if(perLine)wireLineCls(f,'dCls');
+  // A customer's open delayed charges and credits, to add to this invoice.
+  if(kind==='invoice'&&typeof bindDlCards==='function'){dlDraw=bindDlCards(f,le,doc?doc.id:'');dlDraw()}
   // Credits: which open invoices (or bills) of this customer (or vendor) the credit is used on.
   const mine=a=>(d.applied||[]).find(x=>x.docId===a)?.amount||0;
   const drawApply=()=>{
@@ -1086,7 +1127,8 @@ function docForm(kind,doc,preset){
   const depUsed=doc?S.entries.filter(e=>e.type==='depapply'&&e.applyTo===doc.id):[];
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{
     if(cred?refunded:r2(paid-depUsed.reduce((s,e)=>s+(+e.amount||0),0))>0.004){f.err(cred?'Delete the refunds from this credit first.':`Delete the payments on this ${lc} first.`);return}
-    if(!await confirmBox(`Delete this ${lc}?`,cred&&paid?'Its posting to the ledger is removed too, and the invoices or bills it was used on show their balances again.':depUsed.length?'Its posting to the ledger is removed too. The deposit used on it goes back to being held for the customer.':'Its posting to the ledger is removed too.'))return;
+    const dlOn=kind==='invoice'&&(doc.lines||[]).some(l=>l.dl);
+    if(!await confirmBox(`Delete this ${lc}?`,dlOn?'Its posting to the ledger is removed too. The delayed charges and credits on it are open again.':cred&&paid?'Its posting to the ledger is removed too, and the invoices or bills it was used on show their balances again.':depUsed.length?'Its posting to the ledger is removed too. The deposit used on it goes back to being held for the customer.':'Its posting to the ledger is removed too.'))return;
     if(!await batch([...depUsed.map(e=>({op:'delete',collection:'entries',id:e.id})),{op:'delete',collection:'entries',id:'d_'+doc.id},{op:'delete',collection:'docs',id:doc.id}]))return;closeModal();toast(L.del)};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const c=calcLines(le.read(),x=>(+x.qty||0)*(+x.rate||0),!sale);
@@ -1260,9 +1302,9 @@ function moneyForm(kind,entry,preset){
   if(typeof wireFx==='function'){MFX=wireFx(f,'mFx',()=>acctCur($('#mBank',f).value),'#mDate',mHome);$('#mBank',f).addEventListener('change',()=>MFX.refresh(false))}
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox(`Delete this ${kind}?`,'It will be removed from your books.'))return;await del('entries',entry.id);closeModal();toast(`${out?'Expense':'Deposit'} deleted`)};
   // Make recurring: a template from what's on the form now (saved or not).
-  const mk=$('[data-mkrec]',f);if(mk)mk.onclick=()=>{const date=$('#mDate',f).value||today(),cid=$('#mC',f).value;closeModal();
-    recurringForm(null,kind,{name:(contactName(cid)||T(out?'Expense':'Deposit')),contactId:cid==='__new'?'':cid,bank:$('#mBank',f).value,ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),
-      lines:le.read().filter(l=>l.account||+l.amount).map(l=>({account:l.account,desc:l.desc||'',amount:l.amount,taxCode:l.taxCode})),...recFrom(date)})};
+  const mk=$('[data-mkrec]',f);if(mk)mk.onclick=()=>{const date=$('#mDate',f).value||today(),cid=$('#mC',f).value,ct=(typeof tagsOf==='function'&&tagsOf(f,'mTags'))||{};closeModal();
+    recurringForm(null,kind,{name:(contactName(cid)||T(out?'Expense':'Deposit')),contactId:cid==='__new'?'':cid,bank:$('#mBank',f).value,ref:$('#mRef',f).value.trim(),memo:$('#mMemo',f).value.trim(),...classOf(f,'mCls'),...ct,
+      lines:le.read().filter(l=>l.account||+l.amount).map(l=>({account:l.account,desc:l.desc||'',amount:l.amount,taxCode:l.taxCode,...(perLine?{cls:l.cls||''}:{})})),...recFrom(date)})};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const c=calcLines(le.read(),x=>+x.amount||0,out);const bank=$('#mBank',f).value;
     if(!bank)return f.err('Choose a bank or card account.');if(!c.ls.length)return f.err('Add at least one line with a category and amount.');
@@ -1307,8 +1349,8 @@ function journalForm(entry,preset){
   if(perLine)jCols.defaults=()=>({cls:topCls(f,'jCls')});
   const le=lineEditor($('[data-le]',f),jCols,rows,r=>{const d=r2(r.reduce((s,x)=>s+(+x.debit||0),0)),c=r2(r.reduce((s,x)=>s+(+x.credit||0),0));$('[data-j=d]',f).textContent=money(d);$('[data-j=c]',f).textContent=money(c);const x=$('[data-j=x]',f);x.textContent=money(r2(d-c));x.className='big '+(Math.abs(d-c)>0.004?'neg':'')});
   if(perLine)wireLineCls(f,'jCls');
-  const mk=$('[data-mkrec]',f);if(mk)mk.onclick=()=>{const date=$('#jDate',f).value||today(),memo=$('#jMemo',f).value.trim();closeModal();
-    recurringForm(null,'journal',{name:memo||T('Journal entry'),memo,ref:$('#jRef',f).value.trim(),lines:le.read().filter(l=>l.account||+l.debit||+l.credit),...recFrom(date)})};
+  const mk=$('[data-mkrec]',f);if(mk)mk.onclick=()=>{const date=$('#jDate',f).value||today(),memo=$('#jMemo',f).value.trim(),ct=(typeof tagsOf==='function'&&tagsOf(f,'jTags'))||{};closeModal();
+    recurringForm(null,'journal',{name:memo||T('Journal entry'),memo,ref:$('#jRef',f).value.trim(),...classOf(f,'jCls'),...ct,lines:le.read().filter(l=>l.account||+l.debit||+l.credit),...recFrom(date)})};
   const rvId=entry?'rv_'+entry.id:'',hasRev=!!(entry&&S.entries.some(x=>x.id===rvId));
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this journal entry?',hasRev?'It and its reversing entry will be removed from your books.':'It will be removed from your books.'))return;
     const w=[{op:'delete',collection:'entries',id:entry.id}];if(hasRev)w.push({op:'delete',collection:'entries',id:rvId});if(await batch(w)){closeModal();toast('Journal entry deleted')}};
@@ -1430,14 +1472,18 @@ const topCls=(f,id)=>($('#'+id,f)||{}).value||'';
 function classesPanel(){
   if(!ME||ME.role==='client')return '';
   const cs=S.company.classes||[],ro=ME.readOnly||!perm('accounting','edit'),w=clsWords(),lab=S.company.classLabel||'class';
+  // Making classes is in Thrive; classes already made can still be used, renamed and reported on.
+  const canMake=feat('classes');
+  if(!canMake&&!cs.length)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(w.many)}</h3><div class="pad muted" style="font-size:13px"><span>${esc(T('Sort income and expenses by branch, location, department or line of business, and see the profit and loss for each one.'))}</span> ${inPlanPill('classes')}</div></div>`;
   const lineUse=(r,id)=>(r.lines||[]).some(l=>l&&l.cls===id);
   const used=id=>S.entries.some(e=>e.cls===id||lineUse(e,id))||S.docs.some(d=>d.cls===id||lineUse(d,id))||S.rules.some(r=>r.cls===id);
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(w.many)}</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="muted" style="font-size:13px">${esc(T('Sort income and expenses by branch, location, department or line of business. Pick one on an invoice, bill, sales receipt, expense, deposit, journal entry or bank line, then see the profit and loss for each one side by side in Reports.'))}</div>
-    ${ro?'':`<label class="check" style="align-items:flex-start"><input type="checkbox" id="clsPerLine" ${S.company.classPerLine?'checked':''}> <span><b>${esc(T('Track classes on each line'))}</b><br><span class="muted" style="font-size:12.5px">${esc(T('Pick a class on each line of an invoice, bill, sales receipt, credit, expense, deposit or journal entry, so one bill can be split, for example between two stores. The class at the top fills in every line.'))}</span></span></label>`}
+    ${ro||(!canMake&&!S.company.classPerLine)?'':`<label class="check" style="align-items:flex-start"><input type="checkbox" id="clsPerLine" ${S.company.classPerLine?'checked':''}> <span><b>${esc(T('Track classes on each line'))}</b><br><span class="muted" style="font-size:12.5px">${esc(T('Pick a class on each line of an invoice, bill, sales receipt, credit, expense, deposit or journal entry, so one bill can be split, for example between two stores. The class at the top fills in every line.'))}</span></span></label>`}
     ${ro?'':`<div class="fields">${fld('clsLabel','Call them',`<select id="clsLabel">${Object.entries(CLASS_WORDS).map(([k,v])=>`<option value="${k}" ${lab===k?'selected':''}>${esc(T(v.many))}</option>`).join('')}</select><span class="hint">${esc(T('The name used on forms and reports, for example Locations for a business with two stores.'))}</span>`)}</div>`}
     ${cs.length?`<div class="tbl-wrap"><table><tbody>${cs.map(c=>`<tr><td><span translate="no">${esc(c.name)}</span>${c.active===false?' <span class="pill quiet">Inactive</span>':''}</td><td class="n" style="white-space:nowrap">${ro?'':`<button class="btn sm ghost" data-clsren="${esc(c.id)}">Rename</button><button class="btn sm ghost" data-clsact="${esc(c.id)}">${c.active===false?'Turn on':'Turn off'}</button>${used(c.id)?'':`<button class="btn sm ghost" data-clsdel="${esc(c.id)}">Remove</button>`}`}</td></tr>`).join('')}</tbody></table></div>`:`<div class="muted">${esc(T('None yet.'))}</div>`}
-    ${ro?'':`<form id="clsAdd" style="display:flex;gap:8px"><input type="text" id="clsName" maxlength="60" placeholder="${esc(T('e.g. Ottawa office'))}" aria-label="${esc(w.add)}" style="flex:1"><button class="btn" type="submit">${esc(w.add)}</button></form>`}
+    ${!ro&&!canMake?`<div class="muted" style="font-size:12.5px"><span>${esc(T('These classes stay usable. Adding more needs the Thrive plan.'))}</span> ${inPlanPill('classes')}</div>`:''}
+    ${ro||!canMake?'':`<form id="clsAdd" style="display:flex;gap:8px"><input type="text" id="clsName" maxlength="60" placeholder="${esc(T('e.g. Ottawa office'))}" aria-label="${esc(w.add)}" style="flex:1"><button class="btn" type="submit">${esc(w.add)}</button></form>`}
   </div></div>`;
 }
 function bindClasses(m){

@@ -315,18 +315,130 @@
     ['ei', 'EI (employer)', 'cra'], ['qpip', 'QPIP (employer)', 'rq'], ['hsf', 'Health Services Fund', 'rq']
   ];
 
-  // Regular remitters: due the 15th of the month after the pay date (both CRA and Revenu Québec).
-  function remittanceDue(payDate) {
-    const [y, m] = payDate.split('-').map(Number);
-    const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
-    return `${ny}-${String(nm).padStart(2, '0')}-15`;
+  /* ---------- remitting periods and due dates ----------
+     CRA ("When to remit", canada.ca/cra-remit-due-date) and Revenu Québec ("Frequency of remittances"):
+       monthly    regular remitter: the calendar month, due the 15th of the next month
+       quarterly  the calendar quarter, due the 15th after it (April 15, July 15, October 15, January 15)
+       accel1     CRA threshold 1 / Revenu Québec twice-monthly: 1st–15th due the 25th; 16th–end due the 10th of the next month
+       accel2     CRA threshold 2 / Revenu Québec weekly: 1st–7th, 8th–14th, 15th–21st, 22nd–end, each due the 3rd
+                  working day after the period ends
+       annual     Revenu Québec only: the calendar year, due January 15
+     A due date on a Saturday, Sunday or public holiday moves to the next business day (both agencies).
+     Period keys: 'YYYY' · 'YYYY-Qn' · 'YYYY-MM' · 'YYYY-MM-H1'/'H2' · 'YYYY-MM-W1'…'W4'. */
+  const REMIT_FREQS = { cra: ['monthly', 'quarterly', 'accel1', 'accel2'], rq: ['monthly', 'quarterly', 'accel1', 'accel2', 'annual'] };
+  const REMIT_FREQ_LABEL = {
+    cra: { monthly: 'Monthly (regular remitter)', quarterly: 'Quarterly', accel1: 'Twice a month (accelerated, threshold 1)', accel2: 'Up to four times a month (accelerated, threshold 2)' },
+    rq: { monthly: 'Monthly', quarterly: 'Quarterly', accel1: 'Twice a month', accel2: 'Weekly (four times a month)', annual: 'Once a year' },
+  };
+  const monthEnd = (y, m) => ymd(y, m, new Date(Date.UTC(y, m, 0)).getUTCDate());
+  const nextMonth = (y, m) => (m === 12 ? [y + 1, 1] : [y, m + 1]);
+  const WEEKS = [[1, 7], [8, 14], [15, 21], [22, 31]];
+
+  /** The holidays each agency counts when moving a due date (not the employment-standards holidays below).
+      CRA: its list of public holidays for due dates (canada.ca/cra-public-holidays): Saint-Jean-Baptiste Day for
+      Quebec only, the Civic Holiday everywhere but Quebec. Revenu Québec: the days its offices are closed
+      (revenuquebec.ca/en/contact-us/holidays), which include January 2 and December 24 and 31; its 2026 schedule
+      also moves a weekly due date past Remembrance Day, so that counts too.
+      Revenu Québec closes on the next weekday when a fixed-date holiday is on a weekend (2026: Boxing Day on Saturday,
+      closed Monday the 28th). CRA's list keeps the weekend date, so its due dates are never moved later than it says. */
+  const DUE_HOLIDAYS = {
+    cra: prov => ['newyear', 'goodfriday', 'eastermonday', 'victoria', ...(prov === 'QC' ? ['stjean24'] : []), 'canada', ...(prov === 'QC' ? [] : ['civic']), 'labour', 'truth', 'thanksgiving', 'remembrance', 'christmas', 'boxing'],
+    // Ontario (EHT instalments): the holidays in Ontario's Legislation Act, s. 87.
+    on: () => ['newyear', 'family', 'goodfriday', 'eastermonday', 'victoria', 'canada', 'civic', 'labour', 'thanksgiving', 'remembrance', 'christmas', 'boxing'],
+    rq: () => ['newyear', 'jan2', 'goodfriday', 'eastermonday', 'patriots', 'stjean24', 'canada', 'labour', 'thanksgiving', 'remembrance', 'dec24', 'christmas', 'boxing', 'dec31'],
+  };
+  const DUE_EXTRA = {
+    eastermonday: y => addD(easter(y), 1), stjean24: y => ymd(y, 6, 24), jan2: y => ymd(y, 1, 2), dec24: y => ymd(y, 12, 24), boxing: y => ymd(y, 12, 26), dec31: y => ymd(y, 12, 31),
+  };
+  const FIXED = new Set(['newyear', 'jan2', 'stjean24', 'canada', 'truth', 'remembrance', 'dec24', 'christmas', 'boxing', 'dec31']);
+  const weekend = s => { const w = D(s).getUTCDay(); return w === 0 || w === 6; };
+  const dueHolCache = new Map();
+  /** Days an agency is closed in a year (besides weekends), as a Set of YYYY-MM-DD. */
+  function dueHolidays(agency, year, prov) {
+    const ck = `${agency}|${year}|${agency === 'cra' && prov === 'QC' ? 'QC' : ''}`;
+    if (dueHolCache.has(ck)) return dueHolCache.get(ck);
+    const raw = (DUE_HOLIDAYS[agency] || DUE_HOLIDAYS.cra)(prov).map(k => ({ k, d: (DUE_EXTRA[k] || HOLIDAY_RULES[k][1])(year) })).sort((a, b) => a.d.localeCompare(b.d));
+    const out = new Set();
+    for (const h of raw) {
+      let d = h.d;
+      if (agency === 'rq' && FIXED.has(h.k)) while (weekend(d) || out.has(d)) d = addD(d, 1);
+      out.add(d);
+    }
+    dueHolCache.set(ck, out);
+    return out;
+  }
+  /** A day the agency is open: not a weekend, not one of its holidays. */
+  function isBusinessDay(date, agency = 'cra', prov = '') {
+    if (weekend(date)) return false;
+    const y = +date.slice(0, 4);
+    return !dueHolidays(agency, y, prov).has(date) && !dueHolidays(agency, y - 1, prov).has(date);
+  }
+  /** The date itself when it's a business day, otherwise the next one. */
+  function nextBusinessDay(date, agency = 'cra', prov = '') {
+    let d = date;
+    for (let i = 0; i < 20 && !isBusinessDay(d, agency, prov); i++) d = addD(d, 1);
+    return d;
+  }
+  /** The nth business day after a date (the date itself not counted). */
+  function addBusinessDays(date, n, agency = 'cra', prov = '') {
+    let d = date;
+    for (let i = 0; i < n;) { d = addD(d, 1); if (isBusinessDay(d, agency, prov)) i++; }
+    return d;
   }
 
-  /** The remitting period a bank or CRA asks for, as YYYY-MM: the month employees were paid,
-      or the last month of the quarter for quarterly remitters. Takes a period key ('2026-09' or '2026-Q3'). */
+  /** What a period key covers: { freq, from, to }, or null when it isn't a period key. */
+  function periodOfKey(key) {
+    let m;
+    const k = String(key || '');
+    if ((m = /^(\d{4})$/.exec(k))) return { freq: 'annual', from: `${m[1]}-01-01`, to: `${m[1]}-12-31` };
+    if ((m = /^(\d{4})-Q([1-4])$/.exec(k))) { const y = +m[1], q = +m[2]; return { freq: 'quarterly', from: ymd(y, q * 3 - 2, 1), to: monthEnd(y, q * 3) }; }
+    if ((m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(k))) return { freq: 'monthly', from: ymd(+m[1], +m[2], 1), to: monthEnd(+m[1], +m[2]) };
+    if ((m = /^(\d{4})-(0[1-9]|1[0-2])-H([12])$/.exec(k))) { const y = +m[1], mo = +m[2]; return { freq: 'accel1', from: ymd(y, mo, m[3] === '1' ? 1 : 16), to: m[3] === '1' ? ymd(y, mo, 15) : monthEnd(y, mo) }; }
+    if ((m = /^(\d{4})-(0[1-9]|1[0-2])-W([1-4])$/.exec(k))) { const y = +m[1], mo = +m[2], w = WEEKS[+m[3] - 1]; return { freq: 'accel2', from: ymd(y, mo, w[0]), to: w[1] === 31 ? monthEnd(y, mo) : ymd(y, mo, w[1]) }; }
+    return null;
+  }
+  /** When a period's remittance is due, moved off weekends and the agency's holidays. */
+  function remitDueFor(key, agency = 'cra', prov = '') {
+    const p = periodOfKey(key);
+    if (!p) return '';
+    const [y, m] = p.to.split('-').map(Number), [ny, nm] = nextMonth(y, m);
+    if (p.freq === 'accel2') return addBusinessDays(p.to, 3, agency, prov);
+    if (p.freq === 'accel1') return nextBusinessDay(p.to.slice(8) === '15' ? ymd(y, m, 25) : ymd(ny, nm, 10), agency, prov);
+    return nextBusinessDay(ymd(ny, nm, 15), agency, prov);
+  }
+  /** The period key a pay date falls in, for a remitting frequency. */
+  function remitKey(payDate, freq = 'monthly') {
+    const y = payDate.slice(0, 4), m = +payDate.slice(5, 7), d = +payDate.slice(8, 10), ym = payDate.slice(0, 7);
+    if (freq === 'annual') return y;
+    if (freq === 'quarterly') return `${y}-Q${Math.ceil(m / 3)}`;
+    if (freq === 'accel1') return `${ym}-H${d <= 15 ? 1 : 2}`;
+    if (freq === 'accel2') return `${ym}-W${Math.min(4, Math.ceil(d / 7))}`;
+    return ym;
+  }
+  /** The period a pay date's deductions are remitted in, with its due date.
+      paidKeys: periods that already have a payment recorded for this agency. After a change of frequency, a pay date
+      inside a period that was paid under the old frequency stays in that period, so the payment still matches it. */
+  function remitPeriodFor(payDate, freq = 'monthly', agency = 'cra', prov = '', paidKeys = []) {
+    let key = remitKey(payDate, freq);
+    if (!paidKeys.includes(key)) {
+      const old = paidKeys.filter(k => { const p = periodOfKey(k); return p && p.freq !== freq && p.from <= payDate && payDate <= p.to; })
+        .sort((a, b) => periodOfKey(a).to.localeCompare(periodOfKey(b).to))[0]; // the one ending soonest (the shortest)
+      if (old) key = old;
+    }
+    const p = periodOfKey(key);
+    return { key, freq: p.freq, from: p.from, to: p.to, due: remitDueFor(key, agency, prov) };
+  }
+  // The due date for a pay date's deductions (regular remitters: the 15th of the next month, moved off a weekend or holiday).
+  function remittanceDue(payDate, freq = 'monthly', agency = 'cra', prov = '') {
+    return remitDueFor(remitKey(payDate, freq), agency, prov);
+  }
+
+  /** The remitting period a bank or CRA asks for: YYYY-MM for monthly, quarterly and annual remitters (the month
+      employees were paid, or the period's last month), and the period's end date YYYY-MM-DD for accelerated remitters. */
   function remitPeriodEnd(key) {
-    const q = /^(\d{4})-Q([1-4])$/.exec(key || '');
-    return q ? `${q[1]}-${String(q[2] * 3).padStart(2, '0')}` : String(key || '').slice(0, 7);
+    const p = periodOfKey(key);
+    if (!p) return String(key || '').slice(0, 7);
+    return p.freq === 'accel1' || p.freq === 'accel2' ? p.to : p.to.slice(0, 7);
   }
   /** Account number check for paying online: '' when fine, or what's wrong. CRA: 123456789RP0001; Revenu Québec: 1234567890RS0001. */
   function remitAccountProblem(agency, acct) {
@@ -353,12 +465,9 @@
     for (let i = 0; i < 9; i++) { let n = +d[i]; if (i % 2 === 1) { n *= 2; if (n > 9) n -= 9; } sum += n; }
     return sum % 10 === 0 && d[0] !== '0' && d[0] !== '8' ? '' : 'invalid';
   }
-  /** Slips are due the last day of February; on a weekend, the next Monday. */
+  /** Slips are due the last day of February; on a weekend or CRA public holiday, the next business day. */
   function slipsDue(year) {
-    const d = new Date(Date.UTC(year + 1, 2, 0)); // last day of February
-    const dow = d.getUTCDay();
-    if (dow === 6) d.setUTCDate(d.getUTCDate() + 2); else if (dow === 0) d.setUTCDate(d.getUTCDate() + 1);
-    return d.toISOString().slice(0, 10);
+    return nextBusinessDay(iso(new Date(Date.UTC(year + 1, 2, 0))), 'cra'); // last day of February
   }
   /** Health Services Fund rate (Revenu Québec's table). `payroll` is TOTAL payroll: every province,
       plus the payroll of associated employers. The rate is then applied to Quebec payroll only. */
@@ -413,7 +522,7 @@
       add(b.er, 'ei', has(o.erEi) ? o.erEi : r2(num(o.ei) * 1.4)); add(b.er, 'qpip', o.erQpip);
     }
     for (const r of payruns) {
-      if (String(r.payDate).slice(0, 4) !== String(year)) continue;
+      if (r.void || String(r.payDate).slice(0, 4) !== String(year)) continue; // a void pay run isn't on the slips
       for (const l of r.lines || []) {
         const e = empById.get(l.employeeId) || { id: l.employeeId };
         const b = bucket(l.employeeId, l.prov || e.prov, String(r.payDate));
@@ -672,6 +781,18 @@
     return { rate, years, known: true, next: (steps.find(([y]) => y > years) || null) };
   }
 
+  /** What vacation pay is worked out on: regular, holiday, overtime and other pay, and a bonus only when it's
+      non-discretionary (promised, or tied to hours, sales or results). Ontario ESA: "wages" include those bonuses. */
+  const vacationBase = p => r2(num(p.regular) + num(p.holiday) + num(p.overtime) + num(p.other) + (p.bonusVac ? num(p.bonus) : 0));
+  /** This pay's earnings for a holiday falling in it (Ontario): regular pay plus the vacation pay paid with it. Vacation
+      pay added to every pay ('each') is on regular, overtime, other pay and a non-discretionary bonus (not holiday pay,
+      which depends on this); vacation pay set aside ('accrue') counts when it's paid out. Elsewhere: regular pay only. */
+  function holidayCurrentEarnings({ prov, vacMode, vacRate, vacPay, ...p }) {
+    if (prov !== 'ON') return r2(num(p.regular));
+    const vac = vacMode === 'accrue' ? num(vacPay) : vacMode === 'each' ? r2(vacationBase({ ...p, holiday: 0 }) * num(vacRate) / 100) : 0;
+    return r2(num(p.regular) + vac);
+  }
+
   /* ---------- Record of Employment (ROE) ----------
      Service Canada's ROE: insurable earnings for the last pay periods (block 15C) and the insurable hours in them
      (block 15A). How many pay periods depends on how often the employee was paid. */
@@ -714,13 +835,188 @@
       vacation, outside, due: addD(finalPeriodEnd, 5),
     };
   }
+  /**
+   * The pays that belong on a new ROE: only those after the employee's previous ROE. An ROE covers the pay since the
+   * last one was issued (the previous ROE's final pay period ending date, block 12), so earlier pay isn't counted twice.
+   * lines: as for roe(); roes: the employee's saved ROEs ({ finalEnd }). Returns { lines, since } (since: the previous block 12, or '').
+   */
+  function roeSince(lines, roes) {
+    const since = (roes || []).map(r => String((r && r.finalEnd) || '')).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().pop() || '';
+    return { since, lines: since ? lines.filter(l => String(l.to || l.payDate) > since) : lines.slice() };
+  }
   const ROE_REASONS = [
     ['A', 'Shortage of work / end of contract or season'], ['B', 'Strike or lockout'], ['D', 'Illness or injury'], ['E', 'Quit'],
     ['F', 'Maternity'], ['G', 'Retirement'], ['H', 'Work-sharing'], ['J', 'Apprentice training'], ['K', 'Other'],
     ['M', 'Dismissal or suspension'], ['N', 'Leave of absence'], ['P', 'Parental'], ['Z', 'Compassionate care / family caregiver'],
   ];
 
-  return { calc, remitSplit, remittanceDue, remitPeriodEnd, remitAccountProblem, tableFor, BENEFIT_KINDS, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
+  /* ---------- overtime ----------
+     Weekly overtime threshold under each province's employment standards (hours in a work week after which
+     overtime at 1.5 times the regular rate is owed). Several provinces also have a daily rule (overtime after
+     8 hours in a day): Sumlora works out the weekly rule only and says to check the daily one.
+     The employer can set its own threshold (an agreement, a federal workplace, a higher rule). */
+  const OVERTIME = {
+    ON: { weekly: 44 }, QC: { weekly: 40 }, NB: { weekly: 44 }, NS: { weekly: 48 }, PE: { weekly: 48 }, NL: { weekly: 40 },
+    BC: { weekly: 40, daily: 8 }, AB: { weekly: 44, daily: 8 }, MB: { weekly: 40, daily: 8 }, SK: { weekly: 40, daily: 8 },
+    YT: { weekly: 40, daily: 8 }, NT: { weekly: 40, daily: 8 }, NU: { weekly: 40, daily: 8 },
+  };
+  /** The overtime rule for a province: { weekly, daily, custom }. `override` (hours a week) wins when it's a number above 0. */
+  function overtimeRule(prov, override) {
+    const base = OVERTIME[prov] || { weekly: 40 };
+    const o = Number(override);
+    if (override !== '' && override !== null && override !== undefined && Number.isFinite(o) && o > 0) return { ...base, weekly: o, custom: true };
+    return { ...base, custom: false };
+  }
+  /** The pay period cut into work weeks of 7 days from its first day (the last one can be shorter): [{ from, to, days }]. */
+  function workWeeks(from, to) {
+    if (!from || !to || from > to) return [];
+    const out = [];
+    for (let a = from; a <= to; a = addD(a, 7)) {
+      const b = addD(a, 6) < to ? addD(a, 6) : to;
+      out.push({ from: a, to: b, days: daysBetween(a, b) + 1 });
+      if (out.length > 6) break;
+    }
+    return out;
+  }
+  /** Total hours spread over the weeks by their number of days, to the hundredth (the last week takes what's left). */
+  function splitHours(total, weeks) {
+    const days = weeks.reduce((t, w) => t + w.days, 0);
+    if (!weeks.length || !days) return [];
+    let left = r2(num(total));
+    return weeks.map((w, i) => { if (i === weeks.length - 1) return r2(left); const h = r2(num(total) * w.days / days); left = r2(left - h); return h; });
+  }
+  /*
+   * overtime({ weekHours: [hours in each work week], threshold, rate })
+   *   Hours over the threshold in each week are overtime, paid at 1.5 times the regular rate.
+   * Returns { hours, regularHours, overtimeHours, byWeek: [overtime hours], overtimePay, otRate }.
+   */
+  function overtime({ weekHours = [], threshold = 44, rate = 0 }) {
+    const t = num(threshold) > 0 ? num(threshold) : 44;
+    const byWeek = weekHours.map(h => r2(pos(num(h) - t)));
+    const hours = r2(weekHours.reduce((s, h) => s + num(h), 0)), ot = r2(byWeek.reduce((s, h) => s + h, 0));
+    const otRate = r2(num(rate) * 1.5);
+    return { hours, regularHours: r2(hours - ot), overtimeHours: ot, byWeek, otRate, overtimePay: r2(ot * num(rate) * 1.5) };
+  }
+
+  /* ---------- Ontario Employer Health Tax (EHT) ----------
+     Employer Health Tax Act (Ontario). The rate is set by total Ontario remuneration for the year (before the
+     exemption) and applies to remuneration above the exemption. Eligible private-sector employers get a
+     $1,000,000 exemption (until 2028; indexed from 2029), shared by associated employers, and lost when the
+     associated group's Ontario payroll is over $5,000,000. Since 2021, employers with more than $1,200,000 of
+     Ontario remuneration pay monthly instalments, due the 15th of the next month; the annual return and any
+     balance are due March 15. Ontario Ministry of Finance, Employer Health Tax (checked October 2026): an instalment due
+     on a weekend or holiday is due the next business day. Ontario doesn't say the same for the annual return, so its
+     March 15 is kept as it is. */
+  const EHT = {
+    exemption: 1000000, instalments: 1200000, groupLimit: 5000000,
+    rates: [[200000, 0.0098], [230000, 0.01101], [260000, 0.01223], [290000, 0.01344], [320000, 0.01465], [350000, 0.01586], [380000, 0.01708], [400000, 0.01829], [Infinity, 0.0195]],
+  };
+  /** The EHT rate (a fraction) for a year's total Ontario remuneration. */
+  const ehtRate = total => EHT.rates.find(([max]) => num(total) <= max)[1];
+  /** Ontario remuneration month by month for a year: every Ontario pay (gross plus taxable benefits, T4 box 14), by pay date.
+      Amounts paid before Sumlora (opening year-to-date) count in January. Void pay runs are left out. */
+  function ontarioRemuneration({ year, employees = [], payruns = [] }) {
+    const months = Array(12).fill(0);
+    for (const e of employees) {
+      const o = e.openingYtd;
+      if (o && Number(o.year) === Number(year) && (o.prov || e.prov) === 'ON') months[0] = r2(months[0] + num(o.gross));
+    }
+    const emp = new Map(employees.map(e => [e.id, e]));
+    for (const r of payruns) {
+      if (r.void || String(r.payDate).slice(0, 4) !== String(year)) continue;
+      const m = +String(r.payDate).slice(5, 7) - 1;
+      for (const l of r.lines || []) {
+        if ((l.prov || (emp.get(l.employeeId) || {}).prov) !== 'ON') continue;
+        months[m] = r2(months[m] + num(l.gross) + Object.values(l.benefits || {}).reduce((t, v) => t + num(v), 0));
+      }
+    }
+    return months;
+  }
+  /*
+   * eht({ year, months: [12 monthly Ontario remuneration amounts], eligible, exemption, groupPayroll })
+   *   eligible: the employer can claim the exemption; exemption: its share (associated employers split $1,000,000);
+   *   groupPayroll: Ontario payroll of associated employers (no exemption when the group is over $5,000,000).
+   * Returns { total, rate, exemption, taxable, tax, instalmentsRequired, instalments, balance, months: [{ month,
+   *   remuneration, cumulative, taxable, accrual, instalment, due }], due, notes }. The rate is the one for the
+   *   year's total so far: during the year it can still go up, and the annual return settles the difference.
+   */
+  function eht({ year, months = [], eligible = true, exemption, groupPayroll = 0 }) {
+    const notes = [];
+    const ms = Array.from({ length: 12 }, (_, i) => r2(num(months[i])));
+    const total = r2(ms.reduce((t, v) => t + v, 0));
+    let ex = 0;
+    if (eligible) {
+      ex = exemption === undefined || exemption === null || exemption === '' ? EHT.exemption : Math.min(EHT.exemption, pos(num(exemption)));
+      if (r2(total + num(groupPayroll)) > EHT.groupLimit) { ex = 0; notes.push('group'); }
+    }
+    const rate = ehtRate(total), taxable = r2(pos(total - ex)), tax = r2(taxable * rate);
+    const instalmentsRequired = total > EHT.instalments;
+    // Accrual: the tax on what went above the exemption that month. Instalments start in the month cumulative
+    // remuneration goes over $1,200,000: the first covers everything above the exemption so far, then each month's.
+    let cum = 0, before = 0, inst = 0;
+    const out = ms.map((v, i) => {
+      cum = r2(cum + v);
+      const tx = r2(pos(cum - ex)), add = r2(tx - before);
+      before = tx;
+      const accrual = r2(add * rate);
+      const instalment = instalmentsRequired && cum > EHT.instalments ? r2(tx * rate - inst) : 0;
+      inst = r2(inst + instalment);
+      const ny = i === 11 ? Number(year) + 1 : Number(year), nm = i === 11 ? 1 : i + 2;
+      // Ontario: an instalment due on a weekend or holiday is due the next business day.
+      return { month: `${year}-${String(i + 1).padStart(2, '0')}`, remuneration: v, cumulative: cum, taxable: add, accrual, instalment, due: nextBusinessDay(`${ny}-${String(nm).padStart(2, '0')}-15`, 'on') };
+    });
+    // Rounding: the accruals add up to the year's tax exactly (December takes the difference).
+    out[11].accrual = r2(tax - out.slice(0, 11).reduce((t, m) => t + m.accrual, 0));
+    return { year: Number(year), total, rate, ratePct: r2(rate * 100 * 1000) / 1000, exemption: ex, taxable, tax, instalmentsRequired, instalments: inst, balance: r2(tax - inst), months: out, due: `${Number(year) + 1}-03-15`, notes };
+  }
+
+  /* ---------- workers' compensation (WSIB in Ontario) ----------
+     Premium = insurable earnings × the rate group's rate per $100, with each worker's insurable earnings
+     capped at the year's maximum (WSIB 2026: $121,700). Reporting and payment: monthly (the last day of the
+     next month), quarterly (the last day of the month after the quarter) or annually (April 30 of the next year).
+     Other provinces' boards work the same way with their own rates and maximums. */
+  const WSIB_MAX = { 2026: 121700 };
+  /** The premium on one pay: { insurable (capped), premium }. `ytd` is the worker's insurable earnings so far this year. */
+  function wsibPremium({ earnings, ytd = 0, max, rate }) {
+    const cap = num(max) > 0 ? num(max) : Infinity;
+    const insurable = r2(Math.max(0, Math.min(num(ytd) + num(earnings), cap) - Math.min(num(ytd), cap)));
+    return { insurable, premium: r2(insurable * num(rate) / 100) };
+  }
+  const lastDay = (y, m) => ymd(y, m, new Date(Date.UTC(y, m, 0)).getUTCDate());
+  /** The WSIB reporting period a pay date falls in: { key, from, to, due }. */
+  function wsibPeriod(date, freq) {
+    const y = +date.slice(0, 4), m = +date.slice(5, 7);
+    if (freq === 'annual') return { key: `${y}`, from: `${y}-01-01`, to: `${y}-12-31`, due: `${y + 1}-04-30` };
+    if (freq === 'monthly') return { key: date.slice(0, 7), from: ymd(y, m, 1), to: lastDay(y, m), due: m === 12 ? lastDay(y + 1, 1) : lastDay(y, m + 1) };
+    const q = Math.ceil(m / 3), end = q * 3;
+    return { key: `${y}-Q${q}`, from: ymd(y, end - 2, 1), to: lastDay(y, end), due: end === 12 ? lastDay(y + 1, 1) : lastDay(y, end + 1) };
+  }
+  /** The WSIB report: for each period, insurable earnings and premium by rate group. `lines`: [{ payDate, group, insurable, premium }]. */
+  function wsibReport(lines, freq) {
+    const m = new Map();
+    for (const l of lines) {
+      const p = wsibPeriod(l.payDate, freq);
+      if (!m.has(p.key)) m.set(p.key, { ...p, insurable: 0, premium: 0, groups: {} });
+      const x = m.get(p.key), g = x.groups[l.group] = x.groups[l.group] || { insurable: 0, premium: 0 };
+      g.insurable = r2(g.insurable + num(l.insurable)); g.premium = r2(g.premium + num(l.premium));
+      x.insurable = r2(x.insurable + num(l.insurable)); x.premium = r2(x.premium + num(l.premium));
+    }
+    return [...m.values()].sort((a, b) => b.from.localeCompare(a.from));
+  }
+
+  /* ---------- voiding a pay run ---------- */
+  /** The reversing entry's lines: every debit becomes a credit and the other way round. */
+  const reverseLines = lines => (lines || []).map(l => ({ ...l, debit: num(l.credit), credit: num(l.debit) }));
+  /** Pay runs after `run` in the same year that pay any of its employees: their year-to-date amounts included it. */
+  function laterRuns(run, payruns) {
+    const ids = new Set((run.lines || []).map(l => l.employeeId)), y = String(run.payDate).slice(0, 4);
+    const after = r => r.payDate > run.payDate || (r.payDate === run.payDate && (r.created || 0) > (run.created || 0));
+    return payruns.filter(r => r !== run && r.id !== run.id && !r.void && String(r.payDate).slice(0, 4) === y && after(r) && (r.lines || []).some(l => ids.has(l.employeeId)))
+      .sort((a, b) => a.payDate.localeCompare(b.payDate));
+  }
+
+  return { calc, remitSplit, remittanceDue, remitPeriodEnd, remitKey, remitPeriodFor, remitDueFor, periodOfKey, REMIT_FREQS, REMIT_FREQ_LABEL, isBusinessDay, nextBusinessDay, addBusinessDays, dueHolidays, remitAccountProblem, tableFor, BENEFIT_KINDS, FREQUENCIES, FREQ_LABEL, PROVINCES, EMPLOYEE_ITEMS, EMPLOYER_ITEMS, TABLES, r2,
     yearEnd, sinProblem, slipsDue, hsfRateFor, YEAR_LIMITS,
-    holidays, holidaysBetween, holidayWindow, holidayPay, vacationRate, serviceYears, roe, roePeriods, ROE_PERIODS, ROE_REASONS, addDays: addD, daysBetween };
+    holidays, holidaysBetween, holidayWindow, holidayPay, vacationRate, serviceYears, vacationBase, holidayCurrentEarnings, roe, roeSince, roePeriods, ROE_PERIODS, ROE_REASONS, addDays: addD, daysBetween,
+    OVERTIME, overtimeRule, workWeeks, splitHours, overtime, EHT, ehtRate, ontarioRemuneration, eht, WSIB_MAX, wsibPremium, wsibPeriod, wsibReport, reverseLines, laterRuns };
 });

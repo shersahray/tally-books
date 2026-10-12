@@ -109,8 +109,10 @@
    * the source deductions those runs will owe on their remittance due dates, and remittances already owed.
    * schedules: [{ freq, last: { payDate, net, cra, rq } }]   (cra / rq: deductions plus employer share owed)
    * unpaid: [{ agency, key, label, due, amount }]   remitFreq: 'monthly' | 'quarterly'
+   * periodOf(date, agency) → { key, due }: the app's own remitting periods (payroll-calc.js: accelerated remitters,
+   * a separate Revenu Québec frequency, due dates moved off weekends and holidays); remitFreq is used without it.
    */
-  function payrollItems({ schedules = [], unpaid = [], remitFreq = 'monthly', today, end }) {
+  function payrollItems({ schedules = [], unpaid = [], remitFreq = 'monthly', periodOf, today, end }) {
     const out = [], remit = new Map();
     for (const s of schedules) {
       const l = s && s.last;
@@ -119,9 +121,9 @@
       while ((d = nextPayDate(s.freq, d)) <= end && n++ < MAX_DATES) {
         if (d < today) continue; // a missed pay date isn't guessed at
         if (r2(l.net) > 0) out.push({ key: `pay:${s.freq}:${d}`, date: d, amount: -r2(l.net), source: 'payroll', label: s.freq, est: true });
-        const p = remitPeriod(d, remitFreq);
         for (const ag of ['cra', 'rq']) {
           if (!(r2(l[ag]) > 0)) continue;
+          const p = periodOf ? periodOf(d, ag) : remitPeriod(d, remitFreq);
           const k = `${ag}|${p.key}`, x = remit.get(k) || { agency: ag, key: p.key, due: p.due, amount: 0 };
           x.amount = r2(x.amount + r2(l[ag])); remit.set(k, x);
         }

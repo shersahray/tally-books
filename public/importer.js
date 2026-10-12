@@ -1,6 +1,7 @@
 /*
  * Import from a spreadsheet (CSV or Excel .xlsx), like QuickBooks Online's Import data: customers, vendors,
- * products and services, the chart of accounts, invoices, bills and journal entries.
+ * products and services, inventory items, the chart of accounts, invoices, sales receipts, credit notes, bills,
+ * vendor credits and journal entries. Transactions can carry tags, and a class on each line.
  *
  * This file is the pure part: guessing which column is which (English and French headings), reading
  * dates, amounts and tax codes, checking every row against the books (missing name, bad date, unknown
@@ -21,7 +22,16 @@
   const headKey = s => fold(s).replace(/\([^)]*\)/g, ' ').replace(/[’‘`]/g, "'").replace(/\*+/g, ' ').replace(/[^a-z0-9#/' ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
   /* ---------- what can be imported, and the columns of each ---------- */
-  const TYPES = ['customers', 'vendors', 'items', 'accounts', 'invoices', 'bills', 'journal'];
+  const TYPES = ['customers', 'vendors', 'items', 'inventory', 'accounts', 'invoices', 'sreceipts', 'credits', 'bills', 'vcredits', 'journal'];
+  // The kinds of documents: what each is saved as, whether it's a sale, and the prefix of numbers given to ones with none.
+  const DOCS = {
+    invoices: { kind: 'invoice', sale: true, due: true, prefix: '' },
+    sreceipts: { kind: 'sreceipt', sale: true, prefix: 'SR-' },
+    credits: { kind: 'credit', sale: true, prefix: 'CN-' },
+    bills: { kind: 'bill', sale: false, due: true },
+    vcredits: { kind: 'vcredit', sale: false },
+  };
+  const isDoc = t => !!DOCS[t];
   // key, English heading, French heading, other headings it goes by, required
   const F = (key, en, fr, syn, req) => ({ key, en, fr, syn, req: !!req });
   const contactFields = cust => [
@@ -37,14 +47,33 @@
     F('taxCode', 'Default tax code', 'Code de taxe par défaut', ['tax code', 'sales tax', 'default sales tax', 'tax', 'code de taxe', 'taxe']),
     F('notes', 'Notes', 'Notes', ['note', 'remarques', 'commentaires', 'comments']),
   ];
-  const docFields = sale => [
-    F('number', sale ? 'Invoice no.' : 'Bill no.', 'No de facture', sale
-      ? ['invoice no', 'invoiceno', 'invoice number', 'invoice #', 'invoice', 'no', 'number', 'num', 'ref', 'ref no', 'reference', 'numero de facture', 'no de facture', 'n de facture', 'facture', 'numero']
-      : ['bill no', 'billno', 'bill number', 'bill #', 'ref no', 'refno', 'ref', 'reference', 'no', 'number', 'num', 'numero de facture', 'no de facture', 'n de facture', 'facture', 'numero', 'no de reference']),
+  // Tags (several, with commas or semicolons between) and the class of each line, on every kind of transaction.
+  const extraFields = () => [
+    F('cls', 'Class', 'Catégorie analytique', ['class', 'line class', 'itemclass', 'item class', 'class name', 'location', 'department', 'division', 'categorie analytique', 'classe', 'emplacement', 'departement']),
+    F('tags', 'Tags', 'Étiquettes', ['tags', 'tag', 'etiquettes', 'etiquette', 'mots cles']),
+  ];
+  const NUM_HEAD = {
+    invoices: ['Invoice no.', 'No de facture', ['invoice no', 'invoiceno', 'invoice number', 'invoice #', 'invoice', 'no', 'number', 'num', 'ref', 'ref no', 'reference', 'numero de facture', 'no de facture', 'n de facture', 'facture', 'numero']],
+    sreceipts: ['Sales receipt no.', 'No de reçu de vente', ['sales receipt no', 'salesreceiptno', 'sales receipt number', 'sales receipt #', 'receipt no', 'receipt number', 'no', 'number', 'num', 'ref', 'ref no', 'reference', 'numero de recu', 'no de recu', 'no de recu de vente', 'numero']],
+    credits: ['Credit note no.', 'No de note de crédit', ['credit note no', 'credit memo no', 'creditmemono', 'credit memo number', 'credit note number', 'credit no', 'no', 'number', 'num', 'ref', 'ref no', 'reference', 'no de note de credit', 'numero de note de credit', 'numero']],
+    bills: ['Bill no.', 'No de facture', ['bill no', 'billno', 'bill number', 'bill #', 'ref no', 'refno', 'ref', 'reference', 'no', 'number', 'num', 'numero de facture', 'no de facture', 'n de facture', 'facture', 'numero', 'no de reference']],
+    vcredits: ['Credit no.', 'No de crédit', ['vendor credit no', 'vendorcreditno', 'vendor credit number', 'credit no', 'credit number', 'ref no', 'refno', 'ref', 'reference', 'no', 'number', 'num', 'no de credit', 'numero de credit', 'numero']],
+  };
+  const DATE_HEAD = {
+    invoices: ['Invoice date', 'Date de facture', ['invoice date', 'invoicedate']], sreceipts: ['Date', 'Date', ['sales receipt date', 'salesreceiptdate', 'receipt date']],
+    credits: ['Date', 'Date', ['credit memo date', 'creditmemodate', 'credit note date', 'credit date']], bills: ['Bill date', 'Date de facture', ['bill date', 'billdate']],
+    vcredits: ['Date', 'Date', ['vendor credit date', 'vendorcreditdate', 'credit date']],
+  };
+  const docFields = type => {
+    const { sale, due } = DOCS[type], [nEn, nFr, nSyn] = NUM_HEAD[type], [dEn, dFr, dSyn] = DATE_HEAD[type];
+    return [
+    F('number', nEn, nFr, nSyn),
     F('contact', sale ? 'Customer' : 'Vendor', sale ? 'Client' : 'Fournisseur', sale ? ['customer', 'customer name', 'client', 'nom du client', 'name', 'nom', 'display name']
       : ['vendor', 'vendor name', 'supplier', 'supplier name', 'fournisseur', 'nom du fournisseur', 'payee', 'name', 'nom'], true),
-    F('date', sale ? 'Invoice date' : 'Bill date', 'Date de facture', [sale ? 'invoice date' : 'bill date', sale ? 'invoicedate' : 'billdate', 'date', 'txn date', 'transaction date', 'date de la facture', 'date de transaction'], true),
-    F('due', 'Due date', 'Date d’échéance', ['due date', 'duedate', 'due', "date d'echeance", 'echeance']),
+    F('date', dEn, dFr, [...dSyn, 'date', 'txn date', 'transaction date', 'date de la facture', 'date de transaction'], true),
+    ...(due ? [F('due', 'Due date', 'Date d’échéance', ['due date', 'duedate', 'due', "date d'echeance", 'echeance'])] : []),
+    // A sales receipt is paid on the spot: the bank or cash account the money went into.
+    ...(type === 'sreceipts' ? [F('bank', 'Deposit to', 'Déposer dans', ['deposit to', 'deposit to account', 'deposittoaccount', 'deposittoaccountname', 'deposit to account name', 'deposit account', 'bank account', 'deposer dans', 'compte de depot', 'compte bancaire'])] : []),
     F('item', 'Product/service', 'Produit/service', ['product/service', 'item', 'product', 'service', 'item name', 'produit', 'article']),
     F('desc', 'Description', 'Description', ['description', 'item description', 'itemdescription', 'line description', 'desc', 'details', 'detail', 'libelle', 'linedescription', 'line description']),
     F('qty', 'Qty', 'Qté', ['qty', 'quantity', 'itemquantity', 'item quantity', 'quantite', 'qte']),
@@ -54,8 +83,10 @@
     F('account', sale ? 'Income account' : 'Expense account', sale ? 'Compte de revenus' : 'Compte de dépenses', sale ? ['income account', 'account', 'revenue account', 'compte', 'compte de produits']
       : ['expense account', 'account', 'category', 'expense category', 'compte', 'categorie', 'compte de charges']),
     F('taxCode', 'Tax code', 'Code de taxe', ['tax code', 'item tax code', 'itemtaxcode', 'linetaxcode', 'line tax code', 'taxcode', 'tax', 'sales tax', 'taxe', 'taxes']),
-    F('memo', sale ? 'Message' : 'Memo', sale ? 'Message' : 'Note', sale ? ['message', 'memo', 'message on invoice', 'message displayed on invoice', 'customer memo', 'note', 'notes'] : ['memo', 'note', 'notes', 'message', 'memo de la facture']),
-  ];
+    ...extraFields(),
+    F('memo', sale ? 'Message' : 'Memo', sale ? 'Message' : 'Note', sale ? ['message', 'memo', 'message on invoice', 'message displayed on invoice', 'message on sales receipt', 'message on credit memo', 'customer memo', 'note', 'notes'] : ['memo', 'note', 'notes', 'message', 'memo de la facture']),
+    ];
+  };
   const FIELDS = {
     customers: contactFields(true),
     vendors: contactFields(false),
@@ -70,6 +101,22 @@
       F('expenseAccount', 'Expense account', 'Compte de dépenses', ['expense account', 'purchase account', 'compte de charges', "compte d'achats"]),
       F('taxCode', 'Tax code', 'Code de taxe', ['tax code', 'sales tax code', 'sales tax', 'tax', 'taxable', 'taxe']),
     ],
+    // Inventory items (counted in stock), with the quantity on hand on a date, like QuickBooks Online's product import.
+    inventory: [
+      F('name', 'Name', 'Nom', ['name', 'product/service name', 'product/service', 'item', 'item name', 'product', 'produit/service', 'produit', 'article', 'nom du produit'], true),
+      F('sku', 'SKU', 'UGS', ['sku', 'item code', 'product code', 'code', 'code de produit']),
+      F('desc', 'Description', 'Description', ['description', 'sales description', 'salesdescription', 'desc', 'description des ventes']),
+      F('price', 'Sales price', 'Prix de vente', ['sales price', 'sales price/rate', 'price', 'rate', 'unit price', 'prix', 'tarif']),
+      F('cost', 'Cost', 'Coût', ['cost', 'purchase cost', 'unit cost', 'cout', "cout d'achat", "prix d'achat", 'cout unitaire']),
+      F('qty', 'Quantity on hand', 'Quantité en main', ['quantity on hand', 'qty on hand', 'qtyonhand', 'on hand', 'quantity', 'qty', 'quantite en main', 'quantite', 'qte en main', 'qte']),
+      F('value', 'Total value', 'Valeur totale', ['total value', 'value', 'inventory value', 'stock value', 'valeur totale', 'valeur', 'valeur du stock']),
+      F('asOf', 'As of', 'Au', ['as of', 'as of date', 'quantity as of date', 'qty as of date', 'inventory start date', 'invstartdate', 'start date', 'date', 'date de depart', 'en date du']),
+      F('incomeAccount', 'Income account', 'Compte de revenus', ['income account', 'revenue account', 'compte de produits']),
+      F('assetAccount', 'Inventory asset account', 'Compte d’actif de stock', ['inventory asset account', 'inventoryassetaccount', 'asset account', 'inventory account', "compte d'actif", 'compte de stock', 'compte de stocks']),
+      F('cogsAccount', 'Cost of goods sold account', 'Compte du coût des marchandises vendues', ['cost of goods sold account', 'cogs account', 'cogs', 'expense account', 'cost of sales account', 'compte du cout des marchandises vendues', 'compte cmv', 'compte de charges']),
+      F('reorder', 'Reorder point', 'Point de commande', ['reorder point', 'reorder', 'reorder level', 'point de commande', 'seuil de commande']),
+      F('taxCode', 'Tax code', 'Code de taxe', ['tax code', 'sales tax code', 'sales tax', 'tax', 'taxable', 'taxe']),
+    ],
     accounts: [
       F('number', 'Number', 'Numéro', ['account number', 'number', 'code', 'account code', 'account #', 'acct no', 'no', '#', 'numero de compte', 'n de compte']),
       F('name', 'Name', 'Nom', ['account name', 'name', 'account', 'full name', 'nom du compte', 'compte'], true),
@@ -77,8 +124,11 @@
       F('detail', 'Detail type', 'Type de détail', ['detail type', 'detail', 'sub type', 'subtype', 'type de detail']),
       F('desc', 'Description', 'Description', ['description', 'desc']),
     ],
-    invoices: docFields(true),
-    bills: docFields(false),
+    invoices: docFields('invoices'),
+    sreceipts: docFields('sreceipts'),
+    credits: docFields('credits'),
+    bills: docFields('bills'),
+    vcredits: docFields('vcredits'),
     journal: [
       F('number', 'Journal no.', 'No d’écriture', ['journal no', 'journalno', 'journal number', 'journal #', 'je no', 'je #', 'entry no', 'entry number', 'no', 'number', 'num', 'ref', 'reference', "no d'ecriture", "numero d'ecriture", "numero de l'ecriture", 'numero']),
       F('date', 'Date', 'Date', ['journal date', 'journaldate', 'date', 'entry date', "date de l'ecriture", "date d'ecriture"], true),
@@ -88,6 +138,7 @@
       F('amount', 'Amount', 'Montant', ['amount']),
       F('desc', 'Description', 'Description', ['description', 'line description', 'memo', 'memo/description', 'description de la ligne', 'libelle']),
       F('name', 'Name', 'Nom', ['name', 'customer/vendor', 'customer', 'vendor', 'client', 'fournisseur', 'contact', 'client/fournisseur']),
+      ...extraFields(),
       F('memo', 'Journal memo', 'Mémo de l’écriture', ['journal memo', 'entry memo', "memo de l'ecriture"]),
     ],
   };
@@ -124,7 +175,7 @@
   /** Fields that must have a column before rows can be checked. */
   function missingFields(type, map) {
     const out = fieldsOf(type).filter(f => f.req && map[f.key] === undefined).map(f => f.key);
-    if ((type === 'invoices' || type === 'bills') && ['rate', 'amount'].every(k => map[k] === undefined)) out.push('amount');
+    if (isDoc(type) && ['rate', 'amount'].every(k => map[k] === undefined)) out.push('amount');
     if (type === 'journal' && ['debit', 'credit', 'amount'].every(k => map[k] === undefined)) out.push('debit');
     return out;
   }
@@ -137,20 +188,28 @@
       ['Rogers', '', '1-888-555-0199', '', '', '', '', '', '', 'Phone and internet']],
     items: [['Monthly bookkeeping', 'Service', 'BK-01', 'Bookkeeping, one month', '450', '', 'Sales', '', 'HST'],
       ['Printer paper', 'Product', 'PAP-500', 'Case of 500 sheets', '12.99', '8.50', 'Sales', 'Office supplies', 'HST']],
+    inventory: [['Printer paper', 'PAP-500', 'Case of 500 sheets', '12.99', '8.50', '40', '340', '2026-09-30', 'Sales', 'Inventory', 'Cost of goods sold', '10', 'HST'],
+      ['Toner cartridge', 'TN-221', 'Black toner', '89', '52', '6', '', '2026-09-30', 'Sales', 'Inventory', 'Cost of goods sold', '2', 'HST']],
     accounts: [['1010', 'Savings', 'Bank', '', 'High-interest savings'], ['6450', 'Software subscriptions', 'Expense', '', '']],
-    invoices: [['1001', 'Maple Street Dental', '2026-09-01', '2026-10-01', '', 'Monthly bookkeeping, August', '1', '450', '450', 'Sales', 'HST', 'Thank you!'],
-      ['1001', 'Maple Street Dental', '2026-09-01', '2026-10-01', '', 'Year-end adjustments', '2', '75', '150', 'Sales', 'HST', ''],
-      ['1002', 'Acme Supplies Inc. (US)', '2026-09-03', '', '', 'Consulting', '3', '120', '360', 'Sales', 'Zero-rated', '']],
-    bills: [['H-20931', 'Hydro Ottawa', '2026-09-05', '2026-09-25', '', 'Electricity, August', '1', '180.40', '180.40', 'Utilities', 'HST', ''],
-      ['R-8841', 'Rogers', '2026-09-08', '', '', 'Internet', '1', '95', '95', 'Telephone and internet', 'HST', ''],
-      ['R-8841', 'Rogers', '2026-09-08', '', '', 'Late fee', '1', '5', '5', 'Bank charges', 'Exempt', '']],
-    journal: [['JE-1', '2026-09-30', 'Depreciation', '250', '', 'Monthly depreciation', '', 'September depreciation'],
-      ['JE-1', '2026-09-30', 'Accumulated depreciation', '', '250', 'Monthly depreciation', '', ''],
-      ['JE-2', '2026-09-30', 'Prepaid expenses', '1200', '', 'Insurance paid for the year', '', 'Reclass prepaid insurance'],
-      ['JE-2', '2026-09-30', 'Insurance', '', '1200', '', '', '']],
+    invoices: [['1001', 'Maple Street Dental', '2026-09-01', '2026-10-01', '', 'Monthly bookkeeping, August', '1', '450', '450', 'Sales', 'HST', '', '', 'Thank you!'],
+      ['1001', 'Maple Street Dental', '2026-09-01', '2026-10-01', '', 'Year-end adjustments', '2', '75', '150', 'Sales', 'HST', '', '', ''],
+      ['1002', 'Acme Supplies Inc. (US)', '2026-09-03', '', '', 'Consulting', '3', '120', '360', 'Sales', 'Zero-rated', '', '', '']],
+    sreceipts: [['SR-1001', 'Walk-in customer', '2026-09-02', 'Chequing', '', 'Printer paper', '2', '12.99', '25.98', 'Sales', 'HST', '', '', 'Thank you!'],
+      ['SR-1002', 'Maple Street Dental', '2026-09-04', 'Chequing', '', 'Rush service', '1', '75', '75', 'Sales', 'HST', '', '', '']],
+    credits: [['CN-1001', 'Maple Street Dental', '2026-09-10', '', 'Discount on August bookkeeping', '1', '50', '50', 'Sales', 'HST', '', '', 'Sorry for the delay'],
+      ['CN-1002', 'Acme Supplies Inc. (US)', '2026-09-12', '', 'Consulting hour not used', '1', '120', '120', 'Sales', 'Zero-rated', '', '', '']],
+    bills: [['H-20931', 'Hydro Ottawa', '2026-09-05', '2026-09-25', '', 'Electricity, August', '1', '180.40', '180.40', 'Utilities', 'HST', '', '', ''],
+      ['R-8841', 'Rogers', '2026-09-08', '', '', 'Internet', '1', '95', '95', 'Telephone and internet', 'HST', '', '', ''],
+      ['R-8841', 'Rogers', '2026-09-08', '', '', 'Late fee', '1', '5', '5', 'Bank charges', 'Exempt', '', '', '']],
+    vcredits: [['RC-77', 'Rogers', '2026-09-15', '', 'Credit for an outage', '1', '20', '20', 'Telephone and internet', 'HST', '', '', ''],
+      ['HC-310', 'Hydro Ottawa', '2026-09-20', '', 'Billing correction', '1', '12.40', '12.40', 'Utilities', 'HST', '', '', '']],
+    journal: [['JE-1', '2026-09-30', 'Depreciation', '250', '', 'Monthly depreciation', '', '', '', 'September depreciation'],
+      ['JE-1', '2026-09-30', 'Accumulated depreciation', '', '250', 'Monthly depreciation', '', '', '', ''],
+      ['JE-2', '2026-09-30', 'Prepaid expenses', '1200', '', 'Insurance paid for the year', '', '', '', 'Reclass prepaid insurance'],
+      ['JE-2', '2026-09-30', 'Insurance', '', '1200', '', '', '', '', '']],
   };
   // The columns a template has (Amount is left out of journal templates; Debit and Credit cover it).
-  const TEMPLATE_KEYS = { journal: ['number', 'date', 'account', 'debit', 'credit', 'desc', 'name', 'memo'] };
+  const TEMPLATE_KEYS = { journal: ['number', 'date', 'account', 'debit', 'credit', 'desc', 'name', 'cls', 'tags', 'memo'] };
   const csvCell = v => /[",\n;]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
   /** A template CSV for a type, with headings in English or French and a few example rows. */
   function template(type, lang) {
@@ -239,12 +298,66 @@
   const BUY_ACCT = a => a.type === 'Expense' || a.type === 'Cost of Goods Sold' || (a.type === 'Asset' && (!a.detail || a.detail === 'capital'));
   const findItem = (text, items) => { const f = fold(text); return f ? items.find(i => fold(i.name) === f) || items.find(i => i.sku && fold(i.sku) === f) || null : null; };
 
+  /* ---------- tags and classes ----------
+   * A Tags cell holds several names with commas or semicolons between ("Trade show; Event: Open house"). A tag is found
+   * by its name or by "Group: Name". Names the books don't have are added when the person ticks "Add new tags"; else
+   * the row has a problem. A Class cell holds one class name, added the same way with "Add new classes".
+   * Tags and classes still to be added are kept as 'new:<name>' until build() gives them ids. */
+  const NEW = 'new:';
+  function tagFinder(co, add) {
+    const tags = Array.isArray(co.tags) ? co.tags : [], groups = Array.isArray(co.tagGroups) ? co.tagGroups : [];
+    const gName = id => (groups.find(g => g.id === id) || {}).name || '';
+    const label = t => (t.group && gName(t.group) ? gName(t.group) + ': ' + t.name : t.name);
+    return text => {
+      const out = [], bad = [];
+      for (const raw of norm(text).split(/\s*[;,]\s*/).map(norm).filter(Boolean)) {
+        const f = fold(raw), t = tags.find(x => fold(label(x)) === f) || tags.find(x => fold(x.name) === f);
+        if (t) out.push(t.id);
+        else if (add) out.push(NEW + raw.slice(0, 82));
+        else bad.push(raw);
+      }
+      return { ids: [...new Set(out)], bad };
+    };
+  }
+  function classFinder(co, add) {
+    const cs = Array.isArray(co.classes) ? co.classes : [];
+    return text => {
+      const t = norm(text);
+      if (!t) return { id: '' };
+      const c = cs.find(x => fold(x.name) === fold(t));
+      return c ? { id: c.id } : add ? { id: NEW + t.slice(0, 60) } : { bad: t };
+    };
+  }
+  /** Read a row's Tags and Class cells: problems for unknown ones, and the ids (or names still to add). */
+  function tagsAndClass(row, ctx) {
+    const c = row.cells;
+    if (c.tags) {
+      const t = ctx.tagOf(c.tags);
+      t.bad.forEach(v => row.problems.push(P('tag', { value: v })));
+      row.tags = t.ids;
+    } else row.tags = [];
+    if (c.cls) { const k = ctx.clsOf(c.cls); if (k.bad) row.problems.push(P('class', { value: k.bad })); else row.cls = k.id; }
+  }
+  /** The tags of a whole document or entry: every row's, each once (at most 20, as on a form). */
+  function groupTags(g) {
+    const ids = [...new Set(g.rows.flatMap(r => r.tags || []))];
+    if (ids.length > MAX_TAGS) g.rows[0].problems.push(P('tags-many'));
+    return ids;
+  }
+  const MAX_TAGS = 20;
+  /** A class on every line when any line has one (a line without one is '', no class), so each posting line keeps its own. */
+  function lineClasses(g) {
+    if (!g.rows.some(r => r.cls)) return;
+    for (const r of g.rows) r.line.cls = r.cls || '';
+  }
+
   /* ---------- checking the rows ---------- */
   const P = (code, v) => ({ code, ...(v || {}) });
   /**
    * Check every row of a table against the books.
    * table: { rows, header }; map: { field: column }
-   * opts: { dateFormat, addContacts, existing: { accounts, contacts, items, docs, entries }, company: { taxName, taxRate, qstRate, pstRate, terms, closingDate },
+   * opts: { dateFormat, addContacts, addTags, addClasses, existing: { accounts, contacts, items, docs, entries },
+   *         company: { taxName, taxRate, qstRate, pstRate, terms, closingDate, tags, tagGroups, classes },
    *         taxMissing (name of a tax with no account, or ''), filed: [{ from, to }] (filed sales tax periods), taxAccounts: [ids] }
    * Returns { type, rows: [{ n, cells, problems, status, group }], groups, newContacts, counts, warnings, dateFormat }.
    * status: 'ok' | 'error' | 'dup' (already in the books or earlier in the file) | 'skip' (another line of its document has a problem).
@@ -258,7 +371,7 @@
     body.forEach((r, i) => { if (r.some(c => norm(c))) rows.push({ n: (table.header || 0) + i + 2, raw: r, cells: {}, problems: [], status: 'ok' }); });
     for (const row of rows) for (const f of fieldsOf(type)) row.cells[f.key] = get(row.raw, f.key);
     // Dates: one format for the whole file, asked for when 03/04/2026 could be either.
-    const dateKeys = ['date', 'due'].filter(k => map[k] !== undefined);
+    const dateKeys = ['date', 'due', 'asOf'].filter(k => map[k] !== undefined);
     const found = dateFormatOf(rows.flatMap(r => dateKeys.map(k => r.cells[k])));
     const fmt = opts.dateFormat === 'mdy' || opts.dateFormat === 'dmy' ? opts.dateFormat : found;
     const date = (row, k, req) => {
@@ -269,8 +382,19 @@
       if (!d) row.problems.push(P('date', { value: v }));
       return d || '';
     };
-    const out = { type, rows, groups: [], newContacts: [], warnings: [], dateFormat: found };
-    ({ customers: checkContacts, vendors: checkContacts, items: checkItems, accounts: checkAccounts, invoices: checkDocs, bills: checkDocs, journal: checkJournal })[type](out, { ex, co, opts, date });
+    const out = { type, rows, groups: [], newContacts: [], newTags: [], newClasses: [], warnings: [], dateFormat: found };
+    const tagOf = tagFinder(co, !!opts.addTags), clsOf = classFinder(co, !!opts.addClasses);
+    const check1 = isDoc(type) ? checkDocs : ({ customers: checkContacts, vendors: checkContacts, items: checkItems, inventory: checkInventory, accounts: checkAccounts, journal: checkJournal })[type];
+    if (!check1) throw new Error('Unknown kind of import: ' + type);
+    check1(out, { ex, co, opts, date, tagOf, clsOf });
+    // Tags and classes still to be added, only those a good record uses (shown next to the "Add new…" boxes).
+    const okRows = out.groups.length ? out.groups.filter(g => g.status === 'ok').flatMap(g => g.rows) : [];
+    const want = (pick) => [...new Set(okRows.flatMap(pick).filter(x => x && String(x).startsWith(NEW)).map(x => x.slice(NEW.length)))];
+    out.newTags = want(r => r.tags || []);
+    out.newClasses = want(r => [r.cls]);
+    // Names the file uses that the books don't have, whether or not they're added (to say how many the box would add).
+    out.unknownTags = [...new Set(rows.flatMap(r => r.problems.filter(p => p.code === 'tag').map(p => p.value)).concat(out.newTags).map(fold))].length;
+    out.unknownClasses = [...new Set(rows.flatMap(r => r.problems.filter(p => p.code === 'class').map(p => p.value)).concat(out.newClasses).map(fold))].length;
     for (const r of rows) if (r.status === 'ok' && r.problems.length) r.status = 'error';
     // Dated on or before the closing date, or in a period whose sales tax return was filed: the import asks first, as the forms do.
     const dates = out.groups.length ? out.groups.filter(g => g.status === 'ok').map(g => g.date) : [];
@@ -335,6 +459,43 @@
     }
   }
 
+  // Inventory items: counted in stock, bought into an inventory asset account, each sale's cost to cost of goods sold.
+  // The quantity on hand and its value on the As of date are the item's starting stock, saved as the product form saves it.
+  const INV_ASSET = a => a.type === 'Asset' && !['bank', 'card', 'ar'].includes(a.detail);
+  const INV_COGS = a => a.type === 'Cost of Goods Sold' || a.type === 'Expense';
+  function checkInventory(out, { ex, co, date }) {
+    const have = new Set(ex.items.map(i => fold(i.name))), seen = new Set();
+    const live = ex.accounts.filter(a => a.active !== false), byCode = (a, b) => String(a.code || '').localeCompare(String(b.code || ''), undefined, { numeric: true });
+    // Like the product form: the first income account, an asset account named for inventory, the first cost of goods sold account.
+    const def = { incomeAccount: live.filter(SALE_ACCT).sort(byCode)[0], assetAccount: live.filter(a => INV_ASSET(a) && /inventor|stock/i.test(a.name)).sort(byCode)[0], cogsAccount: live.filter(a => a.type === 'Cost of Goods Sold').sort(byCode)[0] };
+    for (const row of out.rows) {
+      const c = row.cells, k = fold(c.name);
+      if (!k) { row.problems.push(P('required', { field: 'name' })); continue; }
+      if (have.has(k)) { row.status = 'dup'; row.problems.push(P('dup', { why: 'exists', value: c.name })); continue; }
+      if (seen.has(k)) { row.status = 'dup'; row.problems.push(P('dup', { why: 'file', value: c.name })); continue; }
+      seen.add(k);
+      const acct = (key, ok, need) => {
+        if (!c[key]) { if (def[key]) return def[key].id; row.problems.push(P('inv-acct', { need })); return ''; }
+        const a = findAccount(c[key], ex.accounts);
+        if (!a) { row.problems.push(P('account', { value: c[key] })); return ''; }
+        if (!ok(a)) { row.problems.push(P('account-kind', { value: c[key], need })); return ''; }
+        return a.id;
+      };
+      const inc = acct('incomeAccount', SALE_ACCT, 'income'), asset = acct('assetAccount', INV_ASSET, 'asset'), cogs = acct('cogsAccount', INV_COGS, 'cogs');
+      const n = (key, min0) => { if (!c[key]) return ''; const v = num(c[key]); if (v === null) { row.problems.push(P('amount', { value: c[key] })); return ''; } if (min0 && v < 0) { row.problems.push(P('negative', { field: key })); return ''; } return v; };
+      const price = n('price'), cost = n('cost', true), qty = n('qty', true), reorder = n('reorder', true);
+      let value = n('value', true);
+      // No value given: the quantity at its cost.
+      if (value === '' && qty !== '' && cost !== '') value = r2(qty * cost);
+      const asOf = date(row, 'asOf', false);
+      if ((+qty || +value) && !asOf && !c.asOf) row.problems.push(P('required', { field: 'asOf' }));
+      const t = taxCode(c.taxCode, co);
+      if (t.error) row.problems.push(P('tax', { value: c.taxCode, why: t.error }));
+      row.record = { name: c.name.slice(0, 120), type: 'inventory', sku: c.sku.slice(0, 60), desc: c.desc, price, cost, incomeAccount: inc, assetAccount: asset, cogsAccount: cogs, expenseAccount: asset,
+        qtyStart: qty === '' ? 0 : Math.round(qty * 10000) / 10000, valueStart: value === '' ? 0 : r2(value), startDate: (+qty || +value) ? asOf : '', reorder, taxCode: t.code || 'std', sold: true, bought: true, active: true };
+    }
+  }
+
   const SUMLORA_TYPES = { asset: 'Asset', actif: 'Asset', liability: 'Liability', passif: 'Liability', equity: 'Equity', 'capitaux propres': 'Equity', income: 'Income', revenue: 'Income', revenus: 'Income', produits: 'Income',
     'cost of goods sold': 'Cost of Goods Sold', 'cout des produits vendus': 'Cost of Goods Sold', 'cout des ventes': 'Cost of Goods Sold', expense: 'Expense', expenses: 'Expense', depenses: 'Expense', charges: 'Expense' };
   const ONE_ONLY = ['ar', 'ap', 'tax', 'qst', 'pst', 'ob']; // books have one of each; a second would split the balance
@@ -363,9 +524,13 @@
     }
   }
 
-  // Invoices and bills: one row per line; rows with the same number (and customer or vendor) are one document.
-  function checkDocs(out, { ex, co, opts, date }) {
-    const sale = out.type === 'invoices', kind = sale ? 'invoice' : 'bill', ck = sale ? 'customer' : 'vendor';
+  // A sales receipt's money goes into a bank, card or cash account (the same accounts as the form).
+  const DEPOSIT_ACCT = a => a.detail === 'bank' || a.detail === 'card' || (a.type === 'Asset' && !a.detail && /undeposited|cash|caisse|fonds non/i.test(a.name));
+  // Invoices, sales receipts, credit notes, bills and vendor credits: one row per line; rows with the same number
+  // (and customer or vendor) are one document.
+  function checkDocs(out, { ex, co, opts, date, tagOf, clsOf }) {
+    const D = DOCS[out.type], sale = D.sale, kind = D.kind, ck = sale ? 'customer' : 'vendor';
+    const defBank = (ex.accounts.filter(a => a.detail === 'bank' && a.active !== false && !a.currency).sort((a, b) => String(a.code || '').localeCompare(String(b.code || ''), undefined, { numeric: true }))[0] || {}).id || '';
     const contacts = new Map();
     for (const c of ex.contacts) if (c.kind === ck && !contacts.has(fold(c.name))) contacts.set(fold(c.name), c);
     const okAcct = sale ? SALE_ACCT : BUY_ACCT, items = ex.items.filter(i => i.active !== false && (sale ? i.sold !== false : i.bought));
@@ -380,7 +545,11 @@
       else row.problems.push(P('contact', { value: c.contact, kind: ck }));
       row.contactId = contact ? contact.id : '';
       row.date = date(row, 'date', true);
-      row.due = date(row, 'due', false);
+      row.due = D.due ? date(row, 'due', false) : '';
+      if (out.type === 'sreceipts') {
+        if (c.bank) { const b = findAccount(c.bank, ex.accounts); if (!b) row.problems.push(P('account', { value: c.bank })); else if (!DEPOSIT_ACCT(b) || b.currency) row.problems.push(P('bank', { value: c.bank })); else row.bank = b.id; }
+      }
+      tagsAndClass(row, { tagOf, clsOf });
       // Product or service
       const item = c.item ? findItem(c.item, items) : null;
       if (c.item && !item) row.problems.push(P('item', { value: c.item }));
@@ -431,14 +600,18 @@
         else if (row.date && first.date && row.date !== first.date) row.problems.push(P('group-date', { value: num0 }));
       }
     }
-    // Numbers: invoices with none get the next ones; a number already in the books is a duplicate.
-    const nums = ex.docs.filter(d => d.kind === kind);
-    let next = sale ? Math.max(1000, ...nums.map(d => parseInt(d.number) || 0), ...groups.map(g => /^\d+$/.test(g.number) ? +g.number : 0)) : 0;
+    // Numbers: invoices, sales receipts and credit notes with none get the next ones (as the forms do); a number already in the books is a duplicate.
+    const nums = ex.docs.filter(d => d.kind === kind), pre = D.prefix || '';
+    const numOf = n => { const s = String(n || ''); return pre && s.toUpperCase().startsWith(pre) ? parseInt(s.slice(pre.length)) || 0 : pre ? 0 : (/^\d+$/.test(s) ? +s : parseInt(s) || 0); };
+    let next = sale ? Math.max(1000, ...nums.map(d => numOf(d.number)), ...groups.map(g => numOf(g.number))) : 0;
     for (const g of groups) {
       const first = g.rows[0], cid = first.contactId;
-      Object.assign(g, { contactId: cid, newContact: cid ? '' : first.cells.contact, date: first.date, due: g.rows.map(r => r.due).find(Boolean) || (first.date ? addDays(first.date, +co.terms || 0) : ''),
+      Object.assign(g, { contactId: cid, newContact: cid ? '' : first.cells.contact, date: first.date, due: D.due ? g.rows.map(r => r.due).find(Boolean) || (first.date ? addDays(first.date, +co.terms || 0) : '') : '',
         memo: g.rows.map(r => r.cells.memo).find(Boolean) || '', lines: g.rows.map(r => r.line) });
-      if (!g.number && sale) { g.number = String(++next); g.auto = true; }
+      if (out.type === 'sreceipts') { g.bank = g.rows.map(r => r.bank).find(Boolean) || defBank; if (!g.bank && !first.problems.length) first.problems.push(P('no-bank')); }
+      lineClasses(g);
+      g.tags = groupTags(g);
+      if (!g.number && sale) { g.number = pre + (++next); g.auto = true; }
       const dup = g.number && !g.auto && nums.find(d => fold(d.number) === fold(g.number) && (sale || (cid && d.contactId === cid)));
       const total = r2(g.lines.reduce((s, l) => s + r2((+l.qty || 0) * (+l.rate || 0)), 0));
       g.taxed = g.lines.some(l => (l.taxCode === 'std' || l.taxCode === 'gst') && r2(l.qty * l.rate));
@@ -453,10 +626,11 @@
 
   // Journal entries: rows with the same journal number are one entry, which has to balance.
   // Rows with no number join the entry above until it balances.
-  function checkJournal(out, { ex, opts, date }) {
+  function checkJournal(out, { ex, opts, date, tagOf, clsOf }) {
     for (const row of out.rows) {
       const c = row.cells;
       row.date = date(row, 'date', true);
+      tagsAndClass(row, { tagOf, clsOf });
       let account = null;
       if (!c.account) row.problems.push(P('required', { field: 'account' }));
       else if (!(account = findAccount(c.account, ex.accounts))) row.problems.push(P('account', { value: c.account }));
@@ -487,6 +661,8 @@
     for (const g of groups) {
       const first = g.rows[0];
       Object.assign(g, { date: first.date, memo: g.rows.map(r => r.cells.memo).find(Boolean) || '', contactId: g.rows.map(r => r.contactId).find(Boolean) || '', lines: g.rows.map(r => r.line) });
+      lineClasses(g);
+      g.tags = groupTags(g);
       const tax = new Set(opts.taxAccounts || []);
       g.taxed = g.lines.some(l => tax.has(l.account)); // only entries that move a sales tax account touch a return
       if (g.number && ex.entries.some(e => e.type === 'journal' && e.ref && fold(e.ref) === fold(g.number))) {
@@ -514,17 +690,21 @@
     const writes = [], counts = {}, now = h.now || Date.now();
     const add = (collection, data, id) => { id = id || h.uid(); writes.push({ op: 'set', collection, id, data }); counts[collection] = (counts[collection] || 0) + 1; return id; };
     const t = res.type;
-    if (t === 'customers' || t === 'vendors' || t === 'items' || t === 'accounts') {
-      const col = t === 'items' ? 'items' : t === 'accounts' ? 'accounts' : 'contacts';
+    if (t === 'customers' || t === 'vendors' || t === 'items' || t === 'inventory' || t === 'accounts') {
+      const col = t === 'items' || t === 'inventory' ? 'items' : t === 'accounts' ? 'accounts' : 'contacts';
       res.rows.filter(r => r.status === 'ok' && r.record).forEach((r, i) => add(col, col === 'contacts' ? { ...r.record, created: now + i } : r.record));
       return { writes, counts };
     }
     const good = res.groups.filter(g => g.status === 'ok');
+    // New tags and classes get the ids newLists() gave them (they're added to the company's lists just before).
+    const real = (x, ids) => { if (!String(x || '').startsWith(NEW)) return x; const id = ids && ids[fold(x.slice(NEW.length))]; if (!id) throw new Error('Add the new tags and classes first.'); return id; };
+    for (const g of good) { g.tags = (g.tags || []).map(x => real(x, h.tagIds)); g.lines.forEach(l => { if (l.cls) l.cls = real(l.cls, h.classIds); }); }
+    const tagsOf = g => (g.tags && g.tags.length ? { tags: g.tags } : {});
     if (t === 'journal') {
-      good.forEach((g, i) => add('entries', { type: 'journal', date: g.date, ref: g.number, memo: g.memo, contactId: g.contactId, lines: g.lines.map(l => ({ account: l.account, debit: l.debit, credit: l.credit, memo: l.memo || '' })), created: now + i, adjusting: false, reverseOn: '' }));
+      good.forEach((g, i) => add('entries', { type: 'journal', date: g.date, ref: g.number, memo: g.memo, contactId: g.contactId, lines: g.lines.map(l => ({ account: l.account, debit: l.debit, credit: l.credit, memo: l.memo || '', ...(l.cls != null ? { cls: l.cls } : {}) })), created: now + i, adjusting: false, reverseOn: '', ...tagsOf(g) }));
       return { writes, counts };
     }
-    const sale = t === 'invoices', kind = sale ? 'invoice' : 'bill', ctl = sale ? h.arId : h.apId;
+    const D = DOCS[t], sale = D.sale, kind = D.kind, sr = kind === 'sreceipt', ctl = sr ? 'bank' : sale ? h.arId : h.apId;
     if (!ctl) throw new Error(sale ? 'Add an Accounts receivable account in Chart of accounts first.' : 'Add an Accounts payable account in Chart of accounts first.');
     // New customers or vendors first, only those a good document uses.
     const newIds = new Map();
@@ -536,12 +716,39 @@
       const c = h.calcLines(g.lines, x => (+x.qty || 0) * (+x.rate || 0), !sale);
       const id = h.uid();
       if (h.invCosts) h.invCosts(kind, c, g.date, id);
-      const base = { date: g.date, contactId: g.contactId || newIds.get(fold(g.newContact)), memo: g.memo };
+      // Tags go on the document and on its journal entry (reports add up journal entries), as the form does.
+      const base = { date: g.date, contactId: g.contactId || newIds.get(fold(g.newContact)), memo: g.memo, ...tagsOf(g) };
       const created = now + 1 + i;
-      add('docs', { ...base, kind, number: g.number, due: g.due, ...h.docRecord(c), created }, id);
-      add('entries', { ...base, type: kind, ref: g.number, docId: id, lines: h.docPostLines(kind, c, ctl), created }, 'd_' + id);
+      add('docs', { ...base, kind, number: g.number, due: g.due || '', ...h.docRecord(c), ...(sr ? { depositTo: g.bank } : {}), ...(kind === 'credit' || kind === 'vcredit' ? { applied: [] } : {}), created }, id);
+      add('entries', { ...base, type: sr ? 'salesreceipt' : kind, ref: g.number, docId: id, lines: h.docPostLines(kind, c, sr ? g.bank : ctl), created }, 'd_' + id);
     });
     return { writes, counts };
+  }
+
+  /**
+   * The company's tag and class lists with the import's new ones added (only those a good record uses), and the id each
+   * new name gets: { tags, classes, tagIds, classIds, added: { tags, classes } }. "Event: Spring fair" goes in the Event
+   * group when the company has one, as on a form.
+   */
+  function newLists(res, co, uid) {
+    const tags = (co.tags || []).slice(), classes = (co.classes || []).slice(), groups = co.tagGroups || [], tagIds = {}, classIds = {};
+    for (const raw of res.newTags || []) {
+      let name = raw, group = '';
+      const m = raw.match(/^([^:]{1,40}):\s*(.+)$/);
+      if (m) { const g = groups.find(x => fold(x.name) === fold(m[1])); if (g) { group = g.id; name = m[2]; } }
+      name = norm(name).slice(0, 40);
+      const same = tags.find(t => (t.group || '') === group && fold(t.name) === fold(name));
+      if (same) { tagIds[fold(raw)] = same.id; continue; }
+      const t = { id: uid(), name, group };
+      tags.push(t); tagIds[fold(raw)] = t.id;
+    }
+    for (const raw of res.newClasses || []) {
+      const same = classes.find(c => fold(c.name) === fold(raw));
+      if (same) { classIds[fold(raw)] = same.id; continue; }
+      const c = { id: uid(), name: norm(raw).slice(0, 60), active: true };
+      classes.push(c); classIds[fold(raw)] = c.id;
+    }
+    return { tags, classes, tagIds, classIds, added: { tags: tags.length - (co.tags || []).length, classes: classes.length - (co.classes || []).length } };
   }
 
   /** The rows that weren't imported, as a CSV with what was wrong, to fix and import again. msg(problem) gives the text. */
@@ -552,5 +759,5 @@
     return out.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
   }
 
-  return { TYPES, FIELDS, fieldsOf, guessMapping, findHeader, missingFields, template, num, parseDate, dateFormatOf, taxCode, findAccount, check, build, leftoverCsv, headKey };
+  return { TYPES, DOCS, FIELDS, fieldsOf, guessMapping, findHeader, missingFields, template, num, parseDate, dateFormatOf, taxCode, findAccount, check, build, newLists, leftoverCsv, headKey };
 });

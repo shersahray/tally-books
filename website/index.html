@@ -80,7 +80,7 @@
   .two ul{margin:14px 0 0;padding-left:1.1em}
   .two li{margin:6px 0}
 
-  .plans{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:40px;align-items:start}
+  .plans{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:40px;align-items:start}
   .plan{background:var(--paper);border:1px solid var(--rule);border-radius:10px;padding:30px}
   .plan.plus{border:2px solid var(--action)}
   .price{display:flex;align-items:baseline;gap:8px;margin:14px 0 4px}
@@ -202,33 +202,47 @@
       <p class="intro">Priced per company, per month, in Canadian dollars plus applicable taxes. Every plan starts with a 14-day free trial.</p>
       <div class="plans">
         <div class="plan">
-          <h3>Essentials</h3>
-          <div class="price"><b>$15</b><span>per company / month</span></div>
+          <h3>Seed</h3>
+          <div class="price"><b>$20</b><span>per company / month</span></div>
           <p class="for">Everyday bookkeeping and sales tax.</p>
           <ul>
-            <li>Chart of accounts, journal entries and registers</li>
+            <li>Invoices, estimates, bills and recurring transactions</li>
             <li>Bank statement import, bank rules and reconciliation</li>
-            <li>Invoices, bills and expenses</li>
-            <li>GST/HST and QST return worksheets</li>
-            <li>Standard financial reports and CaseWare export</li>
+            <li>GST/HST and QST returns (regular method)</li>
+            <li>Receipt uploads, tags and the transaction list</li>
+            <li>Standard reports, cash basis, review tools and CaseWare export</li>
           </ul>
           <a class="btn quiet" href="https://app.sumlora.ca/?signup">Start free trial</a>
         </div>
         <div class="plan plus">
-          <h3>Plus</h3>
-          <div class="price"><b>$30</b><span>per company / month</span></div>
-          <p class="for">Everything in Essentials, and:</p>
+          <h3>Grow</h3>
+          <div class="price"><b>$45</b><span>per company / month</span></div>
+          <p class="for">Everything in Seed, and:</p>
           <ul>
-            <li>Payroll with remittances, ROE, T4 and RL-1</li>
+            <li>Automatic bank feeds</li>
             <li>Receipts and bank lines categorized by AI</li>
-            <li>Advanced reports and cash flow statement</li>
+            <li>Advanced reports, cash flow statement and budgets</li>
+            <li>Projects and time, fixed assets and CCA</li>
             <li>Quick Method and charity/non-profit tax methods</li>
-            <li>Projects, inventory, multi-currency and fixed assets</li>
           </ul>
           <a class="btn" href="https://app.sumlora.ca/?signup">Start free trial</a>
         </div>
+        <div class="plan">
+          <h3>Thrive</h3>
+          <div class="price"><b>$75</b><span>per company / month</span></div>
+          <p class="for">Everything in Grow, and:</p>
+          <ul>
+            <li>Payroll with remittances, ROE, T4 and RL-1</li>
+            <li>Inventory and multi-currency</li>
+            <li>Classes and profit and loss by class</li>
+            <li>Custom roles and bill approvals</li>
+            <li>Receipts by email and the cash flow forecast</li>
+          </ul>
+          <a class="btn quiet" href="https://app.sumlora.ca/?signup">Start free trial</a>
+        </div>
       </div>
-      <p class="addon"><b>AI assistant, $5 per company / month.</b> Ask questions about the books in plain words and get answers with the numbers. Available on either plan, only for companies you add it to.</p>
+      <p class="addon"><b>Payroll, $20 per company / month on Seed and Grow, plus $4 per employee paid in the month.</b> Thrive includes payroll; the $4 per employee paid applies on every plan. Each employee counts once a month, however many times they're paid.</p>
+      <p class="addon"><b>AI assistant, $5 per company / month.</b> Ask questions about the books in plain words and get answers with the numbers. Available on any plan, only for companies you add it to.</p>
     </div>
   </section>
 
