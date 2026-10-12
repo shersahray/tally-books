@@ -1426,6 +1426,8 @@ function createApp(opts) {
         const added = (company.savedReports || []).some(r => !((before && before.savedReports) || []).some(b => b.id === r.id));
         if (added) needFeature(ctx.id, 'advancedReports', ctx.store);
       }
+      // The cash flow forecast's own settings (planned items, lines left out) change only when the plan includes it.
+      if (JSON.stringify(company.cashForecast) !== JSON.stringify(validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) }).cashForecast)) needFeature(ctx.id, 'cashForecast', ctx.store);
       ctx.store.transaction(() => {
         ctx.store.putSetting('company', company);
         ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'company', summary: 'company settings', before, after: company });

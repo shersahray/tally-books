@@ -82,7 +82,7 @@
   const SETTING_AREA = {
     payroll: 'payroll',
     quickMethod: 'salestax', qstRate: 'salestax', pstRate: 'salestax', pstName: 'salestax', pstFreq: 'salestax', filingFreq: 'salestax', taxName: 'salestax', taxRate: 'salestax',
-    savedReports: 'reports',
+    savedReports: 'reports', cashForecast: 'reports',
     notDuplicates: 'accounting', classes: 'accounting', ccaOpening: 'accounting',
     mileage: 'expenses',
     lateFee: 'sales', invoiceNote: 'sales', docStyle: 'sales', customFields: 'sales', etransfer: 'sales',
