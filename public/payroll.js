@@ -66,7 +66,7 @@ function ytdFor(empId,until,inclusive){
   const o=e.openingYtd;
   if(o&&String(o.year)===year){
     const has=v=>v!==undefined&&v!==null&&v!=='';y.gross=+o.gross||0;y.pensionable=+(has(o.pensionable)?o.pensionable:o.gross)||0;y.insurable=+(has(o.insurable)?o.insurable:o.gross)||0;
-    DED_KEYS.forEach(k=>y.ded[k]=+o[k]||0);y.er.qpip=+o.erQpip||0;
+    DED_KEYS.forEach(k=>y.ded[k]=+o[k]||0);y.er.qpip=+o.erQpip||0;y.rrsp=+o.rrsp||0;y.union=+o.union||0;
   }
   for(const r of S.payruns.slice().sort(runOrder)){
     if(r.payDate.slice(0,4)!==year)continue;
@@ -250,11 +250,16 @@ function employeeForm(emp){
     const prov=$('#eProv',f).value,qc=prov==='QC';
     const oy={year:+yr};['gross','pensionable','insurable','cpp','cpp2','qpp','qpp2','qpip','erQpip','ei','erEi','rrsp','union','fedTax','provTax','qcTax'].forEach(k=>{const raw=$('#eo_'+k,f).value,x=+raw||0;if(x||(raw!==''&&['pensionable','insurable','erEi'].includes(k)))oy[k]=r2(x)});
     if($('#eo_prov',f).value)oy.prov=$('#eo_prov',f).value;
+    // The form only shows this year's opening amounts. Saving the employee with none entered must not wipe out an
+    // earlier year's (they're still needed for that year's T4), so keep those as they are.
+    const prevO=emp&&emp.openingYtd;
+    const keepPrev=prevO&&String(prevO.year)!==yr&&+prevO.gross&&Object.keys(oy).length===1;
+    if(prevO&&String(prevO.year)!==yr&&+prevO.gross&&!keepPrev&&!await confirmBox('Replace earlier opening amounts?',`${name} has opening year-to-date amounts for ${prevO.year}. Saving opening amounts for ${yr} replaces them, and the ${prevO.year} T4 will no longer include them. File the ${prevO.year} T4 first.`,'Replace'))return;
     const data={...(emp?strip(emp):{created:Date.now()}),name,email:$('#eEmail',f).value.trim(),address:$('#eAddr',f).value.trim(),prov,hireDate:$('#eHire',f).value,
       freq:$('#eFreq',f).value,payType:$('#eType',f).value,rate:val('eRate'),hours:val('eHours'),
       td1Fed:val('eTd1'),td1Prov:qc?'':val('eTd1p'),td1Qc:qc?val('eTd1q'):'',extraTax:val('eExtra'),extraQcTax:qc?val('eExtraQ'):'',dependants:prov==='ON'?val('eDep'):'',
       rrsp:val('eRrsp'),union:val('eUnion'),sin:$('#eSin',f).value.replace(/\D/g,''),dental:+$('#eDental',f).value||0,rppNo:$('#ePen',f).value==='rpp'?$('#eRppNo',f).value.replace(/\D/g,''):'',pensionType:$('#ePen',f).value,cppExempt:$('#eCppX',f).checked,eiExempt:$('#eEiX',f).checked,qpipExempt:qc&&$('#eQpipX',f).checked,
-      active:emp?!$('#eInactive',f).checked:true,openingYtd:oy,
+      active:emp?!$('#eInactive',f).checked:true,openingYtd:keepPrev?prevO:oy,
       occupation:$('#eOcc',f).value.trim(),vacMode:$('#eVacMode',f).value,vacRate:$('#eVacMode',f).value==='salary'?'':val('eVacRate'),vacOpening:$('#eVacMode',f).value==='accrue'?val('eVacOpen'):(emp?.vacOpening||'')};
     if(data.vacRate!==''&&data.vacRate>100)return f.err('The vacation pay rate is a percentage, 100 or less.');
     if(await put('employees',emp?.id||uid(),data)){closeModal();toast('Employee saved')}
@@ -354,8 +359,11 @@ function payRunForm(){
     try{res=calcFor(e,date,P(),gross,ytdFor(e.id,{payDate:date+'~'},false),{bonus:val('[data-bonus]'),benefits:bt,pensionable:r2(gross+bt),insurable:r2(gross+benInsurable(bl)),qpipInsurable:r2(gross+bt)});note.innerHTML=res.notes.map(n=>`<span>${esc(n)}</span>`).join(' ')}
     catch(err){note.innerHTML=`<span class="neg">${esc(err.message)}</span> Enter the deductions yourself.`}
     const set=(el,v)=>{if(!el.dataset.ov)el.value=v?v.toFixed(2):''};
-    box.querySelectorAll('[data-ded]').forEach(el=>res&&set(el,res.employee[el.dataset.ded]));
-    box.querySelectorAll('[data-er]').forEach(el=>res&&set(el,res.employer[el.dataset.er]));
+    // No rates for this date: clear the suggestions (so amounts worked out for another date don't stay behind)
+    // and remember it, so posting asks before using amounts that weren't calculated.
+    box.dataset.norates=res?'':'1';
+    box.querySelectorAll('[data-ded]').forEach(el=>set(el,res?res.employee[el.dataset.ded]:0));
+    box.querySelectorAll('[data-er]').forEach(el=>set(el,res?res.employer[el.dataset.er]:0));
     box.querySelectorAll('[data-x]').forEach(el=>set(el,+e[el.dataset.x]||0));
     const l=readLine(box);box.querySelector('[data-s=ded]').textContent=money(lineDed(l));const n=box.querySelector('[data-s=net]');n.textContent=money(l.net);n.className=l.net<0?'neg':'';
     box.classList.toggle('off',!box.querySelector('[data-inc]').checked);
@@ -399,6 +407,8 @@ function payRunForm(){
     if(!payDate)return f.err('Enter the pay date.');if(!bank)return f.err('Choose the bank account you pay from.');
     const lines=included().map(readLine).filter(l=>l.gross>0);
     if(!lines.length)return f.err('Include at least one employee with pay.');
+    const noRates=included().filter(b=>b.dataset.norates==='1'&&readLine(b).gross>0).map(b=>employee(b.dataset.emp)?.name||'');
+    if(noRates.length&&!await confirmBox('Payroll rates aren’t loaded for this date',`Sumlora can’t work out CPP, EI and income tax for ${fmtDate(payDate)}, so the deductions for ${noRates.join(', ')} are only what you typed in. Check them with CRA’s Payroll Deductions Online Calculator (PDOC) before posting.`,'Post anyway'))return;
     const bad=lines.find(l=>l.net<0);if(bad)return f.err(`${bad.name}: deductions are more than gross pay.`);
     const over=lines.find(l=>l.vacMode==='accrue'&&l.vacPay>r2(vacBalance(l.employeeId,{payDate:payDate+'~'},false)+(l.vacAccrued||0))+0.004);
     if(over&&!await confirmBox('Pay more vacation pay than is owed?',`${over.name} is owed ${money(r2(vacBalance(over.employeeId,{payDate:payDate+'~'},false)+(over.vacAccrued||0)))} of vacation pay, and this pays ${money(over.vacPay)}. Pay it anyway?`,'Pay anyway'))return;
@@ -459,7 +469,7 @@ function stubHTML(run,l){
     ${l.benefits||y.benefits?`<table><thead><tr><th>Taxable benefits (not paid to you)</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${PR.BENEFIT_KINDS.filter(b=>(l.benefits||{})[b.k]).map(b=>row(b.label,l.benefits[b.k],null)).join('')}</tbody>
       <tfoot><tr><td><b>Total taxable benefits</b></td><td class="n"><b>${money(benTotal(l))}</b></td><td class="n"><b>${money(y.benefits||0)}</b></td></tr></tfoot></table><div class="muted" style="font-size:12px;margin:-4px 0 8px">${(l.prov||e.prov)==='QC'?'Included in your taxable income and on your T4 and RL-1. Tax on them is taken from your pay.':'Included in your taxable income and on your T4. Tax on them is taken from your pay.'}</div>`:''}
     <table><thead><tr><th>Deductions</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${ded||'<tr><td colspan="3" class="muted">None</td></tr>'}</tbody>
-      <tfoot><tr><td><b>Total deductions</b></td><td class="n"><b>${money(lineDed(l))}</b></td><td class="n"><b>${money(r2(y.gross-y.net))}</b></td></tr></tfoot></table>
+      <tfoot><tr><td><b>Total deductions</b></td><td class="n"><b>${money(lineDed(l))}</b></td><td class="n"><b>${money(lineDed(y))}</b></td></tr></tfoot></table>
     <div class="stub-net"><span>Net pay</span><b>${money(l.net)}</b></div>
     ${l.vacMode==='accrue'?`<div class="stub-vac"><span>Vacation pay owed to you after this pay:</span> <b>${money(vacBalance(l.employeeId,run,true))}</b> · <span>Set aside this pay: ${money(l.vacAccrued||0)}, at ${l.vacRate}%</span></div>`:''}
     ${er?`<table class="stub-er"><thead><tr><th>Paid by your employer</th><th class="n">This pay</th><th class="n">Year to date</th></tr></thead><tbody>${er}</tbody></table>`:''}
