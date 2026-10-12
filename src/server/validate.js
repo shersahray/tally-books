@@ -8,16 +8,18 @@ const TAGS = require('../../public/tags.js');
 const APPROVALS = require('../../public/approvals.js');
 const DEP = require('../../public/deposits-calc.js');
 const PAYCALC = require('../../public/payroll-calc.js');
+const DELAYED = require('../../public/delayed-calc.js');
+const WF = require('../../public/workflows.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
   Asset: ['', 'bank', 'ar', 'capital'],
-  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable', 'custdep'],
+  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable', 'wsib_payable', 'eht_payable', 'custdep'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
-  Expense: ['', 'wages', 'payroll_tax'],
+  Expense: ['', 'wages', 'payroll_tax', 'wsib', 'eht'],
 };
 const ENTRY_TYPES = ['invoice', 'salesreceipt', 'invadjust', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust', 'custdeposit', 'depapply', 'deprefund'];
 const PAY_PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
@@ -162,6 +164,7 @@ function validateDoc(data, store, id) {
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Document total must be a number.');
   if (!Array.isArray(data.lines)) throw new ValidationError('Document lines must be a list.');
   checkLineClasses(data.lines, store, id && store.get('docs', id));
+  checkDelayedLines(data, store, id);
   // Bill approvals (approvals.js): only on bills. The server decides it on every save (see applyWrite); this checks its shape.
   if (data.approval !== undefined) {
     if (data.kind !== 'bill') delete data.approval;
@@ -352,6 +355,8 @@ function validateEmployee(data) {
   // Language for emailed pay stubs ('' = the company's).
   out.lang = ['en', 'fr'].includes(data.lang) ? data.lang : '';
   out.dental = [1, 2, 3, 4, 5].includes(Number(data.dental)) ? Number(data.dental) : 0; // 0 = not chosen yet
+  // The address in parts, for the T4 and ROE files (the free-text `address` is kept too).
+  if (data.addr !== undefined) out.addr = validateAddrParts(data.addr, name);
   // Direct deposit: the employee's bank account (institution, transit, account).
   out.payMethod = data.payMethod === 'deposit' ? 'deposit' : 'cheque';
   const bk = isObj(data.bank) ? data.bank : {};
@@ -380,6 +385,9 @@ function validateEmployee(data) {
   out.vacRate = optAmount(data.vacRate, 'Vacation pay rate');
   if (out.vacRate !== '' && out.vacRate > 100) throw new ValidationError('The vacation pay rate is a percentage, 100 or less.');
   out.vacOpening = optAmount(data.vacOpening, 'Vacation pay owed');
+  // Overtime for a salaried employee (hourly employees always get it), and their workers' compensation rate group.
+  if (data.otEligible !== undefined) out.otEligible = !!data.otEligible;
+  if (data.wsibGroup !== undefined) out.wsibGroup = str(data.wsibGroup, 40);
   if (data.occupation !== undefined) out.occupation = str(data.occupation, 100).trim();
   if (data.termDate !== undefined && data.termDate !== '' && !isDate(data.termDate)) throw new ValidationError('The last day worked must be YYYY-MM-DD.');
   if (data.roes !== undefined) {
@@ -388,6 +396,9 @@ function validateEmployee(data) {
     const n = v => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
     out.roes = data.roes.map(r => {
       const c = isObj(r.calc) ? r.calc : null;
+      // Block 16 can be a specific code (E03, K12…) and block 17C needs Service Canada's code for the other money.
+      if (r.reasonCode !== undefined && r.reasonCode !== '' && !/^[A-Z]\d{2}$/.test(String(r.reasonCode))) throw new ValidationError('The ROE reason code isn’t valid.');
+      if (r.otherCd !== undefined && r.otherCd !== '' && !/^[A-Z]\d{2}$/.test(String(r.otherCd))) throw new ValidationError('The ROE other money code isn’t valid.');
       return { ...r, calc: c && { type: ['W', 'B', 'S', 'M'].includes(c.type) ? c.type : 'B', count: n(c.count), hours: n(c.hours), total: n(c.total), vacation: n(c.vacation), outside: n(c.outside),
         due: isDate(c.due) ? c.due : '', periods: (Array.isArray(c.periods) ? c.periods : []).slice(0, 60).filter(isObj).map(p => ({ n: n(p.n), from: isDate(p.from) ? p.from : '', to: isDate(p.to) ? p.to : '', amount: n(p.amount) })) } };
     });
@@ -408,7 +419,7 @@ function validateEmployee(data) {
 const BENEFIT_KEYS = ['life', 'auto', 'nearcash', 'board', 'other']; // see BENEFIT_KINDS in payroll-calc.js
 const PAY_KEYS = ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'fedTax', 'provTax', 'qcTax'];
 const ER_KEYS = ['cpp', 'cpp2', 'qpp', 'qpp2', 'ei', 'qpip', 'hsf'];
-function validatePayrun(data, store) {
+function validatePayrun(data, store, id) {
   if (!isDate(data.payDate)) throw new ValidationError('Pay date must be YYYY-MM-DD.');
   if (data.from && !isDate(data.from) || data.to && !isDate(data.to) || (data.from && data.to && data.from > data.to)) throw new ValidationError('The pay period dates aren’t valid.');
   bankAccount(store, data.bank);
@@ -433,14 +444,15 @@ function validatePayrun(data, store) {
     net += n;
     // Earnings broken down (regular, holiday, other, bonus, vacation pay): they have to add up to gross pay.
     const parts = {};
-    for (const k of ['regular', 'holiday', 'other', 'bonus', 'allowance', 'vacPay', 'vacAccrued', 'holHours', 'hours', 'vacRate']) {
+    for (const k of ['regular', 'holiday', 'overtime', 'other', 'bonus', 'allowance', 'vacPay', 'vacAccrued', 'holHours', 'otHours', 'hours', 'vacRate']) {
       if (l[k] === undefined || l[k] === '') continue;
-      parts[k] = amt(l[k], { regular: 'regular pay', holiday: 'holiday pay', other: 'other pay', bonus: 'bonus', allowance: 'taxable allowance', vacPay: 'vacation pay', vacAccrued: 'vacation pay set aside', holHours: 'holiday hours', hours: 'hours', vacRate: 'vacation pay rate' }[k]) / 100;
+      parts[k] = amt(l[k], { regular: 'regular pay', holiday: 'holiday pay', overtime: 'overtime pay', other: 'other pay', bonus: 'bonus', allowance: 'taxable allowance', vacPay: 'vacation pay', vacAccrued: 'vacation pay set aside', holHours: 'holiday hours', otHours: 'overtime hours', hours: 'hours', vacRate: 'vacation pay rate' }[k]) / 100;
     }
-    if (parts.regular !== undefined && ['holiday', 'other', 'bonus', 'allowance', 'vacPay'].some(k => parts[k] !== undefined)) {
-      const sum = ['regular', 'holiday', 'other', 'bonus', 'allowance', 'vacPay'].reduce((t, k) => t + cents(parts[k] || 0), 0);
-      if (sum !== gross) throw new ValidationError(`${emp.name}: regular, holiday, other, bonus, allowance and vacation pay don’t add up to gross pay.`);
+    if (parts.regular !== undefined && ['holiday', 'overtime', 'other', 'bonus', 'allowance', 'vacPay'].some(k => parts[k] !== undefined)) {
+      const sum = ['regular', 'holiday', 'overtime', 'other', 'bonus', 'allowance', 'vacPay'].reduce((t, k) => t + cents(parts[k] || 0), 0);
+      if (sum !== gross) throw new ValidationError(`${emp.name}: regular, holiday, overtime, other, bonus, allowance and vacation pay don’t add up to gross pay.`);
     }
+    if (parts.otHours !== undefined && parts.hours !== undefined && parts.otHours > parts.hours) throw new ValidationError(`${emp.name}: overtime hours are more than the hours worked.`);
     // Taxable benefits not paid in cash: known kinds only, amounts zero or more.
     let benefits;
     if (l.benefits !== undefined) {
@@ -469,10 +481,65 @@ function validatePayrun(data, store) {
     if (l.final !== undefined) extra.final = !!l.final;
     // When the pay stub was emailed (recorded by the mail route): kept as it was, never more than the last 10.
     if (l.sent !== undefined) extra.sent = (Array.isArray(l.sent) ? l.sent : []).filter(isObj).slice(-10).map(s => ({ at: Number(s.at) || 0, to: str(s.to, 200), by: str(s.by, 120) }));
+    if (l.bonusVac !== undefined) extra.bonusVac = !!l.bonusVac;
+    // Hours in each work week of the pay period (for overtime): up to 6 weeks, each 0 to 168 hours.
+    if (l.weekHours !== undefined) {
+      if (!Array.isArray(l.weekHours) || l.weekHours.length > 6 || l.weekHours.some(h => !Number.isFinite(Number(h)) || Number(h) < 0 || Number(h) > 168)) throw new ValidationError(`${emp.name}: the hours by week aren’t valid.`);
+      extra.weekHours = l.weekHours.map(h => cents(Number(h)) / 100);
+    }
+    // Workers' compensation premium: insurable earnings no more than pay plus benefits, premium = earnings × rate per $100.
+    if (l.wsib !== undefined && l.wsib !== null) {
+      const w = l.wsib;
+      if (!isObj(w)) throw new ValidationError(`${emp.name}: the workers’ compensation premium isn’t valid.`);
+      const rate = Number(w.rate), ins = amt(w.insurable, 'workers’ compensation earnings'), prem = amt(w.premium, 'workers’ compensation premium');
+      if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new ValidationError(`${emp.name}: the workers’ compensation rate isn’t valid.`);
+      if (ins > gross + benCents) throw new ValidationError(`${emp.name}: workers’ compensation earnings are more than pay plus taxable benefits.`);
+      if (Math.abs(prem - Math.round(ins * rate / 100)) > 1) throw new ValidationError(`${emp.name}: the workers’ compensation premium doesn’t match the earnings and rate.`);
+      extra.wsib = { group: str(w.group, 40), rate, insurable: ins / 100, premium: prem / 100 };
+    }
     return { ...l, ...extra, gross: gross / 100, rrsp: cents(numOr0(l.rrsp)) / 100, union: cents(numOr0(l.union)) / 100, ded, er, net: n / 100 };
   });
   if (data.entryId && !store.get('entries', data.entryId)) throw new ValidationError('The journal entry for this pay run doesn’t exist.');
-  return { ...data, lines, totalNet: net / 100 };
+  const out = { ...data, lines, totalNet: net / 100 };
+  // Voiding: the pay run stays as it was, marked void, with a reversing entry that undoes its journal entry.
+  const prev = id && store.get('payruns', id);
+  if (prev && prev.void) {
+    if (!isObj(data.void)) throw new ValidationError('This pay run is void. A void pay run can’t be brought back: post a new one.', 409);
+    if (JSON.stringify(prev.lines) !== JSON.stringify(lines) || prev.payDate !== data.payDate || prev.entryId !== data.entryId || prev.void.date !== data.void.date || prev.void.entryId !== data.void.entryId) throw new ValidationError('A void pay run can’t be changed.', 409);
+  }
+  if (data.void !== undefined && data.void !== null && data.void !== false) {
+    const v = data.void;
+    if (!isObj(v) || !isDate(v.date)) throw new ValidationError('Choose the date of the reversing entry.');
+    if (v.date < data.payDate) throw new ValidationError('The reversing entry can’t be dated before the pay date.');
+    if (!prev) throw new ValidationError('Only a posted pay run can be voided.');
+    if (!prev.void && (JSON.stringify(prev.lines) !== JSON.stringify(lines) || prev.payDate !== data.payDate)) throw new ValidationError('A pay run can’t be changed while it’s voided. Void it as it is.');
+    const orig = data.entryId && store.get('entries', data.entryId);
+    let entryId = '';
+    if (orig) {
+      const rev = store.get('entries', String(v.entryId || ''));
+      if (!rev || rev.reversalOf !== orig.id || rev.date !== v.date) throw new ValidationError('A void pay run needs a reversing entry for its journal entry, dated the day it’s voided.');
+      // The reversal has to undo the entry exactly: the same accounts, debits and credits swapped.
+      const key = (ls, swap) => ls.map(l => `${l.account}|${cents(swap ? l.credit : l.debit)}|${cents(swap ? l.debit : l.credit)}`).sort().join(';');
+      if (key(rev.lines, true) !== key(orig.lines, false)) throw new ValidationError('The reversing entry doesn’t undo the pay run’s journal entry.');
+      entryId = rev.id;
+    }
+    out.void = { date: v.date, reason: str(v.reason, 200).trim(), entryId, at: Number(v.at) || Date.now() };
+  } else delete out.void;
+  return out;
+}
+/** A pay run can be deleted only while nothing depends on it: no later pay run for the same employees (their
+    year-to-date amounts include it) and its bank payment not reconciled. Otherwise it's voided. */
+function checkPayrunDelete(id, store) {
+  const run = store.get('payruns', id);
+  if (!run) return;
+  // Pay runs for example employees go with the example data (Settings → Clear example data).
+  if ((run.lines || []).length && run.lines.every(l => (store.get('employees', l.employeeId) || {}).example)) return;
+  if (run.void) throw new ValidationError('A void pay run stays in the books with its reversing entry, so it can’t be deleted.', 409);
+  const ids = new Set((run.lines || []).map(l => l.employeeId));
+  const later = store.list('payruns').some(r => r.id !== id && !r.void && (r.payDate > run.payDate || (r.payDate === run.payDate && (r.created || 0) > (run.created || 0))) && (r.lines || []).some(l => ids.has(l.employeeId)));
+  if (later) throw new ValidationError('Only the latest pay run can be deleted, because later pay runs used its year-to-date amounts. Void it instead.', 409);
+  const e = run.entryId && store.get('entries', run.entryId);
+  if (e && Object.values(e.clear || {}).includes('r')) throw new ValidationError('This pay run’s bank payment is reconciled, so it can’t be deleted. Void it instead.', 409);
 }
 
 /* Receipts: the file and what AI read are set by the server (upload and reading routes).
@@ -735,12 +802,13 @@ function validateRecord(collection, id, data, store) {
     case 'recons': return validateRecon(data, store);
     case 'filings': return validateFiling({ ...data, id }, store);
     case 'employees': return validateEmployee(data);
-    case 'payruns': return validatePayrun(data, store);
+    case 'payruns': return validatePayrun(data, store, id);
     case 'receipts': return validateReceipt(data, store, id);
     case 'attachments': return validateAttachment(data, store);
     case 'questions': return validateQuestion(data, store);
     case 'estimates': return validateEstimate(data, store, id);
-    case 'recurring': return validateRecurring(data, store);
+    case 'recurring': return validateRecurring(data, store, id);
+    case 'delayed': return validateDelayed(data, store, id);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -758,8 +826,12 @@ function checkDelete(collection, id, store) {
     throw new ValidationError('This account has imported bank transactions or bank rules, so it can’t be deleted. Mark it inactive instead.', 409);
   }
   const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id || r.from === id || r.to === id;
-  if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines))) {
+  if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines) || store.list('delayed').some(onLines))) {
     throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
+  }
+  if (collection === 'delayed') {
+    const r = store.get('delayed', id), d = r && r.invoiceId && store.get('docs', r.invoiceId);
+    if (d && (d.lines || []).some(l => l && l.dl === id)) throw new ValidationError(`This is on invoice${d.number ? ' #' + d.number : ''}. Take it off the invoice (or delete the invoice) first.`, 409);
   }
   if (collection === 'estimates' && DEP.forEstimate(id, store.list('entries')).list.length) {
     throw new ValidationError('This estimate has deposits recorded on it. Delete or refund them first.', 409);
@@ -787,7 +859,7 @@ function checkDelete(collection, id, store) {
   if (collection === 'entries' && store.list('assets').some(a => Object.values(a.posted || {}).includes(id))) throw new ValidationError('This is an amortization entry. Undo it from Fixed assets instead.', 409);
   if (collection === 'items') {
     const onIt = r => (r.lines || []).some(l => l.item === id);
-    if (store.list('docs').some(onIt) || store.list('estimates').some(onIt) || store.list('recurring').some(onIt) || store.list('pos').some(onIt) || store.list('entries').some(e => e.inv && e.inv.item === id)) throw new ValidationError('This product or service is on invoices, bills or estimates, so it can’t be deleted. Mark it inactive instead.', 409);
+    if (store.list('docs').some(onIt) || store.list('estimates').some(onIt) || store.list('recurring').some(onIt) || store.list('delayed').some(onIt) || store.list('pos').some(onIt) || store.list('entries').some(e => e.inv && e.inv.item === id)) throw new ValidationError('This product or service is on invoices, bills or estimates, so it can’t be deleted. Mark it inactive instead.', 409);
   }
   if (collection === 'contacts' && (store.contactUsed(id) || store.list('rules').some(r => r.contactId === id))) {
     throw new ValidationError('This contact appears on transactions, so it can’t be deleted.', 409);
@@ -795,9 +867,10 @@ function checkDelete(collection, id, store) {
   if (collection === 'employees' && store.list('payruns').some(r => (r.lines || []).some(l => l.employeeId === id))) {
     throw new ValidationError('This employee has been paid, so they can’t be deleted. Mark them inactive instead.', 409);
   }
-  if (collection === 'entries' && store.list('payruns').some(r => r.entryId === id)) {
+  if (collection === 'entries' && store.list('payruns').some(r => r.entryId === id || (r.void && r.void.entryId === id))) {
     throw new ValidationError('This transaction belongs to a pay run. Delete the pay run instead.', 409);
   }
+  if (collection === 'payruns') checkPayrunDelete(id, store);
   if (collection === 'docs' && store.list('docs').some(c => (c.applied || []).some(a => a.docId === id))) {
     throw new ValidationError('A credit is applied to this document. Remove it from the credit first.', 409);
   }
@@ -825,6 +898,26 @@ function validateDirectDeposit(d) {
   };
 }
 
+/** An address in parts (employee, or the employer for the T4 Summary): null when empty. */
+function validateAddrParts(a, who) {
+  if (a === null || a === '') return null;
+  if (!isObj(a)) throw new ValidationError('The address isn’t valid.');
+  const country = ['CAN', 'USA'].includes(a.country) ? a.country : 'CAN';
+  const out = { line1: str(a.line1, 60).trim(), line2: str(a.line2, 60).trim(), city: str(a.city, 40).trim(),
+    prov: str(a.prov, 2).trim().toUpperCase(), postal: str(a.postal, 10).toUpperCase().replace(country === 'CAN' ? /[\s-]/g : /\s+/g, ''), country };
+  if (!out.line1 && !out.line2 && !out.city && !out.postal) return null;
+  if (out.prov && (country === 'CAN' ? !PAY_PROVINCES.includes(out.prov) : !/^[A-Z]{2}$/.test(out.prov))) throw new ValidationError(`${who ? who + ': ' : ''}choose a province or territory.`);
+  if (out.postal && country === 'CAN' && !/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(out.postal)) throw new ValidationError(`${who ? who + ': ' : ''}the postal code looks like A1A 1A1.`);
+  return out;
+}
+/** Who sends the T4 XML file to CRA, and who CRA contacts about it (the T619 transmittal). */
+function validateTransmitter(t) {
+  if (!isObj(t)) return {};
+  const email = v => { const s = str(v, 60).trim(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : ''; };
+  return { repId: str(t.repId, 7).toUpperCase().replace(/[^A-Z0-9]/g, ''), name: str(t.name, 35).trim(), contact: str(t.contact, 35).trim(),
+    phone: str(t.phone, 30).trim(), email: email(t.email), email2: email(t.email2) };
+}
+
 function validatePayrollSettings(p) {
   if (!isObj(p)) return { hsfRate: 1.65, remitFreq: 'monthly' };
   const hsf = Number(p.hsfRate);
@@ -838,6 +931,12 @@ function validatePayrollSettings(p) {
     hsfPrimary: !!p.hsfPrimary,
     assocPayroll: optAmount(p.assocPayroll, 'Associated employers’ payroll') || 0,
     dd: validateDirectDeposit(p.dd),
+    transmitter: validateTransmitter(p.transmitter),
+    employerAddr: isObj(p.employerAddr) ? validateAddrParts(p.employerAddr, 'Employer') : null,
+    // Overtime: the company's own weekly threshold ('' = the province's rule).
+    otThreshold: (() => { const n = Number(p.otThreshold); return p.otThreshold === '' || p.otThreshold == null || !Number.isFinite(n) ? '' : Math.min(168, Math.max(1, Math.round(n * 100) / 100)); })(),
+    eht: validateEht(p.eht),
+    wsib: validateWsib(p.wsib),
   };
   if (PAYCALC.REMIT_FREQS.rq.includes(p.remitFreqRq)) out.remitFreqRq = p.remitFreqRq;
   // Emailed pay stubs: the subject and message in each language (blank: Sumlora's own wording).
@@ -851,6 +950,31 @@ function validatePayrollSettings(p) {
     if (Object.keys(m).length) out.stubMail = m;
   }
   return out;
+}
+/** Ontario Employer Health Tax: eligible for the exemption, this employer's share of it, and associated employers' payroll. */
+function validateEht(e) {
+  if (!isObj(e)) return { eligible: true, exemption: '', groupPayroll: 0 };
+  const ex = optAmount(e.exemption, 'EHT exemption');
+  if (ex !== '' && ex > 1000000) throw new ValidationError('The EHT exemption is at most $1,000,000.');
+  return { eligible: e.eligible !== false, exemption: ex, groupPayroll: optAmount(e.groupPayroll, 'Associated employers’ Ontario payroll') || 0 };
+}
+/** Workers' compensation (WSIB in Ontario): account, reporting frequency, maximum insurable earnings and rate groups. */
+function validateWsib(w) {
+  if (!isObj(w)) return { on: false, account: '', freq: 'quarterly', max: '', groups: [] };
+  const groups = Array.isArray(w.groups) ? w.groups : [];
+  if (groups.length > 20) throw new ValidationError('At most 20 workers’ compensation rate groups.');
+  const seen = new Set();
+  const out = groups.map((g, i) => {
+    if (!isObj(g)) throw new ValidationError(`Rate group ${i + 1} isn’t valid.`);
+    const id = str(g.id, 40).trim() || 'g' + (i + 1);
+    if (seen.has(id)) throw new ValidationError('Two rate groups have the same id.');
+    seen.add(id);
+    const rate = Number(g.rate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) throw new ValidationError(`Rate group ${i + 1}: the rate per $100 must be between 0 and 100.`);
+    return { id, name: str(g.name, 80).trim(), code: str(g.code, 20).trim(), rate: Math.round(rate * 10000) / 10000 };
+  });
+  if (w.on && !out.length) throw new ValidationError('Add at least one rate group with its rate per $100 of insurable earnings.');
+  return { on: !!w.on, account: str(w.account, 30).trim(), freq: ['monthly', 'quarterly', 'annual'].includes(w.freq) ? w.freq : 'quarterly', max: optAmount(w.max, 'Maximum insurable earnings'), groups: out };
 }
 
 function validateCompany(data) {
@@ -921,6 +1045,8 @@ function validateCompany(data) {
       ...(isObj(r.sort) && ['date', 'type', 'num', 'name', 'memo', 'acct', 'split', 'cls', 'amt'].includes(r.sort.col) ? { sort: { col: r.sort.col, dir: r.sort.dir === 'desc' ? 'desc' : 'asc' } } : {}),
     })).filter(r => r.id && r.name),
     cashForecast: validateCashForecast(data.cashForecast),
+    // Workflow reminders (workflows.js): which ready-made rules are on, and how each is set.
+    workflows: (() => { try { return WF.clean(data.workflows); } catch (e) { throw new ValidationError(e.message); } })(),
   };
   if (out.qstRate > 0 && out.pstRate > 0) throw new ValidationError('A company charges QST or PST, not both.');
   if (out.pstRate > 0 && out.pstRate >= out.taxRate) throw new ValidationError('The sales tax rate must include GST plus PST.');
@@ -1013,6 +1139,7 @@ function docLines(lines) {
     if (!isObj(l)) throw new ValidationError('Each line must be an object.');
     const out = { desc: str(l.desc, 500), account: String(l.account || ''), taxCode: ['std', 'gst', 'zero', 'export', 'exempt', 'none'].includes(l.taxCode) ? l.taxCode : 'none' };
     if (l.item) out.item = str(l.item, 120);
+    if (l.cls !== undefined && l.cls !== null) out.cls = typeof l.cls === 'string' ? l.cls.slice(0, 40) : '\u0000'; // checked by checkLineClasses
     if (l.qty !== undefined) out.qty = Number(l.qty) || 0;
     if (l.rate !== undefined) out.rate = Number(l.rate) || 0;
     if (l.amount !== undefined) out.amount = Number(l.amount) || 0;
@@ -1028,8 +1155,11 @@ function validateEstimate(data, store, id) {
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Estimate total must be a number.');
   const lines = docLines(data.lines);
   for (const l of lines) if (l.account && !store.get('accounts', l.account)) throw new ValidationError('An account on this estimate doesn’t exist.');
+  checkLineClasses(lines, store, id && store.get('estimates', id));
   if (data.invoiceId && !store.get('docs', String(data.invoiceId))) throw new ValidationError('The invoice made from this estimate doesn’t exist.');
   const out = { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
+  // When it was emailed (recorded by the server's mail route), for workflow follow-ups.
+  if (data.sent !== undefined) out.sent = (Array.isArray(data.sent) ? data.sent : []).filter(isObj).slice(-20).map(e => ({ at: Number(e.at) || 0, to: str(e.to, 300), by: str(e.by, 120), what: ['estimate', 'followup'].includes(e.what) ? e.what : 'estimate' }));
   // Deposit requested: a percent of the total, or an amount up to the total.
   delete out.deposit;
   if (data.deposit && Number(data.deposit.value)) {
@@ -1045,7 +1175,60 @@ function validateEstimate(data, store, id) {
     if (s.list.length && prev && prev.contactId !== out.contactId) throw new ValidationError('A deposit has been received on this estimate, so its customer can’t change.', 409);
     if (s.received > (Number(out.total) || 0) + 0.004) throw new ValidationError(`The total can’t be less than the ${s.received.toFixed(2)} deposit received.`, 409);
   }
-  return out;
+  // Its class and tags go with it to the invoice made from it.
+  if (data.cls) {
+    const prevE = id && store.get('estimates', id), known = new Set(((store.getSetting && store.getSetting('company')) || {}).classes?.map(x => x.id) || []);
+    if (!known.has(String(data.cls)) && !(prevE && prevE.cls === data.cls)) throw new ValidationError('That class doesn’t exist. Add it under Settings first.');
+    out.cls = String(data.cls);
+  } else delete out.cls;
+  return withTags(out, data, store);
+}
+
+/* Delayed charges and delayed credits (delayed-calc.js): noted for a customer, not in the books until they're added
+   to an invoice. The invoice's lines say which ones are on it (line.dl); saving or deleting it closes or reopens them. */
+function validateDelayed(data, store, id) {
+  if (!DELAYED.KINDS.includes(data.kind)) throw new ValidationError('Choose a delayed charge or a delayed credit.');
+  if (!isDate(data.date)) throw new ValidationError('The date must be YYYY-MM-DD.');
+  const c = store.get('contacts', String(data.contactId || ''));
+  if (!c || c.kind === 'vendor') throw new ValidationError('Choose the customer.');
+  if (c.currency) throw new ValidationError('Delayed charges are in Canadian dollars. Bill a customer in another currency on an invoice.');
+  const lines = docLines(data.lines).filter(l => l.account || l.desc || l.qty || l.rate);
+  if (!lines.length) throw new ValidationError('Add at least one line.');
+  for (const l of lines) {
+    const a = store.get('accounts', l.account);
+    if (!a || a.type !== 'Income') throw new ValidationError('Choose an income account on every line.');
+    if (l.item && !store.get('items', l.item)) throw new ValidationError('A product or service on this doesn’t exist.');
+    if (!Number.isFinite(l.qty || 0) || !Number.isFinite(l.rate || 0)) throw new ValidationError('Line amounts must be numbers.');
+  }
+  const prev = id && store.get('delayed', id);
+  checkLineClasses(lines, store, prev);
+  const amount = DELAYED.total({ lines });
+  if (!(amount > 0)) throw new ValidationError('The amount has to be above zero.');
+  // Linked to an invoice by saving the invoice (the server does it). A save here keeps a link only when that invoice
+  // really has its lines (so a restore keeps the links, and nothing else can make one up).
+  const onInv = invId => { const d = invId && store.get('docs', String(invId)); return d && d.kind === 'invoice' && (d.lines || []).some(l => l && l.dl === id) ? d : null; };
+  const invDoc = onInv(data.invoiceId) || onInv(prev && prev.invoiceId), inv = invDoc ? invDoc.id : '';
+  if (invDoc && invDoc.contactId !== String(data.contactId)) throw new ValidationError('This is on an invoice, so its customer can’t change. Take it off the invoice first.', 409);
+  const known = new Set(((store.getSetting && store.getSetting('company')) || {}).classes?.map(x => x.id) || []);
+  if (prev && prev.cls) known.add(prev.cls);
+  const cls = data.cls && known.has(String(data.cls)) ? String(data.cls) : '';
+  if (data.cls && !cls) throw new ValidationError('That class doesn’t exist. Add it under Settings first.');
+  const out = { kind: data.kind, date: data.date, contactId: String(data.contactId), number: str(data.number, 40).trim(), memo: str(data.memo, 2000), lines, amount,
+    status: inv ? 'closed' : 'open', invoiceId: inv, ...(cls ? { cls } : {}), created: Number(data.created) || Date.now() };
+  if (data.example) out.example = true;
+  return withTags(out, data, store);
+}
+/** An invoice's lines from delayed charges and credits (line.dl): each one this customer's, and not on another invoice. */
+function checkDelayedLines(data, store, id) {
+  const ids = new Set();
+  for (const l of data.lines || []) {
+    if (!isObj(l) || l.dl === undefined || l.dl === '' || l.dl === null) { if (isObj(l)) delete l.dl; continue; }
+    if (data.kind !== 'invoice') throw new ValidationError('Delayed charges and credits go on invoices only.');
+    const r = store.get('delayed', String(l.dl));
+    if (!r || r.contactId !== data.contactId) throw new ValidationError('A delayed charge or credit on this invoice isn’t this customer’s.');
+    if (r.invoiceId && r.invoiceId !== id && store.get('docs', r.invoiceId)) throw new ValidationError('A delayed charge or credit on this invoice is already on another invoice.', 409);
+    l.dl = r.id; ids.add(r.id);
+  }
 }
 /* Recurring transactions: a template and a schedule. The client makes each one when it's due (or reminds someone).
    Invoices and bills have a customer or vendor and item lines; expenses and deposits a bank or card account and
@@ -1058,7 +1241,7 @@ function recBank(store, id, what) {
   if (a.currency) throw new ValidationError('Recurring transactions use Canadian-dollar bank and card accounts.');
   return String(id);
 }
-function validateRecurring(data, store) {
+function validateRecurring(data, store, id) {
   if (!REC_KINDS.includes(data.kind)) throw new ValidationError('A recurring transaction must be an invoice, bill, expense, deposit, transfer or journal entry.');
   if (!str(data.name).trim()) throw new ValidationError('Give the recurring transaction a name.');
   const doc = data.kind === 'invoice' || data.kind === 'bill', money = data.kind === 'expense' || data.kind === 'deposit';
@@ -1080,6 +1263,7 @@ function validateRecurring(data, store) {
     const lines = docLines(data.lines);
     if (!lines.length) throw new ValidationError('Add at least one line.');
     for (const l of lines) if (!store.get('accounts', l.account)) throw new ValidationError('Choose an account on every line.');
+    checkLineClasses(lines, store, id && store.get('recurring', id));
     out.lines = lines;
   }
   if (doc) out.terms = data.terms === '' || data.terms == null ? '' : Math.max(0, Math.min(365, Math.round(Number(data.terms) || 0)));
@@ -1103,8 +1287,14 @@ function validateRecurring(data, store) {
     if (bad) throw new ValidationError(bad);
     out.lines = RECUR.journalLines(data.lines);
     for (const l of out.lines) if (!store.get('accounts', l.account)) throw new ValidationError('A line uses an account that doesn’t exist.');
+    checkLineClasses(out.lines, store, id && store.get('recurring', id));
   }
-  return out;
+  // The class and tags it gives what it makes (a class at the top, or one on each line with classes on each line).
+  const prev = id && store.get('recurring', id);
+  const known = new Set(((store.getSetting && store.getSetting('company')) || {}).classes?.map(x => x.id) || []);
+  if (prev && prev.cls) known.add(prev.cls);
+  if (data.cls) { if (!known.has(String(data.cls))) throw new ValidationError('That class doesn’t exist. Add it under Settings first.'); out.cls = String(data.cls); } else delete out.cls;
+  return withTags(out, data, store);
 }
 
 function validateQuestion(data, store) {

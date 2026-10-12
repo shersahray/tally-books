@@ -7,7 +7,7 @@
  * A stub never shows the employee's SIN. A bank account, when shown, is only its last 3 digits.
  *
  * stub = {
- *   company: { name, bn }, payDate, from, to, name, address,
+ *   company: { name, bn }, void (the pay run was cancelled), payDate, from, to, name, address,
  *   earnings: [row], gross: [cur, ytd],
  *   benefits: { rows: [row], total: [cur, ytd], qc } | null,
  *   deductions: [row], totalDed: [cur, ytd], net,
@@ -24,7 +24,8 @@
     'Pay stub': 'Relevé de paie', 'Pay date': 'Date de paie', 'Period': 'Période', 'BN': 'NE',
     'Earnings': 'Gains', 'This pay': 'Cette paie', 'Year to date': 'Cumul annuel', 'Gross pay': 'Salaire brut',
     'Regular pay': 'Salaire régulier', 'Holiday pay': 'Indemnité de jour férié', 'Other pay': 'Autre rémunération', 'Bonus': 'Prime',
-    'Taxable allowance': 'Allocation imposable', 'Vacation pay paid out': 'Indemnité de vacances versée', 'Vacation pay': 'Indemnité de vacances',
+    'Taxable allowance': 'Allocation imposable', 'Overtime': 'Heures supplémentaires', 'Bonus (earns vacation pay)': 'Prime (donne droit à l’indemnité de vacances)',
+    'Void': 'Annulée', 'this pay run was cancelled.': 'cette paie a été annulée.', 'Vacation pay paid out': 'Indemnité de vacances versée', 'Vacation pay': 'Indemnité de vacances',
     'Taxable benefits (not paid to you)': 'Avantages imposables (non versés)', 'Total taxable benefits': 'Total des avantages imposables',
     'Included in your taxable income and on your T4. Tax on them is taken from your pay.': 'Inclus dans votre revenu imposable et sur votre T4. L’impôt sur ces avantages est retenu sur votre paie.',
     'Included in your taxable income and on your T4 and RL-1. Tax on them is taken from your pay.': 'Inclus dans votre revenu imposable et sur votre T4 et votre relevé 1. L’impôt sur ces avantages est retenu sur votre paie.',
@@ -54,6 +55,7 @@
   /** A row's label in a language: "Regular, 40 h × $25.00", "Holiday pay (Labour Day)", "Vacation pay (4%)". */
   function rowLabel(r, lang) {
     if (r.key === 'Regular pay' && r.h) return `${lang === 'fr' ? 'Régulier' : 'Regular'}, ${String(r.h).replace('.', lang === 'fr' ? ',' : '.')} h × ${money(r.rate, lang)}`;
+    if (r.key === 'Overtime' && r.h) return `${t('Overtime', lang)}, ${String(r.h).replace('.', lang === 'fr' ? ',' : '.')} h × ${money(r.rate, lang)}`;
     if (r.key === 'Holiday pay' && r.names && r.names.length) return `${t('Holiday pay', lang)} (${r.names.map(n => t(n, lang)).join(', ')})`;
     if (r.key === 'Vacation pay' && r.rate !== undefined) return `${t('Vacation pay', lang)} (${pct(r.rate, lang)})`;
     return t(r.key, lang);
@@ -110,6 +112,8 @@
     pdf.text(L + 6, y + 2, t('Net pay', lang), { size: 12, bold: true });
     pdf.text(R - 6, y + 2, money(s.net, lang), { size: 12, bold: true, align: 'right' });
     y += 24;
+    // A cancelled pay run: said plainly, so nobody takes the stub for pay that was made.
+    if (s.void) { pdf.text(L, y, `${t('Void', lang)}${lang === 'fr' ? ' : ' : ': '}${t('this pay run was cancelled.', lang)}`, { size: 11, bold: true, color: '#b42318' }); y += 18; }
     if (s.deposit) { pdf.text(L, y, `${t('Deposited to the account ending in', lang)} ${s.deposit}`, { size: 9, color: '#555555' }); y += 16; }
     if (s.vac) {
       pdf.text(L, y, `${t('Vacation pay owed to you after this pay:', lang)} ${money(s.vac.balance, lang)}`, { size: 9.5 });

@@ -127,7 +127,7 @@ const saveTags=async(tags,groups,msg)=>{if(await putCompany({...strip(S.company)
 async function tagRemoveEverywhere(id){
   const off=r=>{const c={...r};const t=(c.tags||[]).filter(x=>x!==id);if(t.length)c.tags=t;else delete c.tags;return c};
   const has=r=>Array.isArray(r&&r.tags)&&r.tags.includes(id),w=[];
-  for(const col of ['entries','docs','rules'])for(const r of S[col].filter(has))w.push({op:'set',collection:col,id:r.id,data:off(r)});
+  for(const col of ['entries','docs','rules','delayed','estimates','recurring'])for(const r of (S[col]||[]).filter(has))w.push({op:'set',collection:col,id:r.id,data:off(r)});
   for(const b of S.bankTxns.filter(b=>has(b.cat)))w.push({op:'set',collection:'bankTxns',id:b.id,data:{...b,cat:off(b.cat)}});
   return !w.length||batch(w);
 }

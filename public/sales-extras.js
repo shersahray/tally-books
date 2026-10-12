@@ -36,7 +36,7 @@ function estimateForm(x){
   const f=openModal(x?`Estimate ${x.number?'#'+x.number:''}`:'New estimate',
     `${done?`<div class="banner" style="margin:0"><span>This estimate was turned into an invoice.</span> <button type="button" class="btn sm" data-estinv="${x.invoiceId}">View invoice</button></div>`:''}
     <div class="fields">${fld('eC','Customer',contactSelect('eC',d.contactId,'customer'))}${fld('eN','Estimate no.',`<input type="text" id="eN" value="${esc(d.number)}">`)}${fld('eD','Date',`<input type="date" id="eD" value="${esc(d.date)}">`)}${fld('eX','Good until',`<input type="date" id="eX" value="${esc(d.expires||'')}">`)}
-    ${typeof fieldInputs==='function'?fieldInputs(d,false):''}${x&&!done?fld('eS','Status',`<select id="eS">${Object.entries(EST_STATUS).map(([k,v])=>`<option value="${k}" ${d.status===k?'selected':''}>${v}</option>`).join('')}</select>`):''}</div>
+    ${typeof fieldInputs==='function'?fieldInputs(d,false):''}${typeof classField==='function'?classField('eCls',d.cls):''}${typeof tagField==='function'?tagField('eTags',d.tags):''}${x&&!done?fld('eS','Status',`<select id="eS">${Object.entries(EST_STATUS).map(([k,v])=>`<option value="${k}" ${d.status===k?'selected':''}>${v}</option>`).join('')}</select>`):''}</div>
     <div data-le></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="eM">Message on estimate</label><textarea id="eM">${esc(d.memo||'')}</textarea>
       <label for="eDepV" style="margin-top:10px">Deposit requested</label><div style="display:flex;gap:6px"><select id="eDepK" aria-label="Kind of deposit" style="max-width:150px"><option value="">None</option><option value="percent" ${d.deposit?.kind==='percent'?'selected':''}>Percent of total</option><option value="amount" ${d.deposit?.kind==='amount'?'selected':''}>Amount</option></select><input type="number" id="eDepV" step="0.01" min="0" inputmode="decimal" value="${esc(d.deposit?.value??'')}" style="max-width:130px" ${d.deposit?'':'disabled'}><span class="muted" data-depamt style="align-self:center;font-size:13px"></span></div><span class="hint">Printed on the estimate as the deposit to accept it.</span></div>${totalsHTML()}</div>
@@ -44,11 +44,13 @@ function estimateForm(x){
     `${delBtn(!!x)}${x?'<button type="button" class="btn ghost" data-estpdf>PDF</button><button type="button" class="btn ghost" data-estmail>Email</button>':''}<button type="button" class="btn" data-close>Cancel</button>${!done&&!(x&&x.status==='declined')?'<button type="button" class="btn" data-estmakehere>Save and make invoice</button>':''}<button type="submit" class="btn primary">Save</button>`,'wide');
   wireContactSelect(f,'eC');
   const filter=DOC_ACCT_FILTER(true);
-  const cols=[...itemCol(true,()=>!!contact($('#eC',f).value)?.taxCode),{key:'desc',label:'Description',type:'text'},{key:'account',label:'Income account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:'Rate',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
-  cols.defaults=()=>({qty:1,taxCode:contact($('#eC',f).value)?.taxCode||'std',account:defA});
+  const perLine=clsPerLine(d)&&!!$('#eCls',f);
+  const cols=[...itemCol(true,()=>!!contact($('#eC',f).value)?.taxCode),{key:'desc',label:'Description',type:'text'},{key:'account',label:'Income account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:'Rate',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},...(perLine?[clsCol()]:[]),{key:'amt',label:'Amount',type:'calc',calc:r=>r2((+r.qty||0)*(+r.rate||0))}];
+  cols.defaults=()=>({qty:1,taxCode:contact($('#eC',f).value)?.taxCode||'std',account:defA,...(perLine?{cls:topCls(f,'eCls')}:{})});
   let estTotal=0;
   const depShow=()=>{const k=$('#eDepK',f).value,v=$('#eDepV',f);v.disabled=!k;$('[data-depamt]',f).textContent=k==='percent'&&+v.value>0?money(TallyDeposits.requested({total:estTotal,deposit:{kind:k,value:+v.value}})):''};
-  const le=lineEditor($('[data-le]',f),cols,d.lines,r=>{const c=calcLines(r,x=>(+x.qty||0)*(+x.rate||0),false);estTotal=c.total;setTotals(f,c);if($('#eDepK',f))depShow()});
+  const le=lineEditor($('[data-le]',f),cols,perLine?withLineCls(d.lines,d.cls):d.lines,r=>{const c=calcLines(r,x=>(+x.qty||0)*(+x.rate||0),false);estTotal=c.total;setTotals(f,c);if($('#eDepK',f))depShow()});
+  if(perLine)wireLineCls(f,'eCls');
   $('#eDepK',f).onchange=()=>{depShow();if($('#eDepK',f).value)$('#eDepV',f).focus()};$('#eDepV',f).oninput=depShow;depShow();
   if(x)bindDepBox(f,x);
   const save=async()=>{f.err('');
@@ -67,6 +69,9 @@ function estimateForm(x){
     const data={...(x?strip(x):{}),number:$('#eN',f).value.trim(),date:$('#eD',f).value,expires:$('#eX',f).value,contactId:cid,memo:$('#eM',f).value.trim(),status:$('#eS',f)?.value||d.status||'open',invoiceId:x?.invoiceId||'',...r,created:x?.created||Date.now()};
     const fv=typeof readFields==='function'?readFields(f,false,x):{};if(Object.keys(fv).length)data.fields=fv;else delete data.fields;
     if(deposit)data.deposit=deposit;else delete data.deposit;
+    // Its class and tags go to the invoice made from it.
+    const ec=$('#eCls',f);if(ec){if(ec.value)data.cls=ec.value;else delete data.cls}
+    if(typeof tagsOf==='function')setTags(data,tagsOf(f,'eTags'));
     if(!await put('estimates',id,data))return null;
     return {...data,id};
   };
@@ -80,13 +85,14 @@ function estimateForm(x){
 async function estMail(x){
   // Asking for a deposit: how much to pay to accept, and how (e-Transfer, and a card link when Stripe is on).
   const pay=depReq(x)?depMailText(x,await opDepLinkFor(x)):'';x=S.estimates.find(y=>y.id===x.id)||x;
-  composeMail({kind:'estimate',contactId:x.contactId,docIds:[],fileName:pdfName('estimate',x.number),makePdf:()=>docPdf({...(S.estimates.find(y=>y.id===x.id)||x),kind:'estimate'}),
+  composeMail({kind:'estimate',contactId:x.contactId,docIds:[],estimateIds:[x.id],fileName:pdfName('estimate',x.number),makePdf:()=>docPdf({...(S.estimates.find(y=>y.id===x.id)||x),kind:'estimate'}),
     vars:{name:contactName(x.contactId),num:x.number||'',amount:dmoney(x.total),due:ddate(x.expires),pay}});
 }
 function estOpenInvoice(id){const d=S.docs.find(y=>y.id===id);if(d){docForm('invoice',d);addExtras('docs',d.id)}}
 /** Open a new invoice filled in from the estimate; saving it links the two. */
 function estToInvoice(x){
-  docForm('invoice',null,{contactId:x.contactId,memo:x.memo||'',fields:x.fields,lines:x.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode})),
+  docForm('invoice',null,{contactId:x.contactId,memo:x.memo||'',fields:x.fields,...(x.cls?{cls:x.cls}:{}),...(x.tags&&typeof liveTags==='function'&&liveTags(x.tags).length?{tags:liveTags(x.tags)}:{}),
+    lines:x.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode,...(l.cls!=null?{cls:l.cls}:{})})),
     note:`<div class="banner" style="margin:0"><span>From estimate</span> <b class="mono">${esc(x.number||'')}</b><span>. Check the lines, then save the invoice.</span></div>`,
     onSaved:async id=>{const cur=S.estimates.find(y=>y.id===x.id)||x;await put('estimates',x.id,{...strip(cur),status:'accepted',invoiceId:id});toast('Invoice saved and linked to the estimate');
       // A deposit received on the estimate is used on the new invoice; anything over its total stays held for the customer.
@@ -254,6 +260,11 @@ function vRecurring(kind){
 const recSchedHTML=(d,r)=>`${fld('rcN','Repeat every',`<div style="display:flex;gap:6px"><input type="number" id="rcN" min="1" max="12" step="1" value="${esc(d.n)}" style="width:70px" aria-label="How many"><select id="rcEvery" aria-label="Weeks, months, quarters or years">${Object.entries(REC_EVERY).map(([k,v])=>`<option value="${k}" ${d.every===k?'selected':''}>${v[1]}</option>`).join('')}</select></div>`)}
       ${fld('rcNext',r?'Next one on':'First one on',`<input type="date" id="rcNext" value="${esc(d.next)}">`)}${fld('rcEnd','Last one on (optional)',`<input type="date" id="rcEnd" value="${esc(d.end||'')}">`)}`;
 const recModeHTML=d=>fld('rcMode','When it’s due',`<select id="rcMode"><option value="auto" ${d.mode!=='remind'?'selected':''}>Make it automatically</option><option value="remind" ${d.mode==='remind'?'selected':''}>Remind me to review it first</option></select>`);
+/** The class and tags a template gives what it makes (recurring-calc.js), tags it still has only. */
+const recCarry=r=>TallyRecurring.carry(r,typeof tagList==='function'?tagList().map(t=>t.id):null);
+/** Class and Tags fields on a recurring form (ids rcCls, rcTags). */
+const recClsTagsHTML=d=>`${typeof classField==='function'?classField('rcCls',d.cls):''}${typeof tagField==='function'?tagField('rcTags',d.tags):''}`;
+function recClsTagsRead(f,data){const c=$('#rcCls',f);if(c){if(c.value)data.cls=c.value;else delete data.cls}if(typeof tagsOf==='function')setTags(data,tagsOf(f,'rcTags'));return data}
 /** Read the schedule back, or {err}. A month-end start (say the 30th of April) keeps to month-end. */
 function recSchedRead(f,d,r){
   const next=$('#rcNext',f).value,end=$('#rcEnd',f).value;
@@ -269,7 +280,7 @@ function recurringForm(r,kind,preset){
     `<div class="fields">${fld('rcName','Name',`<input type="text" id="rcName" value="${esc(d.name)}" placeholder="${inv?'e.g. Monthly bookkeeping retainer':'e.g. Office rent'}">`)}${fld('rcC',inv?'Customer':'Vendor',contactSelect('rcC',d.contactId,ck))}
       ${recSchedHTML(d,r)}
       ${fld('rcTerms','Due in (days)',`<input type="number" id="rcTerms" min="0" max="365" step="1" value="${esc(d.terms)}" placeholder="${esc(S.company.terms)}">`)}
-      ${recModeHTML(d)}</div>
+      ${recModeHTML(d)}${recClsTagsHTML(d)}</div>
     ${inv?`<label class="check" data-rcemail><input type="checkbox" id="rcEmail" ${d.email?'checked':''}> <span>Email it to the customer when it’s made (uses the company’s email in Settings)</span></label>`:''}
     ${r?`<label class="check"><input type="checkbox" id="rcActive" ${d.active!==false?'checked':''}> <span>Active (untick to pause it)</span></label>`:''}
     <div data-le></div>
@@ -277,9 +288,12 @@ function recurringForm(r,kind,preset){
     ${r&&r.made?`<div class="muted" style="font-size:13px"><span>Made so far:</span> ${r.made}${r.last?` · <span>last on</span> ${fmtDate(r.last)}`:''}</div>`:''}`,
     saveFoot(!!r),'wide');
   wireContactSelect(f,'rcC');
-  const cols=[...itemCol(inv,()=>!!contact($('#rcC',f).value)?.taxCode),{key:'desc',label:'Description',type:'text'},{key:'account',label:inv?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:inv?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},{key:'amt',label:'Amount',type:'calc',calc:x=>r2((+x.qty||0)*(+x.rate||0))}];
-  cols.defaults=()=>({qty:1,taxCode:contact($('#rcC',f).value)?.taxCode||'std',account:defA});
-  const le=lineEditor($('[data-le]',f),cols,d.lines.map(l=>({...l,taxCode:taxCodeOf(l)})),rows=>setTotals(f,calcLines(rows,x=>(+x.qty||0)*(+x.rate||0),!inv)));
+  const perLine=clsPerLine(d)&&!!$('#rcCls',f);
+  const cols=[...itemCol(inv,()=>!!contact($('#rcC',f).value)?.taxCode),{key:'desc',label:'Description',type:'text'},{key:'account',label:inv?'Income account':'Expense account',type:'acct',filter},{key:'qty',label:'Qty',type:'num',step:'any'},{key:'rate',label:inv?'Rate':'Cost',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},...(perLine?[clsCol()]:[]),{key:'amt',label:'Amount',type:'calc',calc:x=>r2((+x.qty||0)*(+x.rate||0))}];
+  cols.defaults=()=>({qty:1,taxCode:contact($('#rcC',f).value)?.taxCode||'std',account:defA,...(perLine?{cls:topCls(f,'rcCls')}:{})});
+  const rcRows=d.lines.map(l=>({...l,taxCode:taxCodeOf(l)}));
+  const le=lineEditor($('[data-le]',f),cols,perLine?withLineCls(rcRows,d.cls):rcRows,rows=>setTotals(f,calcLines(rows,x=>(+x.qty||0)*(+x.rate||0),!inv)));
+  if(perLine)wireLineCls(f,'rcCls');
   const em=$('[data-rcemail]',f),syncMode=()=>{if(em)em.hidden=$('#rcMode',f).value==='remind'};$('#rcMode',f).onchange=syncMode;syncMode();
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this recurring transaction?',`No more ${inv?'invoices':'bills'} will be made from it. The ones already made stay.`))return;if(await del('recurring',r.id)){closeModal();toast('Recurring transaction deleted')}};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
@@ -291,7 +305,8 @@ function recurringForm(r,kind,preset){
     const cid=await resolveContact(f,'rcC',ck);if(!cid)return;
     const id=r?r.id:uid(),terms=$('#rcTerms',f).value;
     const data={...(r?strip(r):{made:0,created:Date.now()}),kind,name,contactId:cid,...sc,terms:terms===''?'':Math.max(0,parseInt(terms)||0),email:inv&&!!$('#rcEmail',f)?.checked,
-      memo:$('#rcMemo',f).value.trim(),lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode}))};
+      memo:$('#rcMemo',f).value.trim(),lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode,...(perLine?{cls:l.cls||''}:{})}))};
+    recClsTagsRead(f,data);
     if(!await put('recurring',id,data))return;
     closeModal();toast(r?'Recurring transaction saved':`Saved. The first one is made on ${fmtDate(next)}.`);
     if(next<=today()&&data.mode==='auto')recRunDue();
@@ -312,7 +327,7 @@ function recEntryForm(r,kind,preset){
       ${mon?fld('rcBank',out?'Paid from':'Deposit to',`<select id="rcBank"><option value="">Choose account…</option>${acctOptions(d.bank,bk)}</select>`)+fld('rcC',out?'Payee':'Received from',contactSelect('rcC',d.contactId,out?'vendor':'customer',true)):''}
       ${tf?fld('rcFrom','From',`<select id="rcFrom"><option value="">Choose account…</option>${acctOptions(d.from,bk)}</select>`)+fld('rcTo','To',`<select id="rcTo"><option value="">Choose account…</option>${acctOptions(d.to,bk)}</select>`)+fld('rcAmt','Amount',`<input type="number" id="rcAmt" step="0.01" min="0" inputmode="decimal" value="${esc(d.amount??'')}">`):''}
       ${mon||jn?fld('rcRef',jn?'Journal no.':'Reference',`<input type="text" id="rcRef" value="${esc(d.ref||'')}">`):''}
-      ${recSchedHTML(d,r)}${recModeHTML(d)}</div>
+      ${recSchedHTML(d,r)}${recModeHTML(d)}${tf?'':recClsTagsHTML(d)}</div>
     ${r?`<label class="check"><input type="checkbox" id="rcActive" ${d.active!==false?'checked':''}> <span>Active (untick to pause it)</span></label>`:''}
     ${jn?'<div class="muted" style="font-size:13px">With “Remind me”, you can change the amounts each time before it’s posted.</div>':''}
     <div data-le></div>
@@ -321,16 +336,20 @@ function recEntryForm(r,kind,preset){
     ${r&&r.made?`<div class="muted" style="font-size:13px"><span>Made so far:</span> ${r.made}${r.last?` · <span>last on</span> ${fmtDate(r.last)}`:''}</div>`:''}`,
     saveFoot(!!r),'wide');
   if(mon)wireContactSelect(f,'rcC');
-  let le=null;
+  let le=null;const perLine=!tf&&clsPerLine(d)&&!!$('#rcCls',f);
   if(mon){
     const filter=out?a=>!(a.detail==='bank'||a.detail==='card'||a.detail==='ar'||a.detail==='ap'||a.type==='Income'):a=>!(a.detail==='bank'||a.detail==='card'||a.detail==='ar'||a.detail==='ap'||a.type==='Expense'||a.type==='Cost of Goods Sold');
-    const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions}];
-    cols.defaults=()=>({taxCode:contact($('#rcC',f).value)?.taxCode||(out?'std':'none'),account:defA});
-    le=lineEditor($('[data-le]',f),cols,(d.lines||[]).map(l=>({...l,taxCode:taxCodeOf(l)})),rows=>setTotals(f,calcLines(rows,x=>+x.amount||0,out)));
+    const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions},...(perLine?[clsCol()]:[])];
+    cols.defaults=()=>({taxCode:contact($('#rcC',f).value)?.taxCode||(out?'std':'none'),account:defA,...(perLine?{cls:topCls(f,'rcCls')}:{})});
+    const mRows=(d.lines||[]).map(l=>({...l,taxCode:taxCodeOf(l)}));
+    le=lineEditor($('[data-le]',f),cols,perLine?withLineCls(mRows,d.cls):mRows,rows=>setTotals(f,calcLines(rows,x=>+x.amount||0,out)));
   }
-  if(jn)le=lineEditor($('[data-le]',f),[{key:'account',label:'Account',type:'acct'},{key:'memo',label:'Description',type:'text'},{key:'debit',label:'Debit',type:'num'},{key:'credit',label:'Credit',type:'num'}],
-    (d.lines||[]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||''})),
+  const jCols=[{key:'account',label:'Account',type:'acct'},{key:'memo',label:'Description',type:'text'},...(perLine?[clsCol()]:[]),{key:'debit',label:'Debit',type:'num'},{key:'credit',label:'Credit',type:'num'}];
+  if(perLine)jCols.defaults=()=>({cls:topCls(f,'rcCls')});
+  if(jn)le=lineEditor($('[data-le]',f),jCols,
+    (d.lines||[]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||'',...(perLine?{cls:l.cls!=null?l.cls:d.cls||''}:{})})),
     rows=>{const dr=r2(rows.reduce((s,x)=>s+(+x.debit||0),0)),cr=r2(rows.reduce((s,x)=>s+(+x.credit||0),0));$('[data-j=d]',f).textContent=money(dr);$('[data-j=c]',f).textContent=money(cr);const x=$('[data-j=x]',f);x.textContent=money(r2(dr-cr));x.className='big '+(Math.abs(dr-cr)>0.004?'neg':'')});
+  if(perLine)wireLineCls(f,'rcCls');
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this recurring transaction?','No more will be made from it. The ones already made stay.'))return;if(await del('recurring',r.id)){closeModal();toast('Recurring transaction deleted')}};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const name=$('#rcName',f).value.trim();if(!name)return f.err('Give it a name, like “Office rent”.');
@@ -341,7 +360,7 @@ function recEntryForm(r,kind,preset){
       const c=calcLines(le.read(),l=>+l.amount||0,out);if(!c.ls.length)return f.err('Add at least one line with a category and amount.');
       if(c.tax&&!taxReady(c.parts))return;
       let cid=$('#rcC',f).value;if(cid==='__new'){cid=await resolveContact(f,'rcC',out?'vendor':'customer');if(!cid)return f.err('Enter a name for the new contact.')}
-      x.contactId=cid||'';x.lines=c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode}));
+      x.contactId=cid||'';x.lines=c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,...(perLine?{cls:l.cls||''}:{})}));
     }
     if(tf){
       x.from=$('#rcFrom',f).value;x.to=$('#rcTo',f).value;x.amount=r2($('#rcAmt',f).value);
@@ -349,11 +368,12 @@ function recEntryForm(r,kind,preset){
     }
     if(jn){
       const ls=le.read().filter(l=>l.account||+l.debit||+l.credit),bad=TallyRecurring.journalProblem(ls);if(bad)return f.err(bad);
-      x.lines=TallyRecurring.journalLines(ls);
+      x.lines=TallyRecurring.journalLines(ls.map(l=>perLine?{...l,cls:l.cls||''}:(({cls,...o})=>o)(l)));
     }
     if(mon||jn)x.ref=$('#rcRef',f).value.trim();
     const id=r?r.id:uid();
     const data={...(r?strip(r):{made:0,created:Date.now()}),kind,name,...sc,...x,memo:$('#rcMemo',f).value.trim()};
+    if(!tf)recClsTagsRead(f,data);
     if(!await put('recurring',id,data))return;
     closeModal();toast(r?'Recurring transaction saved':`Saved. The first one is made on ${fmtDate(sc.next)}.`);
     if(sc.next<=today()&&data.mode==='auto')recRunDue();
@@ -368,11 +388,11 @@ function recBuildEntry(r,date){
     const out=r.kind==='expense',c=calcLines(r.lines||[],x=>+x.amount||0,out);
     if(!c.ls.length)return{err:`“${r.name}” has no lines with an amount.`};
     if(c.tax&&c.parts.some(p=>!p.account))return{err:`Add a “${c.parts.find(p=>!p.account).name} payable” account first.`};
-    lines=moneyLines(out,c,r.bank);form={bank:r.bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))};
+    lines=moneyLines(out,c,r.bank);form={bank:r.bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst',...(l.cls!=null?{cls:l.cls}:{})}))};
   }
   if(lines.some(l=>!acct(l.account)))return{err:`An account on “${r.name}” was deleted. Edit it first.`};
   const id=recId(r,date);
-  const entry={type:r.kind,date,ref:r.ref||'',memo:r.memo||'',contactId:r.contactId||'',...(form?{form}:{}),lines,recurringId:r.id,recurringNew:true,created:Date.now()};
+  const entry={type:r.kind,date,ref:r.ref||'',memo:r.memo||'',contactId:r.contactId||'',...recCarry(r),...(form?{form}:{}),lines,recurringId:r.id,recurringNew:true,created:Date.now()};
   return{id,entry,writes:[{op:'set',collection:'entries',id,data:entry}]};
 }
 /** Everything needed to make one from a template on a date: the doc, its posting, and the error if it can't be made. */
@@ -384,7 +404,8 @@ function recBuild(r,date,number){
   if(c.ls.some(l=>!acct(l.account)))return{err:`An account on “${r.name}” was deleted. Edit it first.`};
   const id=recId(r,date);
   const terms=r.terms===''||r.terms==null?+S.company.terms||0:+r.terms;
-  const base={date,contactId:r.contactId,memo:r.memo||''};
+  // Its class and tags go on the document and its journal entry, as the form does.
+  const base={date,contactId:r.contactId,memo:r.memo||'',...recCarry(r)};
   if(typeof invCosts==='function')invCosts(r.kind,c,date,id);
   const doc={...base,kind:r.kind,number,due:addDays(date,terms),...docRecord(c),recurringId:r.id,recurringNew:true,created:Date.now()};
   return{id,doc,writes:[{op:'set',collection:'docs',id,data:doc},{op:'set',collection:'entries',id:'d_'+id,data:{...base,type:r.kind,ref:number,docId:id,lines:docPostLines(r.kind,c,ctl.id),created:doc.created}}]};
@@ -458,12 +479,12 @@ function recReview(r){
   const note=`<div class="banner" style="margin:0"><span><span>From recurring</span> <b>${esc(r.name)}</b>, <span>dated</span> ${fmtDate(date)}<span>. Check it, then save.</span></span></div>`;
   const onSaved=async id=>{const cur=S.recurring.find(x=>x.id===r.id)||r;await put('recurring',r.id,{...strip(cur),next:recAfter(cur,date),made:(+cur.made||0)+1,last:date});toast(`${REC_KIND[r.kind]} saved`)};
   if(!doc){
-    const base={id,date,ref:r.ref||'',memo:r.memo||'',contactId:r.contactId||'',recurringId:r.id,note,onSaved};
+    const base={id,date,ref:r.ref||'',memo:r.memo||'',contactId:r.contactId||'',...recCarry(r),recurringId:r.id,note,onSaved};
     if(r.kind==='journal')return journalForm(null,{...base,lines:r.lines});
     if(r.kind==='transfer')return transferForm(null,{...base,form:{from:r.from,to:r.to,amount:r.amount}});
     return moneyForm(r.kind,null,{...base,form:{bank:r.bank,lines:(r.lines||[]).map(l=>({...l}))}});
   }
-  docForm(r.kind,null,{id,contactId:r.contactId,date,due:addDays(date,r.terms===''||r.terms==null?+S.company.terms||0:+r.terms),memo:r.memo||'',lines:r.lines.map(l=>({...l})),note,
+  docForm(r.kind,null,{id,...recCarry(r),contactId:r.contactId,date,due:addDays(date,r.terms===''||r.terms==null?+S.company.terms||0:+r.terms),memo:r.memo||'',lines:r.lines.map(l=>({...l})),note,
     onSaved:async id=>{const cur=S.recurring.find(x=>x.id===r.id)||r;await put('recurring',r.id,{...strip(cur),next:recAfter(cur,date),made:(+cur.made||0)+1,last:date});
       const d=S.docs.find(x=>x.id===id);if(d&&!d.recurringId){await put('docs',id,{...strip(d),recurringId:r.id})}toast(`${inv?'Invoice':'Bill'} saved`)}});
 }

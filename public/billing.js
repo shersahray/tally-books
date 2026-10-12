@@ -6,6 +6,8 @@
 let BILL=null;
 const centsMoney=c=>`$${(c/100).toFixed(c%100?2:0)}`;
 const planPrice=(b,plan)=>centsMoney((b.offer.amounts||{})[plan]||0);
+/** The price a firm or company pays on its plan: its old price (Essentials, Plus) while it keeps one. */
+const payPrice=(b,plan,legacy)=>planPrice(b,TallyPlans.priceKey(plan,legacy));
 
 /** After signing in: record a payment coming back from Stripe, then block until whatever must be paid for is. Returns true when it showed a payment screen. */
 async function billingCheck(user){
@@ -39,14 +41,15 @@ function billingLock(o){
     html=lockCard(trial?`Start your ${b.offer.trialDays}-day free trial`:again&&f.state==='stopped'?'Your subscription has stopped':'Start your subscription',
       `${trial?`Sumlora is free for ${b.offer.trialDays} days. Your card is charged only after the trial, and you can cancel any time before then. `:''}You pay for each company your firm keeps, each month (companies whose client pays for themselves aren’t counted).`,`
       <div class="flabel">Choose a plan</div>
-      ${Object.entries(b.plans).map(([k,p])=>`<label class="check" style="align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><input type="radio" name="bpPlan" value="${k}" ${f.plan===k?'checked':''} style="margin-top:4px"> <span><b>${esc(T(p.label))}</b> · <span translate="no">${planPrice(b,k)}</span> <span>per company, per month</span><div class="muted" style="font-size:12.5px">${k==='plus'?'Everything in Essentials, plus payroll, AI suggestions, advanced reports and special sales tax methods.':'Bookkeeping, banking, invoices and bills, GST/HST and QST returns, and reports.'}</div></span></label>`).join('')}
+      ${Object.entries(b.plans).map(([k,p])=>`<label class="check" style="align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><input type="radio" name="bpPlan" value="${k}" ${f.plan===k?'checked':''} style="margin-top:4px"> <span><b>${esc(T(p.label))}</b> · <span translate="no">${f.plan===k?payPrice(b,k,f.legacy):planPrice(b,k)}</span> <span>per company, per month</span><div class="muted" style="font-size:12.5px">${esc(T(p.blurb||''))}</div></span></label>`).join('')}
+      <div class="muted" style="font-size:12.5px"><span>Payroll add-on (Seed and Grow):</span> <span translate="no">${planPrice(b,'payroll')}</span> <span>per company, per month. On every plan:</span> <span translate="no">${planPrice(b,'payrollEmployees')}</span> <span>for each employee paid in the month.</span></div>
       <div class="muted" style="font-size:12.5px"><span>Companies now:</span> <b>${f.companies}</b>. <span>Prices in Canadian dollars, plus applicable taxes. You’ll enter your card on Stripe’s secure page.</span></div>`,
       'Continue to payment','<button type="button" class="btn ghost block" data-lockout>Sign out</button>');
   }else{
     const c=(b.companies||[]).find(x=>x.id===o.id)||{name:'',plan:f.plan},trial=!c.hadTrial&&b.offer.trialDays;
     html=lockCard(trial?`Start your ${b.offer.trialDays}-day free trial`:'Start your subscription',
       `<span translate="no">${esc(c.name)}</span>: <span>${trial?`Sumlora is free for ${b.offer.trialDays} days. Your card is charged only after the trial, and you can cancel any time before then. `:''}Your bookkeeper keeps your books in Sumlora; this subscription lets you sign in and see them.</span>`,`
-      <div><b>${esc(T(b.plans[c.plan||'plus'].label))}</b> · <span translate="no">${planPrice(b,c.plan||'plus')}</span> <span>a month</span></div>
+      <div><b>${esc(T(b.plans[TallyPlans.planOf(c.plan)].label))}</b> · <span translate="no">${payPrice(b,TallyPlans.planOf(c.plan),c.legacy)}</span> <span>a month</span></div>
       <div class="muted" style="font-size:12.5px">Prices in Canadian dollars, plus applicable taxes. You’ll enter your card on Stripe’s secure page.</div>`,
       'Continue to payment',`${(b.companies||[]).some(x=>!x.needs)?'<button type="button" class="btn ghost block" data-billnotnow>Not now</button>':''}<button type="button" class="btn ghost block" data-lockout>Sign out</button>`);
   }
@@ -88,8 +91,10 @@ function billingAdminPanel(){
     <div>${a.configured?`<span class="pill paid">On</span> Stripe key ${a.mode==='test'?'(test)':'(live)'} <span class="mono" translate="no">…${esc(a.ending)}</span>`:'<span class="pill quiet">Off</span> Nobody pays until you add a Stripe key.'}</div>
     <div class="fields">
       ${fld('bsKey',a.configured?'Replace Stripe key':'Stripe secret or restricted key',`<input type="password" id="bsKey" autocomplete="off" spellcheck="false" placeholder="${a.configured?'Leave blank to keep it':'sk_live_… or rk_live_…'}" translate="no"><span class="hint">Restricted key permissions: Products, Prices, Customers, Checkout Sessions, Subscriptions (write) and Customer portal (write). Kept on this server, never shown again.</span>`,true)}
-      ${Object.entries(TallyPlans.PLANS).map(([k,p])=>fld('bsAmt'+k,`${T(p.label)}: price per company, per month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}">`)).join('')}
-      ${Object.entries(TallyPlans.ADDONS).map(([k,p])=>fld('bsAmt'+k,`${p.label} add-on: price per company, per month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}"><span class="hint">Only for companies an owner adds it to, on either plan.</span>`)).join('')}
+      ${Object.entries(TallyPlans.PLANS).map(([k,p])=>fld('bsAmt'+k,`${p.label}: price per company, per month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}">`)).join('')}
+      ${Object.entries(TallyPlans.LEGACY).map(([k,p])=>fld('bsAmt'+k,`Old price: ${p.label}: price per company, per month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}"><span class="hint">${esc(T('For firms from before Seed, Grow and Thrive, until you move them to their plan’s price on this page.'))}</span>`)).join('')}
+      ${Object.entries(TallyPlans.ADDONS).map(([k,p])=>fld('bsAmt'+k,`${p.label} add-on: price per company, per month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}"><span class="hint">${esc(T(k==='payroll'?'For companies on Seed or Grow that an owner adds it to. Thrive includes it.':'Only for companies an owner adds it to, on any plan.'))}</span>`)).join('')}
+      ${Object.entries(TallyPlans.UNITS).map(([k,p])=>fld('bsAmt'+k,`${p.label}: price for each employee paid in a month (CAD)`,`<input type="number" id="bsAmt${k}" min="1" step="0.01" value="${amt(k)}"><span class="hint">${esc(T('Counted from the pay runs once the month is over, and added to the next invoice. Each employee counts once, however many times they’re paid.'))}</span>`)).join('')}
       ${fld('bsTrial','Free trial (days)',`<input type="number" id="bsTrial" min="0" max="60" step="1" value="${a.trialDays}"><span class="hint">Only the first time. 0 = no trial.</span>`)}
     </div>
     ${a.configured?`<label class="check" style="align-items:flex-start"><input type="checkbox" id="bsTax" ${a.tax?'checked':''} style="margin-top:4px"> <span><b>Charge sales tax (GST/HST and QST) with Stripe Tax</b><div class="muted" style="font-size:12.5px">Stripe adds the right tax for each customer’s province from their billing address, and businesses can put their GST/HST or QST number on their invoices. Set up Stripe Tax first (Stripe → Tax): your business address, your GST/HST and QST registrations, and the default product tax category <i>Software as a service</i>. Applies to new subscriptions; subscriptions already running keep their current tax setting.</div></span></label>`:''}
@@ -99,7 +104,7 @@ function billingAdminPanel(){
 async function billingAdminAction(b){
   try{
     if(b.hasAttribute('data-billsave')){
-      const body={amounts:{},trialDays:+$('#bsTrial').value};for(const k of [...Object.keys(TallyPlans.PLANS),...Object.keys(TallyPlans.ADDONS)])body.amounts[k]=+$('#bsAmt'+k).value;
+      const body={amounts:{},trialDays:+$('#bsTrial').value};for(const k of [...Object.keys(TallyPlans.PLANS),...Object.keys(TallyPlans.LEGACY),...Object.keys(TallyPlans.ADDONS),...Object.keys(TallyPlans.UNITS)])body.amounts[k]=+$('#bsAmt'+k).value;
       const k=$('#bsKey').value.trim();if(k)body.key=k;
       const tx=$('#bsTax');if(tx&&tx.checked!==!!BILLADM.tax)body.tax=tx.checked;
       BILLADM=await api('PUT','/api/billing',body);loadBillMe();renderMain();toast('Subscription settings saved');return true;

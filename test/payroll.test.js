@@ -363,3 +363,132 @@ test('Bonus method: CPP2 on regular pay goes in F5A, so a high earner’s bonus 
   // The regular part's tax should match the same pay without a bonus (within a dollar).
   near(r.employee.fedTax + r.employee.provTax - r.bonusTax.fed - r.bonusTax.prov, noBonus.employee.fedTax + noBonus.employee.provTax, 1, 'regular tax unchanged by the bonus');
 });
+
+/* ---------- Ontario rules: overtime, EHT, WSIB, voiding ---------- */
+test('Overtime: weekly thresholds by province, a company override, and 1.5 times the rate over the threshold', () => {
+  assert.equal(P.overtimeRule('ON').weekly, 44);
+  assert.equal(P.overtimeRule('QC').weekly, 40);
+  assert.equal(P.overtimeRule('BC').daily, 8, 'BC has a daily rule too');
+  assert.equal(P.overtimeRule('ON').daily, undefined);
+  assert.deepEqual([P.overtimeRule('ON', 40).weekly, P.overtimeRule('ON', 40).custom], [40, true]);
+  assert.equal(P.overtimeRule('ON', '').weekly, 44, 'blank = the province');
+  // Ontario biweekly: 50 + 40 hours at $20 → 6 h overtime at $30.
+  const o = P.overtime({ weekHours: [50, 40], threshold: 44, rate: 20 });
+  assert.deepEqual([o.hours, o.regularHours, o.overtimeHours, o.overtimePay, o.otRate], [90, 84, 6, 180, 30]);
+  // Averaging over two weeks would hide it: 45 + 43 = 88 is still 1 hour of overtime in week 1.
+  assert.equal(P.overtime({ weekHours: [45, 43], threshold: 44, rate: 20 }).overtimeHours, 1);
+  assert.equal(P.overtime({ weekHours: [44, 44], threshold: 44, rate: 20 }).overtimePay, 0);
+});
+
+test('Overtime: a pay period cut into work weeks, hours split evenly by days', () => {
+  const bi = P.workWeeks('2026-09-05', '2026-09-18');
+  assert.deepEqual(bi.map(w => w.days), [7, 7]);
+  assert.deepEqual(P.splitHours(88, bi), [44, 44]);
+  const semi = P.workWeeks('2026-09-16', '2026-09-30');
+  assert.deepEqual(semi.map(w => w.days), [7, 7, 1]);
+  const sp = P.splitHours(80, semi);
+  assert.equal(P.r2(sp.reduce((a, b) => a + b, 0)), 80, 'the split adds back to the total');
+  assert.deepEqual(sp, [37.33, 37.33, 5.34]);
+  assert.deepEqual(P.workWeeks('2026-09-18', '2026-09-05'), []);
+});
+
+test('EHT: tiered rate, $1,000,000 exemption, no exemption for big groups', () => {
+  assert.equal(P.ehtRate(150000), 0.0098);
+  assert.equal(P.ehtRate(200000), 0.0098);
+  assert.equal(P.ehtRate(200000.01), 0.01101);
+  assert.equal(P.ehtRate(390000), 0.01829);
+  assert.equal(P.ehtRate(400000.01), 0.0195);
+  // Under the exemption: nothing owed.
+  const small = P.eht({ year: 2026, months: Array(12).fill(30000) });
+  assert.deepEqual([small.total, small.rate, small.tax, small.instalmentsRequired], [360000, 0.01708, 0, false]);
+  // Not eligible: the whole $360,000 at 1.708%.
+  assert.equal(P.eht({ year: 2026, months: Array(12).fill(30000), eligible: false }).tax, 6148.8);
+  // A share of the exemption (associated employers).
+  assert.equal(P.eht({ year: 2026, months: Array(12).fill(30000), exemption: 200000 }).tax, P.r2(160000 * 0.01708));
+  assert.equal(P.eht({ year: 2026, months: Array(12).fill(30000), exemption: 5000000 }).exemption, 1000000, 'never more than $1,000,000');
+  // Group over $5,000,000: no exemption.
+  const grp = P.eht({ year: 2026, months: Array(12).fill(30000), groupPayroll: 4800000 });
+  assert.deepEqual([grp.exemption, grp.tax, grp.notes], [0, 6148.8, ['group']]);
+  assert.equal(grp.due, '2027-03-15');
+});
+
+test('EHT: monthly instalments once remuneration passes $1,200,000, due the 15th', () => {
+  const X = P.eht({ year: 2026, months: Array(12).fill(150000) });
+  assert.deepEqual([X.total, X.rate, X.taxable, X.tax, X.instalmentsRequired], [1800000, 0.0195, 800000, 15600, true]);
+  // Cumulative reaches $1,200,000 in August (not over it), so the first instalment is September's:
+  // the $350,000 above the exemption so far × 1.95%.
+  const by = Object.fromEntries(X.months.map(m => [m.month, m]));
+  assert.equal(by['2026-08'].instalment, 0);
+  assert.equal(by['2026-09'].instalment, P.r2(350000 * 0.0195));
+  assert.equal(by['2026-09'].due, '2026-10-15');
+  assert.equal(by['2026-10'].instalment, P.r2(150000 * 0.0195));
+  assert.equal(by['2026-12'].due, '2027-01-15');
+  assert.equal(X.instalments, 15600); assert.equal(X.balance, 0);
+  // Accruals add up to the year's tax.
+  assert.equal(P.r2(X.months.reduce((t, m) => t + m.accrual, 0)), 15600);
+  assert.equal(by['2026-07'].accrual, P.r2(50000 * 0.0195), 'the month it passes the exemption');
+});
+
+test('EHT: Ontario remuneration includes taxable benefits and opening amounts, not other provinces or void pay runs', () => {
+  const employees = [{ id: 'a', prov: 'ON', openingYtd: { year: 2026, gross: 10000 } }, { id: 'b', prov: 'QC' }];
+  const payruns = [
+    { payDate: '2026-03-15', lines: [{ employeeId: 'a', prov: 'ON', gross: 2000, benefits: { life: 50 } }, { employeeId: 'b', prov: 'QC', gross: 3000 }] },
+    { payDate: '2026-03-31', void: { date: '2026-04-02' }, lines: [{ employeeId: 'a', prov: 'ON', gross: 9999 }] },
+  ];
+  const m = P.ontarioRemuneration({ year: 2026, employees, payruns });
+  assert.equal(m[0], 10000); assert.equal(m[2], 2050); assert.equal(m.reduce((a, b) => a + b, 0), 12050);
+});
+
+test('WSIB: premium per $100 with the yearly maximum per worker, reporting periods and due dates', () => {
+  assert.equal(P.WSIB_MAX[2026], 121700);
+  assert.deepEqual(P.wsibPremium({ earnings: 2000, ytd: 0, max: 121700, rate: 1.23 }), { insurable: 2000, premium: 24.6 });
+  assert.deepEqual(P.wsibPremium({ earnings: 5000, ytd: 120000, max: 121700, rate: 1.5 }), { insurable: 1700, premium: 25.5 });
+  assert.deepEqual(P.wsibPremium({ earnings: 5000, ytd: 130000, max: 121700, rate: 1.5 }), { insurable: 0, premium: 0 });
+  assert.equal(P.wsibPremium({ earnings: 5000, ytd: 130000, max: '', rate: 1 }).premium, 50, 'no maximum entered');
+  assert.deepEqual(P.wsibPeriod('2026-02-13', 'monthly'), { key: '2026-02', from: '2026-02-01', to: '2026-02-28', due: '2026-03-31' });
+  assert.equal(P.wsibPeriod('2026-12-04', 'monthly').due, '2027-01-31');
+  assert.deepEqual(P.wsibPeriod('2026-08-14', 'quarterly'), { key: '2026-Q3', from: '2026-07-01', to: '2026-09-30', due: '2026-10-31' });
+  assert.equal(P.wsibPeriod('2026-11-14', 'quarterly').due, '2027-01-31');
+  assert.equal(P.wsibPeriod('2026-11-14', 'annual').due, '2027-04-30');
+  const rep = P.wsibReport([{ payDate: '2026-07-10', group: 'g1', insurable: 1000, premium: 12.3 }, { payDate: '2026-08-10', group: 'g2', insurable: 500, premium: 10 },
+    { payDate: '2026-10-10', group: 'g1', insurable: 1000, premium: 12.3 }], 'quarterly');
+  assert.deepEqual(rep.map(p => p.key), ['2026-Q4', '2026-Q3']);
+  assert.deepEqual([rep[1].insurable, rep[1].premium, rep[1].groups.g2.premium], [1500, 22.3, 10]);
+});
+
+test('Voiding: the reversing lines swap debits and credits; later pay runs that used the YTD are found', () => {
+  const lines = [{ account: 'w', debit: 100, credit: 0, memo: 'x' }, { account: 'b', debit: 0, credit: 100 }];
+  assert.deepEqual(P.reverseLines(lines), [{ account: 'w', debit: 0, credit: 100, memo: 'x' }, { account: 'b', debit: 100, credit: 0 }]);
+  const run = { id: 'r2', payDate: '2026-09-18', created: 2, lines: [{ employeeId: 'a' }] };
+  const runs = [{ id: 'r1', payDate: '2026-09-04', lines: [{ employeeId: 'a' }] }, run,
+    { id: 'r3', payDate: '2026-10-02', lines: [{ employeeId: 'a' }] }, { id: 'r4', payDate: '2026-10-02', lines: [{ employeeId: 'z' }] },
+    { id: 'r5', payDate: '2026-10-16', void: { date: '2026-10-17' }, lines: [{ employeeId: 'a' }] }, { id: 'r6', payDate: '2027-01-08', lines: [{ employeeId: 'a' }] }];
+  assert.deepEqual(P.laterRuns(run, runs).map(r => r.id), ['r3'], 'same year, same employee, not void');
+});
+
+test('Year-end slips leave out void pay runs', () => {
+  const line = { employeeId: 'v', prov: 'ON', gross: 1000, ded: { cpp: 50 }, er: {} };
+  const ye = P.yearEnd({ year: 2026, employees: [{ id: 'v', name: 'Val', prov: 'ON', sin: '130692544', dental: 1 }],
+    payruns: [{ payDate: '2026-09-04', lines: [line] }, { payDate: '2026-09-18', void: { date: '2026-09-19' }, lines: [line] }] });
+  assert.equal(ye.slips[0].t4[14], 1000);
+});
+
+test('Vacation pay base: a non-discretionary bonus earns vacation pay, a discretionary one doesn’t; overtime does', () => {
+  const p = { regular: 1000, holiday: 50, overtime: 90, other: 10, bonus: 500 };
+  assert.equal(P.vacationBase(p), 1150);
+  assert.equal(P.vacationBase({ ...p, bonusVac: true }), 1650);
+});
+
+test('Ontario holiday pay counts the vacation pay paid on the current pay too (review finding)', () => {
+  const base = { prov: 'ON', regular: 2000, overtime: 150, other: 0, bonus: 400, bonusVac: true, vacRate: 4 };
+  // Added to every pay: 4% of regular, overtime and the non-discretionary bonus (2,550 × 4% = 102).
+  assert.equal(P.holidayCurrentEarnings({ ...base, vacMode: 'each' }), 2102);
+  // Set aside: only what's paid out now counts.
+  assert.equal(P.holidayCurrentEarnings({ ...base, vacMode: 'accrue', vacPay: 300 }), 2300);
+  assert.equal(P.holidayCurrentEarnings({ ...base, vacMode: 'accrue', vacPay: 0 }), 2000);
+  // Other provinces: regular pay only (Quebec's 1/20 rule doesn't add vacation pay).
+  assert.equal(P.holidayCurrentEarnings({ ...base, prov: 'QC', vacMode: 'each' }), 2000);
+  // Thanksgiving 2026-10-12: the 4 weeks before its week are Sep 13 – Oct 10, two biweekly pays.
+  const hp = P.holidayPay('2026-10-12', [{ from: '2026-09-13', to: '2026-09-26', amount: 2000 }, { from: '2026-09-27', to: '2026-10-10', amount: P.holidayCurrentEarnings({ ...base, vacMode: 'each' }) }]);
+  assert.equal(hp.base, 4102); assert.equal(hp.pay, 205.1);
+});

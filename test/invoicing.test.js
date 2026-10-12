@@ -35,9 +35,9 @@ test('invoicing: lists each firm with its companies and plan; only the administr
   let s = (await call('GET', '/api/invoicing', undefined, admin)).json;
   assert.equal(s.companyId, '');
   assert.deepEqual(s.companies.map(c => c.name), ['Sher Books Inc.']);
-  assert.deepEqual([s.amounts.essentials, s.amounts.plus, s.amounts.assistant], [1500, 3000, 500]);
+  assert.deepEqual([s.amounts.seed, s.amounts.grow, s.amounts.thrive, s.amounts.essentials, s.amounts.plus, s.amounts.assistant, s.amounts.payroll, s.amounts.payrollEmployees], [2000, 4500, 7500, 1500, 3000, 500, 2000, 400]);
   const maple = s.customers.find(c => c.name === 'Maple Firm');
-  assert.deepEqual([maple.email, maple.person, maple.plan, maple.companies, maple.assistant], ['ana@maple.example', 'Ana', 'essentials', 2, 0], 'archived companies aren’t billed');
+  assert.deepEqual([maple.email, maple.person, maple.plan, maple.companies, maple.assistant], ['ana@maple.example', 'Ana', 'seed', 2, 0], 'archived companies aren’t billed');
   assert.equal(s.customers.find(c => c.name === 'Empty Firm').companies, 0);
   assert.ok(!s.customers.some(c => c.name === 'Sher Books'), 'your own firm isn’t billed');
 

@@ -2,15 +2,15 @@
 /* ---------- Activity log: every change to the open company's books, who made it and when ----------
    Kept by the server (see the audit table in db.js); owners and staff can read it, clients can't. */
 S.act={rows:[],users:[],user:'',collection:'',done:false,loading:false,co:null};
-const ACT_COL={entries:'Transaction',docs:'Invoice or bill',accounts:'Account',contacts:'Customer or vendor',employees:'Employee',payruns:'Pay run',bankTxns:'Bank line',rules:'Bank rule',recons:'Reconciliation',filings:'Sales tax filing',settings:'Company settings'};
+const ACT_COL={entries:'Transaction',docs:'Invoice or bill',delayed:'Delayed charge',accounts:'Account',contacts:'Customer or vendor',employees:'Employee',payruns:'Pay run',bankTxns:'Bank line',rules:'Bank rule',recons:'Reconciliation',filings:'Sales tax filing',settings:'Company settings'};
 const ACT_ACTION={create:'Created company',add:'Added',change:'Changed',delete:'Deleted',settings:'Changed',import:'Imported',restore:'Restored backup',examples:'Loaded examples',approve:'Approved',reject:'Rejected',resubmit:'Sent for approval again'};
 
 // The server writes each summary starting with the kind of record ("depapply 2026-10-12 $200.00 · …"): show that
 // kind by its name (Deposit used, Bill…), and the rest (dates, numbers, memos) as it was written.
-const ACT_DOC={invoice:'Invoice',bill:'Bill',credit:'Credit note',vcredit:'Vendor credit',sreceipt:'Sales receipt',estimate:'Estimate',po:'Purchase order'};
+const ACT_DOC={invoice:'Invoice',bill:'Bill',credit:'Credit note',vcredit:'Vendor credit',sreceipt:'Sales receipt',estimate:'Estimate',po:'Purchase order',delayedcharge:'Delayed charge',delayedcredit:'Delayed credit'};
 function actSummary(r,html){
   const s=String(r.summary||''),i=s.indexOf(' '),w=i<0?s:s.slice(0,i);
-  const lbl=r.collection==='entries'?TLABEL[w]:r.collection==='docs'||r.collection==='estimates'?ACT_DOC[w]:'';
+  const lbl=r.collection==='entries'?TLABEL[w]:r.collection==='docs'||r.collection==='estimates'||r.collection==='delayed'?ACT_DOC[w]:'';
   if(!lbl)return html?`<span translate="no">${esc(s)}</span>`:s;
   const rest=i<0?'':s.slice(i);
   return html?`<span>${esc(lbl)}</span><span translate="no">${esc(rest)}</span>`:T(lbl)+rest;

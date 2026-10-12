@@ -14,7 +14,7 @@ const slPlanLabel=(set,plan)=>T(((set.plans||{})[plan]||{label:plan}).label);
 const slAddons=cu=>({...(cu.assistant?{assistant:cu.assistant}:{}),...(cu.addons||{})});
 const slAddonLabel=(set,k)=>T(((set.addons||TallyPlans.ADDONS)[k]||{label:k}).label);
 /** Before tax: the plan for each company, and each add-on for the companies that have it. */
-function slAmount(set,cu){return r2(cu.companies*slCents(set.amounts[cu.plan])+Object.entries(slAddons(cu)).reduce((t,[k,n])=>t+(+n||0)*slCents(set.amounts[k]),0))}
+function slAmount(set,cu){return r2(cu.companies*slCents(set.amounts[cu.priceKey||cu.plan])+Object.entries(slAddons(cu)).reduce((t,[k,n])=>t+(+n||0)*slCents(set.amounts[k]),0)+(+cu.employees||0)*slCents(set.amounts.payrollEmployees))}
 const slDocId=(cu,m)=>('sl_'+cu.key+'_'+m).replace(/[^A-Za-z0-9_.@+~-]/g,'_').slice(0,120);
 
 async function loadInvoicing(){try{INVSET=await api('GET','/api/invoicing')}catch(e){INVSET=null}return INVSET}
@@ -46,8 +46,10 @@ async function slRunDue(auto){
     const terms=+S.company.terms||0,tc=set.tax?'std':'none';
     let num=parseInt(nextNum('invoice'))||1001,made=0;const errs=[];
     for(const cu of todo){
-      const id=slDocId(cu,m),lines=[{desc:`Sumlora ${slPlanLabel(set,cu.plan)}, ${label}: ${cu.companies} ${cu.companies===1?'company':'companies'}`,account:income,qty:cu.companies,rate:slCents(set.amounts[cu.plan]),taxCode:tc}];
+      const id=slDocId(cu,m),lines=[{desc:`Sumlora ${slPlanLabel(set,cu.plan)}, ${label}: ${cu.companies} ${cu.companies===1?'company':'companies'}`,account:income,qty:cu.companies,rate:slCents(set.amounts[cu.priceKey||cu.plan]),taxCode:tc}];
       for(const[k,n]of Object.entries(slAddons(cu)))if(n>0)lines.push({desc:`${slAddonLabel(set,k)} add-on, ${label}: ${n} ${n===1?'company':'companies'}`,account:income,qty:n,rate:slCents(set.amounts[k]),taxCode:tc});
+      // Payroll: each employee paid last month (the month just over), once each.
+      if(cu.employees>0)lines.push({desc:`Payroll, employees paid in ${slMonthName(cu.employeesMonth)}: ${cu.employees}`,account:income,qty:cu.employees,rate:slCents(set.amounts.payrollEmployees),taxCode:tc});
       const c=calcLines(lines,x=>(+x.qty||0)*(+x.rate||0),false);
       // The customer: the one made for this firm before, or a new one.
       const writes=[];let ct=S.contacts.find(x=>x.kind==='customer'&&x.sumlora===cu.key);

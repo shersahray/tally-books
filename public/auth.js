@@ -380,7 +380,7 @@ function userForm(u){
   ${rolePicker(u)}
   <label class="check" data-ro><input type="checkbox" id="usRO" ${u?(u.readOnly?'checked':''):'checked'}> View only: can see reports and transactions but can’t change anything</label>
   ${!u&&typeof BILL!=='undefined'&&BILL&&BILL.configured?`<label class="check" data-pays style="align-items:flex-start"><input type="checkbox" id="usPays" checked style="margin-top:3px"> <span><span>They pay for Sumlora for this company, monthly</span>${BILL.offer.trialDays?` <span>after a ${BILL.offer.trialDays}-day free trial</span>`:''}<span>. They enter a card the first time they sign in.</span>
-    <select id="usPlan" aria-label="Plan they pay for" style="display:block;margin-top:6px">${Object.entries(BILL.plans).map(([k,p])=>`<option value="${k}" ${k==='essentials'?'selected':''}>${esc(T(p.label))}: ${planPrice(BILL,k)}</option>`).join('')}</select></span></label>`:''}
+    <select id="usPlan" aria-label="Plan they pay for" style="display:block;margin-top:6px">${Object.entries(BILL.plans).map(([k,p])=>`<option value="${k}" ${k==='seed'?'selected':''}>${esc(T(p.label))}: ${planPrice(BILL,k)}</option>`).join('')}</select></span></label>`:''}
   ${ME.platformAdmin&&u?`<label class="check" data-adm><input type="checkbox" id="usAdm" ${u.platformAdmin?'checked':''}> Server administrator: manages firms, backups, the AI key and security for the whole server</label>`:''}
   <div data-cos><div class="flabel" style="margin-bottom:6px" data-coslabel>Companies this person can see</div>
     <label class="check" data-allrow><input type="checkbox" id="usAll" ${u&&u.role==='staff'&&!u.companies.length?'checked':''}> All companies, including new ones</label>
@@ -412,15 +412,26 @@ function userForm(u){
     }catch(ex){f.err(ex.message)}};
 }
 
+/* ---------- Firms page: each firm's plan ----------
+   A firm from before Seed, Grow and Thrive keeps its old price (Essentials or Plus) until the administrator changes its
+   plan or clicks "Use plan price". Its companies with the Payroll add-on aren't billed for it until "Bill payroll" is ticked. */
+function firmPlanCell(f){
+  const L=f.legacy&&TallyPlans.LEGACY[f.legacy];
+  const sel=`<select data-firmplan="${f.id}" aria-label="Plan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${TallyPlans.planOf(f.plan)===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select>`;
+  if(!L)return sel;
+  return `${sel}<div style="margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="pill quiet" title="${esc(T('Keeps its old price until you change it'))}">${esc(T(`Old price: ${L.label}`))}</span><button class="btn sm ghost" data-firmlegacy="${f.id}">${esc(T('Use plan price'))}</button></div>
+    ${f.payrollCompanies?`<label class="check" style="font-size:12.5px;margin-top:4px"><input type="checkbox" data-firmbillpay="${f.id}" ${f.billPayroll?'checked':''}> <span>${esc(T('Bill payroll'))}</span> <span class="muted">(${f.payrollCompanies})</span></label>`:''}`;
+}
+
 /* ---------- custom roles (owners, on a plan with custom roles) ----------
    A role gives each area of the books None, View or Edit (roles.js). Staff get one instead of full access. */
 const LEVEL_LABEL={none:'None',view:'View',edit:'Edit'};
 function rolesPanel(){
   const roles=USERS.roles||[];
-  if(!USERS.customRoles&&!roles.length)return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Roles</h3><div class="pad muted" style="font-size:13px"><span>Custom roles let you choose what each staff member can see and change: sales, expenses, banking, payroll and more.</span> <span class="pill quiet">${esc(T('In the Plus plan'))}</span></div></div>`;
+  if(!USERS.customRoles&&!roles.length)return `<div class="panel" style="max-width:760px;margin-top:16px"><h3>Roles</h3><div class="pad muted" style="font-size:13px"><span>Custom roles let you choose what each staff member can see and change: sales, expenses, banking, payroll and more.</span> ${inPlanPill('customRoles')}</div></div>`;
   const A=TallyRoles.AREAS;
   return `<div class="panel" style="margin-top:16px"><h3>Roles${USERS.customRoles?'<button class="btn sm" data-roleadd>+ Add role</button>':''}</h3>
-    <div class="pad muted" style="font-size:13px;padding-bottom:0">Give staff a role to limit what they see and change. Owners always have everything; staff without a role work in everything except users and security.${USERS.customRoles?'':` <span class="pill quiet">${esc(T('In the Plus plan'))}</span> <span>Your roles are kept, but can’t be given to anyone until your firm is on Plus.</span>`}</div>
+    <div class="pad muted" style="font-size:13px;padding-bottom:0">Give staff a role to limit what they see and change. Owners always have everything; staff without a role work in everything except users and security.${USERS.customRoles?'':` ${inPlanPill('customRoles')} <span>Your roles are kept, but can’t be given to anyone until your firm is on Thrive.</span>`}</div>
     <div class="tbl-wrap"><table><thead><tr><th>Role</th>${Object.values(A).map(a=>`<th>${esc(T(a.label))}</th>`).join('')}<th class="n">People</th></tr></thead><tbody>${roles.length?roles.map(r=>`<tr class="click" data-roleedit="${r.id}"><td><b translate="no">${esc(r.name)}</b>${r.approveBills?`<div class="muted" style="font-size:12px">${esc(T('Approves bills'))}</div>`:''}</td>${Object.keys(A).map(k=>{const l=r.perms[k]||'none';return `<td><span class="pill ${l==='edit'?'paid':l==='view'?'open':'quiet'}">${esc(T(LEVEL_LABEL[l]))}</span></td>`}).join('')}<td class="n">${r.users}</td></tr>`).join(''):emptyRow(Object.keys(A).length+2,'No roles yet','Add a role, such as “Accounts receivable clerk” with Sales set to Edit and the rest to None or View.')}</tbody></table></div></div>`;
 }
 function rolePicker(u){
@@ -487,7 +498,7 @@ function vFirms(){
   ${pending?`<div class="banner"><span><b>${pending} firm${pending===1?' is':'s are'} waiting for approval.</b> Check who they are before approving.</span></div>`:''}
   <div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Firm</th><th>Owner</th><th class="n">People</th><th class="n">Companies</th><th>Signed up</th><th>Last sign-in</th><th>Plan</th>${BILLADM&&BILLADM.configured?'<th>Subscription</th>':''}<th>AI</th><th>Status</th><th></th></tr></thead><tbody>${list.map(f=>{const st=FIRM_STATUS[f.status]||['quiet',f.status],mine=f.id===FIRMS.myFirm;
     return `<tr><td><b translate="no">${esc(f.name)}</b>${mine?' <span class="pill paid">Your firm</span>':''}</td><td><span translate="no">${f.owner?esc(f.owner.name):'—'}</span><div class="muted mono" style="font-size:12px" translate="no">${f.owner?esc(f.owner.username):''}</div></td><td class="n">${f.users}</td><td class="n">${f.companies}</td><td class="muted">${fmtWhen(f.created)}</td><td class="muted">${f.lastLogin?fmtWhen(f.lastLogin):'Never'}</td>
-      <td><select data-firmplan="${f.id}" aria-label="Plan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${(f.plan||'plus')===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select></td>
+      <td>${firmPlanCell(f)}</td>
       ${BILLADM&&BILLADM.configured?`<td style="white-space:nowrap">${f.main?'<span class="muted">Your firm (free)</span>':({trialing:'<span class="pill paid">Free trial</span>',active:'<span class="pill paid">Paying</span>',pastdue:'<span class="pill overdue">Payment failed</span>',stopped:'<span class="pill overdue">Stopped</span>'})[f.subscription&&f.subscription.state]||'<span class="pill quiet">Not started</span>'}</td>`:''}
       <td style="white-space:nowrap"><label class="check"><input type="checkbox" data-firmai="${f.id}" ${f.ai?'checked':''} aria-label="AI suggestions"> On</label>${f.main?'<div class="muted" style="font-size:12px">Server limit</div>':`<div class="muted" style="font-size:12px;display:flex;gap:4px;align-items:center"><span translate="no">${money(f.aiSpentUsd||0)}</span> / $<input type="number" min="0" step="1" value="${f.aiCapUsd??10}" data-firmcap="${f.id}" aria-label="Monthly AI limit (US$)" style="width:64px;padding:2px 4px"></div>`}</td><td><span class="pill ${st[0]}">${st[1]}</span></td>
       <td style="white-space:nowrap">${f.status==='pending'?`<button class="btn sm primary" data-firmset="${f.id}" data-to="active">Approve</button>`:''}${f.status==='suspended'?`<button class="btn sm" data-firmset="${f.id}" data-to="active">Reactivate</button>`:''}${f.status!=='suspended'&&!mine?` <button class="btn sm ${f.status==='pending'?'ghost':'danger'}" data-firmset="${f.id}" data-to="suspended">${f.status==='pending'?'Decline':'Suspend'}</button>`:''}${f.status==='suspended'&&!f.companies&&!mine?` <button class="btn sm ghost" data-firmdel="${f.id}">Remove</button>`:''}</td></tr>`}).join('')}</tbody></table></div></div>`;
@@ -499,6 +510,9 @@ function bindFirms(m){
     if(b.dataset.sysmail)return sysMailAction(b.dataset.sysmail);
     if(typeof invoicingAction==='function'&&await invoicingAction(b))return;
     if(typeof billingAdminAction==='function'&&await billingAdminAction(b))return;
+    if(b.dataset.firmlegacy){const f=FIRMS.firms.find(x=>x.id===b.dataset.firmlegacy);
+      if(!await confirmBox('Move to the plan’s price?',`${f.name} ${T('stays on the same plan and starts paying its price from now on. A running subscription changes at Stripe, prorated.')}`,'Move to plan price'))return;
+      try{await api('PUT','/api/firms/'+encodeURIComponent(f.id),{legacy:''});await showFirms();toast(`${f.name}: ${T(TallyPlans.PLANS[f.plan].label)}`)}catch(ex){toast(ex.message,true)}return}
     if(b.dataset.firmdel){const f=FIRMS.firms.find(x=>x.id===b.dataset.firmdel);if(!await confirmBox('Remove this firm?',`${f.name}: the firm and its ${f.users} account${f.users===1?'':'s'} are removed, and their emails can be used again. It has no companies, so no books are lost.`,'Remove'))return;
       try{await api('DELETE','/api/firms/'+encodeURIComponent(f.id));await showFirms();toast(`${f.name} removed`)}catch(ex){toast(ex.message,true)}return}
     const id=b.dataset.firmset;if(!id)return;const f=FIRMS.firms.find(x=>x.id===id),to=b.dataset.to;
@@ -506,7 +520,10 @@ function bindFirms(m){
     try{await api('PUT','/api/firms/'+encodeURIComponent(id),{status:to});await showFirms();toast(to==='active'?(f.status==='pending'?`${f.name} is approved`:`${f.name} is active again`):`${f.name} can’t sign in`)}catch(ex){toast(ex.message,true)}};
   m.onchange=async e=>{const t=e.target;
     if(t.id==='fmDefPlan'){try{await api('PUT','/api/firms/settings',{defaultPlan:t.value});toast('Saved')}catch(ex){toast(ex.message,true)}return}
-    if(t.dataset.firmplan){const f=FIRMS.firms.find(x=>x.id===t.dataset.firmplan);try{await api('PUT','/api/firms/'+encodeURIComponent(f.id),{plan:t.value});f.plan=t.value;if(f.id===ME.firmId){ME.firmPlan=t.value}toast(`${f.name}: ${T(TallyPlans.PLANS[t.value].label)}`)}catch(ex){t.value=f.plan||'plus';toast(ex.message,true)}return}
+    if(t.dataset.firmplan){const f=FIRMS.firms.find(x=>x.id===t.dataset.firmplan);
+      if(f.legacy&&!await confirmBox('Change this firm’s plan?',`${f.name} ${T('keeps its old price until its plan changes. On the new plan, it pays that plan’s price.')}`,'Change plan')){t.value=f.plan;return}
+      try{await api('PUT','/api/firms/'+encodeURIComponent(f.id),{plan:t.value});f.plan=t.value;f.legacy='';if(f.id===ME.firmId){ME.firmPlan=t.value}toast(`${f.name}: ${T(TallyPlans.PLANS[t.value].label)}`);renderMain()}catch(ex){t.value=f.plan;toast(ex.message,true)}return}
+    if(t.dataset.firmbillpay){const f=FIRMS.firms.find(x=>x.id===t.dataset.firmbillpay);try{await api('PUT','/api/firms/'+encodeURIComponent(f.id),{billPayroll:t.checked});f.billPayroll=t.checked;toast(t.checked?`${f.name}: ${T('payroll is billed')}`:`${f.name}: ${T('payroll isn’t billed')}`)}catch(ex){t.checked=!t.checked;toast(ex.message,true)}return}
     if(t.id==='fmSignups'){try{await api('PUT','/api/firms/settings',{signups:t.value});await showFirms();toast('Saved')}catch(ex){toast(ex.message,true)}return}
     if(t.dataset.firmcap){try{await api('PUT','/api/firms/'+encodeURIComponent(t.dataset.firmcap),{aiCapUsd:+t.value});toast('Monthly AI limit saved')}catch(ex){toast(ex.message,true)}return}
     if(t.dataset.firmai){try{await api('PUT','/api/firms/'+encodeURIComponent(t.dataset.firmai),{ai:t.checked});toast(t.checked?'AI suggestions turned on for this firm':'AI suggestions turned off for this firm')}catch(ex){t.checked=!t.checked;toast(ex.message,true)}}};

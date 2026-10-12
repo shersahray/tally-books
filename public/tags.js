@@ -83,11 +83,11 @@
     return { by, none };
   }
 
-  /** Where a tag is used: transactions, invoices and bills, bank rules and bank lines already added. */
+  /** Where a tag is used: transactions, invoices and bills, delayed charges, estimates, recurring templates, bank rules and bank lines already added. */
   const has = (r, id) => Array.isArray(r && r.tags) && r.tags.includes(id);
   function usage(state, id) {
-    return (state.entries || []).filter(r => has(r, id)).length + (state.docs || []).filter(r => has(r, id)).length
-      + (state.rules || []).filter(r => has(r, id)).length + (state.bankTxns || []).filter(r => has(r && r.cat, id)).length;
+    return ['entries', 'docs', 'rules', 'delayed', 'estimates', 'recurring'].reduce((n, c) => n + (state[c] || []).filter(r => has(r, id)).length, 0)
+      + (state.bankTxns || []).filter(r => has(r && r.cat, id)).length;
   }
 
   return { MAX_PER_TXN, MAX_TAGS, MAX_GROUPS, NAME_MAX, cleanList, cleanTags, postingsOf, summary, usage };

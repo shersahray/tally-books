@@ -358,3 +358,144 @@ test('API: an add-only import never changes or deletes what’s there, and respe
   r = await call('POST', '/api/c/import', { writes: [{ op: 'set', collection: 'entries', id: 'je9', data: { ...j, date: '2026-07-01' } }], addOnly: true });
   assert.equal(r.status, 200);
 });
+
+/* ---------- sales receipts, credit notes, vendor credits, inventory items, tags and classes ---------- */
+const CO2 = { ...CO, tags: [{ id: 't1', name: 'Trade show', group: '' }, { id: 't2', name: 'Spring fair', group: 'g1' }], tagGroups: [{ id: 'g1', name: 'Event' }],
+  classes: [{ id: 'k1', name: 'Ottawa', active: true }, { id: 'k2', name: 'Toronto', active: true }] };
+
+test('QuickBooks and French headings for the new kinds', () => {
+  assert.deepEqual(I.guessMapping('sreceipts', ['SalesReceiptNo', 'Customer', 'SalesReceiptDate', 'DepositToAccountName', 'ItemDescription', 'ItemAmount', 'ItemTaxCode', 'Class', 'Tags']),
+    { number: 0, contact: 1, date: 2, bank: 3, desc: 4, amount: 5, taxCode: 6, cls: 7, tags: 8 });
+  assert.deepEqual(I.guessMapping('credits', ['CreditMemoNo', 'Customer', 'CreditMemoDate', 'ItemAmount']), { number: 0, contact: 1, date: 2, amount: 3 });
+  assert.deepEqual(I.guessMapping('vcredits', ['No de crédit', 'Fournisseur', 'Date', 'Montant', 'Compte de dépenses', 'Catégorie analytique', 'Étiquettes']),
+    { number: 0, contact: 1, date: 2, amount: 3, account: 4, cls: 5, tags: 6 });
+  assert.deepEqual(I.guessMapping('inventory', ['Product/Service Name', 'SKU', 'Sales Price / Rate', 'Purchase Cost', 'Quantity On Hand', 'Quantity as-of Date', 'Inventory Asset Account', 'Reorder Point']),
+    { name: 0, sku: 1, price: 2, cost: 3, qty: 4, asOf: 5, assetAccount: 6, reorder: 7 });
+  assert.deepEqual(I.guessMapping('inventory', ['Nom', 'Quantité en main', 'Valeur totale', 'Au', 'Compte d’actif de stock']), { name: 0, qty: 1, value: 2, asOf: 3, assetAccount: 4 });
+  assert.deepEqual(I.missingFields('credits', { contact: 0, date: 1 }), ['amount']);
+});
+
+test('sales receipts: paid into a bank account; numbers follow SR-; tags and line classes', () => {
+  const accts = [...ACCTS, { id: 'a1010', code: '1010', name: 'Savings', type: 'Asset', detail: 'bank' }];
+  const text = 'Sales receipt no.,Customer,Date,Deposit to,Description,Amount,Income account,Tax code,Class,Tags\n'
+    + ',Walk-in,2026-09-02,Savings,Paper,20,Sales,HST,Ottawa,"Trade show; Event: Spring fair"\n'
+    + ',Walk-in,2026-09-02,,Toner,30,Sales,HST,Toronto,\n'
+    + 'SR-7,Walk-in,2026-09-03,,Pens,5,Sales,HST,,\n'
+    + 'SR-8,Walk-in,2026-09-03,Advertising,Pens,5,Sales,HST,,\n';
+  const ex = { accounts: accts, contacts: [{ id: 'c1', name: 'Walk-in', kind: 'customer' }], docs: [{ id: 'x', kind: 'sreceipt', number: 'SR-1004' }] };
+  const r = run('sreceipts', text, { company: CO2 }, ex);
+  assert.deepEqual(r.groups.map(g => [g.number, g.status, g.bank || '']), [['SR-1005', 'ok', 'a1010'], ['SR-7', 'ok', 'a1000'], ['SR-8', 'error', 'a1000']]);
+  assert.deepEqual(r.groups[0].tags, ['t1', 't2'], 'a tag by its name, or Group: Name');
+  assert.deepEqual(r.groups[0].lines.map(l => l.cls), ['k1', 'k2']);
+  assert.equal(r.groups[1].lines[0].cls, undefined, 'no class in the file: no line class');
+  assert.deepEqual(codes(r.rows[3]), ['bank']);
+  let n = 0;
+  const H = { uid: () => 'u' + (++n), now: 1, calcLines: ls => ({ ls }), docRecord: c => ({ lines: c.ls }), docPostLines: (k, c, ctl) => [{ ctl, k }] };
+  const { writes } = I.build(r, H);
+  const doc = writes.find(w => w.collection === 'docs'), ent = writes.find(w => w.collection === 'entries');
+  assert.deepEqual([doc.data.kind, doc.data.depositTo, doc.data.tags, ent.data.type, ent.data.tags, ent.data.lines[0].ctl], ['sreceipt', 'a1010', ['t1', 't2'], 'salesreceipt', ['t1', 't2'], 'a1010']);
+});
+
+test('credit notes and vendor credits group like invoices and bills; numbers CN-; no due date', () => {
+  const ex = { contacts: [{ id: 'c1', name: 'Maple', kind: 'customer' }, { id: 'v1', name: 'Rogers', kind: 'vendor' }], docs: [{ id: 'cn', kind: 'credit', number: 'CN-1010' }, { id: 'vc', kind: 'vcredit', number: 'R1', contactId: 'v1' }] };
+  const r = run('credits', 'Customer,Date,Description,Amount,Income account,Tax code\nMaple,2026-09-01,Refund,40,Sales,HST\nMaple,2026-09-01,More,10,Sales,HST\n', {}, ex);
+  assert.deepEqual(r.groups.map(g => [g.number, g.lines.length, g.due, g.status]), [['CN-1011', 2, '', 'ok']]);
+  const v = run('vcredits', 'Credit no.,Vendor,Date,Description,Amount,Expense account,Tax code\nR1,Rogers,2026-09-01,Dup,5,Advertising,HST\nR2,Rogers,2026-09-01,Outage,20,Advertising,HST\n', {}, ex);
+  assert.deepEqual(v.groups.map(g => [g.number, g.status]), [['R1', 'dup'], ['R2', 'ok']]);
+  assert.deepEqual(v.rows[0].problems, [{ code: 'dup', why: 'exists', value: 'R1', kind: 'vcredit' }]);
+});
+
+test('unknown tags and classes are problems unless “add new” is ticked; then they’re added with the import', () => {
+  const text = 'Journal no.,Date,Account,Debit,Credit,Class,Tags\nJ1,2026-09-30,Advertising,10,,Montreal,"Trade show, Gala"\nJ1,2026-09-30,Chequing,,10,,\n';
+  let r = run('journal', text, { company: CO2 });
+  assert.deepEqual(r.rows[0].problems, [{ code: 'tag', value: 'Gala' }, { code: 'class', value: 'Montreal' }]);
+  assert.deepEqual([r.groups[0].status, r.unknownTags, r.unknownClasses], ['error', 1, 1]);
+  r = run('journal', text, { company: CO2, addTags: true });
+  assert.deepEqual(codes(r.rows[0]), ['class'], 'tags added, the class still unknown');
+  r = run('journal', text, { company: CO2, addTags: true, addClasses: true });
+  assert.equal(r.groups[0].status, 'ok');
+  assert.deepEqual([r.newTags, r.newClasses], [['Gala'], ['Montreal']]);
+  let n = 0;
+  const nl = I.newLists(r, CO2, () => 'n' + (++n));
+  assert.deepEqual(nl.added, { tags: 1, classes: 1 });
+  assert.deepEqual(nl.tags.at(-1), { id: 'n1', name: 'Gala', group: '' });
+  assert.deepEqual(nl.classes.at(-1), { id: 'n2', name: 'Montreal', active: true });
+  assert.throws(() => I.build(r, { uid: () => 'x', now: 1 }), /Add the new tags/);
+  const { writes } = I.build(r, { uid: () => 'e' + (++n), now: 1, tagIds: nl.tagIds, classIds: nl.classIds });
+  assert.deepEqual(writes[0].data.tags, ['t1', 'n1']);
+  assert.deepEqual(writes[0].data.lines.map(l => l.cls), ['n2', ''], 'one line with a class: the other is “no class”');
+  // A new tag written as Group: Name goes in that group.
+  const r2 = run('journal', 'Date,Account,Amount,Tags\n2026-01-01,Advertising,5,Event: Gala\n2026-01-01,Chequing,-5,\n', { company: CO2, addTags: true });
+  assert.deepEqual(I.newLists(r2, CO2, () => 'z').tags.at(-1), { id: 'z', name: 'Gala', group: 'g1' });
+  // More than 20 tags on one entry.
+  const many = Array.from({ length: 21 }, (_, i) => 'T' + i).join(';');
+  const r3 = run('journal', `Date,Account,Amount,Tags\n2026-01-01,Advertising,5,"${many}"\n2026-01-01,Chequing,-5,\n`, { company: CO2, addTags: true });
+  assert.ok(codes(r3.rows[0]).includes('tags-many'));
+});
+
+test('inventory items: quantity on hand, value and date; accounts found or the usual ones', () => {
+  const accts = [...ACCTS, { id: 'a1400', code: '1400', name: 'Inventory', type: 'Asset' }, { id: 'a5000', code: '5000', name: 'Cost of goods sold', type: 'Cost of Goods Sold' }];
+  const text = 'Name,SKU,Sales price,Cost,Quantity on hand,Total value,As of,Inventory asset account,Reorder point\n'
+    + 'Paper,P1,12.99,8.50,40,,2026-09-30,,10\n'
+    + 'Toner,T1,89,52,6,300,30/09/2026,Inventory,\n'
+    + 'Pens,,2,1,5,,,,\n'
+    + 'Bad,,2,1,-1,,2026-09-30,Chequing,\n'
+    + 'Widget,,1,,,,,,\n';
+  const r = run('inventory', text, {}, { accounts: accts, items: [{ id: 'i0', name: 'Widget' }] });
+  assert.deepEqual(r.rows.map(x => x.status), ['ok', 'ok', 'error', 'error', 'dup']);
+  assert.deepEqual(r.rows[0].record, { name: 'Paper', type: 'inventory', sku: 'P1', desc: '', price: 12.99, cost: 8.5, incomeAccount: 'a4000', assetAccount: 'a1400', cogsAccount: 'a5000', expenseAccount: 'a1400',
+    qtyStart: 40, valueStart: 340, startDate: '2026-09-30', reorder: 10, taxCode: 'std', sold: true, bought: true, active: true }, 'no value: quantity × cost');
+  assert.deepEqual([r.rows[1].record.valueStart, r.rows[1].record.startDate], [300, '2026-09-30']);
+  assert.deepEqual(r.rows[2].problems, [{ code: 'required', field: 'asOf' }]);
+  assert.deepEqual(codes(r.rows[3]), ['account-kind', 'negative']);
+  // No inventory account in the books: say so.
+  assert.deepEqual(codes(run('inventory', 'Name\nX\n').rows[0]), ['inv-acct', 'inv-acct']);
+  // The plain products import still points inventory rows here.
+  assert.deepEqual(codes(run('items', 'Name,Type,Income account\nW,Inventory,Sales\n').rows[0]), ['inventory']);
+});
+
+test('API: an imported inventory item starts with its stock; sales receipts, credits and tags import through the server', async () => {
+  let st = await state();
+  const r0 = await call('POST', '/api/c/batch', { writes: [{ op: 'set', collection: 'accounts', id: 'a1400', data: { code: '1400', name: 'Inventory', type: 'Asset', active: true } }] });
+  assert.equal(r0.status, 200, JSON.stringify(r0.json));
+  assert.equal((await call('PUT', '/api/c/settings', { ...st.company, tags: [{ id: 'tg1', name: 'Trade show', group: '' }], classes: [{ id: 'cl1', name: 'Ottawa', active: true }] })).status, 200);
+  st = await state();
+  const ex = () => ({ accounts: st.accounts, contacts: st.contacts, items: st.items, docs: st.docs, entries: st.entries });
+  // Inventory
+  let t = csv('Name,Cost,Quantity on hand,As of\nGadget,4,10,2026-09-30\n');
+  let res = I.check('inventory', t, I.guessMapping('inventory', t.rows[0]), { company: st.company, existing: ex() });
+  let out = I.build(res, { uid: () => 'inv1', now: 1 });
+  let r = await call('POST', '/api/c/import', { writes: out.writes, addOnly: true });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  st = await state();
+  const it = st.items.find(i => i.id === 'inv1');
+  assert.deepEqual([it.type, it.qtyStart, it.valueStart, it.startDate, it.assetAccount, it.cogsAccount], ['inventory', 10, 40, '2026-09-30', 'a1400', st.accounts.find(a => a.type === 'Cost of Goods Sold').id]);
+  // Sales receipt with a tag and a class on the line, the form's own posting.
+  const H = formCode({ accounts: st.accounts, company: st.company, items: st.items, docs: st.docs });
+  t = csv('Sales receipt no.,Customer,Date,Description,Amount,Income account,Tax code,Class,Tags\nSR-50,Walk-in,2026-09-02,Paper,100,Sales,HST,Ottawa,Trade show\n');
+  res = I.check('sreceipts', t, I.guessMapping('sreceipts', t.rows[0]), { addContacts: true, company: st.company, existing: ex() });
+  assert.equal(res.counts.records, 1, JSON.stringify(res.rows.map(x => x.problems)));
+  let n = 0;
+  out = I.build(res, { uid: () => 'sr' + (++n), now: 2, ...H });
+  r = await call('POST', '/api/c/import', { writes: out.writes, addOnly: true });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  st = await state();
+  const sr = st.docs.find(d => d.number === 'SR-50'), se = st.entries.find(e => e.docId === sr.id);
+  const bank = st.accounts.find(a => a.detail === 'bank' && a.code === '1000');
+  assert.deepEqual([sr.kind, sr.depositTo, sr.tags, se.type, se.tags, sr.total], ['sreceipt', bank.id, ['tg1'], 'salesreceipt', ['tg1'], 113]);
+  assert.deepEqual(se.lines.map(l => [l.account, l.debit, l.credit, l.cls]), [[bank.id, 113, 0, undefined], [st.accounts.find(a => a.code === '4000').id, 0, 100, 'cl1'], [st.accounts.find(a => a.detail === 'tax').id, 0, 13, undefined]]);
+  // Credit note: open, available for the customer.
+  t = csv('Customer,Date,Description,Amount,Income account,Tax code\nWalk-in,2026-09-03,Return,10,Sales,HST\n');
+  res = I.check('credits', t, I.guessMapping('credits', t.rows[0]), { company: st.company, existing: ex() });
+  out = I.build(res, { uid: () => 'cn' + (++n), now: 3, ...H, arId: st.accounts.find(a => a.detail === 'ar').id });
+  r = await call('POST', '/api/c/import', { writes: out.writes, addOnly: true });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  st = await state();
+  const cn = st.docs.find(d => d.kind === 'credit');
+  assert.deepEqual([cn.number, cn.total, cn.applied], ['CN-1001', 11.3, []]);
+  const ce = st.entries.find(e => e.docId === cn.id);
+  assert.deepEqual(ce.lines.at(-1), { account: st.accounts.find(a => a.detail === 'ar').id, debit: 0, credit: 11.3 }, 'A/R is credited');
+  // An unknown tag id is refused by the server.
+  r = await call('POST', '/api/c/import', { writes: [{ op: 'set', collection: 'entries', id: 'jx', data: { type: 'journal', date: '2026-09-30', ref: '', memo: '', tags: ['nope'], lines: [{ account: 'a6000', debit: 1, credit: 0 }, { account: 'a1000', debit: 0, credit: 1 }] } }], addOnly: true });
+  assert.equal(r.status, 400);
+});

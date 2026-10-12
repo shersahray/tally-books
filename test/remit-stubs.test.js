@@ -347,3 +347,27 @@ test('French: the new screens’ text translates, numbers kept', () => {
   assert.match(tr('Four periods a month (1st–7th, 8th–14th, 15th–21st, 22nd–end), each due the 3rd business day after it ends.'), /^Quatre périodes/);
   assert.equal(tr('A pay stub goes only to the employee’s own email address.'), 'Un relevé de paie est envoyé seulement à l’adresse courriel de l’employé.');
 });
+
+test('stub with overtime, a bonus that earns vacation pay, on a void run: same rows in HTML and PDF, English and French', () => {
+  const st = stubState();
+  st.payruns[1] = { ...st.payruns[1], void: true, lines: [{ ...st.payruns[1].lines[0], payType: 'hourly', rate: 20, hours: 48, otHours: 4, regular: 880, overtime: 120, bonus: 0, gross: 1000 }, { ...st.payruns[1].lines[1], regular: 900, bonus: 100, bonusVac: true }] };
+  const c = payrollSandbox(st);
+  const run = c.S.payruns[1];
+  const a = plain(c.stubData(run, run.lines[0])), b = plain(c.stubData(run, run.lines[1]));
+  assert.equal(a.void, true);
+  assert.deepEqual(a.earnings.slice(0, 2).map(r => [r.key, r.cur, r.h, r.rate]), [['Regular pay', 880, 44, 20], ['Overtime', 120, 4, 30]]);
+  assert.ok(b.earnings.some(r => r.key === 'Bonus (earns vacation pay)' && r.cur === 100));
+  const html = c.stubHTML(run, run.lines[0]);
+  assert.match(html, /Regular, 44 h × \$20\.00/); assert.match(html, /Overtime, 4 h × \$30\.00/); assert.match(html, /<b>Void<\/b>/);
+  assert.match(c.stubHTML(run, run.lines[1]), /Bonus \(earns vacation pay\)/);
+  const en = pdfText(PS.pdf(PDF, a, 'en')), fr = pdfText(PS.pdf(PDF, a, 'fr')), frB = pdfText(PS.pdf(PDF, b, 'fr'));
+  assert.ok(en.includes(`(${PDF.encode('Regular, 44 h × $20.00')})`), 'regular hours are the hours less overtime');
+  assert.ok(en.includes(`(${PDF.encode('Overtime, 4 h × $30.00')})`));
+  assert.ok(en.includes(`(${PDF.encode('Void: this pay run was cancelled.')})`));
+  const m = n => PDF.encode((n).toLocaleString('fr-CA', { style: 'currency', currency: 'CAD' }));
+  assert.ok(fr.includes(`(${PDF.encode('Heures supplémentaires, 4 h × ')}${m(30)})`));
+  assert.ok(fr.includes(`(${PDF.encode('Annulée : cette paie a été annulée.')})`));
+  assert.ok(frB.includes(`(${PDF.encode('Prime (donne droit à l’indemnité de vacances)')})`));
+  // Void runs aren't remitted.
+  assert.ok(!plain(c.remittances()).some(x => x.lastRun && x.lastRun.id === run.id));
+});

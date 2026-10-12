@@ -32,7 +32,7 @@ function projNumbers(p){
 }
 
 function vProjects(){
-  if(!feat('projects'))return head('Projects','')+'<div class="panel"><div class="empty"><b>Projects aren’t on</b>Projects and time are in the Plus plan. They can also be switched off for this company in Settings.</div></div>';
+  if(!feat('projects'))return head('Projects','')+'<div class="panel"><div class="empty"><b>Projects aren’t on</b>Projects and time are in the Grow plan. They can also be switched off for this company in Settings.</div></div>';
   if(S.param&&projById(S.param))return vProject(projById(S.param));
   const P=S.proj||(S.proj={tab:'projects',show:'active',who:'',cust:'',unbilled:false});
   const staff=ME&&ME.role!=='client'&&!ME.readOnly;
