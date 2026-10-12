@@ -50,9 +50,9 @@
   const THRIVE = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'workflows', 'payroll'].filter(k => !soon(k));
   // cents: the default monthly price per company (the server's administrator can change it in Settings).
   const PLANS = {
-    seed: { label: 'Seed', fr: 'Semis', cents: 2000, features: [], blurb: 'Everyday bookkeeping: invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, reports and CaseWare export.' },
-    grow: { label: 'Grow', fr: 'Croissance', cents: 4500, features: GROW, blurb: 'Everything in Seed, plus automatic bank feeds, AI suggestions, advanced reports, projects and time, fixed assets and CCA, special sales tax methods and budgets.' },
-    thrive: { label: 'Thrive', fr: 'Prospérité', cents: 7500, features: THRIVE, blurb: 'Everything in Grow, plus ' + (soon('payroll') ? '' : 'payroll, ') + 'inventory, multi-currency, classes, custom roles, bill approvals, receipts by email, the cash flow forecast and workflow reminders.' },
+    seed: { label: 'Seed', fr: 'Semis', cents: 1800, features: [], blurb: 'Everyday bookkeeping: invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, reports and CaseWare export.' },
+    grow: { label: 'Grow', fr: 'Croissance', cents: 4000, features: GROW, blurb: 'Everything in Seed, plus automatic bank feeds, AI suggestions, advanced reports, projects and time, fixed assets and CCA, special sales tax methods and budgets.' },
+    thrive: { label: 'Thrive', fr: 'Prospérité', cents: 5500, features: THRIVE, blurb: 'Everything in Grow, plus ' + (soon('payroll') ? '' : 'payroll, ') + 'inventory, multi-currency, classes, custom roles, bill approvals, receipts by email, the cash flow forecast and workflow reminders.' },
   };
   /*
    * The plans before Seed, Grow and Thrive. A firm (or a company whose client pays) still on one of them moves to the

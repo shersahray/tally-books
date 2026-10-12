@@ -14,7 +14,7 @@ const { createApp } = require('../src/server/app');
 /* ---------- the plans themselves ---------- */
 test('plans: Seed has no extras, Grow adds bank feeds and the rest, Thrive has everything; prices and French names', () => {
   assert.deepEqual(Object.keys(P.PLANS), ['seed', 'grow', 'thrive']);
-  assert.deepEqual([P.PLANS.seed.cents, P.PLANS.grow.cents, P.PLANS.thrive.cents], [2000, 4500, 7500]);
+  assert.deepEqual([P.PLANS.seed.cents, P.PLANS.grow.cents, P.PLANS.thrive.cents], [1800, 4000, 5500]);
   assert.deepEqual([P.planLabel('seed', 'fr'), P.planLabel('grow', 'fr'), P.planLabel('thrive', 'fr'), P.planLabel('grow')], ['Semis', 'Croissance', 'Prospérité', 'Grow']);
   for (const k of Object.keys(P.FEATURES)) assert.equal(P.inPlan('seed', k), false, `${k} isn’t in Seed`);
   for (const k of ['bankFeeds', 'ai', 'advancedReports', 'projects', 'fixedAssets', 'specialTax', 'budgets']) assert.ok(P.inPlan('grow', k) && P.inPlan('thrive', k), k);
@@ -90,7 +90,7 @@ test('billing: checkout has the plan, the add-ons and an old price kept; employe
   const bdir = fs.mkdtempSync(path.join(os.tmpdir(), 'tally-plans-bill-'));
   try {
     const b = new Billing(bdir, { fetch: fakeFetch });
-    assert.deepEqual(['seed', 'grow', 'thrive', 'essentials', 'plus', 'payroll', 'payrollEmployees'].map(k => b.data.amounts[k]), [2000, 4500, 7500, 1500, 3000, 2000, 400]);
+    assert.deepEqual(['seed', 'grow', 'thrive', 'essentials', 'plus', 'payroll', 'payrollEmployees'].map(k => b.data.amounts[k]), [1800, 4000, 5500, 1500, 3000, 2000, 400]);
     b.data.key = 'sk_test_' + 'x'.repeat(24);
     await assert.rejects(b.update({ amounts: { payrollEmployees: 0 } }), /price/);
     await b.update({ amounts: { grow: 50, payrollEmployees: 5 } });
