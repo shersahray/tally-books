@@ -50,13 +50,15 @@ const filtSub=()=>repFilter()?' · Filtered':'';
 /** Running sums for one class ('' = every transaction, '__none' = those without a class) and, for a P&L by customer,
     one customer column (an id, '__none', or a list of ids for "Other customers"), on the report's basis and filter.
     One cache per class, customer and filter, so a report with a column for each stays quick. `cls` left out = the report's class filter. */
+/** A posting's class: its line's own (classes on each line), else its transaction's; '' when it has none. */
+const pCls=p=>p.cls!==undefined?p.cls||'':p.e.cls||'';
 function rix(cls,cust){
   if(cls===undefined)cls=repCls();
   const ps=repPostingsF(),hasC=cust!==undefined&&cust!=='',key=`${cls}|${hasC?TallyRepFilter.custKey(cust):''}`;
   if(!RIX||RIX.ps!==ps)RIX={ps,by:new Map()};
   const hit=RIX.by.get(key);if(hit)return hit;
   const m=new Map(),ct=hasC?TallyRepFilter.custTest(cust,rfCtx()):null;
-  for(const p of ps){if(cls&&(cls==='__none'?!!p.e.cls:p.e.cls!==cls))continue;if(ct&&!ct(p.e))continue;let a=m.get(p.account);if(!a)m.set(p.account,a=[]);a.push([p.date,p.debit-p.credit])}
+  for(const p of ps){if(cls&&(cls==='__none'?!!pCls(p):pCls(p)!==cls))continue;if(ct&&!ct(p.e))continue;let a=m.get(p.account);if(!a)m.set(p.account,a=[]);a.push([p.date,p.debit-p.credit])}
   for(const a of m.values()){a.sort((x,y)=>x[0]<y[0]?-1:x[0]>y[0]?1:0);let c=0;a.cum=a.map(x=>c+=x[1])}
   const out={m,cls};RIX.by.set(key,out);return out;
 }
@@ -536,7 +538,7 @@ function rTxList(){
   const an=id=>{const a=acct(id);return a?(a.code?a.code+' ':'')+a.name:'(deleted account)'};
   const rows=TallyRepFilter.txRows(repPostingsF(),{from,to,filter:f,isMain:id=>main.has(id)}).map(r=>{const e=r.e;return{...r,
     type:tl(TLABEL[e.type]||e.type),num:e.ref||'',name:contactName(e.contactId)||(e.type==='payrun'?tl('Payroll'):''),memo:e.memo||'',
-    acct:r.accounts.map(an).join(', '),split:r.split.length>1?tl(`${r.split.length} accounts`):r.split.map(an).join(''),splitAll:r.split.map(an).join(', '),cls:e.cls?clsName(e.cls):''}});
+    acct:r.accounts.map(an).join(', '),split:r.split.length>1?tl(`${r.split.length} accounts`):r.split.map(an).join(''),splitAll:r.split.map(an).join(', '),cls:(r.classes&&r.classes.length?r.classes:e.cls?[e.cls]:[]).map(clsName).filter(Boolean).join(', ')}});
   const so=S.rep.tlSort&&TL_COLS.some(c=>c[0]===S.rep.tlSort.col)?S.rep.tlSort:{col:'date',dir:'asc'};
   const sorted=TallyRepFilter.sortRows(rows,r=>so.col==='amt'?r.amount:so.col==='split'?r.splitAll:r[so.col],so.dir);
   const cols=TL_COLS.filter(c=>c[0]!=='cls'||hasCls).map(c=>c[0]==='cls'?[c[0],clsWords().one]:c);

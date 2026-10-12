@@ -26,10 +26,12 @@
   const DOC_KINDS = new Set(['invoice', 'bill', 'credit', 'vcredit']);
   const isCredit = k => k === 'credit' || k === 'vcredit';
 
+  /** A line's class: its own (classes on each line), else its transaction's. */
+  const clsOf = (l, e) => (l.cls != null ? l.cls : e.cls) || '';
   /** Accrual postings, one per ledger line, in the same shape as the app's postings(). */
   function accrualPostings(entries) {
     const out = [];
-    for (const e of entries) for (const l of e.lines || []) out.push({ e, account: l.account, debit: +l.debit || 0, credit: +l.credit || 0, memo: l.memo || '', date: e.date });
+    for (const e of entries) for (const l of e.lines || []) out.push({ e, account: l.account, debit: +l.debit || 0, credit: +l.credit || 0, memo: l.memo || '', date: e.date, cls: clsOf(l, e) });
     return out;
   }
 
@@ -64,11 +66,11 @@
     for (const e of entries) {
       const d = e.docId && docById.get(e.docId);
       const total = d ? +d.total || 0 : 0;
-      const lines = (e.lines || []).map(l => ({ account: l.account, v: (+l.debit || 0) - (+l.credit || 0), memo: l.memo || '' })).filter(l => Math.abs(l.v) >= 0.005);
+      const lines = (e.lines || []).map(l => ({ account: l.account, v: (+l.debit || 0) - (+l.credit || 0), memo: l.memo || '', cls: clsOf(l, e) })).filter(l => Math.abs(l.v) >= 0.005);
       const ctlLines = lines.filter(l => ctl.has(l.account)), rest = lines.filter(l => !ctl.has(l.account));
       // Not an invoice, bill or credit we can convert: already cash.
       if (!d || !DOC_KINDS.has(d.kind) || d.carried || !(total > 0) || !DOC_KINDS.has(e.type) || !ctlLines.length || !rest.length) {
-        for (const l of e.lines || []) out.push({ e, account: l.account, debit: +l.debit || 0, credit: +l.credit || 0, memo: l.memo || '', date: e.date });
+        for (const l of e.lines || []) out.push({ e, account: l.account, debit: +l.debit || 0, credit: +l.credit || 0, memo: l.memo || '', date: e.date, cls: clsOf(l, e) });
         continue;
       }
       const done = lines.map(() => 0); // what's been posted so far from each line
@@ -90,7 +92,7 @@
         part.forEach((v, i) => {
           if (Math.abs(v) < 0.005) return;
           done[i] = r2(done[i] + v);
-          out.push({ e: se, account: lines[i].account, debit: v > 0 ? v : 0, credit: v < 0 ? -v : 0, memo: lines[i].memo, date: s.date });
+          out.push({ e: se, account: lines[i].account, debit: v > 0 ? v : 0, credit: v < 0 ? -v : 0, memo: lines[i].memo, date: s.date, cls: lines[i].cls });
         });
       }
     }

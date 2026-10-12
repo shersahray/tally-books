@@ -48,6 +48,20 @@ function withTags(out, data, store) {
   return out;
 }
 
+/** Classes on lines (company setting classPerLine): each line's cls is '' (no class) or one of the company's classes.
+    Checked whatever the setting says, since turning it off keeps the classes already on lines. A class the record
+    already had on a line stays allowed, so an old transaction can still be saved after its class was removed. */
+function checkLineClasses(lines, store, prev) {
+  if (!Array.isArray(lines) || !lines.some(l => isObj(l) && l.cls !== undefined)) return;
+  const known = new Set(((store && typeof store.getSetting === 'function' ? store.getSetting('company') : null) || {}).classes?.map(c => c.id) || []);
+  for (const l of [...((prev && prev.lines) || []), ...((prev && prev.form && prev.form.lines) || [])]) if (l && typeof l.cls === 'string' && l.cls) known.add(l.cls);
+  lines.forEach((l, i) => {
+    if (!isObj(l) || l.cls === undefined) return;
+    if (l.cls === null || l.cls === '') { l.cls = ''; return; }
+    if (typeof l.cls !== 'string' || !known.has(l.cls)) throw new ValidationError(`Line ${i + 1} has a class that doesn’t exist. Add it under Settings first.`);
+  });
+}
+
 function checkId(id) {
   if (typeof id !== 'string' || !ID_RE.test(id)) throw new ValidationError('Invalid record id.');
 }
@@ -146,6 +160,7 @@ function validateDoc(data, store, id) {
   } else { delete data.currency; delete data.fx; }
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Document total must be a number.');
   if (!Array.isArray(data.lines)) throw new ValidationError('Document lines must be a list.');
+  checkLineClasses(data.lines, store, id && store.get('docs', id));
   // Bill approvals (approvals.js): only on bills. The server decides it on every save (see applyWrite); this checks its shape.
   if (data.approval !== undefined) {
     if (data.kind !== 'bill') delete data.approval;
@@ -169,6 +184,9 @@ function validateEntry(data, store, id) {
     dr += d; cr += c;
     return { ...l, debit: d / 100, credit: c / 100 };
   });
+  const prevE = id && store.get('entries', id);
+  checkLineClasses(lines, store, prevE);
+  if (isObj(data.form) && Array.isArray(data.form.lines)) checkLineClasses(data.form.lines, store, prevE);
   if (dr !== cr) throw new ValidationError(`Debits and credits don’t balance (off by ${((dr - cr) / 100).toFixed(2)}).`);
   if (dr === 0) throw new ValidationError('A transaction needs an amount.');
   if (data.clear !== undefined) {
@@ -857,7 +875,9 @@ function validateCompany(data) {
     approvals: APPROVALS.clean(data.approvals),
     // Opening UCC for each CCA class, at the start of the first fiscal year Sumlora works out (from the last T2 Schedule 8).
     ccaOpening: isObj(data.ccaOpening) ? Object.fromEntries(Object.entries(data.ccaOpening).filter(([k, v]) => /^[0-9]{1,2}(\.[0-9]{1,2})?$/.test(k) && isObj(v) && isDate(v.fy)).slice(0, 60).map(([k, v]) => [k, { fy: v.fy, ucc: Math.max(0, Math.round((Number(v.ucc) || 0) * 100) / 100) }])) : {},
-    // Classes: a way to sort income and expenses (branch, department, line of business). One per transaction.
+    // Classes: a way to sort income and expenses (branch, department, line of business). One per transaction, or with
+    // classPerLine one on each line (like QuickBooks Online), so one bill can be split between classes.
+    classPerLine: !!data.classPerLine,
     // What the company calls its classes.
     classLabel: ['class', 'location', 'department', 'division'].includes(data.classLabel) ? data.classLabel : 'class',
     classes: (() => { const seen = new Set(); return (Array.isArray(data.classes) ? data.classes : []).filter(isObj).slice(0, 200).map(c => ({ id: str(c.id, 40), name: str(c.name, 60).trim(), active: c.active !== false })).filter(c => c.id && c.name && !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase())); })(),
