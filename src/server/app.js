@@ -579,9 +579,9 @@ function createApp(opts) {
     // Attachments and questions have their own routes; a plain write can only delete an attachment.
     if (collection === 'attachments' && (op !== 'delete' || (user && user.role === 'client'))) throw new ValidationError('Attach files from the transaction.', 403);
     if (collection === 'questions') throw new ValidationError('Use Questions to ask or answer.', 403);
-    // A recurring invoice or bill being made: if another window already made this date, don't make it again.
-    if (collection === 'docs' && op === 'set' && w.data && w.data.recurringNew) {
-      if (store.get('docs', id)) throw new ValidationError('That recurring transaction was already made.', 409);
+    // A recurring transaction being made: if another window already made this date, don't make it again.
+    if ((collection === 'docs' || collection === 'entries') && op === 'set' && w.data && w.data.recurringNew) {
+      if (store.get(collection, id)) throw new ValidationError('That recurring transaction was already made.', 409);
       w.data = { ...w.data }; delete w.data.recurringNew;
     }
     if (collection === 'receipts' && user && user.role === 'client') {

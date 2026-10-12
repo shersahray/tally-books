@@ -73,35 +73,51 @@ function estToInvoice(x){
     onSaved:async id=>{const cur=S.estimates.find(y=>y.id===x.id)||x;await put('estimates',x.id,{...strip(cur),status:'accepted',invoiceId:id});toast('Invoice saved and linked to the estimate')}});
 }
 
-/* ---------- recurring invoices and bills ---------- */
+/* ---------- recurring transactions ----------
+ * Invoices and bills (documents), and expenses, deposits, transfers and journal entries (straight into the
+ * ledger). The schedule itself is in recurring-calc.js (TallyRecurring), shared with the server and the tests. */
 const REC_EVERY={week:['week','weeks'],month:['month','months'],quarter:['quarter','quarters'],year:['year','years']};
+const REC_KIND={invoice:'Invoice',bill:'Bill',expense:'Expense',deposit:'Deposit',transfer:'Transfer',journal:'Journal entry'};
+// Sales → Recurring and Expenses → Recurring each list the kinds that belong there.
+const REC_GROUP={invoice:['invoice','deposit'],bill:['bill','expense','transfer','journal']};
+const recIsDoc=k=>k==='invoice'||k==='bill';
 const recEveryLabel=r=>r.n>1?`Once every ${r.n} ${REC_EVERY[r.every][1]}`:`Every ${REC_EVERY[r.every][0]}`;
 /** The date after `date` on the schedule. Months keep the template's day, or the month's last day when it's shorter. */
-function recAfter(r,date){
-  const n=+r.n||1;
-  if(r.every==='week')return addDays(date,7*n);
-  const months=n*(r.every==='quarter'?3:r.every==='year'?12:1),d=pd(date),day=+r.day||d.getDate();
-  const y=d.getFullYear(),m=d.getMonth()+months,last=new Date(y,m+1,0).getDate();
-  return iso(new Date(y,m,Math.min(day,last)));
-}
-const recDue=(r,t=today())=>r.active!==false&&r.next<=t&&(!r.end||r.next<=r.end);
-const recTotal=r=>calcLines(r.lines,x=>(+x.qty||0)*(+x.rate||0),r.kind==='bill').total;
+const recAfter=(r,date)=>TallyRecurring.after(r,date);
+const recDue=(r,t=today())=>TallyRecurring.isDue(r,t);
+/** "Make recurring" from a transaction dated `date`: monthly from a month later, keeping month-end (April 30 → May 31). */
+const recFrom=date=>{const day=TallyRecurring.dayFor(date);return{next:recAfter({every:'month',n:1,day},date),day}};
+const recTotal=r=>recIsDoc(r.kind)?calcLines(r.lines,x=>(+x.qty||0)*(+x.rate||0),r.kind==='bill').total:r.kind==='expense'||r.kind==='deposit'?calcLines(r.lines||[],x=>+x.amount||0,r.kind==='expense').total:TallyRecurring.total(r);
+/** Who it's with: the customer or payee, or the two accounts of a transfer. */
+const recWho=r=>r.kind==='transfer'?`${acctName(r.from)} → ${acctName(r.to)}`:contactName(r.contactId);
+const recMakeBtn=()=>typeof ME!=='undefined'&&ME&&(ME.readOnly||ME.role==='client')?'':'<button type="button" class="btn ghost" data-mkrec>Make recurring</button>';
 function recState(r){if(r.end&&r.next>r.end)return{k:'quiet',label:'Ended'};if(r.active===false)return{k:'quiet',label:'Paused'};if(recDue(r))return{k:'overdue',label:r.mode==='remind'?'Ready to review':'Due'};return{k:'paid',label:'Active'}}
 function vRecurring(kind){
-  const inv=kind==='invoice',list=S.recurring.filter(r=>r.kind===kind).sort((a,b)=>a.next.localeCompare(b.next));
-  return `<div class="panel"><div class="toolbar"><span class="grow muted">${inv?'Invoices':'Bills'} made on a schedule, such as rent, retainers or subscriptions. They’re made when someone opens these books on or after the date.</span><button class="btn sm primary" data-recnew="${kind}">+ New recurring ${inv?'invoice':'bill'}</button></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Name</th><th>${inv?'Customer':'Vendor'}</th><th>How often</th><th>Next</th><th class="n">Amount</th><th>How</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(r=>{const st=recState(r);return `<tr class="click" data-rec="${r.id}"><td>${esc(r.name)}</td><td class="trunc" translate="no">${esc(contactName(r.contactId))}</td><td>${recEveryLabel(r)}</td><td style="white-space:nowrap">${st.label==='Ended'?'—':fmtDate(r.next)}</td><td class="n">${money(recTotal(r))}</td><td class="muted">${r.mode==='remind'?'Remind me':inv&&r.email?'Make and email':'Make automatically'}</td><td><span class="pill ${st.k}">${st.label}</span></td><td class="n">${st.label==='Ready to review'||st.label==='Due'?`<button class="btn sm" data-recrun="${r.id}">${r.mode==='remind'?'Review':'Make now'}</button>`:''}</td></tr>`}).join(''):emptyRow(8,`No recurring ${inv?'invoices':'bills'}`,inv?'Set up an invoice that repeats, like a monthly retainer.':'Set up a bill that repeats, like rent or a subscription.')}</tbody></table></div></div>`;
+  const inv=kind==='invoice',kinds=REC_GROUP[kind],list=S.recurring.filter(r=>kinds.includes(r.kind)).sort((a,b)=>a.next.localeCompare(b.next));
+  const others=kinds.slice(1).map(k=>`<button class="btn sm" data-recnew="${k}">+ Recurring ${REC_KIND[k].toLowerCase()}</button>`).join('');
+  return `<div class="panel"><div class="toolbar"><span class="muted" style="flex:1 1 100%">${inv?'Invoices and deposits made on a schedule, such as retainers or rent from a tenant.':'Bills, expenses, transfers and journal entries made on a schedule, such as rent, loan payments or monthly accruals.'} <span>Each one is made when someone opens these books on or after its date, or waits for you to review it.</span></span><span class="grow"></span>${others}<button class="btn sm primary" data-recnew="${kind}">+ New recurring ${inv?'invoice':'bill'}</button></div>
+  <div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>${inv?'Customer':'Vendor or payee'}</th><th>How often</th><th>Next</th><th class="n">Amount</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.map(r=>{const st=recState(r),due=st.label==='Ready to review'||st.label==='Due',ended=st.label==='Ended';return `<tr class="click" data-rec="${r.id}"><td>${esc(r.name)}</td><td style="white-space:nowrap">${REC_KIND[r.kind]}</td><td class="trunc" translate="no">${esc(recWho(r))}</td><td><div>${recEveryLabel(r)}</div><div class="muted" style="font-size:12.5px">${r.mode==='remind'?'Remind me':inv&&r.email?'Make and email':'Make automatically'}</div></td><td style="white-space:nowrap">${ended?'—':fmtDate(r.next)}</td><td class="n">${money(recTotal(r))}</td><td><span class="pill ${st.k}">${st.label}</span></td><td class="n"><div style="display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end">${due?`<button class="btn sm" data-recrun="${r.id}">${r.mode==='remind'?'Review':'Make now'}</button>`:''}${ended?'':`<button class="btn sm ghost" data-recskip="${r.id}">Skip next</button><button class="btn sm ghost" data-recpause="${r.id}">${r.active===false?'Resume':'Pause'}</button>`}</div></td></tr>`}).join(''):emptyRow(8,`No recurring ${inv?'invoices':'bills'}`,inv?'Set up an invoice that repeats, like a monthly retainer.':'Set up a bill that repeats, like rent or a subscription.')}</tbody></table></div></div>`;
+}
+/** The schedule fields every recurring form shares (ids rcN, rcEvery, rcNext, rcEnd, rcMode). */
+const recSchedHTML=(d,r)=>`${fld('rcN','Repeat every',`<div style="display:flex;gap:6px"><input type="number" id="rcN" min="1" max="12" step="1" value="${esc(d.n)}" style="width:70px" aria-label="How many"><select id="rcEvery" aria-label="Weeks, months, quarters or years">${Object.entries(REC_EVERY).map(([k,v])=>`<option value="${k}" ${d.every===k?'selected':''}>${v[1]}</option>`).join('')}</select></div>`)}
+      ${fld('rcNext',r?'Next one on':'First one on',`<input type="date" id="rcNext" value="${esc(d.next)}">`)}${fld('rcEnd','Last one on (optional)',`<input type="date" id="rcEnd" value="${esc(d.end||'')}">`)}`;
+const recModeHTML=d=>fld('rcMode','When it’s due',`<select id="rcMode"><option value="auto" ${d.mode!=='remind'?'selected':''}>Make it automatically</option><option value="remind" ${d.mode==='remind'?'selected':''}>Remind me to review it first</option></select>`);
+/** Read the schedule back, or {err}. A month-end start (say the 30th of April) keeps to month-end. */
+function recSchedRead(f,d,r){
+  const next=$('#rcNext',f).value,end=$('#rcEnd',f).value;
+  if(!next)return{err:'Choose the date of the next one.'};if(end&&end<next)return{err:'The last date is before the next one.'};
+  return{every:$('#rcEvery',f).value,n:Math.max(1,Math.min(12,parseInt($('#rcN',f).value)||1)),next,end,day:(r?r.next===next&&r.day:d.next===next&&d.day)||TallyRecurring.dayFor(next),mode:$('#rcMode',f).value,active:r?$('#rcActive',f).checked:true};
 }
 function recurringForm(r,kind,preset){
-  kind=r?r.kind:kind;const inv=kind==='invoice',ck=inv?'customer':'vendor',filter=DOC_ACCT_FILTER(inv);
+  kind=r?r.kind:kind;if(!recIsDoc(kind))return recEntryForm(r,kind,preset);
+  const inv=kind==='invoice',ck=inv?'customer':'vendor',filter=DOC_ACCT_FILTER(inv);
   const defA=(sortAccts(S.accounts.filter(a=>filter(a)&&a.active!==false))[0]||{}).id||'';
   const d=r?{...r}:{name:'',contactId:'',every:'month',n:1,next:addDays(today(),1),end:'',terms:'',mode:'auto',email:false,active:true,lines:[{desc:'',account:defA,qty:1,rate:'',taxCode:inv?'std':'std'}],memo:'',...(preset||{})};
   const f=openModal(r?`Recurring ${inv?'invoice':'bill'}: ${r.name}`:`New recurring ${inv?'invoice':'bill'}`,
     `<div class="fields">${fld('rcName','Name',`<input type="text" id="rcName" value="${esc(d.name)}" placeholder="${inv?'e.g. Monthly bookkeeping retainer':'e.g. Office rent'}">`)}${fld('rcC',inv?'Customer':'Vendor',contactSelect('rcC',d.contactId,ck))}
-      ${fld('rcN','Repeat every',`<div style="display:flex;gap:6px"><input type="number" id="rcN" min="1" max="12" step="1" value="${esc(d.n)}" style="width:70px" aria-label="How many"><select id="rcEvery" aria-label="Weeks, months, quarters or years">${Object.entries(REC_EVERY).map(([k,v])=>`<option value="${k}" ${d.every===k?'selected':''}>${v[1]}</option>`).join('')}</select></div>`)}
-      ${fld('rcNext',r?'Next one on':'First one on',`<input type="date" id="rcNext" value="${esc(d.next)}">`)}${fld('rcEnd','Last one on (optional)',`<input type="date" id="rcEnd" value="${esc(d.end||'')}">`)}
+      ${recSchedHTML(d,r)}
       ${fld('rcTerms','Due in (days)',`<input type="number" id="rcTerms" min="0" max="365" step="1" value="${esc(d.terms)}" placeholder="${esc(S.company.terms)}">`)}
-      ${fld('rcMode','When it’s due',`<select id="rcMode"><option value="auto" ${d.mode!=='remind'?'selected':''}>Make it automatically</option><option value="remind" ${d.mode==='remind'?'selected':''}>Remind me to review it first</option></select>`)}</div>
+      ${recModeHTML(d)}</div>
     ${inv?`<label class="check" data-rcemail><input type="checkbox" id="rcEmail" ${d.email?'checked':''}> <span>Email it to the customer when it’s made (uses the company’s email in Settings)</span></label>`:''}
     ${r?`<label class="check"><input type="checkbox" id="rcActive" ${d.active!==false?'checked':''}> <span>Active (untick to pause it)</span></label>`:''}
     <div data-le></div>
@@ -118,18 +134,94 @@ function recurringForm(r,kind,preset){
     const c=calcLines(le.read(),x=>(+x.qty||0)*(+x.rate||0),!inv);
     const name=$('#rcName',f).value.trim();if(!name)return f.err('Give it a name, like “Office rent”.');
     if($('#rcC',f).value===''||($('#rcC',f).value==='__new'&&!$('#rcCNew',f).value.trim()))return f.err(`Choose a ${ck}.`);
-    const next=$('#rcNext',f).value,end=$('#rcEnd',f).value;if(!next)return f.err('Choose the date of the next one.');
-    if(end&&end<next)return f.err('The last date is before the next one.');
+    const sc=recSchedRead(f,d,r);if(sc.err)return f.err(sc.err);const next=sc.next;
     if(!c.ls.length)return f.err('Add at least one line with an account and an amount.');
     const cid=await resolveContact(f,'rcC',ck);if(!cid)return;
     const id=r?r.id:uid(),terms=$('#rcTerms',f).value;
-    const data={...(r?strip(r):{made:0,created:Date.now()}),kind,name,contactId:cid,every:$('#rcEvery',f).value,n:Math.max(1,Math.min(12,parseInt($('#rcN',f).value)||1)),next,end,
-      day:(r?r.next===next&&r.day:d.next===next&&d.day)||pd(next).getDate(),terms:terms===''?'':Math.max(0,parseInt(terms)||0),mode:$('#rcMode',f).value,email:inv&&!!$('#rcEmail',f)?.checked,active:r?$('#rcActive',f).checked:true,
+    const data={...(r?strip(r):{made:0,created:Date.now()}),kind,name,contactId:cid,...sc,terms:terms===''?'':Math.max(0,parseInt(terms)||0),email:inv&&!!$('#rcEmail',f)?.checked,
       memo:$('#rcMemo',f).value.trim(),lines:c.ls.map(l=>({...(l.item?{item:l.item}:{}),desc:l.desc||'',account:l.account,qty:+l.qty||0,rate:+l.rate||0,taxCode:l.taxCode}))};
     if(!await put('recurring',id,data))return;
     closeModal();toast(r?'Recurring transaction saved':`Saved. The first one is made on ${fmtDate(next)}.`);
     if(next<=today()&&data.mode==='auto')recRunDue();
   };
+}
+/** A recurring expense, deposit, transfer or journal entry. These go straight into the ledger when made. */
+function recEntryForm(r,kind,preset){
+  const out=kind==='expense',mon=kind==='expense'||kind==='deposit',jn=kind==='journal',tf=kind==='transfer';
+  // Each one is made later without anyone there to type an exchange rate, so only Canadian-dollar accounts.
+  const bk=a=>(a.detail==='bank'||a.detail==='card')&&!a.currency;
+  const defBank=(sortAccts(S.accounts.filter(a=>a.detail==='bank'&&!a.currency&&a.active!==false))[0]||{}).id||'';
+  const defA=out?'':kind==='deposit'?(sortAccts(S.accounts.filter(a=>a.type==='Income'&&a.active!==false))[0]||{}).id||'':'';
+  const d=r?{...r}:{name:'',contactId:'',every:'month',n:1,next:addDays(today(),1),end:'',mode:'auto',active:true,ref:'',memo:'',bank:defBank,from:'',to:'',amount:'',
+    lines:jn?[{},{}]:[{account:defA,desc:'',amount:'',taxCode:out?'std':'none'}],...(preset||{})};
+  const title=`Recurring ${REC_KIND[kind].toLowerCase()}`,ph={expense:'e.g. Internet',deposit:'e.g. Rent from tenant',transfer:'e.g. Move to savings',journal:'e.g. Monthly amortization'}[kind];
+  const f=openModal(r?`${title}: ${r.name}`:`New ${title.toLowerCase()}`,
+    `<div class="fields">${fld('rcName','Name',`<input type="text" id="rcName" value="${esc(d.name)}" placeholder="${ph}">`)}
+      ${mon?fld('rcBank',out?'Paid from':'Deposit to',`<select id="rcBank"><option value="">Choose account…</option>${acctOptions(d.bank,bk)}</select>`)+fld('rcC',out?'Payee':'Received from',contactSelect('rcC',d.contactId,out?'vendor':'customer',true)):''}
+      ${tf?fld('rcFrom','From',`<select id="rcFrom"><option value="">Choose account…</option>${acctOptions(d.from,bk)}</select>`)+fld('rcTo','To',`<select id="rcTo"><option value="">Choose account…</option>${acctOptions(d.to,bk)}</select>`)+fld('rcAmt','Amount',`<input type="number" id="rcAmt" step="0.01" min="0" inputmode="decimal" value="${esc(d.amount??'')}">`):''}
+      ${mon||jn?fld('rcRef',jn?'Journal no.':'Reference',`<input type="text" id="rcRef" value="${esc(d.ref||'')}">`):''}
+      ${recSchedHTML(d,r)}${recModeHTML(d)}</div>
+    ${r?`<label class="check"><input type="checkbox" id="rcActive" ${d.active!==false?'checked':''}> <span>Active (untick to pause it)</span></label>`:''}
+    ${jn?'<div class="muted" style="font-size:13px">With “Remind me”, you can change the amounts each time before it’s posted.</div>':''}
+    <div data-le></div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div class="field" style="flex:1 1 240px"><label for="rcMemo">Memo</label>${tf?`<input type="text" id="rcMemo" value="${esc(d.memo||'')}">`:`<textarea id="rcMemo">${esc(d.memo||'')}</textarea>`}</div>
+      ${mon?totalsHTML():jn?'<div class="totals"><div>Total debits</div><div data-j="d">0.00</div><div>Total credits</div><div data-j="c">0.00</div><div class="big">Difference</div><div class="big" data-j="x">0.00</div></div>':''}</div>
+    ${r&&r.made?`<div class="muted" style="font-size:13px"><span>Made so far:</span> ${r.made}${r.last?` · <span>last on</span> ${fmtDate(r.last)}`:''}</div>`:''}`,
+    saveFoot(!!r),'wide');
+  if(mon)wireContactSelect(f,'rcC');
+  let le=null;
+  if(mon){
+    const filter=out?a=>!(a.detail==='bank'||a.detail==='card'||a.detail==='ar'||a.detail==='ap'||a.type==='Income'):a=>!(a.detail==='bank'||a.detail==='card'||a.detail==='ar'||a.detail==='ap'||a.type==='Expense'||a.type==='Cost of Goods Sold');
+    const cols=[{key:'account',label:'Category',type:'acct',filter},{key:'desc',label:'Description',type:'text'},{key:'amount',label:'Amount',type:'num'},{key:'taxCode',label:'Tax',type:'sel',options:taxCodeOptions}];
+    cols.defaults=()=>({taxCode:contact($('#rcC',f).value)?.taxCode||(out?'std':'none'),account:defA});
+    le=lineEditor($('[data-le]',f),cols,(d.lines||[]).map(l=>({...l,taxCode:taxCodeOf(l)})),rows=>setTotals(f,calcLines(rows,x=>+x.amount||0,out)));
+  }
+  if(jn)le=lineEditor($('[data-le]',f),[{key:'account',label:'Account',type:'acct'},{key:'memo',label:'Description',type:'text'},{key:'debit',label:'Debit',type:'num'},{key:'credit',label:'Credit',type:'num'}],
+    (d.lines||[]).map(l=>({account:l.account,memo:l.memo||'',debit:l.debit||'',credit:l.credit||''})),
+    rows=>{const dr=r2(rows.reduce((s,x)=>s+(+x.debit||0),0)),cr=r2(rows.reduce((s,x)=>s+(+x.credit||0),0));$('[data-j=d]',f).textContent=money(dr);$('[data-j=c]',f).textContent=money(cr);const x=$('[data-j=x]',f);x.textContent=money(r2(dr-cr));x.className='big '+(Math.abs(dr-cr)>0.004?'neg':'')});
+  const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this recurring transaction?','No more will be made from it. The ones already made stay.'))return;if(await del('recurring',r.id)){closeModal();toast('Recurring transaction deleted')}};
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const name=$('#rcName',f).value.trim();if(!name)return f.err('Give it a name, like “Office rent”.');
+    const sc=recSchedRead(f,d,r);if(sc.err)return f.err(sc.err);
+    const x={};
+    if(mon){
+      x.bank=$('#rcBank',f).value;if(!x.bank)return f.err('Choose a bank or card account.');
+      const c=calcLines(le.read(),l=>+l.amount||0,out);if(!c.ls.length)return f.err('Add at least one line with a category and amount.');
+      if(c.tax&&!taxReady(c.parts))return;
+      let cid=$('#rcC',f).value;if(cid==='__new'){cid=await resolveContact(f,'rcC',out?'vendor':'customer');if(!cid)return f.err('Enter a name for the new contact.')}
+      x.contactId=cid||'';x.lines=c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode}));
+    }
+    if(tf){
+      x.from=$('#rcFrom',f).value;x.to=$('#rcTo',f).value;x.amount=r2($('#rcAmt',f).value);
+      if(!x.from||!x.to)return f.err('Choose both accounts.');if(x.from===x.to)return f.err('Pick two different accounts.');if(!(x.amount>0))return f.err('Enter an amount above zero.');
+    }
+    if(jn){
+      const ls=le.read().filter(l=>l.account||+l.debit||+l.credit),bad=TallyRecurring.journalProblem(ls);if(bad)return f.err(bad);
+      x.lines=TallyRecurring.journalLines(ls);
+    }
+    if(mon||jn)x.ref=$('#rcRef',f).value.trim();
+    const id=r?r.id:uid();
+    const data={...(r?strip(r):{made:0,created:Date.now()}),kind,name,...sc,...x,memo:$('#rcMemo',f).value.trim()};
+    if(!await put('recurring',id,data))return;
+    closeModal();toast(r?'Recurring transaction saved':`Saved. The first one is made on ${fmtDate(sc.next)}.`);
+    if(sc.next<=today()&&data.mode==='auto')recRunDue();
+  };
+}
+/** An expense, deposit, transfer or journal entry made from a template on a date, or {err} when it can't be made. */
+function recBuildEntry(r,date){
+  let lines,form;
+  if(r.kind==='journal'){const bad=TallyRecurring.journalProblem(r.lines);if(bad)return{err:`“${r.name}”: ${T(bad)}`};lines=TallyRecurring.journalLines(r.lines)}
+  else if(r.kind==='transfer'){lines=TallyRecurring.transferLines(r);form={from:r.from,to:r.to,amount:+r.amount}}
+  else{
+    const out=r.kind==='expense',c=calcLines(r.lines||[],x=>+x.amount||0,out);
+    if(!c.ls.length)return{err:`“${r.name}” has no lines with an amount.`};
+    if(c.tax&&c.parts.some(p=>!p.account))return{err:`Add a “${c.parts.find(p=>!p.account).name} payable” account first.`};
+    lines=moneyLines(out,c,r.bank);form={bank:r.bank,lines:c.ls.map(l=>({account:l.account,desc:l.desc||'',amount:l.net,taxCode:l.taxCode,tax:l.taxCode==='std'||l.taxCode==='gst'}))};
+  }
+  if(lines.some(l=>!acct(l.account)))return{err:`An account on “${r.name}” was deleted. Edit it first.`};
+  const id=recId(r,date);
+  const entry={type:r.kind,date,ref:r.ref||'',memo:r.memo||'',contactId:r.contactId||'',...(form?{form}:{}),lines,recurringId:r.id,recurringNew:true,created:Date.now()};
+  return{id,entry,writes:[{op:'set',collection:'entries',id,data:entry}]};
 }
 /** Everything needed to make one from a template on a date: the doc, its posting, and the error if it can't be made. */
 function recBuild(r,date,number){
@@ -156,17 +248,17 @@ async function recRunDue(only){
     const t=today(),made=[],errs=[];let skippedClosed=0;
     // Each template is saved on its own, so one that can't be made doesn't hold up the others.
     for(const r of S.recurring.filter(x=>(only?x.id===only:x.mode!=='remind')&&recDue(x,t))){
-      let next=r.next,count=0,num=parseInt(nextNum('invoice'))||1001;const mine=[],docs=[];
-      while(next<=t&&(!r.end||next<=r.end)&&count<60){
-        // Dates in a closed period are skipped (the books can't change there).
-        if(S.company.closingDate&&next<=S.company.closingDate)skippedClosed++;
-        else if(!S.docs.some(d=>d.id===recId(r,next))){
-          const b=recBuild(r,next,r.kind==='invoice'?String(num):'');
+      let next=r.next,num=parseInt(nextNum('invoice'))||1001;const mine=[],docs=[],doc=recIsDoc(r.kind);
+      // Dates in a closed period are skipped (the books can't change there).
+      for(const p of TallyRecurring.plan(r,t,S.company.closingDate).dates){
+        if(p.closed)skippedClosed++;
+        else if(!(doc?S.docs:S.entries).some(d=>d.id===recId(r,p.date))){
+          const b=doc?recBuild(r,p.date,r.kind==='invoice'?String(num):''):recBuildEntry(r,p.date);
           if(b.err){errs.push(b.err);break}
           if(r.kind==='invoice')num++;
-          mine.push(...b.writes);docs.push({r,id:b.id,doc:b.doc});
+          mine.push(...b.writes);docs.push({r,id:b.id,doc:b.doc||b.entry});
         }
-        next=recAfter(r,next);count++;
+        next=p.after;
       }
       if(next===r.next)continue;
       const w=[...mine,{op:'set',collection:'recurring',id:r.id,data:{...strip(r),next,made:(+r.made||0)+docs.length,last:docs.length?docs[docs.length-1].doc.date:r.last||''}}];
@@ -176,7 +268,7 @@ async function recRunDue(only){
     }
     await load();
     if(skippedClosed)toast(`${skippedClosed} recurring date${skippedClosed===1?' was':'s were'} skipped because the books are closed then.`);
-    if(made.length)toast(made.length===1?`Made ${made[0].r.kind==='invoice'?'invoice':'bill'} from “${made[0].r.name}”`:`Made ${made.length} recurring invoices and bills`);
+    if(made.length)toast(made.length===1?`Made ${REC_KIND[made[0].r.kind].toLowerCase()} from “${made[0].r.name}”`:`Made ${made.length} recurring transactions`);
     if(errs.length)toast(errs[0],true);
     const mail=made.filter(m=>m.r.kind==='invoice'&&m.r.email);
     if(mail.length)await recEmail(mail);
@@ -193,13 +285,33 @@ async function recEmail(list){
   }
   if(sent){await load();toast(`Emailed ${sent} recurring invoice${sent===1?'':'s'}`)}
 }
-/** Review one that's waiting: open it as a new invoice or bill; saving it moves the schedule on. */
+/** Move a template past its next date without making anything (Skip next, or a date in a closed period). */
+async function recSkip(r){
+  const cur=S.recurring.find(x=>x.id===r.id)||r,next=recAfter(cur,cur.next);
+  if(cur.end&&next>cur.end){if(!await confirmBox('Skip the last one?','This was the last date on the schedule, so nothing more will be made from it.','Skip it'))return}
+  if(await put('recurring',cur.id,{...strip(cur),next}))toast(cur.end&&next>cur.end?'Skipped. That was the last one.':`Skipped ${fmtDate(cur.next)}. The next one is on ${fmtDate(next)}.`);
+}
+async function recPause(r){
+  const cur=S.recurring.find(x=>x.id===r.id)||r,on=cur.active===false;
+  if(await put('recurring',cur.id,{...strip(cur),active:on}))toast(on?'Resumed':'Paused. Nothing is made from it until you resume it.');
+}
+/** Review one that's waiting: open it as a new transaction, amounts and all editable; saving it moves the schedule on. */
 function recReview(r){
-  const date=r.next,inv=r.kind==='invoice',id=recId(r,date),have=S.docs.find(d=>d.id===id);
+  const date=r.next,inv=r.kind==='invoice',id=recId(r,date),doc=recIsDoc(r.kind),have=(doc?S.docs:S.entries).find(d=>d.id===id);
   // Already made for this date (by someone else just now): move the schedule on and show it.
-  if(have){put('recurring',r.id,{...strip(r),next:recAfter(r,date),made:(+r.made||0)+1,last:date}).then(()=>{docForm(have.kind,have)});return}
-  docForm(r.kind,null,{id,contactId:r.contactId,date,due:addDays(date,r.terms===''||r.terms==null?+S.company.terms||0:+r.terms),memo:r.memo||'',lines:r.lines.map(l=>({...l})),
-    note:`<div class="banner" style="margin:0"><span>From recurring</span> <b>${esc(r.name)}</b>, <span>dated</span> ${fmtDate(date)}<span>. Check it, then save.</span></div>`,
+  if(have){put('recurring',r.id,{...strip(r),next:recAfter(r,date),made:(+r.made||0)+1,last:date}).then(()=>{doc?docForm(have.kind,have):openEntry(have)});return}
+  // The books are closed on that date: it can't be posted there, so offer to skip it.
+  if(S.company.closingDate&&date<=S.company.closingDate){
+    confirmBox('The books are closed on this date',`“${r.name}” was due on ${fmtDate(date)}, but the books are closed through ${fmtDate(S.company.closingDate)}. Skip this date and move on to the next one?`,'Skip it').then(ok=>{if(ok)recSkip(r)});return}
+  const note=`<div class="banner" style="margin:0"><span><span>From recurring</span> <b>${esc(r.name)}</b>, <span>dated</span> ${fmtDate(date)}<span>. Check it, then save.</span></span></div>`;
+  const onSaved=async id=>{const cur=S.recurring.find(x=>x.id===r.id)||r;await put('recurring',r.id,{...strip(cur),next:recAfter(cur,date),made:(+cur.made||0)+1,last:date});toast(`${REC_KIND[r.kind]} saved`)};
+  if(!doc){
+    const base={id,date,ref:r.ref||'',memo:r.memo||'',contactId:r.contactId||'',recurringId:r.id,note,onSaved};
+    if(r.kind==='journal')return journalForm(null,{...base,lines:r.lines});
+    if(r.kind==='transfer')return transferForm(null,{...base,form:{from:r.from,to:r.to,amount:r.amount}});
+    return moneyForm(r.kind,null,{...base,form:{bank:r.bank,lines:(r.lines||[]).map(l=>({...l}))}});
+  }
+  docForm(r.kind,null,{id,contactId:r.contactId,date,due:addDays(date,r.terms===''||r.terms==null?+S.company.terms||0:+r.terms),memo:r.memo||'',lines:r.lines.map(l=>({...l})),note,
     onSaved:async id=>{const cur=S.recurring.find(x=>x.id===r.id)||r;await put('recurring',r.id,{...strip(cur),next:recAfter(cur,date),made:(+cur.made||0)+1,last:date});
       const d=S.docs.find(x=>x.id===id);if(d&&!d.recurringId){await put('docs',id,{...strip(d),recurringId:r.id})}toast(`${inv?'Invoice':'Bill'} saved`)}});
 }
@@ -278,6 +390,8 @@ function salesExtraClick(e,t,d){
   if(d.est){const x=S.estimates.find(y=>y.id===d.est);if(x)estimateForm(x);return true}
   if(d.recnew){recurringForm(null,d.recnew);return true}
   if(d.opissue){const[docId,session]=d.opissue.split('|');api('POST','/api/pay/issue',{docId,session}).then(()=>load()).catch(err=>toast(err.message,true));return true}
+  if(d.recskip){e.stopPropagation();const r=S.recurring.find(x=>x.id===d.recskip);if(r)recSkip(r);return true}
+  if(d.recpause){e.stopPropagation();const r=S.recurring.find(x=>x.id===d.recpause);if(r)recPause(r);return true}
   if(d.recrun){e.stopPropagation();const r=S.recurring.find(x=>x.id===d.recrun);if(r){if(r.mode==='remind')recReview(r);else recRunDue(r.id)}return true}
   if(d.rec){const r=S.recurring.find(x=>x.id===d.rec);if(r)recurringForm(r);return true}
   return false;

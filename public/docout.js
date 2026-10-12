@@ -228,7 +228,7 @@ function bindDocActions(f,doc){
   const name=pdfName(doc.kind,doc.number);
   if(p)p.onclick=async()=>{try{if(doc.kind==='invoice'&&typeof opLinkFor==='function'&&PAYCFG&&PAYCFG.configured)await opLinkFor(doc);saveFile(name,new Blob([await docPdf(S.docs.find(x=>x.id===doc.id)||doc)],{type:'application/pdf'}))}catch(e){toast(e.message,true)}};
   const lk=$('[data-dolink]',f);if(lk)lk.onclick=async()=>{const url=await opLinkFor(doc);if(!url)return;try{await navigator.clipboard.writeText(url);toast('Pay link copied. Paste it in a message to the customer.')}catch(e){prompt('Copy this link:',url)}};
-  const rc=$('[data-dorec]',f);if(rc)rc.onclick=()=>{closeModal();recurringForm(null,doc.kind,{name:`${contactName(doc.contactId)} ${doc.kind==='invoice'?'invoice':'bill'}`.trim(),contactId:doc.contactId,memo:doc.memo||'',lines:doc.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode||(l.tax?'std':'none')})),next:recAfter({every:'month',n:1},doc.date),day:pd(doc.date).getDate()})};
+  const rc=$('[data-dorec]',f);if(rc)rc.onclick=()=>{closeModal();recurringForm(null,doc.kind,{name:`${contactName(doc.contactId)} ${doc.kind==='invoice'?'invoice':'bill'}`.trim(),contactId:doc.contactId,memo:doc.memo||'',lines:doc.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode||(l.tax?'std':'none')})),...recFrom(doc.date)})};
   if(m)m.onclick=()=>{
     const st=docStatus(doc),late=doc.kind==='invoice'&&st.k==='overdue';
     closeModal();
