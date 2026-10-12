@@ -43,6 +43,20 @@ test('settings: document look, own fields, late fees and classes', async () => {
   r = await call('PUT', '/api/c/records/entries/j1', { type: 'journal', date: '2026-03-01', cls: 'k1', lines: [{ account: 'a6000', debit: 50, credit: 0 }, { account: 'a1000', debit: 0, credit: 50 }] });
   assert.equal(r.status, 200);
   assert.equal((await call('GET', '/api/c/state')).json.entries.find(e => e.id === 'j1').cls, 'k1');
+  // What they're called, and a saved profit and loss by class.
+  assert.equal((await company()).classLabel, 'class', 'classes by default');
+  const c2 = await company();
+  r = await call('PUT', '/api/c/settings', { ...c2, classLabel: 'location', savedReports: [{ id: 'sr1', name: 'P&L by store', tab: 'pl', period: 'fy', compare: 'byclass' }] });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const c3 = await company();
+  assert.equal(c3.classLabel, 'location');
+  assert.equal(c3.savedReports[0].compare, 'byclass');
+  await call('PUT', '/api/c/settings', { ...c3, classLabel: 'galaxy' });
+  assert.equal((await company()).classLabel, 'class', 'an unknown name falls back to classes');
+  // A bank rule can set the class.
+  r = await call('PUT', '/api/c/records/rules/r1', { text: 'HYDRO', direction: 'out', account: 'a6000', cls: 'k3' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal((await call('GET', '/api/c/state')).json.rules.find(x => x.id === 'r1').cls, 'k3');
 });
 
 test('budgets: 12 months per income or expense account', async () => {

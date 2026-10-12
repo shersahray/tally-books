@@ -334,11 +334,11 @@ function vReports(){
   <div class="panel"><div class="toolbar">
     ${R.tab==='ar'||R.tab==='ap'?`<span class="muted">Aged as of ${fmtDate(today())}</span>`:`<label class="flabel" for="repPeriod">${pointInTime?'As of':'Period'}</label><select id="repPeriod">${[['month','This month'],['lastmonth','Last month'],['quarter','This quarter'],['ytd','Fiscal year to date'],['fy','This fiscal year'],['lastfy','Last fiscal year'],['all','All dates'],['custom','Custom']].map(([k,v])=>`<option value="${k}" ${R.period===k?'selected':''}>${v}</option>`).join('')}</select>
     ${pointInTime?'':`<input type="date" id="repFrom" value="${R.from}" aria-label="From date"><span class="muted">to</span>`}<input type="date" id="repTo" value="${R.to}" aria-label="${pointInTime?'As of date':'To date'}">`}
-    ${['pl','bva'].includes(R.tab)&&(S.company.classes||[]).length?`<label class="flabel" for="repCls">Class</label><select id="repCls"><option value="">All classes</option>${S.company.classes.map(c=>`<option value="${esc(c.id)}" ${R.cls===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}<option value="__none" ${R.cls==='__none'?'selected':''}>No class</option></select>`:''}
+    ${['pl','bva'].includes(R.tab)&&(S.company.classes||[]).length&&!(R.tab==='pl'&&R.compare==='byclass')?`<label class="flabel" for="repCls">${esc(clsWords().one)}</label><select id="repCls"><option value="">${esc(clsWords().all)}</option>${S.company.classes.map(c=>`<option value="${esc(c.id)}" ${R.cls===c.id?'selected':''} translate="no">${esc(c.name)}</option>`).join('')}<option value="__none" ${R.cls==='__none'?'selected':''}>${esc(clsWords().none)}</option></select>`:''}
     ${typeof budgetToolbar==='function'?budgetToolbar():''}
     ${R.tab==='gl'?`<select id="repAcct" aria-label="Account"><option value="">All accounts</option>${acctOptions(R.acct||'')}</select>`:''}
     ${R.tab==='tb'&&adv?`<label class="flabel" for="repTbAdj">Show</label><select id="repTbAdj">${[['','Trial balance'],['adj','Working trial balance (with adjustments)'],['aje','Adjusting entries']].map(([k,v])=>`<option value="${k}" ${(R.tbAdj==='aje'?'aje':R.tbAdj?'adj':'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
-    ${['pl','bs','cf'].includes(R.tab)&&adv?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
+    ${['pl','bs','cf'].includes(R.tab)&&adv?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE.filter(([k])=>k!=='byclass'||(S.company.classes||[]).length)).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${k==='byclass'?clsWords().by:v}</option>`).join('')}</select>`:''}
     <span class="grow"></span>${R.tab==='tb'&&ME&&ME.role!=='client'?'<button class="btn sm" data-act="caseware">Export for CaseWare</button>':''}<button class="btn sm" data-act="export">Export CSV</button><button class="btn sm" data-act="reppdf">PDF</button>
   </div><div id="repBody">${reportBody()}</div></div>`;
 }
@@ -1303,27 +1303,40 @@ $('#newMenu').onclick=e=>{const b=e.target.closest('[data-new]');if(b)openNew(b.
 document.addEventListener('click',e=>{if(!e.target.closest('.newwrap')){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false')}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#newMenu').hidden){$('#newMenu').hidden=true;$('#newBtn').focus()}});
 
-/* ---------- classes (Settings → Classes): one per transaction, to see the P&L by branch, department or line of business ---------- */
+/* ---------- classes (Settings → Classes): one per transaction, to see the P&L by branch, department or line of business ----------
+   A company can call them classes, locations, departments or divisions; the words below follow that choice. */
+const CLASS_WORDS={
+  class:{one:'Class',many:'Classes',none:'No class',all:'All classes',add:'Add class',by:'By class',slug:'class'},
+  location:{one:'Location',many:'Locations',none:'No location',all:'All locations',add:'Add location',by:'By location',slug:'location'},
+  department:{one:'Department',many:'Departments',none:'No department',all:'All departments',add:'Add department',by:'By department',slug:'department'},
+  division:{one:'Division',many:'Divisions',none:'No division',all:'All divisions',add:'Add division',by:'By division',slug:'division'},
+};
+/** The words for this company's classes, translated (slug stays English: it's for file names). */
+function clsWords(){const w=CLASS_WORDS[S.company.classLabel]||CLASS_WORDS.class;return Object.fromEntries(Object.entries(w).map(([k,v])=>[k,k==='slug'?v:T(v)]))}
 const clsName=id=>((S.company.classes||[]).find(c=>c.id===id)||{}).name||'';
-function classField(id,val){
+/** Pick list of the company's classes ('' when it has none). `bare` leaves out the field label (for table cells). */
+function classSelect(id,val,attrs=''){
   const cs=(S.company.classes||[]).filter(c=>c.active!==false||c.id===val);
   if(!cs.length)return '';
-  return fld(id,'Class',`<select id="${id}"><option value="">${T('No class')}</option>${cs.map(c=>`<option value="${esc(c.id)}" ${c.id===val?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`);
+  return `<select id="${id}" ${attrs}><option value="">${esc(clsWords().none)}</option>${cs.map(c=>`<option value="${esc(c.id)}" ${c.id===val?'selected':''} translate="no">${esc(c.name)}</option>`).join('')}</select>`;
 }
+function classField(id,val){const s=classSelect(id,val);return s?fld(id,esc(clsWords().one),s):''}
 const classOf=(f,id)=>{const s=$('#'+id,f);return s&&s.value?{cls:s.value}:{}};
 function classesPanel(){
   if(!ME||ME.role==='client')return '';
-  const cs=S.company.classes||[],ro=ME.readOnly;
-  const used=id=>S.entries.some(e=>e.cls===id)||S.docs.some(d=>d.cls===id);
-  return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Classes</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
-    <div class="muted" style="font-size:13px">Sort income and expenses by branch, department or line of business. Pick a class on an invoice, bill, sales receipt, expense, deposit or journal entry, then see the profit and loss for one class in Reports.</div>
-    ${cs.length?`<div class="tbl-wrap"><table><tbody>${cs.map(c=>`<tr><td><span translate="no">${esc(c.name)}</span>${c.active===false?' <span class="pill quiet">Inactive</span>':''}</td><td class="n" style="white-space:nowrap">${ro?'':`<button class="btn sm ghost" data-clsren="${esc(c.id)}">Rename</button><button class="btn sm ghost" data-clsact="${esc(c.id)}">${c.active===false?'Turn on':'Turn off'}</button>${used(c.id)?'':`<button class="btn sm ghost" data-clsdel="${esc(c.id)}">Remove</button>`}`}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted">No classes yet.</div>'}
-    ${ro?'':`<form id="clsAdd" style="display:flex;gap:8px"><input type="text" id="clsName" maxlength="60" placeholder="${esc(T('e.g. Ottawa office'))}" aria-label="New class" style="flex:1"><button class="btn" type="submit">Add class</button></form>`}
+  const cs=S.company.classes||[],ro=ME.readOnly,w=clsWords(),lab=S.company.classLabel||'class';
+  const used=id=>S.entries.some(e=>e.cls===id)||S.docs.some(d=>d.cls===id)||S.rules.some(r=>r.cls===id);
+  return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(w.many)}</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
+    <div class="muted" style="font-size:13px">${esc(T('Sort income and expenses by branch, location, department or line of business. Pick one on an invoice, bill, sales receipt, expense, deposit, journal entry or bank line, then see the profit and loss for each one side by side in Reports.'))}</div>
+    ${ro?'':`<div class="fields">${fld('clsLabel','Call them',`<select id="clsLabel">${Object.entries(CLASS_WORDS).map(([k,v])=>`<option value="${k}" ${lab===k?'selected':''}>${esc(T(v.many))}</option>`).join('')}</select><span class="hint">${esc(T('The name used on forms and reports, for example Locations for a business with two stores.'))}</span>`)}</div>`}
+    ${cs.length?`<div class="tbl-wrap"><table><tbody>${cs.map(c=>`<tr><td><span translate="no">${esc(c.name)}</span>${c.active===false?' <span class="pill quiet">Inactive</span>':''}</td><td class="n" style="white-space:nowrap">${ro?'':`<button class="btn sm ghost" data-clsren="${esc(c.id)}">Rename</button><button class="btn sm ghost" data-clsact="${esc(c.id)}">${c.active===false?'Turn on':'Turn off'}</button>${used(c.id)?'':`<button class="btn sm ghost" data-clsdel="${esc(c.id)}">Remove</button>`}`}</td></tr>`).join('')}</tbody></table></div>`:`<div class="muted">${esc(T('None yet.'))}</div>`}
+    ${ro?'':`<form id="clsAdd" style="display:flex;gap:8px"><input type="text" id="clsName" maxlength="60" placeholder="${esc(T('e.g. Ottawa office'))}" aria-label="${esc(w.add)}" style="flex:1"><button class="btn" type="submit">${esc(w.add)}</button></form>`}
   </div></div>`;
 }
 function bindClasses(m){
   const saveCls=async(list,msg)=>{if(await putCompany({...strip(S.company),classes:list}))toast(msg)};
-  const add=$('#clsAdd',m);if(add)add.onsubmit=async e=>{e.preventDefault();const n=$('#clsName',add).value.trim();if(!n)return;if((S.company.classes||[]).some(c=>c.name.toLowerCase()===n.toLowerCase()))return toast('There’s already a class with that name.',true);await saveCls([...(S.company.classes||[]),{id:uid(),name:n,active:true}],`${n} added`)};
+  const lb=$('#clsLabel',m);if(lb)lb.onchange=async()=>{if(await putCompany({...strip(S.company),classLabel:lb.value}))toast('Saved')};
+  const add=$('#clsAdd',m);if(add)add.onsubmit=async e=>{e.preventDefault();const n=$('#clsName',add).value.trim();if(!n)return;if((S.company.classes||[]).some(c=>c.name.toLowerCase()===n.toLowerCase()))return toast(T('There’s already one with that name.'),true);await saveCls([...(S.company.classes||[]),{id:uid(),name:n,active:true}],`${n} added`)};
   if(m._clsBound)return;m._clsBound=true;
   m.addEventListener('click',async e=>{if(S.view!=='settings')return;const b=e.target.closest('[data-clsren],[data-clsact],[data-clsdel]');if(!b)return;e.stopPropagation();const cs=S.company.classes||[];
     if(b.dataset.clsren){const c=cs.find(x=>x.id===b.dataset.clsren);const n=prompt(T('New name for the class'),c.name);if(!n||!n.trim())return;await saveCls(cs.map(x=>x.id===c.id?{...x,name:n.trim()}:x),'Class renamed')}

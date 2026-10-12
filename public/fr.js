@@ -2100,3 +2100,33 @@ addFr({
   '{s}: the bank transit (branch) number has {0} digits.':'{s} : le numéro de transit (succursale) a {0} chiffres.',
   '{s}: the bank account number has {0} to {1} digits.':'{s} : le numéro de compte bancaire a de {0} à {1} chiffres.',
 });
+
+/* ---------- classes, locations, departments and divisions ---------- */
+addFr({
+  'By class':'Par catégorie analytique',
+  'Location':'Emplacement',
+  'Locations':'Emplacements',
+  'No location':'Sans emplacement',
+  'All locations':'Tous les emplacements',
+  'Add location':'Ajouter un emplacement',
+  'By location':'Par emplacement',
+  'Department':'Service',
+  'Departments':'Services',
+  'No department':'Sans service',
+  'All departments':'Tous les services',
+  'Add department':'Ajouter un service',
+  'By department':'Par service',
+  'Division':'Division',
+  'Divisions':'Divisions',
+  'No division':'Sans division',
+  'All divisions':'Toutes les divisions',
+  'Add division':'Ajouter une division',
+  'By division':'Par division',
+  '(optional)':'(facultatif)',
+  'None yet.':'Aucune pour l’instant.',
+  'Call them':'Les appeler',
+  'The name used on forms and reports, for example Locations for a business with two stores.':'Le nom utilisé dans les formulaires et les rapports, par exemple Emplacements pour une entreprise qui a deux magasins.',
+  'Sort income and expenses by branch, location, department or line of business. Pick one on an invoice, bill, sales receipt, expense, deposit, journal entry or bank line, then see the profit and loss for each one side by side in Reports.':'Classez les revenus et les dépenses par succursale, emplacement, service ou secteur d’activité. Choisissez-en un sur une facture, une facture fournisseur, un reçu de vente, une dépense, un dépôt, une écriture de journal ou une ligne bancaire, puis voyez l’état des résultats de chacun côte à côte dans Rapports.',
+  'There’s already one with that name.':'Il y en a déjà un avec ce nom.',
+  'That’s too many columns. Turn off classes you no longer use.':'Il y a trop de colonnes. Désactivez celles que vous n’utilisez plus.',
+});

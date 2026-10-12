@@ -38,7 +38,7 @@ function rBudgetVsActual(){
   const inc=sec('Income',W('Income'))||z,cogs=sec('Cost of Goods Sold','Cost of goods sold')||z,exp=sec('Expense','Expenses')||z;
   rows.push({cls:'spacer'},{cls:'grand',label:W('Net income'),vals:[0,1].map(i=>r2(inc[i]-cogs[i]-exp[i]))});
   const clipped=f!==from||t!==to;
-  const cl=repCls(),cn=cl==='__none'?T('No class'):cl?clsName(cl):'';
+  const cl=repCls(),cn=cl==='__none'?clsWords().none:cl?clsName(cl):'';
   const r=colReport({title:`Budget vs actual · ${b.name}${cn?` · ${cn}`:''}`,sub:`${fmtDate(f)} – ${fmtDate(t)}${clipped?' · '+T('limited to the budget’s fiscal year'):''}`,C:{cols:[{label:'Actual'},{label:'Budget'}],change:true,changeLabels:['Over or under budget','% over or under']},rows,name:`budget-vs-actual_${f}_${t}`});
   return r;
 }
