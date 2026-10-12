@@ -247,7 +247,7 @@ async function recRunDue(only){
     await load();
     const t=today(),made=[],errs=[];let skippedClosed=0;
     // Each template is saved on its own, so one that can't be made doesn't hold up the others.
-    for(const r of S.recurring.filter(x=>(only?x.id===only:x.mode!=='remind')&&recDue(x,t))){
+    for(const r of S.recurring.filter(x=>(only?x.id===only:x.mode!=='remind')&&recDue(x,t)&&perm(TallyRoles.recordArea('recurring',x),'edit'))){
       let next=r.next,num=parseInt(nextNum('invoice'))||1001;const mine=[],docs=[],doc=recIsDoc(r.kind);
       // Dates in a closed period are skipped (the books can't change there).
       for(const p of TallyRecurring.plan(r,t,S.company.closingDate).dates){
@@ -344,7 +344,7 @@ function opHowToPay(d,link){
 }
 /** Check Stripe for payments on open links. At most every 5 minutes, and only when there's a link to check. */
 async function opSync(force){
-  if(!PAYCFG||!PAYCFG.configured||(typeof ME!=='undefined'&&ME&&(ME.readOnly||ME.role==='client')))return;
+  if(!PAYCFG||!PAYCFG.configured||(typeof ME!=='undefined'&&ME&&(ME.readOnly||ME.role==='client'))||!perm('sales','edit'))return;
   if(!force&&(Date.now()-opSynced<5*60e3||!S.docs.some(d=>d.payLink&&d.payLink.active!==false)))return;
   opSynced=Date.now();
   try{const r=await api('POST','/api/pay/sync');

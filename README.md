@@ -100,7 +100,7 @@ It runs two ways from the same code:
 - **Overview (administrators):** under **Overview** at the bottom left: how many firms use your server (active, waiting, suspended, by plan, new this month), how many people and companies, desktop licences sold (active, ending in 30 days, ended, by plan) with a **Renewals due** list and a Renew button, installer downloads per version (GitHub's public download counts), and AI spending this month. Desktop copies don't report back, so they're counted by the licences you've sold and the downloads.
 - **Plans (Essentials and Plus):** each firm on the server has a plan, so you can sell two levels.
   - **Essentials:** everyday bookkeeping, banking and bank rules, invoices and bills, receipts, GST/HST and QST returns (regular method), the standard reports, the review tools and the CaseWare export.
-  - **Plus:** everything in Essentials, and payroll (pay runs, remittances, ROE, T4 and RL-1), AI suggestions, advanced reports (comparisons, cash flow statement, saved reports, report packages, working trial balance) and the special sales tax methods (Quick Method, charity and non-profit calculations).
+  - **Plus:** everything in Essentials, and payroll (pay runs, remittances, ROE, T4 and RL-1), AI suggestions, advanced reports (comparisons, cash flow statement, saved reports, report packages, working trial balance), the special sales tax methods (Quick Method, charity and non-profit calculations), and custom roles for staff.
   - Set each firm's plan in the **Plan** column on the **Firms** page, and choose the plan that new sign-ups get (Essentials by default). Your own firm starts on Plus, and so do firms from before plans existed.
   - Inside its plan, each company can switch features off under **Settings → Features**: a client who doesn't need payroll doesn't see it. Switching a feature off, or moving a firm to Essentials, hides it and keeps its records.
   - The server enforces the plan, not just the screens: payroll records, special tax methods, AI and new saved reports are refused when they aren't in the plan. The plan lives on the server, so a copy of the desktop app that keeps books on its own computer always has everything.
@@ -123,6 +123,9 @@ It runs two ways from the same code:
 - **Sign-in security:** nobody sees any data without signing in.
   - The first start asks you to create an **owner** account. On an online server this also needs the setup code chosen when the server was installed.
   - **Roles:** owners manage everything; **staff** work in the companies they're given; **clients** see only their own company. Staff and clients can be **view only**.
+  - **Custom roles (Plus):** under **Users & security → Roles**, owners make their own roles, like QuickBooks Online Advanced. Each role sets **None**, **View** or **Edit** for eight areas: Sales (customers, invoices, sales receipts, credit notes, estimates, projects, payments received), Expenses (vendors, bills, expenses, purchase orders, receipts), Banking (bank lines, rules, feeds, reconciliation, deposits, transfers), Payroll (employees and pay runs; at View, social insurance and bank account numbers stay hidden), Reports, Accounting (chart of accounts, journal entries, fixed assets, review), Sales tax and Settings (company settings, email, online payments, the activity log). Give a role to a staff member instead of plain staff; owners always have everything.
+    - The server enforces it, not just the screens: every change is checked against the area of the record (an invoice payment is Sales, an expense is Expenses, a journal entry is Accounting, a pay run is Payroll), and what a role can't see isn't sent to the browser at all. Menus, **+ New** and Save buttons for areas the role can't change are hidden.
+    - Creating, changing and giving roles is recorded in the sign-in activity. On Essentials, roles can't be made or given; anyone who already has one keeps its limits.
   - **Invitations:** new people get a one-time link (valid 7 days) to choose their own password. Owners can send a **password reset link** (valid 24 hours). Links are stored only as hashes.
   - **Two-step sign-in:** a 6-digit code from an authenticator app (Microsoft Authenticator, Google Authenticator, 1Password), set up by scanning a QR code, with ten one-time recovery codes. Owners can require it for owners or everyone; online servers require it for everyone.
   - Passwords are stored only as scrypt hashes, never as the password itself.
@@ -294,6 +297,7 @@ The Mac and Linux builds stay unsigned. Signing the Mac version needs Apple's se
 ```
 public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   industries.js    Starter accounts by type of business (shared with the server)
+  roles.js         Custom roles: areas, None/View/Edit, which area each record belongs to (shared with the server)
   bankparse.js     Bank file parsers (CSV column detection, OFX/QFX/QBO)
   banking.js       Banking screens: import, review, rules, reconcile
   ai.js            AI suggestions for bank lines, reading receipts, AI settings

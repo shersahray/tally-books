@@ -310,6 +310,11 @@ body.readonly #setForm button[type=submit],body.readonly #paySetForm button[type
 body.readonly [data-coact="new"],body.readonly [data-coact="convert"],
 body.readonly .modal:not(.keep) .mfoot button[type=submit]{display:none!important}
 a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}
+/* custom roles: an area the role can only view (forms opened from it too), and whole-books actions for limited roles */
+body.area-ro [data-pay],body.area-ro [data-del],body.area-ro [data-newcontact],body.area-ro [data-pay-run="new"],body.area-ro [data-pay-emp="new"],
+body.area-ro [data-remit-pay],body.area-ro [data-go-pay],body.area-ro #setForm button[type=submit],body.area-ro #paySetForm button[type=submit],
+.modal.ro:not(.keep) .mfoot button[type=submit],.modal.ro [data-del],
+body.perm-limited [data-act="load-examples"],body.perm-limited [data-act="clear-examples"],body.perm-limited [data-go="convert"],body.perm-limited [data-coact="convert"]{display:none!important}
 /* clients don't change company settings or load examples; only owners restore backups */
 body.role-client #setForm button[type=submit],body.role-client #paySetForm button[type=submit],
 body.role-client [data-act="load-examples"],body.role-client [data-act="clear-examples"],
