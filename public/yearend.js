@@ -112,12 +112,12 @@ async function yearEndPackage(ye, { files = true } = {}) {
   try {
     const reps = [];
     for (const k of ['pl', 'bs', 'cf', 'tb']) {
-      Object.assign(S.rep, { tab: k, period: 'custom', from: fy, to: ye, compare: '' });
+      Object.assign(S.rep, { tab: k, period: 'custom', from: fy, to: ye, compare: '', basis: 'accrual' }); // accrual, like the trial balance and CaseWare export
       const x = ({ pl: rPL, bs: rBS, cf: rCF, tb: rTB })[k]();
       x.title = x.title || REPORT_TITLES[k](); x.sub = x.sub ?? (k === 'tb' ? `As of ${fmtDate(ye)}` : ''); reps.push(x);
     }
     statements = reportsPdf(reps, { cover: { title: 'Financial statements', sub: period, note: `Prepared from the books of ${co} in Sumlora on ${fmtDate(today())}. Not audited or reviewed.` } });
-    Object.assign(S.rep, { tab: 'gl', period: 'custom', from: fy, to: ye, acct: '' });
+    Object.assign(S.rep, { tab: 'gl', period: 'custom', from: fy, to: ye, acct: '', basis: 'accrual' });
     gl = rGL().csv;
   } finally { Object.assign(S.rep, keep); }
   out.push({ name: `2 Financial statements ${tag}.pdf`, data: statements });

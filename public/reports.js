@@ -8,11 +8,26 @@
 let RIX=null;
 /** The class the P&L (or budget vs actual) is filtered to: '' all, '__none' transactions without a class. */
 const repCls=()=>['pl','bva'].includes(S.rep.tab)&&(S.company.classes||[]).length&&!(S.rep.tab==='pl'&&S.rep.compare==='byclass')?S.rep.cls||'':'';
-/** Running sums for one class ('' = every transaction, '__none' = those without a class). One cache per class,
-    so a profit and loss by class (a column for each class) stays quick. `cls` left out = the report's class filter. */
+/* Accrual or cash basis (cashbasis.js). The Reports page's choice, else the company's default. Only the reports
+   below change; everything else (trial balance, aging, sales tax, budgets…) stays on the books' accrual basis. */
+const BASIS_TABS=['pl','bs','cf','gl','sc','ev'];
+const basisChoice=()=>(S.rep.basis||S.company.reportBasis)==='cash'?'cash':'accrual';
+const repBasis=()=>BASIS_TABS.includes(S.rep.tab)&&basisChoice()==='cash'?'cash':'accrual';
+/** " · Cash basis" for a report's subtitle (the French has the whole subtitle as a key, e.g. "As of {0} · Cash basis"). */
+const basisSub=()=>repBasis()==='cash'?' · Cash basis':'';
+let CPS=null;
+/** The postings a report adds up: the ledger as it is, or on the cash basis. Cached until the books change. */
+function repPostings(){
+  const ps=postings();if(repBasis()!=='cash'||typeof TallyCash==='undefined')return ps;
+  if(CPS&&CPS.src===ps)return CPS.out;
+  const ctl=new Set(S.accounts.filter(a=>a.detail==='ar'||a.detail==='ap').map(a=>a.id));
+  CPS={src:ps,out:TallyCash.cashPostings(S.entries,S.docs,ctl)};return CPS.out;
+}
+/** Running sums for one class ('' = every transaction, '__none' = those without a class), on the report's basis.
+    One cache per class, so a profit and loss by class (a column for each class) stays quick. `cls` left out = the report's class filter. */
 function rix(cls){
   if(cls===undefined)cls=repCls();
-  const ps=postings();if(!RIX||RIX.ps!==ps)RIX={ps,by:new Map()};
+  const ps=repPostings();if(!RIX||RIX.ps!==ps)RIX={ps,by:new Map()};
   const hit=RIX.by.get(cls);if(hit)return hit;
   const m=new Map();
   for(const p of ps){if(cls&&(cls==='__none'?!!p.e.cls:p.e.cls!==cls))continue;let a=m.get(p.account);if(!a)m.set(p.account,a=[]);a.push([p.date,p.debit-p.credit])}
@@ -126,7 +141,7 @@ function rPL(){
   rows.push({cls:'spacer'},{cls:'grand',label:W('Net income'),vals:inc.map((v,i)=>r2(v-(cogs||z)[i]-exp[i]))});
   const byCls=C.cols.some(c=>c.cls),cl=byCls?'':repCls(),cn=cl==='__none'?clsWords().none:cl?(clsName(cl)||''):'';
   // Translated here: with a suffix the whole title wouldn't match the dictionary on screen.
-  return colReport({title:(byCls||cn?T(W('Profit and loss')):W('Profit and loss'))+(byCls?` · ${clsWords().by}`:cn?` · ${cn}`:''),sub:`${fmtDate(from)} – ${fmtDate(to)}`,C,rows,name:`profit-and-loss${byCls?'-by-'+clsWords().slug:''}_${from}_${to}`});
+  return colReport({title:(byCls||cn?T(W('Profit and loss')):W('Profit and loss'))+(byCls?` · ${clsWords().by}`:cn?` · ${cn}`:''),sub:`${fmtDate(from)} – ${fmtDate(to)}${basisSub()}`,C,rows,name:`profit-and-loss${byCls?'-by-'+clsWords().slug:''}_${from}_${to}${repBasis()==='cash'?'_cash':''}`});
 }
 
 /* ---------- balance sheet ---------- */
@@ -144,7 +159,7 @@ function rBS(){
   const L=sec('Liability','Liabilities');
   const E=sec('Equity',W('Equity'),[{label:W('Retained earnings'),vals:per.map(p=>p.re)},{label:W('Net income, current fiscal year'),vals:per.map(p=>p.cy)}]);
   rows.push({cls:'grand',label:W('Total liabilities and equity'),vals:L.map((v,i)=>r2(v+E[i]))});
-  const r=colReport({title:W('Balance sheet'),sub:C.cols.length>1?`As of ${fmtDate(to)}`:`As of ${fmtDate(to)}`,C,rows,name:`balance-sheet_${to}`});
+  const r=colReport({title:W('Balance sheet'),sub:`As of ${fmtDate(to)}${basisSub()}`,C,rows,name:`balance-sheet_${to}${repBasis()==='cash'?'_cash':''}`});
   const off=A.map((v,i)=>r2(v-L[i]-E[i])).find(x=>Math.abs(x)>0.004);
   if(off)r.html=r.html.replace(/<\/div>$/,`<div class="banner err" style="margin:12px 16px">Out of balance by ${money(off)}. Check for entries posted to deleted accounts.</div></div>`);
   return r;
@@ -189,7 +204,7 @@ function rCF(){
   const begin=C.cols.map(c=>r2(cash.reduce((s,a)=>s+fbal(a.id,null,addDays(c.from,-1)),0))),end=C.cols.map(c=>r2(cash.reduce((s,a)=>s+fbal(a.id,null,c.to),0)));
   // In a Total column, opening cash is the first period's and closing cash the last period's, not a sum.
   rows.push({cls:'spacer'},{cls:'tot',label:'Net change in cash',vals:net},{cls:'item',label:'Cash at the beginning of the period',vals:begin,total:begin[0]},{cls:'grand',label:'Cash at the end of the period',vals:end,total:end[end.length-1]});
-  const r=colReport({title:'Cash flow statement',sub:`${fmtDate(from)} – ${fmtDate(to)}`,C,rows,name:`cash-flow_${from}_${to}`});
+  const r=colReport({title:'Cash flow statement',sub:`${fmtDate(from)} – ${fmtDate(to)}${basisSub()}`,C,rows,name:`cash-flow_${from}_${to}${repBasis()==='cash'?'_cash':''}`});
   const off=C.cols.map((c,i)=>r2(begin[i]+net[i]-end[i])).find(x=>Math.abs(x)>0.004);
   if(off)r.html=r.html.replace(/<\/div>$/,`<div class="banner err" style="margin:12px 16px">The cash flow doesn’t add up by ${money(off)}. Check for entries posted to deleted accounts.</div></div>`);
   r.html=r.html.replace(/<\/div>$/,`<div class="muted" style="font-size:12.5px;padding:8px 16px 14px">Bank and cash accounts are cash. Capital assets are investing activities; loans, shareholder accounts and equity are financing; everything else is operating. Change an account’s section in the chart of accounts.</div></div>`);
@@ -203,12 +218,12 @@ async function saveReport(){
     <div class="muted" style="font-size:13px">Saves the report, its period and comparison so you can open it again in one click. The dates move with the period: “This fiscal year” is always the current one.</div>`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`);
   f.onsubmit=async e=>{e.preventDefault();const name=$('#srName',f).value.trim();if(!name)return f.err('Give it a name.');
-    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:R.tbAdj==='aje'?'aje':!!R.tbAdj,...(repCls()?{cls:R.cls}:{}),...(R.tab==='bva'&&R.budget?{budget:R.budget}:{})};
+    const item={id:uid(),name,tab:R.tab,period:R.period,from:R.period==='custom'?R.from:'',to:R.period==='custom'?R.to:'',compare:R.compare||'',acct:R.acct||'',tbAdj:R.tbAdj==='aje'?'aje':!!R.tbAdj,...(repCls()?{cls:R.cls}:{}),...(R.tab==='bva'&&R.budget?{budget:R.budget}:{}),...(BASIS_TABS.includes(R.tab)?{basis:basisChoice()}:{})};
     if(await putCompany({...strip(S.company),savedReports:[...savedReports().filter(x=>x.name!==name),item].slice(-30)})){S.rep.savedId=item.id;closeModal();toast('Report saved')}};
 }
-function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:x.tbAdj==='aje'?'aje':!!x.tbAdj,cls:x.cls||'',budget:x.budget||''});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
+function openSaved(id){const x=savedReports().find(r=>r.id===id);if(!x)return;Object.assign(S.rep,{savedId:x.id,tab:x.tab,period:x.period,compare:x.compare||'',acct:x.acct||'',tbAdj:x.tbAdj==='aje'?'aje':!!x.tbAdj,cls:x.cls||'',budget:x.budget||'',basis:x.basis||''});if(x.period==='custom'){S.rep.from=x.from;S.rep.to=x.to}renderMain()}
 /** Is the report on screen still the saved one (same report, period and options)? */
-const savedMatches=x=>{const R=S.rep;return x.tab===R.tab&&x.period===R.period&&(x.compare||'')===(R.compare||'')&&(x.acct||'')===(R.acct||'')&&(x.tbAdj==='aje'?'aje':!!x.tbAdj)===(R.tbAdj==='aje'?'aje':!!R.tbAdj)&&(x.period!=='custom'||(x.from===R.from&&x.to===R.to))};
+const savedMatches=x=>{const R=S.rep;return x.tab===R.tab&&x.period===R.period&&(x.compare||'')===(R.compare||'')&&(x.acct||'')===(R.acct||'')&&(x.tbAdj==='aje'?'aje':!!x.tbAdj)===(R.tbAdj==='aje'?'aje':!!R.tbAdj)&&(x.period!=='custom'||(x.from===R.from&&x.to===R.to))&&(!x.basis||x.basis===basisChoice())};
 async function deleteSaved(id){const x=savedReports().find(r=>r.id===id);if(!x||!await confirmBox('Delete this saved report?',x.name,'Delete'))return;if(await putCompany({...strip(S.company),savedReports:savedReports().filter(r=>r.id!==id)})){S.rep.savedId='';toast('Saved report deleted');renderMain()}}
 
 /* ---------- PDFs ---------- */
@@ -262,7 +277,7 @@ function reportsPdf(reports,{cover}={}){
       let y=0;
       const top=()=>{page();y=M+6;
         doc.text(M,y,S.company.name,{size:13,bold:true});y+=17;doc.text(M,y,tl(r.title),{size:11,bold:true});y+=14;
-        if(gsub){doc.text(M,y,gsub,{size:9,color:'#555555'});y+=12}
+        if(gsub){doc.text(M,y,tl(gsub),{size:9,color:'#555555'});y+=12}
         y+=8;if(n>1||!r.head){head.slice(g0,g1).forEach((h,i)=>doc.text(M+labelW+colW*(i+1)-4,y,tl(String(h)),{size:size-0.5,bold:true,align:'right'}));y+=6;doc.line(M,y,W0-M,y,{color:'#999999'});y+=12}};
       top();
       for(const row of rows){
@@ -283,7 +298,7 @@ function reportsPdf(reports,{cover}={}){
   return doc.output();
 }
 const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor',bva:()=>'Budget vs actual',iv:()=>'Inventory valuation'};
-function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
+function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}${basisSub()}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
 
 /* ---------- report package: several reports for a period, as one PDF ---------- */
 function packageForm(){
@@ -398,13 +413,13 @@ function nameReport({title,col,rows,cols,name,empty,note}){
   const csv=[[col,...cols.map(c=>c.label)],...rows.map(r=>[r.label,...r.vals.map(v=>typeof v==='number'?r2(v):v===null?'':v)]),['Total',...tot.map(v=>v===null?'':v)]];
   const cell=(v,c)=>v===null||v===undefined?'<span class="muted">—</span>':c.kind==='qty'?(+v||0).toLocaleString(LOC(),{maximumFractionDigits:2}):c.kind==='pct'?`${(+v||0).toLocaleString(LOC(),{maximumFractionDigits:1})}%`:mcell(v);
   const body=rows.map(r=>`<tr>${r.contact?`<td><button class="link" data-contact="${esc(r.contact)}" translate="no">${esc(r.label)}</button></td>`:r.item?`<td><button class="link" data-item="${esc(r.item)}" translate="no">${esc(r.label)}</button></td>`:`<td>${esc(r.label)}</td>`}${r.vals.map((v,i)=>`<td class="n">${cell(v,cols[i])}</td>`).join('')}</tr>`).join('');
-  return{html:`<div class="report" style="max-width:none">${rh(esc(title),`${fmtDate(from)} – ${fmtDate(to)} · before sales tax`)}<div class="tbl-wrap"><table><thead><tr><th>${esc(col)}</th>${cols.map(c=>`<th class="n">${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${cols.length+1}" class="muted" style="padding:16px">${esc(empty)}</td></tr>`}</tbody>${rows.length?`<tfoot><tr class="grand"><td>Total</td>${tot.map((v,i)=>`<td class="n">${v===null?'':cell(v,cols[i])}</td>`).join('')}</tr></tfoot>`:''}</table></div>${note?`<div class="muted" style="font-size:12.5px;padding:10px 12px 12px">${esc(note)}</div>`:''}</div>`,csv,name:`${name}_${from}_${to}`};
+  return{html:`<div class="report" style="max-width:none">${rh(esc(title),`${fmtDate(from)} – ${fmtDate(to)} · before sales tax${basisSub()}`)}<div class="tbl-wrap"><table><thead><tr><th>${esc(col)}</th>${cols.map(c=>`<th class="n">${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${body||`<tr><td colspan="${cols.length+1}" class="muted" style="padding:16px">${esc(empty)}</td></tr>`}</tbody>${rows.length?`<tfoot><tr class="grand"><td>Total</td>${tot.map((v,i)=>`<td class="n">${v===null?'':cell(v,cols[i])}</td>`).join('')}</tr></tfoot>`:''}</table></div>${note?`<div class="muted" style="font-size:12.5px;padding:10px 12px 12px">${esc(note)}</div>`:''}</div>`,csv,name:`${name}_${from}_${to}`};
 }
 function byContactOn(types){
-  const{from,to}=S.rep,by={};
-  for(const e of S.entries){if(e.date<from||e.date>to||e.opening)continue;let amt=0;
-    for(const l of e.lines||[]){const a=acct(l.account);if(!a||!types.includes(a.type))continue;amt+=types.includes('Income')?(+l.credit||0)-(+l.debit||0):(+l.debit||0)-(+l.credit||0)}
-    if(Math.abs(amt)<0.005)continue;const k=e.contactId||'';const o=by[k]=by[k]||{amt:0,n:0};o.amt+=amt;o.n++}
+  // From the report's postings, so on the cash basis an invoice or bill counts each time it's paid.
+  const{from,to}=S.rep,by={},per=new Map(),inc=types.includes('Income'),ty=new Map(S.accounts.map(a=>[a.id,a.type]));
+  for(const p of repPostings()){if(p.date<from||p.date>to||p.e.opening||!types.includes(ty.get(p.account)))continue;per.set(p.e,(per.get(p.e)||0)+(inc?p.credit-p.debit:p.debit-p.credit))}
+  for(const[e,amt]of per){if(Math.abs(amt)<0.005)continue;const k=e.contactId||'';const o=by[k]=by[k]||{amt:0,n:0};o.amt+=amt;o.n++}
   return by;
 }
 function rSalesByCustomer(){

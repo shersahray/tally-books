@@ -73,6 +73,7 @@ It runs two ways from the same code:
 - **Light or dark:** each person chooses Automatic (follows the computer), Light or Dark, in the sidebar, on the sign-in screen or under Account. The choice is saved on their account, so it follows them to other computers.
 - **Reports for accountants:**
   - Profit and loss, balance sheet and cash flow statement side by side with the previous period, the same period last year, or by month or quarter, with the change in dollars and percent.
+  - **Accrual or cash basis:** the profit and loss, balance sheet, cash flow statement, general ledger, sales by customer and expenses by vendor can be shown on the cash basis, like QuickBooks Online's *Accounting method*. Invoices, bills, credit notes and vendor credits count when they're paid (or a credit is used or refunded), in proportion: half paid counts half of every line, sales tax included. Sales receipts, expenses, deposits and journal entries don't change. On the cash basis the balance sheet has no A/R or A/P, and sales tax payable shows only the tax on what's been paid. Choose it on each report, or set the default in Settings; saved reports keep it. The trial balance, aging reports, sales tax returns and the year-end package stay on the accrual basis.
   - **Cash flow statement** (indirect method): net income, changes in working capital, investing and financing activities, and cash at the start and end. Each balance sheet account can be set to operating, investing or financing.
   - **Saved reports**, a **PDF** of any report, and a **report package**: the reports you choose for a period in one PDF with a cover page, to download or email to the client.
   - **Working trial balance**: before adjustments, adjusting entries and the adjusted balance in three columns.
@@ -295,6 +296,7 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   convert.js       The Bring over from QuickBooks or Sage wizard
   companies.js     Client list, company switcher, new company
   salestax.js      GST/HST, QST and PST/RST return worksheets, filing, payments
+  cashbasis.js     Cash-basis postings for reports: invoices and bills counted when paid, in proportion
   reports.js       Comparative reports, cash flow, saved reports, PDFs, report packages, reconciliation reports
   review.js        Attachments, reclassify, the Review page and questions to the client
   payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas, year-end slip figures, public holidays, vacation pay rates and ROE figures

@@ -338,6 +338,7 @@ function vReports(){
     ${typeof budgetToolbar==='function'?budgetToolbar():''}
     ${R.tab==='gl'?`<select id="repAcct" aria-label="Account"><option value="">All accounts</option>${acctOptions(R.acct||'')}</select>`:''}
     ${R.tab==='tb'&&adv?`<label class="flabel" for="repTbAdj">Show</label><select id="repTbAdj">${[['','Trial balance'],['adj','Working trial balance (with adjustments)'],['aje','Adjusting entries']].map(([k,v])=>`<option value="${k}" ${(R.tbAdj==='aje'?'aje':R.tbAdj?'adj':'')===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
+    ${BASIS_TABS.includes(R.tab)?`<label class="flabel" for="repBasis">Accounting method</label><select id="repBasis">${[['accrual','Accrual basis'],['cash','Cash basis']].map(([k,v])=>`<option value="${k}" ${basisChoice()===k?'selected':''}>${v}</option>`).join('')}</select>`:''}
     ${['pl','bs','cf'].includes(R.tab)&&adv?`<label class="flabel" for="repCmp">Compare</label><select id="repCmp">${(R.tab==='bs'?BS_COMPARE:PL_COMPARE.filter(([k])=>k!=='byclass'||(S.company.classes||[]).length)).map(([k,v])=>`<option value="${k}" ${(R.compare||'')===k?'selected':''}>${k==='byclass'?clsWords().by:v}</option>`).join('')}</select>`:''}
     <span class="grow"></span>${R.tab==='tb'&&ME&&ME.role!=='client'?'<button class="btn sm" data-act="caseware">Export for CaseWare</button>':''}<button class="btn sm" data-act="export">Export CSV</button><button class="btn sm" data-act="reppdf">PDF</button>
   </div><div id="repBody">${reportBody()}</div></div>`;
@@ -362,14 +363,14 @@ function rTB(){
 function rGL(){
   const{from,to}=S.rep,only=S.rep.acct||'';
   const csv=[['Account','Date','Type','No.','Name','Memo','Debit','Credit','Balance']];let h='',td=0,tc=0,n=0;
-  const byAcct={};for(const p of postings())if(p.date>=from&&p.date<=to)(byAcct[p.account]=byAcct[p.account]||[]).push(p);
+  const byAcct={};for(const p of repPostings())if(p.date>=from&&p.date<=to)(byAcct[p.account]=byAcct[p.account]||[]).push(p);
   // On screen, only the first lines are drawn (more on request); the CSV and PDF always have every line.
   const glTotal=only?(byAcct[only]||[]).length:Object.values(byAcct).reduce((s,x)=>s+x.length,0),glMax=shownCount('gl',glTotal,2000);
   for(const a of sortAccts(S.accounts)){
     if(only&&a.id!==only)continue;
     const ps=(byAcct[a.id]||[]).sort((x,y)=>x.date.localeCompare(y.date)||(x.e.created||0)-(y.e.created||0));
     const dn=debitNormal(a.type),sign=dn?1:-1;
-    const open=isPL(a.type)?(fyStartOf(from)<from?bal(a.id,fyStartOf(from),addDays(from,-1)):0):bal(a.id,null,addDays(from,-1));
+    const open=isPL(a.type)?(fyStartOf(from)<from?fbal(a.id,fyStartOf(from),addDays(from,-1)):0):fbal(a.id,null,addDays(from,-1));
     if(!ps.length&&!open&&!only)continue;
     const label=(a.code?a.code+' ':'')+a.name;let run=open,ad=0,ac=0;const skip=n>=glMax&&n>0;
     if(!skip)h+=`<tbody class="gl-acct"><tr class="sec"><td colspan="8"><button class="link" data-acct="${a.id}">${esc(label)}</button> <span class="muted">· ${a.type}</span></td></tr>
@@ -388,7 +389,7 @@ function rGL(){
   csv.push(['Total','','','','','',r2(td),r2(tc),'']);
   if(glMax<glTotal)h+=`<tbody>${moreRow('gl',glMax,glTotal,8,'Pick one account to see all of it. Export CSV and PDF include every line.')}</tbody>`;
   const out=Math.abs(r2(td-tc))>0.004&&!only;
-  return{html:`<div class="report" style="max-width:none">${rh('General ledger',`${fmtDate(from)} – ${fmtDate(to)}${only?' · '+esc(acctName(only)):''}`)}<div class="tbl-wrap"><table class="gl"><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Name</th><th>Memo</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead>
+  return{html:`<div class="report" style="max-width:none">${rh('General ledger',`${fmtDate(from)} – ${fmtDate(to)}${basisSub()}${only?` · <span translate="no">${esc(acctName(only))}</span>`:''}`)}<div class="tbl-wrap"><table class="gl"><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>Name</th><th>Memo</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead>
     ${h||`<tbody><tr><td colspan="8" class="muted" style="padding:16px">No transactions in this period.</td></tr></tbody>`}
     ${h&&!only?`<tfoot><tr class="grand"><td colspan="5">Total, ${n} line${n===1?'':'s'}</td><td class="n">${money(td)}</td><td class="n">${money(tc)}</td><td></td></tr></tfoot>`:''}</table></div>
     ${out?`<div class="banner err" style="margin:12px 16px">Debits and credits differ by ${money(r2(td-tc))}. Check for entries posted to deleted accounts.</div>`:''}</div>`,csv,name:`general-ledger_${from}_${to}`};
@@ -440,6 +441,7 @@ function vSettings(){
     <div class="field"><label for="sTaxRate">Sales tax rate (%)</label><input type="number" id="sTaxRate" min="0" step="0.001" value="${esc(pst?r2(c.taxRate-pst):c.taxRate)}"><span class="hint" data-pstonly>GST only. Provincial sales tax is set below.</span></div>
     <div class="field"><label for="sCur">Currency symbol</label><input type="text" id="sCur" maxlength="4" value="${esc(c.currency)}"></div>
     <div class="field"><label for="sBn">Business / tax number</label><input type="text" id="sBn" value="${esc(c.bn||'')}"><span class="hint">Shown for your reference</span></div>
+    <div class="field"><label for="sBasis">Reports’ accounting method</label><select id="sBasis">${[['accrual','Accrual basis'],['cash','Cash basis']].map(([k,v])=>`<option value="${k}" ${(c.reportBasis||'accrual')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Cash counts invoices and bills when they’re paid. You can switch on each report.</span></div>
     <div class="field"><label for="sOrg">Organization type</label><select id="sOrg">${ORG_TYPES.map(([k,v])=>`<option value="${k}" ${(c.orgType||'business')===k?'selected':''}>${v}</option>`).join('')}</select><span class="hint">Non-profits get non-profit report names and sales tax rules</span></div>
   </div>
   <div data-pstbox style="display:flex;flex-direction:column;gap:12px">
@@ -557,6 +559,7 @@ function bindMain(m){
   const rp=$('#repPeriod',m);if(rp)rp.onchange=()=>{S.rep.period=rp.value;renderMain()};
   const ra=$('#repAcct',m);if(ra)ra.onchange=()=>{S.rep.acct=ra.value;renderMain()};
   const rc=$('#repCmp',m);if(rc)rc.onchange=()=>{S.rep.compare=rc.value;renderMain()};
+  const rb=$('#repBasis',m);if(rb)rb.onchange=()=>{S.rep.basis=rb.value;renderMain()};
   const rcl=$('#repCls',m);if(rcl)rcl.onchange=()=>{S.rep.cls=rcl.value;renderMain()};
   if(typeof bindBudgetToolbar==='function')bindBudgetToolbar(m);
   const rta=$('#repTbAdj',m);if(rta)rta.onchange=()=>{S.rep.tbAdj=rta.value==='aje'?'aje':rta.value==='adj';renderMain()};
@@ -596,7 +599,7 @@ function bindMain(m){
     $('#sPst',m).onchange=pstSync;pstSync()}
   $$('[data-feat]',m).forEach(cb=>cb.onchange=async()=>{const k=cb.dataset.feat,features={...(S.company.features||{})};if(cb.checked)delete features[k];else features[k]=false;
     if(await putCompany({...strip(S.company),features})){toast(cb.checked?`${T(TallyPlans.FEATURES[k].label)}: on for this company`:`${T(TallyPlans.FEATURES[k].label)}: off for this company`)}else cb.checked=!cb.checked});
-  const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value,
+  const sf=$('#setForm',m);if(sf)sf.onsubmit=async e=>{e.preventDefault();const data={...strip(S.company),name:$('#sName').value.trim()||'My Business',fyStart:+$('#sFy').value,terms:Math.max(0,parseInt($('#sTerms').value)||0),taxName:$('#sTaxName').value.trim()||'Sales tax',taxRate:Math.max(0,+$('#sTaxRate').value||0),currency:$('#sCur').value||'$',bn:$('#sBn').value.trim(),province:$('#sProv').value,filingFreq:$('#sFreq').value,reportBasis:$('#sBasis').value==='cash'?'cash':'accrual',
     ...pstSettings(),orgType:$('#sOrg').value,nonprofit:{...(S.company.nonprofit||{}),charityNo:$('#sCharNo').value.trim(),netTax:$('#sNetTax').value,itcPct:$('#sItc').value===''?'':Math.max(0,Math.min(100,+$('#sItc').value||0)),qualifying:$('#sQual').checked,rebate:$('#sRebate').checked,capitalItc:$('#sCapItc').checked}};
     if(data.orgType!=='business'&&S.company.quickMethod?.on&&(data.orgType==='charity'||data.nonprofit.qualifying)&&!await confirmBox('Turn off the Quick Method?','Registered charities and qualifying non-profits can’t use the Quick Method. Saving turns it off; returns already filed stay as they were.','Save'))return;if(data.pstRate>0&&!byDetail('pst')){const id=acct('a2220')?uid():'a2220';
       if(!await batch([{op:'set',collection:'accounts',id,data:{code:S.accounts.some(a=>a.code==='2220')?'':'2220',name:S.company.lang==='fr'?`${data.pstName==='RST'?'TVD':'TVP'} à payer`:`${data.pstName} payable`,type:'Liability',detail:'pst',desc:'',active:true}}]))return}

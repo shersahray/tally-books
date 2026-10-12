@@ -2130,3 +2130,17 @@ addFr({
   'There’s already one with that name.':'Il y en a déjà un avec ce nom.',
   'That’s too many columns. Turn off classes you no longer use.':'Il y a trop de colonnes. Désactivez celles que vous n’utilisez plus.',
 });
+
+/* ---------- Cash-basis reports ---------- */
+addFr({
+  'Accounting method':'Méthode de comptabilité',
+  'Accrual basis':'Comptabilité d’exercice',
+  'Cash basis':'Comptabilité de caisse',
+  'Reports’ accounting method':'Méthode de comptabilité des rapports',
+  'Cash counts invoices and bills when they’re paid. You can switch on each report.':'La comptabilité de caisse compte les factures quand elles sont payées. Vous pouvez changer de méthode dans chaque rapport.',
+  '{0} – {1} · Cash basis':'Du {0} au {1} · comptabilité de caisse',
+  '{0} – {1} · Cash basis ·':'Du {0} au {1} · comptabilité de caisse ·',
+  'As of {0} · Cash basis':'Au {0} · comptabilité de caisse',
+  '{0} – {1} · before sales tax':'Du {0} au {1} · avant taxes',
+  '{0} – {1} · before sales tax · Cash basis':'Du {0} au {1} · avant taxes · comptabilité de caisse',
+});
