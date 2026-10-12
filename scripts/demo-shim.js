@@ -182,6 +182,8 @@
     if (r && method === 'PUT') { const w0 = { op: 'set', collection: r[1], id: decodeURIComponent(r[2]), data: body }; note(w0); return transact(id, w => apply(w, w0)); }
     if (r && method === 'DELETE') { const w0 = { op: 'delete', collection: r[1], id: decodeURIComponent(r[2]) }; note(w0); return transact(id, w => apply(w, w0)); }
     if (rest === '/batch') { body.writes.forEach(note); return transact(id, w => body.writes.forEach(x => apply(w, x))); }
+    // Import data (a spreadsheet) only adds records, so it works like a batch here.
+    if (rest === '/import' && body.addOnly) { body.writes.forEach(note); const out = transact(id, w => body.writes.forEach(x => apply(w, x))); const counts = {}; body.writes.forEach(x => { counts[x.collection] = (counts[x.collection] || 0) + 1; }); return { ...out, counts }; }
     if (rest === '/settings') { const out = transact(id, w => { w.company = { ...w.company, ...body }; }); cos.find(c => c.id === id).name = body.name; return out; }
     if (rest === '/bank/import') {
       let added = 0, skipped = 0; const seen = {};

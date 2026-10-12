@@ -170,7 +170,7 @@ function renderMain(){
   for(const[v,k]of[['projects','projects'],['assets','fixedAssets']]){const b=$(`#nav [data-view=${v}]`);if(b)b.hidden=!feat(k)||(v==='assets'&&ME&&ME.role==='client');if(S.view===v&&!feat(k))S.view='dashboard'}
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
@@ -188,6 +188,8 @@ function banners(){
   if(hasExamples())h+=`<div class="banner"><span><b>Example data is loaded</b> so you can see how things work. Clear it when you're ready to enter your real books.</span><button class="btn sm" data-act="clear-examples">Clear example data</button></div>`;
   return h;
 }
+// An Import button on a list, for people who can change the books (see dataimport.js).
+const diStaffBtn=(type,cls='btn sm')=>typeof diOpen==='function'&&ME&&ME.role!=='client'&&!ME.readOnly?`<button class="${cls}" data-diopen="${type}">Import</button>`:'';
 const head=(title,sub,actions='')=>`<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${sub}</div>`:''}</div><div class="actions">${actions}</div></div>`;
 const emptyRow=(cols,title,msg)=>`<tr><td colspan="${cols}"><div class="empty"><b>${title}</b>${msg}</div></td></tr>`;
 
@@ -252,20 +254,20 @@ function vDocs(kind){
   if(st.tab==='recurring')return h+vRecurring(kind);
   if(st.tab==='contacts'){
     const cs=S.contacts.filter(c=>c.kind===ck).sort((a,b)=>a.name.localeCompare(b.name));
-    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span><button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0)-credits.filter(x=>x.d.contactId===c.id).reduce((s,x)=>s+x.s.bal,0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}${c.currency?` <span class="pill quiet">${esc(c.currency)}</span>`:''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${moneyC(ob,c.currency)}</td><td class="n ${ov?'neg':''}">${ov?moneyC(ov,c.currency):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
+    return h+`<div class="panel"><div class="toolbar"><span class="grow muted">${cs.length} ${ck}s</span>${diStaffBtn(inv?'customers':'vendors')}<button class="btn sm" data-newcontact="${ck}">+ Add ${ck}</button></div><div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th class="n">Open balance</th><th class="n">Overdue</th></tr></thead><tbody>${cs.length?cs.map(c=>{const mine=docs.filter(x=>x.d.contactId===c.id);const ob=mine.reduce((s,x)=>s+x.s.bal,0)-credits.filter(x=>x.d.contactId===c.id).reduce((s,x)=>s+x.s.bal,0),ov=mine.filter(x=>x.s.k==='overdue').reduce((s,x)=>s+x.s.bal,0);return `<tr class="click" data-contact="${c.id}"><td>${esc(c.name)} ${c.example?'<span class="pill ex">Example</span>':''}${c.currency?` <span class="pill quiet">${esc(c.currency)}</span>`:''}</td><td>${esc(c.email||'')}</td><td>${esc(c.phone||'')}</td><td class="n">${moneyC(ob,c.currency)}</td><td class="n ${ov?'neg':''}">${ov?moneyC(ov,c.currency):'—'}</td></tr>`}).join(''):emptyRow(5,`No ${ck}s yet`,`Add your first ${ck} to start ${inv?'invoicing':'tracking bills'}.`)}</tbody></table></div></div>`;
   }
   const sum=k=>r2(docs.filter(x=>k(x)).reduce((s,x)=>s+x.s.bal*(+x.d.fx||1),0)); // in Canadian dollars
   const t30=addDays(today(),-30);
   const paid30=r2(S.entries.filter(e=>e.type===(inv?'payment':'billpayment')&&e.date>=t30).reduce((s,e)=>s+(+e.amount||0),0));
   const chips=`<div class="chips"><div class="chip"><div class="lbl">Open</div><div class="val">${money(sum(x=>x.s.bal>0))}</div></div><div class="chip"><div class="lbl">Overdue</div><div class="val ${sum(x=>x.s.k==='overdue')?'neg':''}">${money(sum(x=>x.s.k==='overdue'))}</div></div><div class="chip"><div class="lbl">${inv?'Received':'Paid'}, last 30 days</div><div class="val">${money(paid30)}</div></div></div>`;
   const list=docs.concat(credits,receipts).filter(x=>st.status==='all'||(st.status==='credits'?isCreditKind(x.d.kind):st.status==='receipts'?x.d.kind==='sreceipt':isCreditKind(x.d.kind)?false:(st.status==='unpaid'?x.s.bal>0:x.s.k===st.status))).sort((a,b)=>b.d.date.localeCompare(a.d.date)||String(b.d.number).localeCompare(String(a.d.number),undefined,{numeric:true}));
-  return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option>${inv?'<option value="receipts">Sales receipts</option>':''}</select><span class="grow"></span></div>
+  return h+chips+`<div class="panel"><div class="toolbar"><label class="flabel" for="docStatus">Show</label><select id="docStatus" data-docstatus><option value="all">All</option><option value="unpaid">Unpaid</option><option value="overdue">Overdue</option><option value="paid">Paid</option><option value="credits">${inv?'Credit notes':'Vendor credits'}</option>${inv?'<option value="receipts">Sales receipts</option>':''}</select><span class="grow"></span>${diStaffBtn(inv?'invoices':'bills')}</div>
   <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>No.</th><th>${inv?'Customer':'Vendor'}</th><th>Due</th><th class="n">Total</th><th class="n">Balance</th><th>Status</th><th></th></tr></thead><tbody>${list.length?list.slice(0,shownCount('docs',list.length)).map(x=>{const cr=isCreditKind(x.d.kind);return `<tr class="click" data-doc="${x.d.id}"><td style="white-space:nowrap">${fmtDate(x.d.date)}</td><td class="mono">${esc(x.d.number||'—')}</td><td class="trunc" translate="no">${esc(contactName(x.d.contactId))}</td><td style="white-space:nowrap" class="${x.s.k==='overdue'?'neg':'muted'}">${cr?`<span>${inv?'Credit note':'Vendor credit'}</span>`:x.d.kind==='sreceipt'?'<span>Sales receipt</span>':fmtDate(x.d.due)}</td><td class="n">${moneyC(cr?-x.d.total:x.d.total,x.d.currency)}</td><td class="n">${moneyC(cr?-x.s.bal:x.s.bal,x.d.currency)}</td><td><span class="pill ${x.s.k}">${x.s.label}</span></td><td class="n">${!cr&&x.s.bal>0?`<button class="btn sm" data-pay="${x.d.id}">${inv?'Receive payment':'Pay'}</button>`:''}</td></tr>`}).join('')+moreRow('docs',shownCount('docs',list.length),list.length,8):emptyRow(8,inv?'No invoices here':'No bills here',docs.length?'Try a different filter.':(inv?'Create an invoice to bill a customer.':'Enter a bill when a vendor invoices you.'))}</tbody></table></div></div>`;
 }
 
 function vTx(){
   const f=S.tx;
-  return head('Transactions','Every entry in your books, newest first',`${ME&&ME.role!=='client'?'<button class="btn" data-act="reclass">Reclassify</button>':''}<button class="btn" data-new="journal">Journal entry</button><button class="btn primary" data-new="expense">Expense</button>`)+
+  return head('Transactions','Every entry in your books, newest first',`${ME&&ME.role!=='client'?'<button class="btn" data-act="reclass">Reclassify</button>':''}${diStaffBtn('journal','btn')}<button class="btn" data-new="journal">Journal entry</button><button class="btn primary" data-new="expense">Expense</button>`)+
   `<div class="panel"><div class="toolbar">
     <input class="grow" type="search" id="txQ" placeholder="Search payee, memo, number, amount" value="${esc(f.q)}" aria-label="Search transactions">
     <select id="txType" aria-label="Transaction type"><option value="">All types</option>${Object.entries(TLABEL).map(([k,v])=>`<option value="${k}" ${f.type===k?'selected':''}>${v}</option>`).join('')}<option value="adjusting" ${f.type==='adjusting'?'selected':''}>Adjusting entries</option><option value="attached" ${f.type==='attached'?'selected':''}>With attachments</option></select>
@@ -290,7 +292,7 @@ function vAccounts(){
     rows+=`<tr class="click" data-acct="${a.id}"><td class="mono">${esc(a.code||'')}</td><td><span translate="no">${esc(a.name)}</span> ${a.active===false?'<span class="pill quiet">Inactive</span>':''}</td><td class="mono" ${a.gifi?`title="${esc(gifiName(a.gifi))}"`:''}>${esc(a.gifi||'')}</td><td class="muted">${detailLabel(a)}</td><td class="n">${mcell(b)}</td></tr>`;
   }
   const staff=ME&&ME.role!=='client'&&!ME.readOnly;
-  return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`${staff?'<button class="btn" data-act="industry">Accounts for a type of business…</button><button class="btn" data-act="acclib">Add accounts from the list…</button><button class="btn" data-act="gifi">GIFI codes…</button>'+(S.accounts.some(a=>a.imported)?'<button class="btn" data-act="rmimported">Remove imported accounts…</button>':''):''}<button class="btn primary" data-new="account">+ Add account</button>`)+
+  return head('Chart of accounts','Balance sheet accounts show all-time balances; income and expense accounts show this fiscal year',`${staff?'<button class="btn" data-act="industry">Accounts for a type of business…</button><button class="btn" data-act="acclib">Add accounts from the list…</button><button class="btn" data-act="gifi">GIFI codes…</button>'+diStaffBtn('accounts','btn')+(S.accounts.some(a=>a.imported)?'<button class="btn" data-act="rmimported">Remove imported accounts…</button>':''):''}<button class="btn primary" data-new="account">+ Add account</button>`)+
   `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Code</th><th>Account</th><th title="CRA GIFI code (T2 Schedules 100 and 125)">GIFI</th><th>Detail</th><th class="n">Balance</th></tr></thead><tbody>${rows||emptyRow(5,'No accounts yet','Add accounts to start recording transactions.')}</tbody></table></div></div>`;
 }
 
@@ -465,6 +467,7 @@ function vSettings(){
   </div>
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${featuresPanel()}
+  ${ME&&ME.role!=='client'&&!ME.readOnly?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Import data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Add customers, vendors, products and services, accounts, invoices, bills or journal entries from a spreadsheet (CSV or Excel).</span><button class="btn" data-diopen="">Import data</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
@@ -500,6 +503,7 @@ function bindMain(m){
     if(S.view==='activity'&&await actClick(e,t,d))return;
     if(S.view==='receipts'&&rcClick(e,t,d))return;
     if(S.view==='convert'&&cvClick(e,t,d))return;
+    if(typeof diClick==='function'&&diClick(e,t,d))return;
     if(typeof purchasingClick==='function'&&purchasingClick(e,t,d))return;
     if(typeof projectsClick==='function'&&projectsClick(e,t,d))return;
     if(typeof assetsClick==='function'&&await assetsClick(e,t,d))return;
@@ -566,6 +570,7 @@ function bindMain(m){
   if(S.view==='banking')bindBanking(m);
   if(S.view==='receipts')bindReceipts(m);
   if(S.view==='convert')bindConvert(m);
+  if(S.view==='dataimport'&&typeof bindDataImport==='function')bindDataImport(m);
   if(S.view==='companies')bindCompanies(m);
   bindBackups(m);
   bindAI(m);bindAIRead(m);bindAssistantSettings(m);if(typeof bindFeeds==='function')bindFeeds();
@@ -928,7 +933,7 @@ function needAcct(detail,label){const a=byDetail(detail);if(!a)toast(`Add a "${l
 
 /* ---------- forms ---------- */
 function openNew(k){$('#newMenu').hidden=true;$('#newBtn').setAttribute('aria-expanded','false');
-  ({invoice:()=>docForm('invoice'),sreceipt:()=>docForm('sreceipt'),bill:()=>docForm('bill'),credit:()=>docForm('credit'),vcredit:()=>docForm('vcredit'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
+  ({invoice:()=>docForm('invoice'),sreceipt:()=>docForm('sreceipt'),bill:()=>docForm('bill'),credit:()=>docForm('credit'),vcredit:()=>docForm('vcredit'),payment:()=>payForm('payment'),billpayment:()=>payForm('billpayment'),expense:()=>moneyForm('expense'),deposit:()=>moneyForm('deposit'),transfer:()=>transferForm(),journal:()=>journalForm(),import:()=>importForm(),dataimport:()=>diOpen(''),payrun:()=>{if(!S.employees.some(e=>e.active!==false)){go('payroll');S.pay.tab='employees';renderMain();toast('Add an employee first.',true)}else payRunForm()},employee:()=>employeeForm(null),contact:()=>contactForm(null,S.view==='expenses'?'vendor':'customer'),account:()=>accountForm(null)})[k]?.()}
 async function openEntry(e){if(!e)return;
   if((e.vehBuy||e.vehDone)&&typeof vehFromEntry==='function'&&vehFromEntry(e))return;
   if(e.type==='payrun'){const r=S.payruns.find(x=>x.entryId===e.id);if(r)return payRunView(r)}
