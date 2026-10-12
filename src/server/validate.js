@@ -2,18 +2,23 @@
 const GIFI = require('../../public/gifi.js');
 const PLANS = require('../../public/plans.js');
 const IND = require('../../public/industries.js');
+const RECUR = require('../../public/recurring-calc.js');
+const REPFILTER = require('../../public/report-filters.js');
+const TAGS = require('../../public/tags.js');
+const APPROVALS = require('../../public/approvals.js');
+const DEP = require('../../public/deposits-calc.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
 const DETAILS = {
   Asset: ['', 'bank', 'ar', 'capital'],
-  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable'],
+  Liability: ['', 'card', 'ap', 'tax', 'qst', 'pst', 'payroll_cra', 'payroll_rq', 'payroll_other', 'vacation_payable', 'custdep'],
   Equity: ['', 'ob'],
   Income: [''],
   'Cost of Goods Sold': [''],
   Expense: ['', 'wages', 'payroll_tax'],
 };
-const ENTRY_TYPES = ['invoice', 'salesreceipt', 'invadjust', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust'];
+const ENTRY_TYPES = ['invoice', 'salesreceipt', 'invadjust', 'bill', 'payment', 'billpayment', 'expense', 'deposit', 'transfer', 'journal', 'taxpayment', 'payrun', 'payremit', 'credit', 'vcredit', 'refund', 'vrefund', 'qmadjust', 'custdeposit', 'depapply', 'deprefund'];
 const PAY_PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
 const PAY_FREQ = ['weekly', 'biweekly', 'semimonthly', 'monthly'];
 const ID_RE = /^[A-Za-z0-9_.:@+~-]{1,120}$/;
@@ -30,6 +35,32 @@ const cents = n => Math.round(Number(n) * 100);
 const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
 const isDate = s => typeof s === 'string' && DATE_RE.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z'));
 const str = (v, max = 500) => (v === undefined || v === null ? '' : String(v).slice(0, max));
+
+/** Tags on a transaction, invoice, bill or bank rule: known tag ids of the company, at most 20. Sets or removes out.tags. */
+function withTags(out, data, store) {
+  let tags;
+  try {
+    const has = data.tags !== undefined && data.tags !== null && !(Array.isArray(data.tags) && !data.tags.length);
+    const known = has && store && typeof store.getSetting === 'function' ? ((store.getSetting('company') || {}).tags || []).map(t => t.id) : [];
+    tags = TAGS.cleanTags(data.tags, known);
+  } catch (e) { throw new ValidationError(e.message); }
+  if (tags) out.tags = tags; else delete out.tags;
+  return out;
+}
+
+/** Classes on lines (company setting classPerLine): each line's cls is '' (no class) or one of the company's classes.
+    Checked whatever the setting says, since turning it off keeps the classes already on lines. A class the record
+    already had on a line stays allowed, so an old transaction can still be saved after its class was removed. */
+function checkLineClasses(lines, store, prev) {
+  if (!Array.isArray(lines) || !lines.some(l => isObj(l) && l.cls !== undefined)) return;
+  const known = new Set(((store && typeof store.getSetting === 'function' ? store.getSetting('company') : null) || {}).classes?.map(c => c.id) || []);
+  for (const l of [...((prev && prev.lines) || []), ...((prev && prev.form && prev.form.lines) || [])]) if (l && typeof l.cls === 'string' && l.cls) known.add(l.cls);
+  lines.forEach((l, i) => {
+    if (!isObj(l) || l.cls === undefined) return;
+    if (l.cls === null || l.cls === '') { l.cls = ''; return; }
+    if (typeof l.cls !== 'string' || !known.has(l.cls)) throw new ValidationError(`Line ${i + 1} has a class that doesn’t exist. Add it under Settings first.`);
+  });
+}
 
 function checkId(id) {
   if (typeof id !== 'string' || !ID_RE.test(id)) throw new ValidationError('Invalid record id.');
@@ -129,7 +160,13 @@ function validateDoc(data, store, id) {
   } else { delete data.currency; delete data.fx; }
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Document total must be a number.');
   if (!Array.isArray(data.lines)) throw new ValidationError('Document lines must be a list.');
-  return data;
+  checkLineClasses(data.lines, store, id && store.get('docs', id));
+  // Bill approvals (approvals.js): only on bills. The server decides it on every save (see applyWrite); this checks its shape.
+  if (data.approval !== undefined) {
+    if (data.kind !== 'bill') delete data.approval;
+    else { try { data.approval = APPROVALS.cleanApproval(data.approval); } catch (e) { throw new ValidationError(e.message); } if (data.approval === undefined) delete data.approval; }
+  }
+  return withTags(data, data, store);
 }
 
 function validateEntry(data, store, id) {
@@ -147,6 +184,9 @@ function validateEntry(data, store, id) {
     dr += d; cr += c;
     return { ...l, debit: d / 100, credit: c / 100 };
   });
+  const prevE = id && store.get('entries', id);
+  checkLineClasses(lines, store, prevE);
+  if (isObj(data.form) && Array.isArray(data.form.lines)) checkLineClasses(data.form.lines, store, prevE);
   if (dr !== cr) throw new ValidationError(`Debits and credits don’t balance (off by ${((dr - cr) / 100).toFixed(2)}).`);
   if (dr === 0) throw new ValidationError('A transaction needs an amount.');
   if (data.clear !== undefined) {
@@ -159,7 +199,7 @@ function validateEntry(data, store, id) {
   }
   if (data.applyTo) {
     const doc = store.get('docs', data.applyTo);
-    const wants = { payment: 'invoice', billpayment: 'bill', refund: 'credit', vrefund: 'vcredit' }[data.type];
+    const wants = { payment: 'invoice', billpayment: 'bill', refund: 'credit', vrefund: 'vcredit', depapply: 'invoice' }[data.type];
     if (doc && wants && doc.kind !== wants) throw new ValidationError(data.type === 'refund' || data.type === 'vrefund' ? 'A refund has to come from a credit.' : `A payment has to go to ${wants === 'invoice' ? 'an invoice' : 'a bill'}.`);
     // Never more than what's left on it (after other payments, refunds and credits).
     if (doc && wants) {
@@ -171,12 +211,47 @@ function validateEntry(data, store, id) {
   }
   // Adjusting entries are marked for the working trial balance; a reversing entry points at the one it undoes.
   const out = { ...data, lines };
+  if (DEP.TYPES.includes(data.type)) validateDepositEntry(out, store, id);
   if (data.adjusting !== undefined) out.adjusting = !!data.adjusting;
   if (data.reverseOn !== undefined && data.reverseOn !== '') {
     if (!isDate(data.reverseOn) || data.reverseOn <= data.date) throw new ValidationError('The reversing date has to be after the entry’s date.');
   }
   if (data.reversalOf !== undefined) out.reversalOf = str(data.reversalOf, 60);
-  return out;
+  return withTags(out, data, store);
+}
+
+/* Deposits on estimates (deposits-calc.js): received (Dr bank, Cr Customer deposits), used on an invoice made for the
+   same customer (Dr Customer deposits, Cr A/R) or refunded (Dr Customer deposits, Cr bank). Never more used or refunded
+   than was received, and never more received than the estimate's total. */
+function validateDepositEntry(out, store, id) {
+  const est = store.get('estimates', String(out.estimateId || ''));
+  if (!est) throw new ValidationError('The estimate this deposit belongs to doesn’t exist.');
+  const amt = cents(out.amount) / 100;
+  if (!(amt > 0)) throw new ValidationError('The deposit amount must be above zero.');
+  if (out.lines.length !== 2) throw new ValidationError('A deposit has two lines.');
+  const di = out.type === 'custdeposit' ? 1 : 0; // the Customer deposits line: credited when received, debited when used or refunded
+  const dep = store.get('accounts', String(out.lines[di].account)), other = store.get('accounts', String(out.lines[1 - di].account));
+  if (!dep || dep.detail !== 'custdep') throw new ValidationError('A deposit has to go through the Customer deposits account.');
+  const want = DEP.lines(out.type, dep.id, other && other.id, amt);
+  if (out.lines.some((l, i) => l.account !== want[i].account || cents(l.debit) !== cents(want[i].debit) || cents(l.credit) !== cents(want[i].credit))) throw new ValidationError('A deposit’s lines don’t match its amount.');
+  if (out.type === 'depapply') {
+    if (!other || other.detail !== 'ar') throw new ValidationError('A deposit used on an invoice comes off Accounts receivable.');
+    const inv = store.get('docs', String(out.applyTo || ''));
+    if (!inv || inv.kind !== 'invoice') throw new ValidationError('Choose the invoice to use the deposit on.');
+    if (inv.contactId !== est.contactId) throw new ValidationError('A deposit can only be used on the same customer’s invoices.');
+    if (inv.currency) throw new ValidationError('Deposits are in Canadian dollars, so they can’t be used on an invoice in another currency.');
+  } else {
+    if (!other || !(other.detail === 'bank' || (other.type === 'Asset' && !other.detail))) throw new ValidationError('Choose the bank account the money went into (or came out of).');
+    if (other.currency) throw new ValidationError('Deposits are in Canadian dollars. Choose a Canadian dollar bank account.');
+    delete out.applyTo;
+    out.bank = other.id;
+  }
+  if (out.method !== undefined && out.method !== '' && !DEP.METHODS.includes(out.method)) throw new ValidationError('Unknown payment method.');
+  const s = DEP.forEstimate(est.id, store.list('entries'), id);
+  const received = s.received + (out.type === 'custdeposit' ? amt : 0), used = s.applied + s.refunded + (out.type === 'custdeposit' ? 0 : amt);
+  if (out.type === 'custdeposit' && received > (Number(est.total) || 0) + 0.004) throw new ValidationError(`That’s more than the estimate’s total of ${(Number(est.total) || 0).toFixed(2)}.`);
+  if (used > received + 0.004) throw new ValidationError(out.type === 'custdeposit' ? `${used.toFixed(2)} of this deposit has already been used or refunded.` : `Only ${Math.max(0, s.received - s.applied - s.refunded).toFixed(2)} of the deposit is available.`);
+  Object.assign(out, { amount: amt, estimateId: est.id, contactId: est.contactId, ref: str(out.ref, 60), memo: str(out.memo, 300) });
 }
 
 function bankAccount(store, id) {
@@ -198,6 +273,12 @@ function validateBankTxn(data, store, id) {
   // AI suggestions are only written by the server's AI route; an edit can keep one but not make one up.
   const prev = id ? store.get('bankTxns', id) : null;
   const out = { ...data, amount: cents(amt) / 100, desc: str(data.desc, 300), entryId: data.status === 'added' || data.status === 'matched' ? data.entryId : '' };
+  // What a line was added as is remembered for the next line from the same payee; its tags only if they still exist.
+  if (isObj(out.cat) && out.cat.tags !== undefined) {
+    const known = new Set(((store.getSetting && store.getSetting('company')) || {}).tags?.map(t => t.id) || []);
+    const tags = (Array.isArray(out.cat.tags) ? out.cat.tags : []).map(String).filter(id => known.has(id)).slice(0, TAGS.MAX_PER_TXN);
+    out.cat = { ...out.cat }; if (tags.length) out.cat.tags = tags; else delete out.cat.tags;
+  }
   delete out.ai;
   if (data.ai && prev && prev.ai && JSON.stringify(prev.ai) === JSON.stringify(data.ai)) out.ai = prev.ai;
   return out;
@@ -210,7 +291,7 @@ function validateRule(data, store) {
   if (!a) throw new ValidationError('Choose the account this rule should use.');
   if (a.detail === 'bank' || a.detail === 'card') throw new ValidationError('A rule can’t categorize into a bank or card account; use a transfer instead.');
   if (data.contactId && !store.get('contacts', data.contactId)) throw new ValidationError('The payee on this rule doesn’t exist.');
-  return { ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: data.tax === 'gst' ? 'gst' : !!data.tax, contactId: data.contactId || '', cls: str(data.cls, 40) };
+  return withTags({ ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: data.tax === 'gst' ? 'gst' : !!data.tax, contactId: data.contactId || '', cls: str(data.cls, 40) }, data, store);
 }
 
 function validateRecon(data, store) {
@@ -404,7 +485,8 @@ function sanitizeDraft(x, { accounts, vendors } = {}) {
     reason: str(x.reason, 300),
   };
 }
-const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'draft', 'readAt', 'wasAttached'];
+const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'draft', 'readAt', 'wasAttached', 'source', 'emailFrom', 'emailSubject'];
+const RECEIPT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic'];
 function validateReceipt(data, store, id) {
   const prev = store.get('receipts', id);
   if (!prev && !(data.fileId && store.hasFile(String(data.fileId)))) throw new ValidationError('Add receipts from the Receipts screen.');
@@ -413,9 +495,11 @@ function validateReceipt(data, store, id) {
   const base = {};
   if (prev) { for (const k of RECEIPT_SERVER) if (prev[k] !== undefined) base[k] = prev[k]; }
   else {
-    Object.assign(base, { fileId: String(data.fileId), fileName: str(data.fileName, 120), mediaType: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(data.mediaType) ? data.mediaType : 'image/jpeg',
+    Object.assign(base, { fileId: String(data.fileId), fileName: str(data.fileName, 120), mediaType: RECEIPT_TYPES.includes(data.mediaType) ? data.mediaType : 'image/jpeg',
       size: Number(data.size) || 0, uploadedBy: str(data.uploadedBy, 200), uploadedByName: str(data.uploadedByName, 200), uploadedAt: Number(data.uploadedAt) || Date.now(),
       readStatus: data.draft ? 'read' : 'off', readError: '', wasAttached: !!data.wasAttached });
+    // Emailed in (kept through a backup and restore): who sent it and the subject.
+    if (data.source === 'email') Object.assign(base, { source: 'email', emailFrom: str(data.emailFrom, 200), emailSubject: str(data.emailSubject, 200) });
     if (data.draft) base.draft = sanitizeDraft(data.draft);
   }
   const status = RECEIPT_STATUS.includes(data.status) ? data.status : 'inbox';
@@ -644,7 +728,7 @@ function validateRecord(collection, id, data, store) {
     case 'receipts': return validateReceipt(data, store, id);
     case 'attachments': return validateAttachment(data, store);
     case 'questions': return validateQuestion(data, store);
-    case 'estimates': return validateEstimate(data, store);
+    case 'estimates': return validateEstimate(data, store, id);
     case 'recurring': return validateRecurring(data, store);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
@@ -662,9 +746,19 @@ function checkDelete(collection, id, store) {
   if (collection === 'accounts' && (store.list('bankTxns').some(b => b.account === id) || store.list('rules').some(r => r.account === id))) {
     throw new ValidationError('This account has imported bank transactions or bank rules, so it can’t be deleted. Mark it inactive instead.', 409);
   }
-  const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id;
+  const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id || r.from === id || r.to === id;
   if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines))) {
     throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
+  }
+  if (collection === 'estimates' && DEP.forEstimate(id, store.list('entries')).list.length) {
+    throw new ValidationError('This estimate has deposits recorded on it. Delete or refund them first.', 409);
+  }
+  if (collection === 'entries') {
+    const e = store.get('entries', id);
+    if (e && e.type === 'custdeposit') {
+      const s = DEP.forEstimate(e.estimateId, store.list('entries'), id);
+      if (s.applied + s.refunded > s.received + 0.004) throw new ValidationError('Part of this deposit has been used on an invoice or refunded. Delete that first.', 409);
+    }
   }
   if (collection === 'entries' && store.list('trips').some(t => t.entryId === id)) {
     throw new ValidationError('This expense is a mileage claim. Undo the claim from Expenses → Mileage instead.', 409);
@@ -771,30 +865,79 @@ function validateCompany(data) {
     industry: IND.INDUSTRIES[data.industry] && !['npo', 'charity'].includes(data.orgType) ? data.industry : '',
     nonprofit: validateNonprofit(data.nonprofit),
     // Features switched off for this company (only "false" is stored: everything in the plan is on by default).
-    features: Object.fromEntries(Object.keys(PLANS.FEATURES).filter(k => isObj(data.features) && data.features[k] === false).map(k => [k, false])),
+    features: Object.fromEntries(Object.keys(PLANS.FEATURES).filter(k => !PLANS.FEATURES[k].firm && isObj(data.features) && data.features[k] === false).map(k => [k, false])),
     notDuplicates: (Array.isArray(data.notDuplicates) ? data.notDuplicates : []).slice(-500).map(x => str(x, 130)).filter(Boolean),
     // How invoices, estimates, sales receipts and purchase orders look, and up to three fields of the company's own.
     docStyle: { color: /^#[0-9a-fA-F]{6}$/.test(isObj(data.docStyle) ? data.docStyle.color : '') ? data.docStyle.color : '#0a7369', layout: ['classic', 'bold', 'minimal'].includes(isObj(data.docStyle) && data.docStyle.layout) ? data.docStyle.layout : 'classic' },
     customFields: (Array.isArray(data.customFields) ? data.customFields : []).filter(isObj).slice(0, 3).map((f, i) => ({ id: 'f' + (i + 1), label: str(f.label, 30).trim(), sales: f.sales !== false, purchase: !!f.purchase })).filter(f => f.label),
     lateFee: validateLateFee(data.lateFee),
+    // Bill approvals: on or off, which bills (over an amount, from some vendors) and who besides owners approves them.
+    approvals: APPROVALS.clean(data.approvals),
     // Opening UCC for each CCA class, at the start of the first fiscal year Sumlora works out (from the last T2 Schedule 8).
     ccaOpening: isObj(data.ccaOpening) ? Object.fromEntries(Object.entries(data.ccaOpening).filter(([k, v]) => /^[0-9]{1,2}(\.[0-9]{1,2})?$/.test(k) && isObj(v) && isDate(v.fy)).slice(0, 60).map(([k, v]) => [k, { fy: v.fy, ucc: Math.max(0, Math.round((Number(v.ucc) || 0) * 100) / 100) }])) : {},
-    // Classes: a way to sort income and expenses (branch, department, line of business). One per transaction.
+    // Classes: a way to sort income and expenses (branch, department, line of business). One per transaction, or with
+    // classPerLine one on each line (like QuickBooks Online), so one bill can be split between classes.
+    classPerLine: !!data.classPerLine,
     // What the company calls its classes.
     classLabel: ['class', 'location', 'department', 'division'].includes(data.classLabel) ? data.classLabel : 'class',
     classes: (() => { const seen = new Set(); return (Array.isArray(data.classes) ? data.classes : []).filter(isObj).slice(0, 200).map(c => ({ id: str(c.id, 40), name: str(c.name, 60).trim(), active: c.active !== false })).filter(c => c.id && c.name && !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase())); })(),
+    // Tags: labels on transactions, several per transaction, optionally in groups (tags.js).
+    ...(() => { const t = TAGS.cleanList(data.tagGroups, data.tags); return { tagGroups: t.groups, tags: t.tags }; })(),
     mileage: isObj(data.mileage) ? { expenseAccount: str(data.mileage.expenseAccount, 40), payAccount: str(data.mileage.payAccount, 40), territories: !!data.mileage.territories, rates: isObj(data.mileage.rates) ? Object.fromEntries(Object.entries(data.mileage.rates).filter(([y, v]) => /^\d{4}$/.test(y) && isObj(v)).slice(0, 20).map(([y, v]) => [y, { first: Math.max(0, Math.min(5, Number(v.first) || 0)), after: Math.max(0, Math.min(5, Number(v.after) || 0)) }])) : {} } : { expenseAccount: '', payAccount: '', territories: false, rates: {} },
+    // Reports' default accounting method: accrual (as the books are kept) or cash (invoices and bills when paid).
+    reportBasis: data.reportBasis === 'cash' ? 'cash' : 'accrual',
     savedReports: (Array.isArray(data.savedReports) ? data.savedReports : []).slice(0, 30).filter(isObj).map(r => ({
-      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap', 'sc', 'si', 'ev', 'bva', 'iv'].includes(r.tab) ? r.tab : 'pl', ...(r.cls ? { cls: str(r.cls, 40) } : {}), ...(r.budget ? { budget: str(r.budget, 120) } : {}),
+      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap', 'sc', 'si', 'ev', 'bva', 'iv', 'tl', 'tg'].includes(r.tab) ? r.tab : 'pl', ...(r.cls ? { cls: str(r.cls, 40) } : {}), ...(r.budget ? { budget: str(r.budget, 120) } : {}),
       period: ['month', 'lastmonth', 'quarter', 'ytd', 'fy', 'lastfy', 'all', 'custom'].includes(r.period) ? r.period : 'fy',
-      from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth', 'byclass'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: r.tbAdj === 'aje' ? 'aje' : true } : {}),
+      from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth', 'byclass', 'bycustomer'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: r.tbAdj === 'aje' ? 'aje' : true } : {}),
+      ...(['accrual', 'cash'].includes(r.basis) ? { basis: r.basis } : {}),
+      // Report filters (customers, vendors, accounts, classes, tags): lists of ids; anything else is dropped.
+      ...(REPFILTER.clean(r.flt) ? { flt: REPFILTER.clean(r.flt) } : {}),
+      ...(isObj(r.sort) && ['date', 'type', 'num', 'name', 'memo', 'acct', 'split', 'cls', 'amt'].includes(r.sort.col) ? { sort: { col: r.sort.col, dir: r.sort.dir === 'desc' ? 'desc' : 'asc' } } : {}),
     })).filter(r => r.id && r.name),
+    cashForecast: validateCashForecast(data.cashForecast),
   };
   if (out.qstRate > 0 && out.pstRate > 0) throw new ValidationError('A company charges QST or PST, not both.');
   if (out.pstRate > 0 && out.pstRate >= out.taxRate) throw new ValidationError('The sales tax rate must include GST plus PST.');
   // Registered charities and qualifying non-profits can't use the Quick Method.
   if (out.quickMethod.on && (out.orgType === 'charity' || (out.orgType === 'npo' && out.nonprofit.qualifying))) out.quickMethod = { ...out.quickMethod, on: false };
   return out;
+}
+/**
+ * Cash flow forecast (Reports → Cash flow forecast): how it's worked out, the company's own planned money in and
+ * out, and the lines someone unticked to leave out. Planned items are refused when they're wrong, not dropped, so
+ * the person saving one sees why.
+ */
+function validateCashForecast(c) {
+  c = isObj(c) ? c : {};
+  const planned = Array.isArray(c.planned) ? c.planned : [];
+  if (planned.length > 100) throw new ValidationError('At most 100 planned items.');
+  const ids = new Set();
+  const out = planned.map(p => {
+    if (!isObj(p)) throw new ValidationError('Each planned item must be an object.');
+    const id = str(p.id, 40).trim(), name = str(p.name, 80).trim(), amount = Math.round((Number(p.amount) || 0) * 100) / 100;
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(id) || ids.has(id)) throw new ValidationError('Each planned item needs its own id.');
+    ids.add(id);
+    if (!name) throw new ValidationError('Give the planned item a name.');
+    if (!['in', 'out'].includes(p.dir)) throw new ValidationError('A planned item is money in or money out.');
+    if (!(amount > 0) || amount > 1e9) throw new ValidationError('Enter the planned amount (more than $0).');
+    if (!isDate(p.date)) throw new ValidationError('Enter the date of the planned item.');
+    const every = ['once', 'week', 'month', 'quarter', 'year'].includes(p.every) ? p.every : 'once';
+    const n = Number(p.n === undefined || p.n === '' ? 1 : p.n);
+    if (every !== 'once' && !(Number.isInteger(n) && n >= 1 && n <= 12)) throw new ValidationError('Repeat every 1 to 12 weeks, months, quarters or years.');
+    const end = every !== 'once' && p.end ? p.end : '';
+    if (end && (!isDate(end) || end < p.date)) throw new ValidationError('The planned item’s end date must be on or after its first date.');
+    return { id, name, dir: p.dir, amount, date: p.date, every, ...(every !== 'once' ? { n } : {}), ...(end ? { end } : {}) };
+  });
+  return {
+    days: [30, 60, 90].includes(Number(c.days)) ? Number(c.days) : 30,
+    overdue: c.overdue === 'skip' ? 'skip' : 'week',
+    late: !!c.late,
+    cards: !!c.cards,
+    planned: out,
+    // Keys of forecast lines left out ("inv:<id>", "rec:<id>:<date>"…), newest kept.
+    off: [...new Set((Array.isArray(c.off) ? c.off : []).filter(k => typeof k === 'string' && /^[A-Za-z0-9_:|.@+~-]{1,140}$/.test(k)))].slice(-500),
+  };
 }
 /** Late fees on overdue invoices: a flat amount or a percentage of what's overdue, after some days of grace. */
 function validateLateFee(l) {
@@ -852,7 +995,7 @@ function docLines(lines) {
     return out;
   });
 }
-function validateEstimate(data, store) {
+function validateEstimate(data, store, id) {
   if (!isDate(data.date)) throw new ValidationError('Estimate date must be YYYY-MM-DD.');
   if (data.expires && !isDate(data.expires)) throw new ValidationError('The date the estimate is good until must be YYYY-MM-DD.');
   const c = store.get('contacts', String(data.contactId || ''));
@@ -861,26 +1004,82 @@ function validateEstimate(data, store) {
   const lines = docLines(data.lines);
   for (const l of lines) if (l.account && !store.get('accounts', l.account)) throw new ValidationError('An account on this estimate doesn’t exist.');
   if (data.invoiceId && !store.get('docs', String(data.invoiceId))) throw new ValidationError('The invoice made from this estimate doesn’t exist.');
-  return { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
+  const out = { ...data, number: str(data.number, 40), memo: str(data.memo, 2000), lines, status: EST_STATUS.includes(data.status) ? data.status : 'open', invoiceId: data.invoiceId ? String(data.invoiceId) : '' };
+  // Deposit requested: a percent of the total, or an amount up to the total.
+  delete out.deposit;
+  if (data.deposit && Number(data.deposit.value)) {
+    const d = data.deposit, kind = d.kind === 'percent' ? 'percent' : 'amount', v = Math.round(Number(d.value) * 100) / 100;
+    if (!(v > 0)) throw new ValidationError('The deposit requested must be above zero.');
+    if (kind === 'percent' && v > 100) throw new ValidationError('The deposit requested can’t be more than 100%.');
+    if (kind === 'amount' && v > (Number(data.total) || 0) + 0.004) throw new ValidationError('The deposit requested is more than the estimate’s total.');
+    out.deposit = { kind, value: v };
+  }
+  // Once a deposit has been received, the customer stays, and the total can't drop below it.
+  if (id) {
+    const s = DEP.forEstimate(id, store.list('entries')), prev = store.get('estimates', id);
+    if (s.list.length && prev && prev.contactId !== out.contactId) throw new ValidationError('A deposit has been received on this estimate, so its customer can’t change.', 409);
+    if (s.received > (Number(out.total) || 0) + 0.004) throw new ValidationError(`The total can’t be less than the ${s.received.toFixed(2)} deposit received.`, 409);
+  }
+  return out;
 }
-/* Recurring invoices and bills: a template and a schedule. The client makes each one when it's due. */
-const REC_KINDS = ['invoice', 'bill'], REC_EVERY = ['week', 'month', 'quarter', 'year'];
+/* Recurring transactions: a template and a schedule. The client makes each one when it's due (or reminds someone).
+   Invoices and bills have a customer or vendor and item lines; expenses and deposits a bank or card account and
+   category lines; transfers two accounts and an amount; journal entries debit and credit lines that must balance. */
+const REC_KINDS = ['invoice', 'bill', 'expense', 'deposit', 'transfer', 'journal'], REC_EVERY = ['week', 'month', 'quarter', 'year'];
+// A recurring transaction in another currency would need each day's exchange rate, which isn't known ahead.
+function recBank(store, id, what) {
+  const a = store.get('accounts', String(id || ''));
+  if (!a || (a.detail !== 'bank' && a.detail !== 'card')) throw new ValidationError(`Choose ${what}.`);
+  if (a.currency) throw new ValidationError('Recurring transactions use Canadian-dollar bank and card accounts.');
+  return String(id);
+}
 function validateRecurring(data, store) {
-  if (!REC_KINDS.includes(data.kind)) throw new ValidationError('A recurring transaction must be an invoice or a bill.');
+  if (!REC_KINDS.includes(data.kind)) throw new ValidationError('A recurring transaction must be an invoice, bill, expense, deposit, transfer or journal entry.');
   if (!str(data.name).trim()) throw new ValidationError('Give the recurring transaction a name.');
-  const c = store.get('contacts', String(data.contactId || ''));
-  if (!c) throw new ValidationError(`Choose the ${data.kind === 'invoice' ? 'customer' : 'vendor'}.`);
+  const doc = data.kind === 'invoice' || data.kind === 'bill', money = data.kind === 'expense' || data.kind === 'deposit';
+  if (doc && !store.get('contacts', String(data.contactId || ''))) throw new ValidationError(`Choose the ${data.kind === 'invoice' ? 'customer' : 'vendor'}.`);
+  if (!doc && data.contactId && !store.get('contacts', String(data.contactId))) throw new ValidationError('The payee on this recurring transaction doesn’t exist.');
   if (!REC_EVERY.includes(data.every)) throw new ValidationError('Choose how often: every week, month, quarter or year.');
   const n = Math.round(Number(data.n) || 1);
   if (n < 1 || n > 12) throw new ValidationError('Repeat every 1 to 12 weeks, months, quarters or years.');
   if (!isDate(data.next)) throw new ValidationError('Choose the date of the next one.');
   if (data.end && !isDate(data.end)) throw new ValidationError('The end date must be YYYY-MM-DD.');
-  const lines = docLines(data.lines);
-  if (!lines.length) throw new ValidationError('Add at least one line.');
-  for (const l of lines) if (!store.get('accounts', l.account)) throw new ValidationError('Choose an account on every line.');
-  const terms = data.terms === '' || data.terms == null ? '' : Math.max(0, Math.min(365, Math.round(Number(data.terms) || 0)));
-  return { ...data, name: str(data.name, 100).trim(), memo: str(data.memo, 2000), n, lines, terms, end: data.end || '', mode: data.mode === 'remind' ? 'remind' : 'auto',
+  const day = data.day === undefined || data.day === '' || data.day === null || data.day === false ? undefined : Math.round(Number(data.day));
+  if (day !== undefined && !(day >= 1 && day <= 31)) throw new ValidationError('The day of the month must be 1 to 31.');
+  const out = { ...data, name: str(data.name, 100).trim(), memo: str(data.memo, 2000), n, end: data.end || '', mode: data.mode === 'remind' ? 'remind' : 'auto',
     email: data.kind === 'invoice' && !!data.email, active: data.active !== false, made: Math.max(0, Math.round(Number(data.made) || 0)) };
+  if (day !== undefined) out.day = day; else delete out.day;
+  if (!doc) out.contactId = data.contactId ? String(data.contactId) : '';
+  if (data.ref !== undefined) out.ref = str(data.ref, 40).trim();
+  if (doc || money) {
+    const lines = docLines(data.lines);
+    if (!lines.length) throw new ValidationError('Add at least one line.');
+    for (const l of lines) if (!store.get('accounts', l.account)) throw new ValidationError('Choose an account on every line.');
+    out.lines = lines;
+  }
+  if (doc) out.terms = data.terms === '' || data.terms == null ? '' : Math.max(0, Math.min(365, Math.round(Number(data.terms) || 0)));
+  if (money) {
+    out.bank = recBank(store, data.bank, data.kind === 'expense' ? 'the bank or card account it’s paid from' : 'the bank account it goes into');
+    if (!out.lines.some(l => l.amount)) throw new ValidationError('Add at least one line with an amount.');
+    if (out.lines.some(l => l.account === out.bank)) throw new ValidationError('A line can’t use the bank or card account itself.');
+  }
+  if (data.kind === 'transfer') {
+    out.from = recBank(store, data.from, 'the account the money comes from');
+    out.to = recBank(store, data.to, 'the account the money goes to');
+    if (out.from === out.to) throw new ValidationError('Pick two different accounts.');
+    const amount = cents(data.amount);
+    if (!(amount > 0)) throw new ValidationError('Enter an amount above zero.');
+    out.amount = amount / 100;
+    delete out.lines;
+  }
+  if (data.kind === 'journal') {
+    // Each one made from it goes straight into the books, so it has to balance now (the journal entry rule).
+    const bad = RECUR.journalProblem(data.lines);
+    if (bad) throw new ValidationError(bad);
+    out.lines = RECUR.journalLines(data.lines);
+    for (const l of out.lines) if (!store.get('accounts', l.account)) throw new ValidationError('A line uses an account that doesn’t exist.');
+  }
+  return out;
 }
 
 function validateQuestion(data, store) {
@@ -893,4 +1092,4 @@ function validateQuestion(data, store) {
     label: str(data.label, 200), created: Number(data.created) || 0 };
 }
 
-module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate, str, sanitizeDraft, settledOn };
+module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, ENTRY_TYPES, isDate, str, sanitizeDraft, settledOn };

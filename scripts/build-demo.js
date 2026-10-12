@@ -37,6 +37,9 @@ const pub = f => fs.readFileSync(path.join(root, 'public', f), 'utf8');
   const index = pub('index.html');
   const fonts = index.match(/<link rel="stylesheet" href="https:\/\/fonts[^>]+>/)[0];
   const body = index.split('<body>')[1].split('<script')[0].trim();
+  // The app's scripts in index.html's own order (theme.js goes in the head, before the page draws).
+  const scripts = [...index.split('<body>')[1].matchAll(/<script src="([a-z0-9-]+\.js)"><\/script>/g)].map(m => m[1]);
+  if (scripts.length < 40 || scripts[0] !== 'i18n.js') throw new Error('Couldn’t read the script list from public/index.html.');
   const safe = s => s.replace(/<\/script/gi, '<\\/script');
   const html = `<title>Sumlora Demo</title>
 <meta name="description" content="Try Sumlora in your browser. Example data; nothing is saved.">
@@ -50,7 +53,7 @@ ${body}
 <div class="demo-ribbon">Demo · example data · changes aren’t saved</div>
 <script>window.__TALLY_DEMO__=${safe(JSON.stringify(data))};</script>
 <script>${safe(fs.readFileSync(path.join(__dirname, 'demo-shim.js'), 'utf8'))}</script>
-${['i18n.js', 'fr.js', 'gifi.js', 'plans.js', 'industries.js', 'accountlib.js', 'logo.js', 'bankparse.js', 'app.js', 'fx.js', 'coa.js', 'banking.js', 'ai.js', 'receipts.js', 'convert-parse.js', 'convert.js', 'pdf.js', 'docout.js', 'sales-extras.js', 'items.js', 'inventory.js', 'budgets.js', 'purchasing.js', 'projects.js', 'assets.js', 'scrapyard.js', 'bankfeeds.js', 'billing.js', 'yearend.js', 'salestax.js', 'reports.js', 'review.js', 'payroll-calc.js', 'payroll-dd.js', 'payroll.js', 'payroll-yearend.js', 'payroll-roe.js', 'activity.js', 'backups.js', 'qr.js', 'auth.js', 'companies.js', 'licence.js', 'overview.js'].map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
+${scripts.map(f => `<script>\n${safe(pub(f))}\n</script>`).join('\n')}
 `;
   fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
   fs.writeFileSync(path.join(root, 'dist', 'demo.html'), html);

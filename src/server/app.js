@@ -14,12 +14,14 @@ const assistant = require('./assistant');
 const mail = require('./mail');
 const stripe = require('./stripe');
 const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
+const inbound = require('./inbound');
 const { TERMS_VERSION, TERMS_DRAFT } = require('./legal');
 const { Billing, paid: billingPaid, stale: billingStale, describe: billingDescribe } = require('./billing');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
+const DEP = require('../../public/deposits-calc.js');
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 const MIME = {
@@ -56,6 +58,18 @@ const BACKUP_FORMAT = 'tally-books-backup';
 function createApp(opts) {
   const reg = new Registry(opts.dataDir);
   const stripeFetch = opts.stripeFetch || ((...a) => fetch(...a)); // tests pass a stand-in for Stripe
+  /** The Customer deposits account (a current liability), made the first time a deposit comes in online. Same rule as the app's depAccount(). */
+  const depAccount = ctx => {
+    const all = ctx.store.list('accounts');
+    const have = all.find(a => a.detail === 'custdep' && a.active !== false) || all.find(a => a.detail === 'custdep');
+    if (have) return have.id;
+    const named = all.find(a => a.type === 'Liability' && !a.detail && DEP.NAME_RE.test(a.name));
+    if (named) { applyWrite(ctx.store, { op: 'set', collection: 'accounts', id: named.id, data: { ...named, detail: 'custdep' } }, ctx.user, ctx); return named.id; }
+    const id = all.some(a => a.id === 'a2345') ? crypto.randomUUID() : 'a2345';
+    const fr = (ctx.store.getSetting('company') || {}).lang === 'fr';
+    applyWrite(ctx.store, { op: 'set', collection: 'accounts', id, data: { code: all.some(a => a.code === '2345') ? '' : '2345', name: fr ? 'Dépôts des clients' : 'Customer deposits', type: 'Liability', detail: 'custdep', active: true, desc: DEP.ACCOUNT_DESC } }, ctx.user, ctx);
+    return id;
+  };
   /** Every Stripe link an invoice has had (the current one included); closedAt marks the current one as turned off. */
   const payLinkList = (d, closedAt) => {
     const list = (Array.isArray(d.payLinks) ? d.payLinks : []).slice(-30);
@@ -94,6 +108,18 @@ function createApp(opts) {
   /** AI costs the server's owner money, so each firm uses it only when an administrator allows it. */
   const PLANS = require('../../public/plans.js');
   const IND = require('../../public/industries.js');
+  const ROLES = require('../../public/roles.js');
+  const APPROVALS = require('../../public/approvals.js');
+  /* Custom roles (public/roles.js): a staff member with one of the firm's own roles sees and changes only
+     the areas it allows. Owners, plain staff and clients have no perms, so nothing here limits them. */
+  const canArea = (user, area, level = 'view') => !(user && user.perms) || ROLES.can(user.perms, area, level);
+  const needArea = (user, area, level = 'edit') => {
+    if (!canArea(user, area, level)) throw new ValidationError(level === 'edit' ? `Your role doesn’t allow changes in ${ROLES.AREAS[area].label}.` : `Your role doesn’t include ${ROLES.AREAS[area].label}.`, 403);
+  };
+  /** Every area at this level (for things that touch the whole books, like a backup or example data). */
+  /** Edit in the areas a write touches (roles.js writeAreas; a list there means any one of them). */
+  const needWrite = (user, col, data, prev) => { for (const a of ROLES.writeAreas(col, data, prev)) { const any = Array.isArray(a) ? a : [a]; if (!any.some(x => canArea(user, x, 'edit'))) needArea(user, any[0], 'edit'); } };
+  const needAllAreas = (user, level) => { for (const a of Object.keys(ROLES.AREAS)) needArea(user, a, level); };
   /** Is a plan feature on for this company: in its firm's plan, and not switched off in its settings? */
   const featureOn = (cid, key, store) => {
     const c = reg.get(cid), f = c && auth.firm(c.firmId);
@@ -218,6 +244,8 @@ function createApp(opts) {
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
   // Plaid's keys and the banks' access tokens stay with this computer (the licence folder on desktop), never in a books folder that may be shared.
   const plaid = new Plaid(opts.licenceDir || opts.dataDir, { env: opts.plaid || {}, fetch: opts.plaidFetch });
+  // Receipts by email: the server's settings and each company's address (inbound.js), kept with the server like Plaid's keys.
+  const inSet = new inbound.InboundSettings(opts.licenceDir || opts.dataDir);
   /** Bring one bank connection's new transactions into its company's "For review". */
   async function syncFeed(cid, itemId, user) {
     const it = plaid.item(itemId, cid);
@@ -452,6 +480,16 @@ function createApp(opts) {
     }));
   }
 
+  /** The client list's figures, without the ones a custom role can't see. */
+  function roleSummary(user, c) {
+    if (!user.perms) return c;
+    const out = { ...c };
+    if (!canArea(user, 'sales', 'view')) Object.assign(out, { overdueCount: 0, overdue: 0, receivable: 0 });
+    if (!canArea(user, 'expenses', 'view')) out.payable = 0;
+    if (!canArea(user, 'banking', 'view')) Object.assign(out, { toReview: 0, lastReconciled: '' });
+    return out;
+  }
+
   function summary(c) {
     const store = reg.store(c.id);
     seedDefaults(store);
@@ -475,6 +513,8 @@ function createApp(opts) {
       else if (d.kind === 'credit') receivable -= bal;
       else if (d.kind === 'vcredit') payable -= bal;
     }
+    // Deposits received on estimates and not used yet are a credit for the customer.
+    for (const v of Object.values(DEP.byCustomer(store.list('estimates'), entries))) receivable -= v;
     const recons = store.list('recons').map(r => r.statementDate).sort();
     const { billing: bill, ...entry } = c;
     return {
@@ -517,13 +557,67 @@ function createApp(opts) {
     return { ...r, bank: { ...r.bank, account: '••••' + String(r.bank.account).slice(-3) } };
   }
 
+  /**
+   * What a custom role can't see is left out of the books sent to the browser (as empty lists, so every screen still works).
+   * The ledger (all transactions) comes with Reports, Accounting, Banking or Sales tax, which need every posting for their totals;
+   * otherwise transactions follow their own area. Invoices, bills, customers, vendors, payroll and the rest follow their area.
+   */
+  function roleView(user, out) {
+    const see = a => canArea(user, a, 'view');
+    const ledger = see('reports') || see('accounting') || see('banking') || see('salestax');
+    for (const c of COLLECTIONS) {
+      if (c === 'accounts' || c === 'attachments' || c === 'questions' || (c === 'entries' && ledger)) continue;
+      out[c] = (out[c] || []).filter(r => (c === 'items' ? see('sales') || see('expenses') : see(ROLES.recordArea(c, r))));
+    }
+    // Files and questions go with the transaction they're on.
+    const ids = { entries: new Set(out.entries.map(r => r.id)), docs: new Set(out.docs.map(r => r.id)), bankTxns: new Set(out.bankTxns.map(r => r.id)) };
+    const onSeen = x => !!(ids[x.target] && ids[x.target].has(x.targetId));
+    out.attachments = out.attachments.filter(onSeen);
+    out.questions = out.questions.filter(onSeen);
+    // Payroll at View: social insurance numbers and bank account numbers stay hidden. Without Payroll, its settings too.
+    if (see('payroll') && !canArea(user, 'payroll', 'edit')) out.employees = out.employees.map(e => maskPrivate(e.sin ? { ...e, sin: '•••••' + String(e.sin).slice(-3) } : e));
+    if (!see('payroll')) { out.company = { ...out.company }; delete out.company.payroll; }
+  }
+
+  /**
+   * Company settings from someone with a custom role: each setting belongs to an area (payroll settings to Payroll,
+   * saved reports to Reports, the rest to Settings). Settings in an area they can't see were never sent, so they're
+   * kept as they were; changing one in an area they can only view is refused.
+   */
+  /** The tag list only grew: every tag and group already there is unchanged, and nothing was removed. */
+  function tagsOnlyAdded(before, after) {
+    const same = (a, b) => (a || []).every(x => (b || []).some(y => JSON.stringify(x) === JSON.stringify(y)));
+    return same(before.tags, after.tags) && same(before.tagGroups, after.tagGroups);
+  }
+  function roleSettings(user, company, before) {
+    for (const k of Object.keys(company)) {
+      const a = ROLES.settingArea(k);
+      if (canArea(user, a, 'edit')) continue;
+      if (!canArea(user, a, 'view')) { company[k] = before[k]; continue; }
+      if (JSON.stringify(company[k]) !== JSON.stringify(before[k])) needArea(user, a, 'edit');
+    }
+  }
+
+  /** An activity log row someone with a custom role may see: changes to records in areas their role can view. */
+  function auditVisible(user, r) {
+    if (!user.perms || !r.collection || !COLLECTIONS.includes(r.collection)) return true;
+    if (r.collection === 'contacts' || r.collection === 'items') return canArea(user, 'sales', 'view') || canArea(user, 'expenses', 'view');
+    const word = String(r.summary || '').split(' ')[0]; // summaries start with the kind of record: "invoice #1001 …", "payrun 2026-…"
+    const rec = r.after || r.before || { type: word, kind: word };
+    return ['attachments', 'questions'].includes(r.collection) || canArea(user, ROLES.recordArea(r.collection, rec), 'view');
+  }
+
   function state(ctx) {
     const cl = ctx.store.getSetting('closing') || {};
     const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}), closingDate: cl.date || '', closingPassword: !!cl.hash, hasCode: hasCode(ctx.store) } };
     for (const c of COLLECTIONS) out[c] = ctx.store.list(c);
     // Clients and view-only users see only the last 3 digits of employees' bank accounts.
     if (ctx.user && (ctx.user.role === 'client' || ctx.user.readOnly) && out.employees) out.employees = out.employees.map(maskPrivate);
+    if (ctx.user && ctx.user.perms) roleView(ctx.user, out);
     out.assistant = assistantInfo(ctx.id, ctx.store);
+    // Bill approvals: how many owners the firm has (one owner may approve their own bills).
+    const cf = reg.get(ctx.id);
+    out.approvalOwners = cf ? auth.firmUsers(cf.firmId).filter(u => u.role === 'owner' && !u.disabled).length : 1;
     // Add-ons on for this company (the AI assistant has its own details above).
     const co = reg.get(ctx.id) || {};
     out.addons = Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, !!co[k]]));
@@ -540,7 +634,7 @@ function createApp(opts) {
   const isUnlocked = (user, store) => { const k = `${user && user.token}|${store.file}`, t = unlocks.get(k); if (t && t > Date.now()) return true; unlocks.delete(k); return false; };
   const DATED = { entries: 'date', docs: 'date', payruns: 'payDate' };
   const canon = x => JSON.stringify(x, (k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o, key) => { o[key] = v[key]; return o; }, {}) : v));
-  const sameBut = (a, b) => { const drop = o => { const { clear, receiptId, applied, sent, id, ...rest } = o || {}; return canon(rest); }; return drop(a) === drop(b); };
+  const sameBut = (a, b) => { const drop = o => { const { clear, receiptId, applied, sent, id, tags, ...rest } = o || {}; return canon(rest); }; return drop(a) === drop(b); };
   function closedCheck(store, w, data, user) {
     const field = DATED[w.collection];
     if (!field) return;
@@ -561,6 +655,12 @@ function createApp(opts) {
   function applyWrite(store, w, user, ctx) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
+    // Custom roles: Edit in the area of the record, before and after the change (an invoice turned into a bill needs both).
+    if (user && user.perms) {
+      const prev = store.get(collection, id);
+      if (collection === 'attachments') { const x = prev || {}; const t = x.target && store.get(x.target, x.targetId); needArea(user, ROLES.recordArea(x.target || 'entries', t), 'edit'); }
+      else needWrite(user, collection, op === 'set' ? w.data || {} : null, prev);
+    }
     // Plan features: payroll records, and the special sales tax methods on returns.
     if (ctx && op === 'set') {
       const d = w.data || {};
@@ -574,14 +674,31 @@ function createApp(opts) {
         if (!(prev && prev.method === d.method)) needFeature(ctx.id, 'specialTax', store);
       }
     }
+    // Bill approvals (approvals.js): the server decides a bill's approval on every save; a bill waiting for approval
+    // (or rejected) can't be paid. Payments already on it stay as they are and can still be ticked as cleared.
+    if (op === 'set' && collection === 'docs' && w.data && w.data.kind === 'bill') {
+      const prev = store.get('docs', id), settings = (store.getSetting('company') || {}).approvals;
+      const on = !!ctx && !ctx.importing && APPROVALS.active(settings, featureOn(ctx.id, 'billApprovals', store));
+      const a = APPROVALS.onSave(prev && prev.kind === 'bill' ? prev : null, w.data, settings, on, user);
+      w.data = { ...w.data }; if (a) w.data.approval = a; else delete w.data.approval;
+    }
+    if (op === 'set' && collection === 'entries' && w.data && w.data.type === 'billpayment' && w.data.applyTo && ctx && !ctx.importing) {
+      const doc = store.get('docs', String(w.data.applyTo)), prev = store.get('entries', id);
+      const more = !prev || prev.applyTo !== w.data.applyTo || (Number(w.data.amount) || 0) > (Number(prev.amount) || 0) + 0.004;
+      if (more && APPROVALS.held(doc, APPROVALS.active((store.getSetting('company') || {}).approvals, featureOn(ctx.id, 'billApprovals', store)))) {
+        throw new ValidationError(doc.approval.status === 'rejected'
+          ? `Bill${doc.number ? ' #' + doc.number : ''} was rejected, so it can’t be paid. Correct it and send it for approval again.`
+          : `Bill${doc.number ? ' #' + doc.number : ''} is waiting for approval, so it can’t be paid yet.`, 409);
+      }
+    }
     // Receipts are created only by the upload route (or a restore), never by a plain write.
     if (collection === 'receipts' && op === 'set' && !store.get('receipts', id)) throw new ValidationError('Add receipts from the Receipts screen.');
     // Attachments and questions have their own routes; a plain write can only delete an attachment.
     if (collection === 'attachments' && (op !== 'delete' || (user && user.role === 'client'))) throw new ValidationError('Attach files from the transaction.', 403);
     if (collection === 'questions') throw new ValidationError('Use Questions to ask or answer.', 403);
-    // A recurring invoice or bill being made: if another window already made this date, don't make it again.
-    if (collection === 'docs' && op === 'set' && w.data && w.data.recurringNew) {
-      if (store.get('docs', id)) throw new ValidationError('That recurring transaction was already made.', 409);
+    // A recurring transaction being made: if another window already made this date, don't make it again.
+    if ((collection === 'docs' || collection === 'entries') && op === 'set' && w.data && w.data.recurringNew) {
+      if (store.get(collection, id)) throw new ValidationError('That recurring transaction was already made.', 409);
       w.data = { ...w.data }; delete w.data.recurringNew;
     }
     if (collection === 'receipts' && user && user.role === 'client') {
@@ -802,14 +919,19 @@ function createApp(opts) {
       auth.changeOwnPassword(user, body.current, body.password);
       return { ok: true };
     }],
-    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); return { users: auth.list(user.firmId), idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa || 'off', forced2fa: auth.forced2fa, firm: auth.firm(user.firmId) }; }],
+    ['GET', /^\/api\/users$/, (req, m, res, user) => { ownerOnly(user); const { roles, ...firm } = auth.firm(user.firmId) || {}; return { users: auth.list(user.firmId), idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.data.settings.require2fa || 'off', forced2fa: auth.forced2fa, firm, roles: auth.roles(user.firmId), customRoles: auth.firmHas(user.firmId, 'customRoles') }; }],
+    // Custom roles (Users & security → Roles): owners only, and only on a plan that includes them.
+    ['GET', /^\/api\/roles$/, (req, m, res, user) => { ownerOnly(user); return { roles: auth.roles(user.firmId), available: auth.firmHas(user.firmId, 'customRoles') }; }],
+    ['POST', /^\/api\/roles$/, async (req, m, res, user) => { ownerOnly(user); return { ok: true, role: auth.addRole(await readJson(req), user) }; }],
+    ['PUT', /^\/api\/roles\/([A-Za-z0-9_]+)$/, async (req, m, res, user) => { ownerOnly(user); return { ok: true, role: auth.updateRole(m[1], await readJson(req), user) }; }],
+    ['DELETE', /^\/api\/roles\/([A-Za-z0-9_]+)$/, (req, m, res, user) => { ownerOnly(user); auth.removeRole(m[1], user); return { ok: true }; }],
     ['POST', /^\/api\/users$/, async (req, m, res, user) => {
       ownerOnly(user);
       const b = await readJson(req);
       const mine = new Set(reg.list(user.firmId).map(c => c.id));
       if ((Array.isArray(b.companies) ? b.companies : []).some(id => !mine.has(String(id)))) throw new ValidationError('That company doesn’t exist.', 404);
       const u = auth.addUser({ ...b, mustChange: !b.invite, firmId: user.firmId, self: false });
-      auth.log('user-added', { username: u.username, by: user.username, role: u.role });
+      auth.log('user-added', { username: u.username, by: user.username, role: u.roleName ? `${u.role} (${u.roleName})` : u.role });
       // "They pay for Sumlora for this company": the client starts a subscription for it when they first sign in.
       if (u.role === 'client' && b.clientPays === true) {
         const plan = PLANS.PLANS[b.clientPlan] ? b.clientPlan : PLANS.planOf((auth.firm(user.firmId) || {}).plan);
@@ -895,7 +1017,7 @@ function createApp(opts) {
       // A firm sees its own people's sign-ins; the server's administrators see everything.
       if (user.platformAdmin) return { log: auth.readLog(1000) };
       const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
-      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
+      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
     }],
     // The administrator's overview: firms on this server, desktop licences sold, renewals due, AI use.
@@ -1056,7 +1178,7 @@ function createApp(opts) {
       auth.deleteFirm(id, user, reg.list(id).length);
       return { ok: true };
     }],
-    ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list(user.firmId).filter(c => canSeeCo(user, c.id)).map(summary), provinces: PROVINCES,
+    ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list(user.firmId).filter(c => canSeeCo(user, c.id)).map(summary).map(c => roleSummary(user, c)), provinces: PROVINCES,
       ...(user.platformAdmin ? { pendingFirms: auth.data.firms.filter(f => f.status === 'pending').length } : {}) })],
     // Invite a single business in one step: its company, and its owner as a client who signs in to see it
     // (and, when subscriptions are on, pays for it themselves). Returns the invitation link to send.
@@ -1130,6 +1252,7 @@ function createApp(opts) {
       if (used) throw new ValidationError('This company has transactions or documents, so it can’t be removed. Archive it instead to hide it from the list.', 409);
       if (c.billing && billingPaid(c.billing)) throw new ValidationError('This company’s client has a Sumlora subscription running. Cancel it first (Stripe → Subscriptions), then remove the company.', 409);
       await plaid.removeCompany(id).catch(() => {});
+      inSet.drop(id);
       reg.remove(id);
       auth.dropCompany(id);
       auth.log('company-removed', { by: user.username, company: c.name });
@@ -1186,6 +1309,19 @@ function createApp(opts) {
       const st = plaid.update(body);
       auth.log('plaid-settings', { username: user.username, ip: clientIp(req), change: body.secret !== undefined || body.clientId !== undefined ? 'Plaid keys changed' : 'settings changed' });
       return st;
+    }],
+    // Receipts by email: the administrator turns it on, names the domain and gets the webhook address for the mail provider.
+    ['GET', /^\/api\/inbound$/, (req, m, res, user) => {
+      if (!(user.role === 'owner' && user.platformAdmin)) return { ready: inSet.ready() };
+      const st = inSet.status();
+      return { ...st, admin: true, webhook: st.secret ? `${originOf(req)}/api/inbound/email/${st.secret}` : '' };
+    }],
+    ['PUT', /^\/api\/inbound$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const body = await readJson(req);
+      const st = inSet.update(body);
+      auth.log('inbound-settings', { username: user.username, ip: clientIp(req), change: body.newSecret ? 'webhook secret changed' : `receipts by email ${st.on ? 'on' : 'off'} (${st.domain || 'no domain'})` });
+      return { ...st, admin: true, webhook: `${originOf(req)}/api/inbound/email/${st.secret}` };
     }],
     // Sumlora subscriptions: the administrator's settings.
     ['GET', /^\/api\/billing$/, (req, m, res, user) => { adminOnly(user); return billing.status(); }],
@@ -1326,12 +1462,38 @@ function createApp(opts) {
       const before = ctx.store.getSetting('company');
       const company = validateCompany(await readJson(req));
       company.logoFile = (before && before.logoFile) || ''; // changed only through the logo route
+      if (ctx.user.perms) {
+        const prev = validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) });
+        // Tags: anyone who can change transactions can add a new tag from a form; renaming or removing tags needs Accounting.
+        const tagsChanged = JSON.stringify([prev.tags, prev.tagGroups]) !== JSON.stringify([company.tags, company.tagGroups]);
+        if (tagsChanged && tagsOnlyAdded(prev, company) && ['sales', 'expenses', 'banking', 'accounting'].some(a => canArea(ctx.user, a, 'edit'))) { prev.tags = company.tags; prev.tagGroups = company.tagGroups; }
+        else if (tagsChanged) needArea(ctx.user, 'accounting', 'edit'); // everyone sees the tags, so say no rather than quietly keep them
+        roleSettings(ctx.user, company, prev);
+      }
+      // A tag still on transactions can't just disappear from the list (they'd point at nothing): take it off them first.
+      const gone = new Set(((before && before.tags) || []).map(t => t.id).filter(id => !company.tags.some(t => t.id === id)));
+      if (gone.size) {
+        const on = r => Array.isArray(r && r.tags) && r.tags.some(id => gone.has(id));
+        if (['entries', 'docs', 'rules'].some(c => ctx.store.list(c).some(on)) || ctx.store.list('bankTxns').some(b => on(b.cat))) throw new ValidationError('That tag is still on transactions. Remove it from them first.', 409);
+      }
       // Plan features: can't be turned on here when the plan doesn't include them (settings already saved stay as they were).
       if (company.quickMethod && company.quickMethod.on && !(before && before.quickMethod && before.quickMethod.on)) needFeature(ctx.id, 'specialTax', ctx.store);
+      // Bill approvals: only owners decide them (staff could otherwise make themselves approvers), and only on a plan that has them.
+      // Approvers must be people in this firm.
+      const firmId = (reg.get(ctx.id) || {}).firmId;
+      const inFirm = a => ({ ...a, approvers: a.approvers.filter(uid => { const u = auth.byId(uid); return u && u.firmId === firmId && u.role !== 'client'; }) });
+      company.approvals = inFirm(company.approvals);
+      const prevAp = inFirm(APPROVALS.clean(before && before.approvals));
+      if (JSON.stringify(company.approvals) !== JSON.stringify(prevAp)) {
+        if (ctx.user.role !== 'owner') throw new ValidationError('Only an owner can change bill approvals.', 403);
+        if (company.approvals.on && !prevAp.on) needFeature(ctx.id, 'billApprovals', ctx.store);
+      }
       if (!featureOn(ctx.id, 'advancedReports', ctx.store) && JSON.stringify(company.savedReports || []) !== JSON.stringify((before && before.savedReports) || [])) {
         const added = (company.savedReports || []).some(r => !((before && before.savedReports) || []).some(b => b.id === r.id));
         if (added) needFeature(ctx.id, 'advancedReports', ctx.store);
       }
+      // The cash flow forecast's own settings (planned items, lines left out) change only when the plan includes it.
+      if (JSON.stringify(company.cashForecast) !== JSON.stringify(validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) }).cashForecast)) needFeature(ctx.id, 'cashForecast', ctx.store);
       ctx.store.transaction(() => {
         ctx.store.putSetting('company', company);
         ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'company', summary: 'company settings', before, after: company });
@@ -1346,7 +1508,7 @@ function createApp(opts) {
       return { ...mail.publicMail(m), sentToday: Number(ctx.store.getMeta('mail-sent:' + new Date().toISOString().slice(0, 10)) || 0) };
     }],
     ['PUT', /^\/mail$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       const body = (await readJson(req)) || {};
       const before = ctx.store.getSetting('mail');
       if (body.remove) {
@@ -1358,6 +1520,9 @@ function createApp(opts) {
       return mail.publicMail(m);
     }],
     ['POST', /^\/mail\/(test|send)$/, async (ctx, req, m) => {
+      // A test is part of setting up email; sending goes with what's sent (invoices, purchase orders, reports, pay stubs).
+      if (m[1] === 'test') needArea(ctx.user, 'settings');
+      else if (!['sales', 'expenses', 'reports', 'payroll'].some(a => canArea(ctx.user, a, 'view'))) needArea(ctx.user, 'sales', 'view');
       const cfg = ctx.store.getSetting('mail');
       if (!cfg || !cfg.host) throw new ValidationError('Set up email for this company first (Settings → Email).', 409);
       const dayKey = 'mail-sent:' + new Date().toISOString().slice(0, 10);
@@ -1396,10 +1561,66 @@ function createApp(opts) {
       });
       return { ok: true, rev: docIds.length ? ctx.bump() : ctx.rev };
     }],
+    // ---------- bill approvals ----------
+    // The people who could be approvers (Settings → Bill approvals): owners and staff of the firm.
+    ['GET', /^\/approvers$/, ctx => {
+      notClient(ctx.user);
+      const c = reg.get(ctx.id);
+      return { people: auth.firmUsers(c.firmId).filter(u => u.role !== 'client' && !u.disabled && auth.canSee(u, ctx.id)).map(u => { const cr = auth.customRoleOf(u); return { id: u.id, name: u.name, username: u.username, role: u.role, roleName: cr ? cr.name : '', approveBills: !!(cr && cr.approveBills) }; }) };
+    }],
+    // Approve or reject a bill waiting for approval (with a comment), or send a rejected bill for approval again.
+    ['POST', /^\/approvals\/([^/]+)$/, async (ctx, req, m) => {
+      notClient(ctx.user);
+      needFeature(ctx.id, 'billApprovals', ctx.store);
+      const settings = (ctx.store.getSetting('company') || {}).approvals;
+      if (!APPROVALS.clean(settings).on) throw new ValidationError('Bill approvals are turned off for this company.', 409);
+      const body = (await readJson(req)) || {};
+      const action = ['approve', 'reject', 'resubmit'].includes(body.action) ? body.action : '';
+      if (!action) throw new ValidationError('Choose approve or reject.');
+      const comment = String(body.comment || '').trim().slice(0, 500);
+      const id = decodeURIComponent(m[1]), doc = ctx.store.get('docs', id);
+      if (!doc || doc.kind !== 'bill') throw new ValidationError('That bill doesn’t exist.', 404);
+      if (action === 'resubmit') {
+        needArea(ctx.user, 'expenses', 'edit');
+        if (!doc.approval || doc.approval.status !== 'rejected') throw new ValidationError('Only a rejected bill can be sent for approval again.', 409);
+      } else {
+        needArea(ctx.user, 'expenses', 'view');
+        if (action === 'reject' && !comment) throw new ValidationError('Say why the bill is rejected, so the person who entered it knows what to fix.');
+        const owners = auth.firmUsers((reg.get(ctx.id) || {}).firmId).filter(u => u.role === 'owner' && !u.disabled).length;
+        const why = APPROVALS.whyNot(ctx.user, settings, doc, owners);
+        if (why) throw new ValidationError(why, why.startsWith('This bill') ? 409 : 403);
+      }
+      const after = APPROVALS.decide(doc, action, ctx.user, comment);
+      ctx.store.transaction(() => {
+        ctx.store.put('docs', id, after);
+        const word = { approve: 'approved', reject: 'rejected', resubmit: 'sent for approval again' }[action];
+        ctx.store.audit(ctx.user, action, { collection: 'docs', id, summary: `bill${doc.number ? ' #' + doc.number : ''} ${doc.date} $${(Number(doc.total) || 0).toFixed(2)} ${word}${comment ? ': ' + comment.slice(0, 120) : ''}`, before: doc, after });
+      });
+      return { ok: true, status: after.approval.status, rev: ctx.bump() };
+    }],
+    // Batch "Mark as sent": invoices that went out some other way (by hand, by post, from another mailbox) get the
+    // same "sent" record an email adds, with no address. Like the email record, it isn't a change to the books,
+    // so it's allowed in a closed period.
+    ['POST', /^\/docs\/mark-sent$/, async (ctx, req) => {
+      needArea(ctx.user, 'sales'); // a change to the invoices, like sending them
+      const body = (await readJson(req)) || {};
+      if (!Array.isArray(body.docIds) || !body.docIds.length) throw new ValidationError('Pick at least one invoice.');
+      if (body.docIds.length > 1000) throw new ValidationError('Mark at most 1,000 invoices at a time.');
+      const ids = [...new Set(body.docIds.map(x => String(x).slice(0, 120)))];
+      const docs = ids.map(id => ctx.store.get('docs', id));
+      if (docs.some(d => !d)) throw new ValidationError('One of those invoices no longer exists. Refresh and try again.', 404);
+      if (docs.some(d => d.kind !== 'invoice')) throw new ValidationError('Only invoices can be marked as sent.');
+      const at = Date.now(), by = ctx.user.name || ctx.user.username;
+      ctx.store.transaction(() => {
+        for (const d of docs) ctx.store.put('docs', d.id, { ...d, sent: [...(d.sent || []).slice(-19), { at, to: '', by, what: 'marked' }] });
+        ctx.store.audit(ctx.user, 'email', { summary: `marked ${docs.length} invoice${docs.length === 1 ? '' : 's'} as sent: ${docs.map(d => d.number || d.id).join(', ').slice(0, 160)}` });
+      });
+      return { ok: true, marked: docs.length, rev: ctx.bump() };
+    }],
     // ---------- online payments (Stripe) ----------
     ['GET', /^\/pay$/, ctx => { const p = stripe.publicStripe(ctx.store.getSetting('stripe')); return ctx.user.role === 'client' ? { configured: p.configured } : p; }],
     ['PUT', /^\/pay$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       const body = (await readJson(req)) || {};
       if (body.remove) {
         ctx.store.transaction(() => { ctx.store.putSetting('stripe', {}); ctx.store.audit(ctx.user, 'stripe', { collection: 'settings', id: 'stripe', summary: 'online payments turned off' }); });
@@ -1414,27 +1635,30 @@ function createApp(opts) {
     }],
     // A "Pay now" link for an invoice's balance. Kept while the balance is the same; replaced when it changes.
     ['POST', /^\/pay\/link$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'sales');
       const cfg = ctx.store.getSetting('stripe');
       if (!cfg || !cfg.key) throw new ValidationError('Turn on online payments first (Settings → Online payments).', 409);
       const body = (await readJson(req)) || {};
-      const doc = ctx.store.get('docs', String(body.docId || ''));
-      if (!doc || doc.kind !== 'invoice') throw new ValidationError('Choose an invoice.');
+      // An invoice's balance, or the deposit still to be paid on an estimate.
+      const est = body.estimateId !== undefined, col = est ? 'estimates' : 'docs';
+      const doc = ctx.store.get(col, String((est ? body.estimateId : body.docId) || ''));
+      if (est ? !doc : !doc || doc.kind !== 'invoice') throw new ValidationError(est ? 'Choose an estimate.' : 'Choose an invoice.');
       if (doc.currency) throw new ValidationError('Card payment links are for invoices in Canadian dollars.', 409);
-      const cents = Math.round(((Number(doc.total) || 0) - settledOn(ctx.store, doc.id)) * 100);
-      if (cents < 50) throw new ValidationError('There’s nothing left to pay on this invoice.', 409);
+      if (est && doc.invoiceId && ctx.store.get('docs', doc.invoiceId)) throw new ValidationError('This estimate is already an invoice. Send the invoice’s pay link instead.', 409);
+      const cents = est ? Math.round(DEP.outstanding(doc, ctx.store.list('entries')) * 100) : Math.round(((Number(doc.total) || 0) - settledOn(ctx.store, doc.id)) * 100);
+      if (cents < 50) throw new ValidationError(est ? 'There’s no deposit left to pay on this estimate.' : 'There’s nothing left to pay on this invoice.', 409);
       const cur = doc.payLink;
       if (cur && cur.active !== false && cur.cents === cents) return { url: cur.url, rev: ctx.rev };
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       let link;
-      try { link = await stripe.createLink(cfg, stripeFetch, { cents, docId: doc.id, company: company.name, name: `${company.name} · Invoice ${doc.number || ''}`.trim() }); }
+      try { link = await stripe.createLink(cfg, stripeFetch, { cents, docId: doc.id, company: company.name, name: `${company.name} · ${est ? 'Deposit on estimate' : 'Invoice'} ${doc.number || ''}`.trim() }); }
       catch (e) { throw new ValidationError(e.message, e.status || 502); }
       // The old link is turned off, but kept on the list so a payment made through it before then is still found.
       const closed = cur && cur.id && cur.active !== false ? await stripe.deactivate(cfg, stripeFetch, cur.id).then(() => Date.now(), () => 0) : 0;
       ctx.store.transaction(() => {
-        const d = ctx.store.get('docs', doc.id);
-        if (d) ctx.store.put('docs', doc.id, { ...d, payLink: { id: link.id, url: link.url, cents, created: Date.now(), active: true }, payLinks: payLinkList(d, closed) });
-        ctx.store.audit(ctx.user, 'stripe', { collection: 'docs', id: doc.id, summary: `payment link for invoice ${doc.number ? '#' + doc.number : doc.id}: $${(cents / 100).toFixed(2)}` });
+        const d = ctx.store.get(col, doc.id);
+        if (d) ctx.store.put(col, doc.id, { ...d, payLink: { id: link.id, url: link.url, cents, created: Date.now(), active: true }, payLinks: payLinkList(d, closed) });
+        ctx.store.audit(ctx.user, 'stripe', { collection: col, id: doc.id, summary: `payment link for ${est ? 'the deposit on estimate' : 'invoice'} ${doc.number ? '#' + doc.number : doc.id}: $${(cents / 100).toFixed(2)}` });
       });
       return { url: link.url, rev: ctx.bump() };
     }],
@@ -1443,16 +1667,19 @@ function createApp(opts) {
     // made through an old link is still found. A payment that can't be recorded (more than what's owing) is kept on
     // the invoice as a problem to deal with, never dropped.
     ['POST', /^\/pay\/sync$/, async ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'sales');
       const cfg = ctx.store.getSetting('stripe');
       if (!cfg || !cfg.key) return { added: [], errors: [], rev: ctx.rev };
       const recorded = new Set(ctx.store.list('entries').filter(e => e.stripeSession).map(e => e.stripeSession));
       const week = 7 * 864e5, now = Date.now();
-      const docs = ctx.store.list('docs').filter(d => d.kind === 'invoice' && (d.payLinks || d.payLink));
+      // Invoices, and estimates with a deposit link (est: true; a payment there is a deposit received).
+      const entriesNow = ctx.store.list('entries');
+      const docs = [...ctx.store.list('docs').filter(d => d.kind === 'invoice' && (d.payLinks || d.payLink)),
+        ...ctx.store.list('estimates').filter(d => d.payLinks || d.payLink).map(d => ({ ...d, est: true }))];
       const found = [], errors = [], closeNow = [];
       outer: for (const d of docs) {
         const known = new Set((d.payIssues || []).map(x => x.session));
-        const balance = Math.round(((Number(d.total) || 0) - settledOn(ctx.store, d.id)) * 100);
+        const balance = d.est ? Math.round(DEP.outstanding(d, entriesNow) * 100) : Math.round(((Number(d.total) || 0) - settledOn(ctx.store, d.id)) * 100);
         for (const l of payLinkList(d)) {
           if (l.done || (l.closed && now - l.closed > week)) continue;
           // The balance changed some other way (a payment entered by hand, the invoice edited): this link is out of date.
@@ -1467,11 +1694,11 @@ function createApp(opts) {
         let acc = ctx.store.list('accounts').find(a => a.stripe);
         const ar = ctx.store.list('accounts').find(a => a.detail === 'ar' && a.active !== false) || ctx.store.list('accounts').find(a => a.detail === 'ar');
         const touched = new Map(); // doc id -> { done: Set(link ids), issues: [] }
-        const mark = id => { if (!touched.has(id)) touched.set(id, { done: new Set(), issues: [] }); return touched.get(id); };
+        const mark = (id, est) => { if (!touched.has(id)) touched.set(id, { done: new Set(), issues: [], col: est ? 'estimates' : 'docs' }); return touched.get(id); };
         for (const { d, l, s } of found) {
           const amount = s.cents / 100, t = new Date(s.created * 1000);
           const date = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
-          mark(d.id).done.add(l.id);
+          mark(d.id, d.est).done.add(l.id);
           try {
             if (!acc) {
               const id = ctx.store.get('accounts', 'a1090') ? crypto.randomUUID() : 'a1090';
@@ -1480,41 +1707,46 @@ function createApp(opts) {
               acc = ctx.store.get('accounts', id);
             }
             const id = 'stripe_' + s.id.replace(/[^A-Za-z0-9_]/g, '').slice(-80);
-            applyWrite(ctx.store, { op: 'set', collection: 'entries', id, data: { type: 'payment', date, ref: 'Stripe', memo: `Paid online${d.number ? ' · invoice #' + d.number : ''}`, contactId: d.contactId || '', applyTo: d.id, amount, bank: acc.id,
+            if (d.est) {
+              const dep = depAccount(ctx);
+              applyWrite(ctx.store, { op: 'set', collection: 'entries', id, data: { type: 'custdeposit', date, ref: 'Stripe', memo: `Deposit paid online${d.number ? ' · estimate #' + d.number : ''}`, contactId: d.contactId || '', estimateId: d.id, amount, bank: acc.id, method: 'card',
+                lines: DEP.lines('custdeposit', dep, acc.id, amount), stripeSession: s.id, created: Date.now() } }, ctx.user, ctx);
+            } else applyWrite(ctx.store, { op: 'set', collection: 'entries', id, data: { type: 'payment', date, ref: 'Stripe', memo: `Paid online${d.number ? ' · invoice #' + d.number : ''}`, contactId: d.contactId || '', applyTo: d.id, amount, bank: acc.id,
               lines: [{ account: acc.id, debit: amount, credit: 0 }, { account: ar && ar.id, debit: 0, credit: amount }], stripeSession: s.id, created: Date.now() } }, ctx.user, ctx);
-            added.push({ docId: d.id, number: d.number || '', amount });
+            added.push({ docId: d.id, number: d.number || '', amount, ...(d.est ? { estimate: true } : {}) });
           } catch (e) {
             // Usually: more than what's still owing (paid twice, or an old link after another payment). Kept for a person to sort out.
             const issue = { session: s.id, link: l.id, amount, date, error: String(e.message).slice(0, 200), at: Date.now() };
-            mark(d.id).issues.push(issue); issues.push({ docId: d.id, number: d.number || '', ...issue });
+            mark(d.id, d.est).issues.push(issue); issues.push({ docId: d.id, number: d.number || '', ...issue, ...(d.est ? { estimate: true } : {}) });
           }
         }
-        for (const c of closeNow) if (c.closedOk) { const m = mark(c.d.id); m.closed = m.closed || new Set(); m.closed.add(c.l.id); }
+        for (const c of closeNow) if (c.closedOk) { const m = mark(c.d.id, c.d.est); m.closed = m.closed || new Set(); m.closed.add(c.l.id); }
         for (const [id, m] of touched) {
-          const cur = ctx.store.get('docs', id); if (!cur) continue;
+          const cur = ctx.store.get(m.col, id); if (!cur) continue;
           const list = payLinkList(cur).map(l => ({ ...l, ...(m.done.has(l.id) ? { done: true } : {}), ...(m.closed && m.closed.has(l.id) && !l.closed ? { closed: Date.now() } : {}) }));
           const pl = cur.payLink && (m.done.has(cur.payLink.id) || (m.closed && m.closed.has(cur.payLink.id))) ? { ...cur.payLink, active: false } : cur.payLink;
-          ctx.store.put('docs', id, { ...cur, payLink: pl, payLinks: list, ...(m.issues.length ? { payIssues: [...(cur.payIssues || []), ...m.issues].slice(-20) } : {}) });
+          ctx.store.put(m.col, id, { ...cur, payLink: pl, payLinks: list, ...(m.issues.length ? { payIssues: [...(cur.payIssues || []), ...m.issues].slice(-20) } : {}) });
         }
       });
-      for (const i of issues) errors.push(`A Stripe payment of $${i.amount.toFixed(2)} for invoice ${i.number ? '#' + i.number : ''} couldn’t be recorded: ${i.error}`);
+      for (const i of issues) errors.push(`A Stripe payment of $${i.amount.toFixed(2)} for ${i.estimate ? 'the deposit on estimate' : 'invoice'} ${i.number ? '#' + i.number : ''} couldn’t be recorded: ${i.error}`);
       return { added, issues, errors, rev: added.length || issues.length || closeNow.length ? ctx.bump() : ctx.rev };
     }],
     // A problem payment was dealt with by hand (refunded in Stripe, or recorded as a credit): stop showing it.
     ['POST', /^\/pay\/issue$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'sales');
       const body = (await readJson(req)) || {};
-      const d = ctx.store.get('docs', String(body.docId || ''));
+      const col = body.estimateId !== undefined ? 'estimates' : 'docs';
+      const d = ctx.store.get(col, String((col === 'estimates' ? body.estimateId : body.docId) || ''));
       if (!d || !(d.payIssues || []).some(x => x.session === body.session)) throw new ValidationError('That payment problem isn’t on this invoice.', 404);
       ctx.store.transaction(() => {
-        ctx.store.put('docs', d.id, { ...d, payIssues: d.payIssues.map(x => (x.session === body.session ? { ...x, resolved: Date.now() } : x)) });
-        ctx.store.audit(ctx.user, 'stripe', { collection: 'docs', id: d.id, summary: `marked a Stripe payment problem on invoice ${d.number ? '#' + d.number : d.id} as dealt with` });
+        ctx.store.put(col, d.id, { ...d, payIssues: d.payIssues.map(x => (x.session === body.session ? { ...x, resolved: Date.now() } : x)) });
+        ctx.store.audit(ctx.user, 'stripe', { collection: col, id: d.id, summary: `marked a Stripe payment problem on ${col === 'estimates' ? 'estimate' : 'invoice'} ${d.number ? '#' + d.number : d.id} as dealt with` });
       });
       return { ok: true, rev: ctx.bump() };
     }],
     // ---------- logo on invoices ----------
     ['PUT', /^\/logo$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       const body = (await readJson(req, 3 * 1024 * 1024)) || {};
       const data = Buffer.from(String(body.data || ''), 'base64');
       if (!(data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)) throw new ValidationError('Choose a JPEG or PNG image for the logo.');
@@ -1530,7 +1762,7 @@ function createApp(opts) {
       return { ok: true, logoFile: fileId, rev: ctx.bump() };
     }],
     ['DELETE', /^\/logo$/, ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       const company = ctx.store.getSetting('company') || {};
       ctx.store.transaction(() => {
         if (company.logoFile) ctx.store.deleteFile(company.logoFile);
@@ -1575,6 +1807,7 @@ function createApp(opts) {
     }],
     ['POST', /^\/closing\/unlock$/, async (ctx, req) => {
       notClient(ctx.user);
+      if (!ROLES.editsSomething(ctx.user.perms)) throw new ValidationError('Your role doesn’t allow changes.', 403);
       const cl = ctx.store.getSetting('closing') || {};
       if (!cl.date) return { ok: true };
       const body = (await readJson(req)) || {};
@@ -1594,15 +1827,15 @@ function createApp(opts) {
       return { ok: true, minutes: 15 };
     }],
     // Bank feeds for this company. Only the bookkeeper's team connects banks (each connection costs money each month).
-    ['GET', /^\/feeds$/, ctx => { notClient(ctx.user); return { configured: plaid.configured(), items: plaid.list(ctx.id) }; }],
+    ['GET', /^\/feeds$/, ctx => { notClient(ctx.user); needArea(ctx.user, 'banking', 'view'); return { configured: plaid.configured(), items: plaid.list(ctx.id) }; }],
     ['POST', /^\/feeds\/link$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const body = await readJson(req);
       const company = ctx.store.getSetting('company') || {};
       return { linkToken: await plaid.linkToken({ userId: ctx.user.id || ctx.user.username, lang: body.lang || company.lang, itemId: body.itemId ? String(body.itemId) : '', companyId: ctx.id }) };
     }],
     ['POST', /^\/feeds$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const body = await readJson(req);
       const c = reg.get(ctx.id);
       const item = await plaid.connect({ publicToken: body.publicToken, institution: body.institution, companyId: ctx.id, firmId: c && c.firmId, userName: ctx.user.name || ctx.user.username });
@@ -1610,7 +1843,7 @@ function createApp(opts) {
       return { item };
     }],
     ['PUT', /^\/feeds\/([A-Za-z0-9_]+)$/, async (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const body = await readJson(req);
       const links = {};
       for (const [k, v] of Object.entries(body.links || {})) {
@@ -1627,19 +1860,20 @@ function createApp(opts) {
       return { item };
     }],
     ['POST', /^\/feeds\/([A-Za-z0-9_]+)\/sync$/, async (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const r = await syncFeed(ctx.id, m[1], ctx.user);
       return { ...r, item: plaid.data.items[m[1]] ? plaid.publicItem(m[1]) : null, rev: ctx.rev };
     }],
-    ['POST', /^\/feeds\/([A-Za-z0-9_]+)\/reconnected$/, (ctx, req, m) => { notClient(ctx.user); return { item: plaid.reconnected(m[1], ctx.id) }; }],
+    ['POST', /^\/feeds\/([A-Za-z0-9_]+)\/reconnected$/, (ctx, req, m) => { notClient(ctx.user); needArea(ctx.user, 'banking'); return { item: plaid.reconnected(m[1], ctx.id) }; }],
     ['DELETE', /^\/feeds\/([A-Za-z0-9_]+)$/, async (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'banking');
       const name = plaid.item(m[1], ctx.id).institution;
       const r = await plaid.remove(m[1], ctx.id);
       ctx.store.audit(ctx.user, 'feed', { collection: 'settings', id: 'feeds', summary: `disconnected the ${name} bank feed` });
       return { ok: true, ...r };
     }],
     ['POST', /^\/bank\/import$/, async (ctx, req) => {
+      needArea(ctx.user, 'banking');
       const body = await readJson(req, 20 * 1024 * 1024);
       const result = ctx.store.transaction(() => {
         const r = importBankRows(ctx.store, body);
@@ -1650,7 +1884,7 @@ function createApp(opts) {
     }],
     // AI suggestions for bank lines waiting for review. Suggestions are saved on each line; nothing is added to the books.
     ['POST', /^\/ai\/suggest$/, async (ctx, req) => {
-      notClient(ctx.user); // AI costs money: only the bookkeeper's team uses it
+      notClient(ctx.user); // AI costs money: only the bookkeeper's team uses it needArea(ctx.user, 'banking');
       needFirmAi(ctx.id);
       const body = await readJson(req);
       if (!Array.isArray(body.ids) || !body.ids.length) throw new ValidationError('Choose the bank lines to suggest categories for.');
@@ -1670,6 +1904,7 @@ function createApp(opts) {
     }],
     // The AI assistant add-on: answers questions about these books. Read-only; see assistant.js.
     ['POST', /^\/assistant$/, async (ctx, req) => {
+      needArea(ctx.user, 'reports', 'view'); // it answers from the whole books
       const info = assistantInfo(ctx.id, ctx.store);
       if (!info.on) throw new ValidationError('The AI assistant isn’t turned on for this company. An owner can add it in Settings.', 403);
       if (!info.ready) throw new ValidationError('The AI assistant isn’t set up on this server yet. The server’s administrator adds the AI key in Settings.', 409);
@@ -1694,6 +1929,7 @@ function createApp(opts) {
     // Receipts: a photo or PDF sent from the Receipts screen (often a client's phone).
     ['POST', /^\/receipts$/, async (ctx, req) => {
       // Count every upload today (deleted ones too), so the daily limit can't be dodged.
+      needArea(ctx.user, 'expenses');
       const dayKey = 'receipts-sent:' + new Date().toISOString().slice(0, 10);
       const sentToday = Number(ctx.store.getMeta(dayKey) || 0);
       if (sentToday >= 300) throw new ValidationError('That’s 300 receipts today for this company. Send the rest tomorrow.', 429);
@@ -1719,6 +1955,33 @@ function createApp(opts) {
       if (canRead) queueRead(ctx.id, id);
       return { ok: true, id, rev: ctx.bump() };
     }],
+    // Receipts by email: this company's forwarding address, and who may send to it.
+    // The address goes with the Receipts inbox (Expenses); who may send to it, and a new address, are Settings.
+    ['GET', /^\/receipts\/email$/, ctx => {
+      notClient(ctx.user); if (!canArea(ctx.user, 'settings', 'view')) needArea(ctx.user, 'expenses', 'view');
+      const feature = featureOn(ctx.id, 'emailReceipts', ctx.store), cfg = ctx.store.getSetting('inboundEmail') || {};
+      if (feature && inSet.ready()) inSet.ensure(ctx.id);
+      return { feature, ready: inSet.ready(), address: feature ? inSet.address(ctx.id) : '', allowed: cfg.allowed || [], rejected: (cfg.rejected || []).slice(-10).reverse() };
+    }],
+    ['PUT', /^\/receipts\/email$/, async (ctx, req) => {
+      notClient(ctx.user); needArea(ctx.user, 'settings');
+      needFeature(ctx.id, 'emailReceipts', ctx.store);
+      const body = (await readJson(req)) || {};
+      const before = ctx.store.getSetting('inboundEmail') || {}, allowed = inbound.cleanAllowed(body.allowed);
+      ctx.store.transaction(() => {
+        ctx.store.putSetting('inboundEmail', { ...before, allowed });
+        ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'inboundEmail', summary: allowed.length ? `receipts by email: only from ${allowed.join(', ')}`.slice(0, 300) : 'receipts by email: from anyone' });
+      });
+      return { ok: true, allowed };
+    }],
+    ['POST', /^\/receipts\/email\/new$/, ctx => {
+      notClient(ctx.user); needArea(ctx.user, 'settings');
+      needFeature(ctx.id, 'emailReceipts', ctx.store);
+      if (!inSet.ready()) throw new ValidationError('Receipts by email aren’t set up on this server yet. Ask the server’s administrator.', 409);
+      inSet.rotate(ctx.id);
+      ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'inboundEmail', summary: 'receipts by email: new address made; the old one stopped working' });
+      return { ok: true, address: inSet.address(ctx.id) };
+    }],
     /* Questions about a transaction: the team asks, the client answers (or the other way round), the team resolves.
        A message from the client marks it answered; one from the team marks it waiting for the client. */
     ['POST', /^\/questions$/, async (ctx, req) => {
@@ -1726,6 +1989,7 @@ function createApp(opts) {
       const target = ['entries', 'docs', 'bankTxns'].includes(body.target) ? body.target : '';
       const rec = target && ctx.store.get(target, String(body.targetId || ''));
       if (!rec) throw new ValidationError('That transaction isn’t here any more.', 404);
+      needArea(ctx.user, ROLES.recordArea(target, rec), 'view');
       const text = String(body.text || '').trim().slice(0, 2000);
       if (!text) throw new ValidationError('Type your question.');
       if (ctx.store.list('questions').filter(q => q.status !== 'resolved').length >= 500) throw new ValidationError('There are 500 open questions already. Resolve some first.', 409);
@@ -1740,6 +2004,7 @@ function createApp(opts) {
     ['POST', /^\/questions\/([A-Za-z0-9-]+)\/(reply|resolve|reopen)$/, async (ctx, req, m) => {
       const q = ctx.store.get('questions', m[1]);
       if (!q) throw new ValidationError('That question isn’t here any more.', 404);
+      needArea(ctx.user, ROLES.recordArea(q.target, ctx.store.get(q.target, q.targetId)), 'view');
       const client = ctx.user.role === 'client';
       let next;
       if (m[2] === 'reply') {
@@ -1757,6 +2022,7 @@ function createApp(opts) {
     ['DELETE', /^\/questions\/([A-Za-z0-9-]+)$/, (ctx, req, m) => {
       notClient(ctx.user);
       const q = ctx.store.get('questions', m[1]);
+      if (q) needArea(ctx.user, ROLES.recordArea(q.target, ctx.store.get(q.target, q.targetId)));
       if (q) ctx.store.transaction(() => { ctx.store.delete('questions', q.id); ctx.store.audit(ctx.user, 'delete', { collection: 'questions', id: q.id, summary: `question on ${q.label}`, before: q }); });
       return { ok: true, rev: ctx.bump() };
     }],
@@ -1767,6 +2033,7 @@ function createApp(opts) {
       const target = body.target === 'docs' ? 'docs' : 'entries', targetId = String(body.targetId || '');
       const rec0 = ctx.store.get(target, targetId);
       if (!rec0) throw new ValidationError('Save the transaction first, then attach files to it.', 404);
+      needArea(ctx.user, ROLES.recordArea(target, rec0));
       if (ctx.store.list('attachments').filter(x => x.target === target && x.targetId === targetId).length >= 20) throw new ValidationError('That’s 20 files on this transaction already.', 409);
       const data = Buffer.from(String(body.data || ''), 'base64');
       if (!data.length) throw new ValidationError('That file is empty.');
@@ -1786,7 +2053,12 @@ function createApp(opts) {
     ['GET', /^\/files\/([A-Za-z0-9-]+)$/, (ctx, req, m, res) => {
       const f = ctx.store.getFile(m[1]);
       if (!f) throw new ValidationError('That file isn’t here any more.', 404);
-      const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[f.mediaType] || 'bin';
+      if (ctx.user.perms) { // a receipt is in Expenses; an attachment goes with its transaction (the logo is for everyone)
+        const at = ctx.store.list('attachments').find(x => x.fileId === m[1]);
+        if (at) needArea(ctx.user, ROLES.recordArea(at.target, ctx.store.get(at.target, at.targetId)), 'view');
+        else if (ctx.store.list('receipts').some(x => x.fileId === m[1])) needArea(ctx.user, 'expenses', 'view');
+      }
+      const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' }[f.mediaType] || 'bin';
       const safe = (f.name || 'receipt').replace(/[^A-Za-z0-9 ._-]+/g, '').replace(/\.[A-Za-z0-9]+$/, '').slice(0, 60) || 'receipt';
       res.writeHead(200, { 'Content-Type': f.mediaType, 'Content-Length': f.data.length, 'Content-Disposition': `inline; filename="${safe}.${ext}"`,
         'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin',
@@ -1795,7 +2067,7 @@ function createApp(opts) {
       res.end(f.data);
     }],
     ['POST', /^\/receipts\/([A-Za-z0-9-]+)\/read$/, (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'expenses');
       const r = ctx.store.get('receipts', m[1]);
       if (!r) throw new ValidationError('That receipt isn’t here any more.', 404);
       if (r.status !== 'inbox') throw new ValidationError('Only receipts waiting for review are read.', 409);
@@ -1807,7 +2079,7 @@ function createApp(opts) {
     }],
     // Read a receipt or bill with AI and return a draft. Nothing is saved; the file isn't kept.
     ['POST', /^\/ai\/read$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'expenses');
       needFirmAi(ctx.id);
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       ai.precheck(company); // before reading a large upload
@@ -1824,11 +2096,19 @@ function createApp(opts) {
       const body = await readJson(req, 60 * 1024 * 1024);
       if (!body || !Array.isArray(body.writes) || !body.writes.length) throw new ValidationError('There’s nothing to import.');
       if (body.writes.length > 100000) throw new ValidationError('That’s too much to import at once. Import the transaction history a year at a time.', 413);
+      // A spreadsheet import (Import data) only adds: products and services too, and never touches an existing record, accounts included.
+      const addOnly = body.addOnly === true;
+      const cols = addOnly ? ['accounts', 'contacts', 'items', 'entries', 'docs'] : ['accounts', 'contacts', 'entries', 'docs'];
+      const ids = new Set();
       for (const w of body.writes) {
-        if (!w || (w.collection !== 'accounts' && w.op === 'delete') || !['accounts', 'contacts', 'entries', 'docs'].includes(w.collection)) throw new ValidationError('An import can only add accounts, contacts, transactions and open invoices or bills.');
+        if (!w || ((addOnly || w.collection !== 'accounts') && w.op !== 'set') || !cols.includes(w.collection)) throw new ValidationError(addOnly ? 'An import can only add accounts, customers and vendors, products and services, invoices, bills and journal entries.' : 'An import can only add accounts, contacts, transactions and open invoices or bills.');
         // Only new contacts, transactions and bills; existing ones are never overwritten.
-        if (w.collection !== 'accounts' && w.op === 'set' && ctx.store.get(w.collection, String(w.id))) throw new ValidationError('An import can only add new records, not change existing ones.');
+        if ((addOnly || w.collection !== 'accounts') && w.op === 'set' && ctx.store.get(w.collection, String(w.id))) throw new ValidationError('An import can only add new records, not change existing ones.');
+        if (addOnly) { const k = w.collection + '/' + w.id; if (ids.has(k)) throw new ValidationError('The same record is listed twice in the import.'); ids.add(k); }
       }
+      // Custom roles: Edit in the area of every record the import adds (each is checked again as it's written, but
+      // saying so now means no copy of the books is made for an import that can't go ahead).
+      if (ctx.user.perms) for (const w of body.writes) needWrite(ctx.user, w.collection, w.op === 'set' ? w.data || {} : null, ctx.store.get(w.collection, String(w.id)));
       const snapDir = path.join(opts.dataDir, 'before-restore');
       fs.mkdirSync(snapDir, { recursive: true, mode: 0o700 });
       const snap = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: ctx.store.getSetting('company') };
@@ -1838,10 +2118,16 @@ function createApp(opts) {
       const mine = fs.readdirSync(snapDir).filter(f => f.startsWith(ctx.id + '-before-import-')).sort();
       for (const f of mine.slice(0, -10)) fs.rmSync(path.join(snapDir, f), { force: true });
       const counts = {};
+      // Bills brought over from other software were already approved (and often paid) there: approvals don't apply.
+      ctx.importing = true;
       ctx.store.transaction(() => {
         body.writes.forEach((w, i) => {
           try { applyWrite(ctx.store, w, ctx.user, ctx); } catch (e) {
-            if (e instanceof ValidationError) throw new ValidationError(`Item ${i + 1} (${w.collection}${w.data && (w.data.name || w.data.number || w.data.date) ? ': ' + String(w.data.name || w.data.number || w.data.date).slice(0, 60) : ''}): ${e.message}`, e.status);
+            if (e instanceof ValidationError) {
+              const x = new ValidationError(`Item ${i + 1} (${w.collection}${w.data && (w.data.name || w.data.number || w.data.date) ? ': ' + String(w.data.name || w.data.number || w.data.date).slice(0, 60) : ''}): ${e.message}`, e.status);
+              if (e.closedThrough) x.closedThrough = e.closedThrough; // so the app can offer to unlock the books and try again
+              throw x;
+            }
             throw e;
           }
           if (w.op === 'set') counts[w.collection] = (counts[w.collection] || 0) + 1;
@@ -1854,7 +2140,7 @@ function createApp(opts) {
     // Undo the chart of accounts an import brought in: removes the accounts the import created (not the
     // starter accounts it matched or renamed), but only those nothing uses. The rest stay and are listed.
     ['POST', /^\/accounts\/remove-imported$/, ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'accounting');
       const imported = ctx.store.list('accounts').filter(a => a.imported);
       if (!imported.length) throw new ValidationError('There are no imported accounts in these books.', 404);
       // Records that can name an account outside journal lines (items, bank rules, budgets, assets, payroll, settings).
@@ -1872,13 +2158,14 @@ function createApp(opts) {
       return { ok: true, rev: ctx.bump(), removed: removed.length, kept };
     }],
     ['POST', /^\/examples$/, ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needAllAreas(ctx.user, 'edit');
       if ((ctx.store.getSetting('closing') || {}).date) throw new ValidationError('These books are closed, so example data can’t be added. Try it in a new company.', 423);
       loadExamples(ctx.store);
       ctx.store.audit(ctx.user, 'examples', { summary: 'loaded example data' });
       return { ok: true, rev: ctx.bump() };
     }],
     ['GET', /^\/backup$/, (ctx, req, m, res) => {
+      needAllAreas(ctx.user, 'view'); // a backup is the whole books
       const s = state(ctx);
       const body = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: s.company };
       for (const c of COLLECTIONS) body[c] = s[c];
@@ -1930,24 +2217,117 @@ function createApp(opts) {
       return fxRate(cur, date);
     }],
     ['GET', /^\/audit$/, (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings', 'view');
       const q = new URL(req.url, 'http://x').searchParams;
-      return { rows: ctx.store.auditList({ before: q.get('before'), from: q.get('from'), to: q.get('to'), username: q.get('user'), collection: q.get('collection'), recordId: q.get('record'), limit: q.get('limit') }), users: ctx.store.auditUsers() };
+      const rows = ctx.store.auditList({ before: q.get('before'), from: q.get('from'), to: q.get('to'), username: q.get('user'), collection: q.get('collection'), recordId: q.get('record'), limit: q.get('limit') });
+      return { rows: rows.filter(r => auditVisible(ctx.user, r)), users: ctx.store.auditUsers() };
     }],
     ['GET', /^\/audit\/(\d+)$/, (ctx, req, m) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings', 'view');
       const r = ctx.store.auditList({ before: Number(m[1]) + 1, limit: 1, full: true })[0];
-      if (!r || r.seq !== Number(m[1])) throw new ValidationError('That change isn’t in the log.', 404);
+      if (!r || r.seq !== Number(m[1]) || !auditVisible(ctx.user, r)) throw new ValidationError('That change isn’t in the log.', 404);
       return r;
     }],
   ];
 
+  /* ---------- Receipts by email: the webhook the mail provider calls ----------
+     Answers 200 for anything the provider shouldn't send again (an unknown address, a sender that isn't allowed,
+     a company without the feature): the reason is in the answer and in that company's Settings → Receipts by email. */
+  const inboundHits = new Map(); // company -> { since, n }: emails in the last hour
+  function inboundRefuse(cid, from, reason) {
+    try {
+      const store = reg.store(cid), cfg = store.getSetting('inboundEmail') || {};
+      store.putSetting('inboundEmail', { ...cfg, rejected: [...(cfg.rejected || []), { at: Date.now(), from: String(from || '').slice(0, 200), reason }].slice(-20) });
+    } catch { /* the refusal is still answered */ }
+    return reason;
+  }
+  async function inboundEmail(req, secret) {
+    if (req.method !== 'POST' || !inSet.ready() || !inSet.secretOk(secret)) { req.resume(); return [404, { error: 'Not found' }]; }
+    const type = String(req.headers['content-type'] || '').toLowerCase();
+    if (!/^(application\/json|multipart\/form-data)/.test(type)) { req.resume(); return [415, { error: 'Send Postmark’s JSON or SendGrid’s form.' }]; }
+    if (Number(req.headers['content-length']) > inbound.LIMITS.request) { req.resume(); return [413, { error: 'That email is too large.' }]; }
+    const raw = await readRaw(req, inbound.LIMITS.request);
+    let mail;
+    if (type.startsWith('application/json')) { let j; try { j = JSON.parse(raw.toString('utf8')); } catch { return [400, { error: 'That isn’t valid JSON.' }]; } mail = inbound.fromPostmark(j); }
+    else mail = inbound.fromSendgrid(raw, req.headers['content-type']);
+    const cids = [...new Set(mail.recipients.map(a => inSet.companyFor(a)).filter(Boolean))].slice(0, 5);
+    if (!cids.length) return [200, { ok: false, ignored: 'No company has that address.' }];
+    const total = mail.attachments.reduce((t, a) => t + a.data.length, 0);
+    if (total > inbound.LIMITS.email) { cids.forEach(c => inboundRefuse(c, mail.fromEmail, 'The email was over 25 MB.')); return [413, { error: 'The attachments are over 25 MB.' }]; }
+    const out = [];
+    for (const cid of cids) {
+      try { out.push({ company: cid, ...(await inboundDeliver(cid, mail)) }); }
+      catch (e) { if (e.status === 429) return [429, { error: e.message }]; throw e; }
+    }
+    return [200, { ok: out.some(r => r.receipts && r.receipts.length), results: out }];
+  }
+  async function inboundDeliver(cid, mail) {
+    const c = reg.get(cid), f = c && auth.firm(c.firmId);
+    if (!c || c.archived || !f || f.status !== 'active') return { rejected: 'The company isn’t taking receipts.' };
+    const h = inboundHits.get(cid);
+    if (!h || Date.now() - h.since > 3600e3) inboundHits.set(cid, { since: Date.now(), n: 1 });
+    else if (++h.n > inbound.LIMITS.perHour) throw new ValidationError('Too many emails for this company this hour. Try again later.', 429);
+    if (inboundHits.size > 10000) for (const [k, v] of inboundHits) if (Date.now() - v.since > 3600e3) inboundHits.delete(k);
+    if (!featureOn(cid, 'emailReceipts')) return { rejected: inboundRefuse(cid, mail.fromEmail, 'Receipts by email aren’t part of this company’s plan.') };
+    if (licence.on && !licence.status().canChange) return { rejected: inboundRefuse(cid, mail.fromEmail, 'The books are view only until the licence is renewed.') };
+    if (firmNeedsPay(f) || coNeedsPay(c)) return { rejected: inboundRefuse(cid, mail.fromEmail, 'The Sumlora subscription needs attention.') };
+    const ctx = ctxFor(cid), cfg = ctx.store.getSetting('inboundEmail') || {};
+    if (!mail.fromEmail) return { rejected: inboundRefuse(cid, '', 'The email had no sender.') };
+    if (!inbound.senderAllowed(cfg.allowed, mail.fromEmail)) return { rejected: inboundRefuse(cid, mail.fromEmail, 'The sender isn’t on the list of allowed senders.') };
+    // The files that can be receipts: PDFs and photos (by their first bytes), not too big, not a signature logo.
+    const files = [], skipped = [];
+    for (const a of mail.attachments) {
+      const mediaType = inbound.sniffInbound(a.data);
+      if (!mediaType) { if (!a.inline) skipped.push(`${a.name || 'file'}: not a PDF or photo`); continue; }
+      if (a.inline && a.data.length < inbound.INLINE_MIN) continue;
+      if (a.data.length > inbound.LIMITS.attachment) { skipped.push(`${a.name || 'file'}: over 10 MB`); continue; }
+      if (files.length >= inbound.LIMITS.files) { skipped.push(`${a.name || 'file'}: more than ${inbound.LIMITS.files} files`); continue; }
+      files.push({ data: a.data, mediaType, name: a.name });
+    }
+    if (!files.length) {
+      if (skipped.length) return { rejected: inboundRefuse(cid, mail.fromEmail, `Nothing could be used: ${skipped.join('; ')}.`.slice(0, 300)), skipped };
+      const body = String(mail.text || '').trim() || inbound.htmlToText(mail.html);
+      if (!body) return { rejected: inboundRefuse(cid, mail.fromEmail, 'The email had no attachment and no text.') };
+      files.push({ data: inbound.bodyPdf(mail), mediaType: 'application/pdf', name: (mail.subject || 'Email receipt').slice(0, 100) + '.pdf' });
+    }
+    // The same daily limit as the Receipts screen.
+    const dayKey = 'receipts-sent:' + new Date().toISOString().slice(0, 10), sentToday = Number(ctx.store.getMeta(dayKey) || 0);
+    if (sentToday + files.length > 300) return { rejected: inboundRefuse(cid, mail.fromEmail, 'That’s 300 receipts today for this company.') };
+    const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+    let canRead = ai.status().configured && company.ai && firmAi(cid);
+    try { if (canRead) needFirmAi(cid); } catch { canRead = false; }
+    const who = { username: 'email', name: mail.fromName ? `${mail.fromName} (${mail.fromEmail})` : mail.fromEmail };
+    const ids = [];
+    ctx.store.transaction(() => {
+      ctx.store.putMeta(dayKey, sentToday + files.length);
+      for (const fl of files) {
+        const id = crypto.randomUUID(), fileId = crypto.randomUUID();
+        const fileName = String(fl.name || 'receipt').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').trim().slice(0, 120) || 'receipt';
+        // AI reads PDFs and the usual photo types; an iPhone's HEIC photo is kept for the bookkeeper to look at.
+        const readable = fl.mediaType !== 'image/heic';
+        const rec = { fileId, fileName, mediaType: fl.mediaType, size: fl.data.length, uploadedBy: '', uploadedByName: mail.fromEmail, uploadedAt: Date.now(),
+          readStatus: canRead && readable ? 'waiting' : 'off', readError: canRead && !readable ? 'AI can’t read HEIC photos. Open it to record it.' : '', status: 'inbox', note: '', entryId: '', docId: '',
+          source: 'email', emailFrom: mail.fromEmail, emailSubject: mail.subject.slice(0, 200) };
+        ctx.store.putFile(fileId, { mediaType: fl.mediaType, name: fileName, data: fl.data });
+        ctx.store.put('receipts', id, rec);
+        ctx.store.audit(who, 'add', { collection: 'receipts', id, summary: `Receipt emailed in from ${mail.fromEmail}`, after: rec });
+        ids.push({ id, readable });
+      }
+    });
+    for (const r of ids) if (canRead && r.readable) queueRead(cid, r.id);
+    ctx.bump();
+    return { receipts: ids.map(r => r.id), skipped };
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
+      const url = new URL(req.url, 'http://localhost');
+      // The mail provider's call: no session (nor the APP_PASSWORD prompt); the long secret in the address is the password.
+      const im = url.pathname.match(/^\/api\/inbound\/email\/([^/]*)$/);
+      if (im) { const [st, out] = await inboundEmail(req, im[1]); return sendJson(res, st, out); }
       if (opts.password && !authorized(req, opts.password)) {
         return send(res, 401, 'Sign in required', { 'WWW-Authenticate': 'Basic realm="Sumlora", charset="UTF-8"', 'Content-Type': 'text/plain' });
       }
-      const url = new URL(req.url, 'http://localhost');
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
         // Everything except signing in needs a signed-in user.
@@ -2085,6 +2465,21 @@ function sameOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return true; // non-browser clients (curl, tests)
   try { return new URL(origin).host === req.headers.host; } catch { return false; }
+}
+
+/** The request body as it came, up to a limit. */
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new ValidationError('That email is too large.', 413)); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }
 
 function readJson(req, limit = 5 * 1024 * 1024) {

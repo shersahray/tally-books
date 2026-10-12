@@ -58,7 +58,7 @@ async function readZip(buf) {
 /* ---------- the package ---------- */
 const ypSafe = s => String(s || '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80) || 'file';
 const ypCsv = rows => '﻿' + rows.map(r => r.map(v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\r\n');
-const YP_EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const YP_EXT = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' };
 /** The fiscal year-ends to offer: last year first. */
 function ypYearEnds() {
   const t = today(), thisEnd = fyEndOf(t), lastEnd = fyEndOf(addDays(fyStartOf(t), -1));
@@ -112,12 +112,12 @@ async function yearEndPackage(ye, { files = true } = {}) {
   try {
     const reps = [];
     for (const k of ['pl', 'bs', 'cf', 'tb']) {
-      Object.assign(S.rep, { tab: k, period: 'custom', from: fy, to: ye, compare: '' });
+      Object.assign(S.rep, { tab: k, period: 'custom', from: fy, to: ye, compare: '', basis: 'accrual', flt: null }); // accrual, like the trial balance and CaseWare export
       const x = ({ pl: rPL, bs: rBS, cf: rCF, tb: rTB })[k]();
       x.title = x.title || REPORT_TITLES[k](); x.sub = x.sub ?? (k === 'tb' ? `As of ${fmtDate(ye)}` : ''); reps.push(x);
     }
     statements = reportsPdf(reps, { cover: { title: 'Financial statements', sub: period, note: `Prepared from the books of ${co} in Sumlora on ${fmtDate(today())}. Not audited or reviewed.` } });
-    Object.assign(S.rep, { tab: 'gl', period: 'custom', from: fy, to: ye, acct: '' });
+    Object.assign(S.rep, { tab: 'gl', period: 'custom', from: fy, to: ye, acct: '', basis: 'accrual', flt: null });
     gl = rGL().csv;
   } finally { Object.assign(S.rep, keep); }
   out.push({ name: `2 Financial statements ${tag}.pdf`, data: statements });

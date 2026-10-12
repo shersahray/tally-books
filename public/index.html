@@ -43,6 +43,7 @@
           <button data-new="transfer">Transfer</button>
           <button data-new="journal">Journal entry</button>
           <button data-new="import">Import bank statement</button>
+          <button data-new="dataimport">Import data</button>
           <button data-new="payrun">Run payroll</button>
         </div>
         <div class="col"><h4>Lists</h4>
@@ -55,7 +56,7 @@
     <nav class="nav" id="nav" aria-label="Sections">
       <button data-view="dashboard">Dashboard</button>
       <button data-view="sales">Sales <span class="count" id="odCount" hidden></span></button>
-      <button data-view="expenses">Expenses</button>
+      <button data-view="expenses">Expenses <span class="count" id="apCount" hidden></span></button>
       <button data-view="projects">Projects</button>
       <button data-view="yard" hidden>Scrap yard</button>
       <button data-view="receipts">Receipts <span class="count info" id="rcCount" hidden></span></button>
@@ -81,6 +82,8 @@
 <script src="fr.js"></script>
 <script src="gifi.js"></script>
 <script src="plans.js"></script>
+<script src="roles.js"></script>
+<script src="tags.js"></script>
 <script src="industries.js"></script>
 <script src="accountlib.js"></script>
 <script src="logo.js"></script>
@@ -89,18 +92,26 @@
 <script src="fx.js"></script>
 <script src="coa.js"></script>
 <script src="banking.js"></script>
+<script src="tags-ui.js"></script>
 <script src="ai.js"></script>
 <script src="assistant.js"></script>
 <script src="receipts.js"></script>
 <script src="convert-parse.js"></script>
 <script src="convert.js"></script>
+<script src="importer.js"></script>
+<script src="dataimport.js"></script>
 <script src="pdf.js"></script>
+<script src="batch.js"></script>
 <script src="docout.js"></script>
+<script src="recurring-calc.js"></script>
+<script src="deposits-calc.js"></script>
 <script src="sales-extras.js"></script>
 <script src="items.js"></script>
 <script src="inventory.js"></script>
 <script src="budgets.js"></script>
 <script src="purchasing.js"></script>
+<script src="approvals.js"></script>
+<script src="bill-approvals.js"></script>
 <script src="projects.js"></script>
 <script src="assets.js"></script>
 <script src="scrapyard.js"></script>
@@ -109,7 +120,11 @@
 <script src="invoicing.js"></script>
 <script src="yearend.js"></script>
 <script src="salestax.js"></script>
+<script src="cashbasis.js"></script>
+<script src="report-filters.js"></script>
 <script src="reports.js"></script>
+<script src="forecast.js"></script>
+<script src="cashforecast.js"></script>
 <script src="review.js"></script>
 <script src="payroll-calc.js"></script>
 <script src="payroll-dd.js"></script>

@@ -7,7 +7,8 @@
   'use strict';
   const DATA = window.__TALLY_DEMO__;
   const PROVS = DATA.provinces, DEFAULT_ACCOUNTS = DATA.defaultAccounts;
-  const COLS = ['accounts', 'contacts', 'employees', 'rules', 'recurring', 'docs', 'estimates', 'entries', 'bankTxns', 'recons', 'filings', 'payruns'];
+  // Every list in the books (src/server/db.js COLLECTIONS), so products, projects, purchase orders and the rest can be added too.
+  const COLS = ['accounts', 'contacts', 'items', 'budgets', 'trips', 'pos', 'projects', 'times', 'assets', 'vehicles', 'employees', 'rules', 'recurring', 'docs', 'estimates', 'entries', 'bankTxns', 'recons', 'filings', 'payruns', 'receipts', 'attachments', 'questions'];
   const clone = o => JSON.parse(JSON.stringify(o));
   const cos = DATA.companies.map(c => ({ ...c.entry }));
   const books = {};
@@ -51,6 +52,13 @@
       if (w.collection === 'employees' && b.payruns.some(r => r.lines.some(l => l.employeeId === w.id))) throw new ApiError(409, 'This employee has been paid, so they can’t be deleted. Mark them inactive instead.');
       if (w.collection === 'docs' && b.entries.some(e => e.applyTo === w.id)) throw new ApiError(409, 'Delete the payments on this invoice or bill first.');
     }
+  }
+  // Bill approvals, as the server decides them (approvals.js), so the demo shows bills waiting for approval.
+  function demoApproval(b, w) {
+    if (w.op !== 'set' || w.collection !== 'docs' || !w.data || w.data.kind !== 'bill' || typeof TallyApprovals === 'undefined') return;
+    const prev = b.docs.find(x => x.id === w.id) || null, s = b.company.approvals;
+    const a = TallyApprovals.onSave(prev, w.data, s, TallyApprovals.active(s, true), { username: 'demo', name: 'Demo user' });
+    w.data = { ...w.data }; if (a) w.data.approval = a; else delete w.data.approval;
   }
   function apply(b, w) {
     check(b, w);
@@ -103,6 +111,7 @@
     { id: 'd2', name: 'Birch Bookkeeping (example)', email: '', plan: 'essentials', kind: 'firm', maxCompanies: 10, period: 'monthly', until: new Date(Date.now() + 12 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 353 * day).toISOString().slice(0, 10), note: 'Paid by e-transfer', code: 'TB1-DEMO.example-code-not-real' },
   ] };
   let auditSeq = 0;
+  let demoRoles = [{ id: 'r_ar', name: 'Accounts receivable clerk (example)', perms: { sales: 'edit', expenses: 'view', banking: 'none', payroll: 'none', reports: 'view', accounting: 'none', salestax: 'none', settings: 'none' } }];
   function route(url, method, body) {
     const path = url.split('?')[0];
     if (path === '/api/health') return { ok: true };
@@ -130,7 +139,18 @@
     }
     if (path.startsWith('/api/licences')) throw new ApiError(400, 'Your licence key is made in your own copy of Sumlora, not in the demo.');
     if (path === '/api/auth/logout') return { ok: true };
-    if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480, firm: demoFirms[0] };
+    if (path === '/api/users' && method === 'GET') return { users: [demoUser], idleMinutes: 480, firm: demoFirms[0], roles: demoRoles.map(r => ({ ...r, users: 0 })), customRoles: true };
+    // Custom roles (roles.js), kept until the page reloads.
+    if (path === '/api/roles' && method === 'GET') return { roles: demoRoles.map(r => ({ ...r, users: 0 })), available: true };
+    if (path === '/api/roles' && method === 'POST') { const r = { id: 'r_' + Date.now().toString(36), ...TallyRoles.cleanRole(body, demoRoles) }; demoRoles.push(r); return { ok: true, role: r }; }
+    m0 = path.match(/^\/api\/roles\/([^/]+)$/);
+    if (m0) {
+      const r = demoRoles.find(x => x.id === m0[1]);
+      if (!r) throw new ApiError(404, 'That role doesn’t exist.');
+      if (method === 'DELETE') { demoRoles = demoRoles.filter(x => x !== r); return { ok: true }; }
+      Object.assign(r, TallyRoles.cleanRole(body, demoRoles.filter(x => x !== r)));
+      return { ok: true, role: r };
+    }
     if (path === '/api/security/log') return { log: [] };
     // Firms: two made-up firms so the administrator's page has something to show. Changes last until the page reloads.
     if (path === '/api/firm') {
@@ -158,6 +178,15 @@
       if (method === 'GET') return { configured: true, demo: true, model: 'claude-haiku-4-5', capUsd: 20, spentUsd: 0, linesThisMonth: 0, source: 'env', keyHint: '(demo)', models: [{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (lowest cost)' }, { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (more accurate)' }] };
       throw new ApiError(400, 'AI settings aren’t available in the demo.');
     }
+    // Monthly invoices to firms (Firms page): nobody to bill in the demo.
+    if (path === '/api/invoicing') {
+      if (method === 'GET') return { companyId: '', tax: true, companies: cos.filter(c => !c.archived).map(c => ({ id: c.id, name: c.name })), amounts: {}, plans: typeof TallyPlans !== 'undefined' ? TallyPlans.PLANS : {}, addons: typeof TallyPlans !== 'undefined' ? TallyPlans.ADDONS : {}, customers: [] };
+      throw new ApiError(400, 'Billing firms isn’t available in the demo, because nothing in it is saved.');
+    }
+    if (path === '/api/inbound') {
+      if (method === 'GET') return { admin: true, on: false, domain: '', secret: '', ready: false, addresses: 0, webhook: '' };
+      throw new ApiError(400, 'Receipts by email aren’t available in the demo, because nothing in it is saved.');
+    }
     if (path === '/api/companies' && method === 'GET') return { companies: cos.map(summary), provinces: PROVS, pendingFirms: demoFirms.filter(f => f.status === 'pending').length };
     if (path === '/api/companies' && method === 'POST') return { ok: true, company: summary(createCompany(body)) };
     let m = path.match(/^\/api\/companies\/([^/]+)$/);
@@ -179,9 +208,11 @@
     if (am) { const row = log.find(x => x.seq === Number(am[1])); if (!row) throw new ApiError(404, 'Not found'); return row; }
     if (rest === '/state') return { ...clone(b), companyId: id };
     let r = rest.match(/^\/records\/([A-Za-z]+)\/([^/]+)$/);
-    if (r && method === 'PUT') { const w0 = { op: 'set', collection: r[1], id: decodeURIComponent(r[2]), data: body }; note(w0); return transact(id, w => apply(w, w0)); }
+    if (r && method === 'PUT') { const w0 = { op: 'set', collection: r[1], id: decodeURIComponent(r[2]), data: body }; demoApproval(b, w0); note(w0); return transact(id, w => apply(w, w0)); }
     if (r && method === 'DELETE') { const w0 = { op: 'delete', collection: r[1], id: decodeURIComponent(r[2]) }; note(w0); return transact(id, w => apply(w, w0)); }
-    if (rest === '/batch') { body.writes.forEach(note); return transact(id, w => body.writes.forEach(x => apply(w, x))); }
+    if (rest === '/batch') { body.writes.forEach(x => demoApproval(b, x)); body.writes.forEach(note); return transact(id, w => body.writes.forEach(x => apply(w, x))); }
+    // Import data (a spreadsheet) only adds records, so it works like a batch here.
+    if (rest === '/import' && body.addOnly) { body.writes.forEach(note); const out = transact(id, w => body.writes.forEach(x => apply(w, x))); const counts = {}; body.writes.forEach(x => { counts[x.collection] = (counts[x.collection] || 0) + 1; }); return { ...out, counts }; }
     if (rest === '/settings') { const out = transact(id, w => { w.company = { ...w.company, ...body }; }); cos.find(c => c.id === id).name = body.name; return out; }
     if (rest === '/bank/import') {
       let added = 0, skipped = 0; const seen = {};
@@ -211,20 +242,39 @@
       w.questions = (w.questions || []).map(q => q.id !== m[1] ? q : m[2] === 'reply' ? { ...q, status: 'open', thread: [...q.thread, { by: 'demo', name: 'Demo user', role: 'owner', at: Date.now(), text: String(body.text || '') }] } : { ...q, status: m[2] === 'resolve' ? 'resolved' : 'open' });
       if (method === 'DELETE') w.questions = w.questions.filter(q => q.id !== m[1]);
     });
+    // Receipts by email: a made-up address so the settings can be seen; nothing arrives in the demo.
+    if (rest === '/receipts/email' && method === 'GET') return { feature: true, ready: true, address: 'r-0d3m0a11ce5f00dbeefcafe12345678@receipts.example.com', allowed: [], rejected: [] };
+    if (rest.startsWith('/receipts/email')) throw new ApiError(400, 'Receipts by email aren’t available in the demo, because nothing in it is saved.');
     if (rest === '/receipts' || /^\/receipts\/[^/]+\/read$/.test(rest)) throw new ApiError(400, 'Sending receipts isn’t available in the demo, because nothing in it is saved. In Sumlora, receipts go to this screen from a phone or a computer.');
     if (rest === '/closing') { const out = transact(id, w => { w.company = { ...w.company, closingDate: body.date || '', closingPassword: body.password !== undefined ? !!body.password : !!w.company.closingPassword }; }); return out; }
     if (rest === '/closing/unlock') return { ok: true, minutes: 15 };
+    // Bill approvals: the demo user is the only owner, so they can approve their own bills.
+    if (rest === '/approvers') return { people: [] };
+    m = rest.match(/^\/approvals\/([^/]+)$/);
+    if (m && method === 'POST') {
+      const d = b.docs.find(x => x.id === decodeURIComponent(m[1]));
+      if (!d || !d.approval) throw new ApiError(404, 'That bill doesn’t exist.');
+      if (body.action === 'reject' && !String(body.comment || '').trim()) throw new ApiError(400, 'Say why the bill is rejected, so the person who entered it knows what to fix.');
+      return transact(id, w => { const i = w.docs.findIndex(x => x.id === d.id); w.docs[i] = TallyApprovals.decide(w.docs[i], body.action, demoUser, String(body.comment || '').trim()); });
+    }
     if (rest === '/code') {
       if (!body.remove && !/^\d{4}$/.test(String(body.code))) throw new ApiError(400, 'The company code has to be 4 digits.');
       if (body.remove) delete codes[id]; else codes[id] = String(body.code);
       return transact(id, w => { w.company = { ...w.company, hasCode: !body.remove }; });
     }
     if (rest === '/code/check') { if (codes[id] && String(body.code) !== codes[id]) throw new ApiError(403, 'That code isn’t right for this company.'); return { ok: true }; }
+    if (rest === '/docs/mark-sent') {
+      const ids = new Set((body.docIds || []).map(String)), docs = b.docs.filter(d => ids.has(d.id));
+      if (!docs.length) throw new ApiError(400, 'Pick at least one invoice.');
+      if (docs.some(d => d.kind !== 'invoice')) throw new ApiError(400, 'Only invoices can be marked as sent.');
+      return { ...transact(id, w => { w.docs = w.docs.map(d => ids.has(d.id) ? { ...d, sent: [...(d.sent || []).slice(-19), { at: Date.now(), to: '', by: 'Demo user', what: 'marked' }] } : d); }), marked: docs.length };
+    }
     if (rest === '/mail' && method === 'GET') return { configured: false, sentToday: 0 };
     if (rest === '/pay' && method === 'GET') return { configured: false };
     if (rest.startsWith('/pay')) throw new ApiError(400, 'Card payments aren’t available in the demo, because nothing in it is saved.');
     if (rest.startsWith('/mail') || rest === '/logo') throw new ApiError(400, 'Email and logos aren’t available in the demo, because nothing in it is saved. You can still download invoices and statements as PDFs.');
     if (rest === '/import') throw new ApiError(400, 'Importing isn’t available in the demo, because nothing in it is saved. You can still choose files to see how they’re read and checked.');
+    if (rest === '/assistant') throw new ApiError(400, 'The AI assistant needs a Claude API key, so it isn’t available in the demo.');
     if (rest === '/ai/read') throw new ApiError(400, 'Reading receipts needs a Claude API key, so it isn’t available in the demo. Try “Suggest with AI” under Banking instead.');
     if (rest === '/ai/suggest') {
       if (!b.company.ai) throw new ApiError(409, 'AI suggestions are turned off for this company. Turn them on in Settings.');

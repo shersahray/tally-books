@@ -9,6 +9,8 @@
 //   "staff" works in the companies they're given (all of them if none are picked);
 //   "client" sees only the companies they're given, never all.
 //   Staff and clients can also be "view only": they can look but not change anything.
+//   On a plan with custom roles, a firm's owners define their own roles (None / View / Edit for each area of
+//   the books, see public/roles.js) and give one to a staff member instead of plain staff.
 // - Two-step sign-in: a 6-digit code from an authenticator app (TOTP, RFC 6238), with one-time
 //   recovery codes. Owners can require it for owners or for everyone.
 // - New users get a one-time invitation link to choose their own password; owners can also send
@@ -18,6 +20,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const PLANS = require('../../public/plans.js');
+const ROLESLIB = require('../../public/roles.js');
 const crypto = require('node:crypto');
 
 const COOKIE = 'tb_session';
@@ -288,10 +291,74 @@ class Auth {
     if (!u) return u;
     const twoStep = !!(u.totp && u.totp.enabled);
     const f = this.firm(u.firmId);
+    const cr = this.customRoleOf(u);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
+      customRole: cr ? cr.id : '', roleName: cr ? cr.name : '', perms: cr ? { ...cr.perms } : null, approveBills: !!(cr && cr.approveBills),
       firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: (this.planOverride && this.planOverride()) || (f ? PLANS.planOf(f.plan) : 'plus'), platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '', terms: u.terms ? { v: u.terms.v, at: u.terms.at } : null };
+  }
+  /**
+   * The custom role a staff member works under, or null (owners, clients, plain staff).
+   * A role that has gone missing gives no access at all rather than everything.
+   */
+  customRoleOf(u) {
+    if (!u || u.role !== 'staff' || !u.customRole) return null;
+    const f = this.firm(u.firmId);
+    return ((f && f.roles) || []).find(r => r.id === u.customRole) || { id: u.customRole, name: '?', perms: {} };
+  }
+  /** Is a plan feature in this firm's plan (or the desktop licence's)? */
+  firmHas(firmId, key) {
+    const f = this.firm(firmId);
+    return PLANS.inPlan((this.planOverride && this.planOverride()) || (f ? f.plan : 'plus'), key);
+  }
+  needCustomRoles(firmId) {
+    if (!this.firmHas(firmId, 'customRoles')) throw new AuthError(`${PLANS.FEATURES.customRoles.label} aren’t part of your firm’s plan.`, 403);
+  }
+  /** A custom role for a staff member, checked: it must be one of the firm's, and the plan must include custom roles. */
+  pickRole(firmId, id) {
+    const f = this.firm(firmId);
+    if (!((f && f.roles) || []).some(r => r.id === id)) throw new AuthError('That role doesn’t exist.', 404);
+    this.needCustomRoles(firmId);
+    return id;
+  }
+
+  /* ---------- custom roles (owners) ---------- */
+  roles(firmId) { const f = this.firm(firmId); return ((f && f.roles) || []).map(r => ({ ...r, users: this.firmUsers(firmId).filter(u => u.role === 'staff' && u.customRole === r.id).length })); }
+  addRole(data, actor) {
+    this.needCustomRoles(actor.firmId);
+    const f = this.firm(actor.firmId);
+    f.roles = f.roles || [];
+    if (f.roles.length >= ROLESLIB.MAX_ROLES) throw new AuthError(`A firm can have up to ${ROLESLIB.MAX_ROLES} roles.`, 400);
+    let r;
+    try { r = ROLESLIB.cleanRole(data, f.roles); } catch (e) { throw new AuthError(e.message, 400); }
+    r = { id: 'r_' + crypto.randomBytes(6).toString('hex'), ...r, created: Date.now() };
+    f.roles.push(r);
+    this.save();
+    this.log('role-added', { by: actor.username, role: r.name, perms: permText(r.perms, r) });
+    return r;
+  }
+  updateRole(id, data, actor) {
+    this.needCustomRoles(actor.firmId);
+    const f = this.firm(actor.firmId), r = ((f && f.roles) || []).find(x => x.id === id);
+    if (!r) throw new AuthError('That role doesn’t exist.', 404);
+    let next;
+    try { next = ROLESLIB.cleanRole(data, f.roles.filter(x => x.id !== id)); } catch (e) { throw new AuthError(e.message, 400); }
+    const before = permText(r.perms, r), oldName = r.name;
+    Object.assign(r, next);
+    this.save();
+    this.log('role-changed', { by: actor.username, role: r.name, ...(oldName !== r.name ? { was: oldName } : {}), perms: permText(r.perms, r), before });
+    return r;
+  }
+  removeRole(id, actor) {
+    const f = this.firm(actor.firmId), r = ((f && f.roles) || []).find(x => x.id === id);
+    if (!r) throw new AuthError('That role doesn’t exist.', 404);
+    const n = this.firmUsers(f.id).filter(u => u.role === 'staff' && u.customRole === id).length;
+    if (n) throw new AuthError(`${n} ${n === 1 ? 'person has' : 'people have'} this role. Give them another role first.`, 409);
+    f.roles = f.roles.filter(x => x.id !== id);
+    for (const u of this.firmUsers(f.id)) if (u.customRole === id) delete u.customRole; // owners or clients who once had it
+    this.save();
+    this.log('role-removed', { by: actor.username, role: r.name });
   }
   list(firmId) { return this.data.users.filter(u => u.firmId === firmId).map(u => this.publicUser(u)); }
   /** A user in the same firm as the person asking (anyone else counts as not existing). */
@@ -313,7 +380,7 @@ class Auth {
     return this.publicUser(this.byId(u.id));
   }
 
-  addUser({ name, username, password, role = 'staff', companies = [], mustChange = false, readOnly = false, invite = false, firmId, self = false }) {
+  addUser({ name, username, password, role = 'staff', companies = [], mustChange = false, readOnly = false, invite = false, firmId, self = false, customRole = '' }) {
     if (!firmId || !this.firm(firmId)) throw new AuthError('Choose the firm for this person.', 400);
     name = String(name || '').trim().slice(0, 80);
     username = cleanUsername(username);
@@ -323,7 +390,9 @@ class Auth {
     if (!ROLES.includes(role)) throw new AuthError('Role must be owner, staff or client.', 400);
     companies = Array.isArray(companies) ? companies.map(String) : [];
     if (role === 'client' && !companies.length) throw new AuthError('Choose the company this client can see.', 400);
-    const u = { id: 'u_' + crypto.randomBytes(8).toString('hex'), firmId, name, username, role, companies, readOnly: role !== 'owner' && !!readOnly, created: Date.now() };
+    if (customRole && role !== 'staff') throw new AuthError('Only staff can have a custom role.', 400);
+    if (customRole) this.pickRole(firmId, String(customRole));
+    const u = { id: 'u_' + crypto.randomBytes(8).toString('hex'), firmId, name, username, role, companies, readOnly: role !== 'owner' && !!readOnly, created: Date.now(), ...(customRole ? { customRole: String(customRole) } : {}) };
     let link = '';
     if (invite) { link = this.setLink(u, 'invite'); }
     else if (this.forced2fa !== 'off' && this.data.users.length && !self) {
@@ -411,6 +480,12 @@ class Auth {
   updateUser(id, patch, actor) {
     const u = this.inFirm(id, actor);
     this.guardAdmin(u, actor);
+    const roleLabel = () => { const cr = this.customRoleOf(u); return cr ? cr.name : u.role[0].toUpperCase() + u.role.slice(1); };
+    const roleBefore = roleLabel();
+    // A custom role is checked before anything changes (staff only, one of the firm's, and in the plan).
+    const wantRole = patch.customRole !== undefined ? String(patch.customRole || '') : '';
+    if (wantRole && (patch.role !== undefined ? patch.role : u.role) !== 'staff') throw new AuthError('Only staff can have a custom role.', 400);
+    if (wantRole && wantRole !== u.customRole) this.pickRole(u.firmId, wantRole);
     const lastAdmin = u.platformAdmin && this.activeAdmins().length <= 1;
     if (patch.platformAdmin !== undefined) {
       if (!actor.platformAdmin) throw new AuthError('Only the server’s administrator can do that.', 403);
@@ -433,6 +508,8 @@ class Auth {
     if (u.role === 'client' && !(u.companies || []).length) throw new AuthError('Choose the company this client can see.', 400);
     if (patch.readOnly !== undefined) u.readOnly = !!patch.readOnly;
     if (u.role === 'owner') u.readOnly = false;
+    if (patch.customRole !== undefined) { if (wantRole) u.customRole = wantRole; else delete u.customRole; }
+    if (u.role !== 'staff') delete u.customRole; // owners and clients don't have one
     if (patch.reset2fa) {
       if (u.id === actor.id) throw new AuthError('Turn off your own two-step sign-in from Account instead.', 409);
       delete u.totp; delete u.totpPending;
@@ -456,7 +533,10 @@ class Auth {
       this.clearFailures(u.username);
     }
     this.save();
-    this.log('user-changed', { username: u.username, by: actor.username, changes: Object.keys(patch).filter(k => k !== 'password').concat(patch.password !== undefined ? ['password'] : []) });
+    // A change of role (owner, staff, client, or a custom role) is written out in full in the sign-in activity.
+    const roleAfter = roleLabel();
+    this.log('user-changed', { username: u.username, by: actor.username, changes: Object.keys(patch).filter(k => k !== 'password').concat(patch.password !== undefined ? ['password'] : []),
+      ...(roleAfter !== roleBefore ? { roleWas: roleBefore, roleNow: roleAfter } : {}) });
     return this.publicUser(u);
   }
 
@@ -666,6 +746,9 @@ class Auth {
     this.save();
   }
 }
+
+/** "Sales: edit, Expenses: view" for the sign-in activity log. */
+const permText = (p, r) => Object.keys(ROLESLIB.AREAS).map(a => `${ROLESLIB.AREAS[a].label}: ${(p && p[a]) || 'none'}`).join(', ') + (r && r.approveBills ? ', approves bills' : '');
 
 function readCookie(req, name) {
   const h = req.headers.cookie || '';

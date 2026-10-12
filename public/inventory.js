@@ -41,11 +41,12 @@ function invCosts(kind,c,date,docId){
 /** The ledger lines that move the cost of inventory sold (or returned) between the asset and cost of goods sold. */
 function invCostLines(kind,ls){
   const g={};
-  for(const l of ls){const it=invItem(l.item);if(!it||!+l.cost)continue;const k=it.cogsAccount+'|'+it.assetAccount;g[k]=r2((g[k]||0)+(+l.cost))}
+  // With classes on each line, the cost of goods sold goes to the sale line's class (the inventory asset doesn't need one).
+  for(const l of ls){const it=invItem(l.item);if(!it||!+l.cost)continue;const k=it.cogsAccount+'|'+it.assetAccount+(l.cls!=null?'|'+l.cls:'');g[k]=r2((g[k]||0)+(+l.cost))}
   const out=[];
-  for(const[k,v]of Object.entries(g)){const[cogs,asset]=k.split('|');
-    if(kind==='credit')out.push({account:asset,debit:v,credit:0,memo:'Inventory returned'},{account:cogs,debit:0,credit:v,memo:'Inventory returned'});
-    else out.push({account:cogs,debit:v,credit:0,memo:'Cost of goods sold'},{account:asset,debit:0,credit:v,memo:'Cost of goods sold'})}
+  for(const[k,v]of Object.entries(g)){const[cogs,asset,cls]=k.split('|'),c=cls!==undefined?{cls}:{};
+    if(kind==='credit')out.push({account:asset,debit:v,credit:0,memo:'Inventory returned'},{account:cogs,debit:0,credit:v,memo:'Inventory returned',...c});
+    else out.push({account:cogs,debit:v,credit:0,memo:'Cost of goods sold',...c},{account:asset,debit:0,credit:v,memo:'Cost of goods sold'})}
   return out;
 }
 

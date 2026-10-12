@@ -81,15 +81,16 @@ function rcStatus(r){
   return m.length?`<span class="pill paid">Match found</span>`:`<span class="pill open">To review</span>`;
 }
 function rcCard(r){
-  const d=r.draft&&Array.isArray(r.draft.lines)?r.draft:null,img=r.mediaType!=='application/pdf';
-  const thumb=img?`<img src="${rcUrl(r)}" alt="" loading="lazy">`:`<span class="pdf">PDF</span>`;
+  const d=r.draft&&Array.isArray(r.draft.lines)?r.draft:null,img=r.mediaType!=='application/pdf'&&r.mediaType!=='image/heic';
+  const thumb=img?`<img src="${rcUrl(r)}" alt="" loading="lazy">`:`<span class="pdf">${r.mediaType==='image/heic'?'HEIC':'PDF'}</span>`;
   const m=!rcIsClient()&&r.status==='inbox'&&r.readStatus==='read'?rcMatches(r)[0]:null;
   const linked=r.entryId?S.entries.find(e=>e.id===r.entryId):null,doc=r.docId?S.docs.find(x=>x.id===r.docId):null;
   return `<button class="rc-card" data-rc="${r.id}">
     <span class="rc-thumb">${thumb}</span>
     <span class="rc-body"><b translate="no">${esc(rcTitle(r))}</b>
-      <span class="rc-meta">${d&&d.total?`<span class="amt">${money(d.total)}</span> · `:''}${d&&d.date?fmtDate(d.date):`Sent on ${fmtDate(rcDay(r.uploadedAt))}`}${!rcIsClient()&&r.uploadedByName?` · <span translate="no">${esc(r.uploadedByName)}</span>`:''}</span>
+      <span class="rc-meta">${d&&d.total?`<span class="amt">${money(d.total)}</span> · `:''}${d&&d.date?fmtDate(d.date):`<span>${r.source==='email'?'Emailed in on':'Sent on'} ${fmtDate(rcDay(r.uploadedAt))}</span>`}${!rcIsClient()&&r.uploadedByName?` · <span translate="no">${esc(r.uploadedByName)}</span>`:''}</span>
       ${r.note?`<span class="rc-note" translate="no">${esc(r.note)}</span>`:''}
+      ${r.source==='email'&&r.emailSubject?`<span class="rc-note"><span>Email:</span> <span translate="no">${esc(r.emailSubject)}</span></span>`:''}
       ${m?`<span class="rc-match">${m.kind==='bank'?'Bank line':m.kind==='doc'?'Unpaid bill':'Already recorded'}: <span translate="no">${esc(m.label)}</span> · ${fmtDate(m.date)}</span>`:''}
       ${linked?`<span class="rc-match"><span>${TLABEL[linked.type]||linked.type}</span> · ${fmtDate(linked.date)}</span>`:doc?`<span class="rc-match"><span>Bill</span>${doc.number?` <span translate="no">#${esc(doc.number)}</span>`:''} · ${fmtDate(doc.date)}</span>`:''}
       ${r.readStatus==='failed'&&!rcIsClient()?`<span class="rc-err">${esc(r.readError||'Reading failed.')}</span>`:''}
@@ -109,15 +110,15 @@ function vReceipts(){
     </div>`;
   const help=cl?'Take a photo of each receipt or bill. It goes straight to your bookkeeper, who records it and keeps it with your books.'
     :(typeof aiOn==='function'&&aiOn()?'Receipts sent here, from your phone or your clients’, are read by AI and matched to your books. Review each one to record it.':'Receipts sent here, from your phone or your clients’, wait for you to record them. Turn on AI suggestions in Settings to have them read and matched automatically.');
-  return head('Receipts',esc(help))+snap+`<div class="tabs" role="tablist">${tabs.map(([k,v])=>`<button role="tab" data-rcshow="${k}" aria-selected="${B.show===k}">${v} (${counts[k]||0})</button>`).join('')}</div>
+  return head('Receipts',esc(help))+snap+rcMailLine()+`<div class="tabs" role="tablist">${tabs.map(([k,v])=>`<button role="tab" data-rcshow="${k}" aria-selected="${B.show===k}">${v} (${counts[k]||0})</button>`).join('')}</div>
     <div class="rc-list">${rows.length?rows.map(rcCard).join(''):`<div class="panel"><div class="empty"><b>${B.show==='inbox'?(cl?'Nothing sent yet':'No receipts to review'):'Nothing here yet'}</b>${B.show==='inbox'?(cl?'Receipts you send appear here until your bookkeeper records them.':'Receipts you or your clients send appear here.'):''}</div></div>`}</div>`;
 }
 
 /* ---------- review ---------- */
 function rcModal(r){
-  const cl=rcIsClient(),d=r.draft&&Array.isArray(r.draft.lines)?r.draft:null,img=r.mediaType!=='application/pdf';
+  const cl=rcIsClient(),d=r.draft&&Array.isArray(r.draft.lines)?r.draft:null,img=r.mediaType!=='application/pdf'&&r.mediaType!=='image/heic';
   const own=r.uploadedBy===(ME&&ME.username)&&r.status==='inbox'&&!r.entryId&&!r.docId&&!r.wasAttached;
-  const pic=img?`<a href="${rcUrl(r)}" target="_blank" rel="noopener" class="rc-big"><img src="${rcUrl(r)}" alt="Receipt"></a>`:`<a class="btn" href="${rcUrl(r)}" target="_blank" rel="noopener">Open the PDF</a>`;
+  const pic=img?`<a href="${rcUrl(r)}" target="_blank" rel="noopener" class="rc-big"><img src="${rcUrl(r)}" alt="Receipt"></a>`:`<a class="btn" href="${rcUrl(r)}" target="_blank" rel="noopener">${r.mediaType==='image/heic'?'Download the photo (HEIC)':'Open the PDF'}</a>`;
   let info='';
   if(d){
     const conf={high:'High',medium:'Medium',low:'Low'}[d.confidence]||'Low';
@@ -140,7 +141,8 @@ function rcModal(r){
       :(d?`<div class="muted" style="font-size:13px">No matching transaction or bank line yet. If the bank statement isn’t imported yet, the match shows up once it is.</div>`:'');
   }
   const note=cl&&own||!cl&&r.status==='inbox'?`<div class="field"><label for="rcNote">Note</label><input type="text" id="rcNote" maxlength="500" value="${esc(r.note||'')}" placeholder="${cl?'For example: lunch with a client':'A note about this receipt'}"></div>`:(r.note?`<div class="muted" translate="no">${esc(r.note)}</div>`:'');
-  const sent=`<div class="muted" style="font-size:12.5px">Sent ${fmtDate(rcDay(r.uploadedAt))}${r.uploadedByName?` by <span translate="no">${esc(r.uploadedByName)}</span>`:''}</div>`;
+  const sent=r.source==='email'?`<div class="muted" style="font-size:12.5px"><span>Emailed in on ${fmtDate(rcDay(r.uploadedAt))} by</span> <span translate="no">${esc(r.emailFrom||'')}</span>${r.emailSubject?`<br><span>Subject:</span> <span translate="no">${esc(r.emailSubject)}</span>`:''}</div>`
+    :`<div class="muted" style="font-size:12.5px">Sent ${fmtDate(rcDay(r.uploadedAt))}${r.uploadedByName?` by <span translate="no">${esc(r.uploadedByName)}</span>`:''}</div>`;
   const linked=r.entryId?S.entries.find(e=>e.id===r.entryId):null,doc=r.docId?S.docs.find(x=>x.id===r.docId):null;
   const body=`<div class="rc-review"><div class="rc-pic">${pic}</div><div class="rc-side">${info}${acts}${note}${sent}</div></div>`;
   let foot='';
@@ -195,3 +197,76 @@ function bindReceipts(m){
 }
 // A small "View receipt" link for transaction and bill forms.
 function rcLinkFor(x){const r=x&&x.receiptId&&S.receipts.find(y=>y.id===x.receiptId);return r?`<a class="btn sm" href="${rcUrl(r)}" target="_blank" rel="noopener">View receipt</a>`:''}
+
+/* ---------- Receipts by email ----------
+   Each company has its own address; anything forwarded to it lands in the inbox above, like a phone photo.
+   A mail service (Postmark or SendGrid) receives the email and passes it to the server; the administrator
+   sets that up once for the whole server. */
+let RCM=null,rcmFor=null,rcmTried=0,INB=null,inbTried=0;
+async function loadRcMail(){
+  if(!CO||!ME||ME.role==='client')return;
+  const co=CO;let r;try{r=await api('GET','/api/receipts/email')}catch(e){r={unavailable:true}}
+  if(co===CO){RCM=r;rcmFor=co}
+}
+async function loadInbound(){try{INB=await api('GET','/api/inbound')}catch(e){INB={unavailable:true}}}
+const rcCopy=async text=>{try{await navigator.clipboard.writeText(text);toast('Copied')}catch(e){toast('Select the text and copy it instead.',true)}};
+/** One line on the Receipts screen: where to forward receipts. */
+function rcMailLine(){
+  if(rcIsClient()||!RCM||RCM.unavailable||rcmFor!==CO||!RCM.address)return '';
+  return `<div class="muted" style="font-size:13px;margin:-4px 0 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span>Or forward receipts by email to</span> <b class="mono" translate="no" style="word-break:break-all">${esc(RCM.address)}</b> <button type="button" class="btn sm ghost" data-rcmcopy>Copy</button></div>`;
+}
+/** Settings: this company's forwarding address and who may send to it. */
+function rcMailPanel(){
+  if(!ME||ME.role==='client'||!RCM||RCM.unavailable||rcmFor!==CO)return '';
+  const ro=ME.readOnly||!perm('settings','edit');
+  const box=c=>`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Receipts by email</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">${c}</div></div>`;
+  if(!RCM.feature)return box(`<div class="muted" style="font-size:13px"><span class="pill quiet">${esc(T('In the Plus plan'))}</span> <span>Give this company its own email address, so receipts and bills forwarded to it go straight to the Receipts inbox.</span></div>`);
+  if(!RCM.ready)return box('<div class="muted" style="font-size:13px">Receipts by email aren’t set up on this server yet. The server’s administrator turns them on in Settings.</div>');
+  const rej=(RCM.rejected||[]).slice(0,5);
+  return box(`<div class="muted" style="font-size:13px">${typeof aiOn==='function'&&aiOn()?'Forward receipts and bills to this address, or give it to your client. PDF and photo attachments go to Receipts and are read by AI. An email with no attachment is kept as a PDF of its text.':'Forward receipts and bills to this address, or give it to your client. PDF and photo attachments go to Receipts. An email with no attachment is kept as a PDF of its text.'}</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b class="mono" translate="no" style="font-size:14px;word-break:break-all">${esc(RCM.address)}</b><button type="button" class="btn sm" data-rcmcopy>Copy</button>${ro?'':'<button type="button" class="btn sm ghost" data-rcmnew>Make a new address</button>'}</div>
+    ${fld('rcmAllowed','Only accept email from (optional)',`<textarea id="rcmAllowed" rows="3" spellcheck="false" translate="no" placeholder="name@example.com&#10;@clientcompany.ca" ${ro?'disabled':''}>${esc((RCM.allowed||[]).join('\n'))}</textarea><span class="hint">One address per line, or @domain.com for everyone there. Leave it empty to accept email from anyone who has the address.</span>`)}
+    ${ro?'':'<div class="actions"><button type="button" class="btn primary" data-rcmsave>Save allowed senders</button></div>'}
+    ${rej.length?`<div><span class="flabel">Recently refused</span>${rej.map(x=>`<div class="muted" style="font-size:12.5px">${fmtDate(rcDay(x.at))} · <span translate="no">${esc(x.from||'')}</span> · <span>${esc(x.reason)}</span></div>`).join('')}</div>`:''}`);
+}
+/** Settings, for the server's administrator: the domain and the webhook address for the mail service. */
+function inboundPanel(){
+  if(!INB||INB.unavailable||!INB.admin)return '';
+  const steps=[
+    ['Postmark',['Create a server at postmarkapp.com and open its Default Inbound Stream, then Settings.','Paste the webhook address below as the inbound webhook URL. Leave “Include raw email content” unticked.','Under Inbound domain forwarding, enter the domain below, and add the MX record Postmark shows (inbound.postmarkapp.com) at your domain’s DNS provider.']],
+    ['SendGrid',['At your domain’s DNS provider, add an MX record for the domain below pointing to mx.sendgrid.net (priority 10).','In SendGrid, open Settings → Inbound Parse → Add Host & URL. Enter the domain and paste the webhook address below.','Leave “POST the raw, full MIME message” unticked.']],
+  ];
+  return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Receipts by email (server)</h3><div class="pad" style="display:flex;flex-direction:column;gap:14px">
+    <div class="muted" style="font-size:13px">Each company gets its own address on this domain. A server can’t receive email by itself, so a mail service (Postmark or SendGrid) receives it and passes each email to Sumlora through the webhook address below. Use a domain or subdomain that does nothing else, such as receipts.yourfirm.ca.</div>
+    <div>${INB.ready?`<span class="pill paid">On</span> <span>Companies with an address: ${INB.addresses}</span>`:'<span class="pill quiet">Off</span> <span>Turn it on once the mail service is set up.</span>'}</div>
+    <div class="fields">${fld('inbDomain','Domain that receives the email',`<input type="text" id="inbDomain" value="${esc(INB.domain||'')}" placeholder="receipts.yourfirm.ca" spellcheck="false" autocomplete="off" translate="no">`)}</div>
+    <label class="check"><input type="checkbox" id="inbOn" ${INB.on?'checked':''}> Take receipts by email</label>
+    ${INB.webhook?`<div><span class="flabel">Webhook address for the mail service</span><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="mono" translate="no" style="word-break:break-all">${esc(INB.webhook)}</span><button type="button" class="btn sm" data-inbcopy>Copy</button></div><div class="muted" style="font-size:12.5px;margin-top:4px">Keep it private: anyone with it can send email in. If it gets out, make a new one and paste it into the mail service again.</div></div>`:''}
+    ${steps.map(([name,list])=>`<details><summary><b translate="no">${name}</b></summary><ol style="margin:8px 0 0 18px;padding:0;font-size:13px;display:flex;flex-direction:column;gap:4px">${list.map(s=>`<li>${esc(s)}</li>`).join('')}</ol></details>`).join('')}
+    <div class="actions"><button type="button" class="btn primary" data-inbact="save">Save email settings</button>${INB.webhook?'<button type="button" class="btn ghost" data-inbact="secret">Make a new webhook address</button>':''}</div>
+  </div></div>`;
+}
+async function inboundAction(act){
+  try{
+    if(act==='save'){INB=await api('PUT','/api/inbound',{domain:$('#inbDomain').value.trim(),on:$('#inbOn').checked});rcmTried=0;renderMain();toast('Email settings saved');return}
+    if(act==='secret'){
+      if(!await confirmBox('Make a new webhook address?','The old one stops working at once. Paste the new one into Postmark or SendGrid right away, or emailed receipts won’t arrive.','Make a new one'))return;
+      INB=await api('PUT','/api/inbound',{newSecret:true});renderMain();toast('New webhook address made');return;
+    }
+  }catch(e){toast(e.message,true)}
+}
+function bindRcMail(m){
+  const v=S.view==='settings'||S.view==='receipts';
+  if(v&&ME&&ME.role!=='client'&&(rcmFor!==CO||Date.now()-rcmTried>60000)){rcmTried=Date.now();rcmFor=CO;loadRcMail().then(()=>{if(S.view==='settings'||S.view==='receipts')renderMain()})}
+  if(S.view==='settings'&&ME&&ME.role==='owner'&&ME.platformAdmin&&Date.now()-inbTried>60000){inbTried=Date.now();loadInbound().then(()=>{if(S.view==='settings')renderMain()})}
+  $$('[data-rcmcopy]',m).forEach(b=>b.onclick=()=>rcCopy(RCM.address));
+  const cp=$('[data-inbcopy]',m);if(cp)cp.onclick=()=>rcCopy(INB.webhook);
+  $$('[data-inbact]',m).forEach(b=>b.onclick=()=>inboundAction(b.dataset.inbact));
+  const nw=$('[data-rcmnew]',m);if(nw)nw.onclick=async()=>{
+    if(!await confirmBox('Make a new address?','The current address stops working at once. Anyone who forwards receipts to it needs the new one.','Make a new address'))return;
+    try{const r=await api('POST','/api/receipts/email/new');RCM={...RCM,address:r.address};renderMain();toast('New address made')}catch(e){toast(e.message,true)}
+  };
+  const sv=$('[data-rcmsave]',m);if(sv)sv.onclick=async()=>{
+    try{const r=await api('PUT','/api/receipts/email',{allowed:$('#rcmAllowed').value.split(/[\s,;]+/).filter(Boolean)});RCM={...RCM,allowed:r.allowed};renderMain();toast(r.allowed.length?'Allowed senders saved':'Email from anyone is accepted')}catch(e){toast(e.message,true)}
+  };
+}

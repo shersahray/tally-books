@@ -4,8 +4,8 @@
    language the company keeps its books in. They're downloaded, or emailed from the company's own
    mailbox through the server (POST /api/mail/send). */
 const DL={
-  en:{po:'PURCHASE ORDER',poNo:'PO no.',expected:'Expected by',vendor:'Vendor',shipTo:'Ship to',sreceipt:'SALES RECEIPT',srNo:'Sales receipt no.',paidBy:'Paid',estimate:'ESTIMATE',estNo:'Estimate no.',until:'Good until',payHead:'How to pay',invoice:'INVOICE',credit:'CREDIT NOTE',statement:'STATEMENT',billTo:'Bill to',to:'To',invNo:'Invoice no.',crNo:'Credit note no.',date:'Date',due:'Due date',asOf:'As of',desc:'Description',qty:'Qty',rate:'Rate',amount:'Amount',sub:'Subtotal',total:'Total',paid:'Paid',credits:'Credits applied',bal:'Balance due',avail:'Credit available',page:'Page {0} of {1}',taxNo:'GST/HST no.',taxNoQc:'GST/QST no.',type:'Type',no:'No.',balance:'Balance',inv:'Invoice',cr:'Credit note',current:'Current',d30:'1–30 days',d60:'31–60 days',d90:'61–90 days',d90p:'Over 90 days',totalDue:'Total due',appliedTo:'Applied to invoice {0}: {1}'},
-  fr:{po:'BON DE COMMANDE',poNo:'N° de bon de commande',expected:'Prévu pour le',vendor:'Fournisseur',shipTo:'Livrer à',sreceipt:'REÇU DE VENTE',srNo:'N° de reçu de vente',paidBy:'Payé',estimate:'SOUMISSION',estNo:'N° de soumission',until:'Valide jusqu’au',payHead:'Comment payer',invoice:'FACTURE',credit:'NOTE DE CRÉDIT',statement:'RELEVÉ DE COMPTE',billTo:'Facturer à',to:'À',invNo:'N° de facture',crNo:'N° de note de crédit',date:'Date',due:'Échéance',asOf:'Au',desc:'Description',qty:'Qté',rate:'Prix',amount:'Montant',sub:'Sous-total',total:'Total',paid:'Payé',credits:'Crédits appliqués',bal:'Solde dû',avail:'Crédit disponible',page:'Page {0} de {1}',taxNo:'N° de TPS/TVH',taxNoQc:'N° de TPS/TVQ',type:'Type',no:'N°',balance:'Solde',inv:'Facture',cr:'Note de crédit',current:'Courant',d30:'1 à 30 jours',d60:'31 à 60 jours',d90:'61 à 90 jours',d90p:'Plus de 90 jours',totalDue:'Total dû',appliedTo:'Appliqué à la facture {0} : {1}'},
+  en:{po:'PURCHASE ORDER',poNo:'PO no.',expected:'Expected by',vendor:'Vendor',shipTo:'Ship to',sreceipt:'SALES RECEIPT',srNo:'Sales receipt no.',paidBy:'Paid',estimate:'ESTIMATE',estNo:'Estimate no.',until:'Good until',payHead:'How to pay',invoice:'INVOICE',credit:'CREDIT NOTE',statement:'STATEMENT',billTo:'Bill to',to:'To',invNo:'Invoice no.',crNo:'Credit note no.',date:'Date',due:'Due date',asOf:'As of',desc:'Description',qty:'Qty',rate:'Rate',amount:'Amount',sub:'Subtotal',total:'Total',paid:'Paid',credits:'Credits applied',bal:'Balance due',avail:'Credit available',page:'Page {0} of {1}',taxNo:'GST/HST no.',taxNoQc:'GST/QST no.',type:'Type',no:'No.',balance:'Balance',inv:'Invoice',cr:'Credit note',current:'Current',d30:'1–30 days',d60:'31–60 days',d90:'61–90 days',d90p:'Over 90 days',totalDue:'Total due',appliedTo:'Applied to invoice {0}: {1}',depAccept:'Deposit to accept',depRecv:'Deposit received'},
+  fr:{po:'BON DE COMMANDE',poNo:'N° de bon de commande',expected:'Prévu pour le',vendor:'Fournisseur',shipTo:'Livrer à',sreceipt:'REÇU DE VENTE',srNo:'N° de reçu de vente',paidBy:'Payé',estimate:'SOUMISSION',estNo:'N° de soumission',until:'Valide jusqu’au',payHead:'Comment payer',invoice:'FACTURE',credit:'NOTE DE CRÉDIT',statement:'RELEVÉ DE COMPTE',billTo:'Facturer à',to:'À',invNo:'N° de facture',crNo:'N° de note de crédit',date:'Date',due:'Échéance',asOf:'Au',desc:'Description',qty:'Qté',rate:'Prix',amount:'Montant',sub:'Sous-total',total:'Total',paid:'Payé',credits:'Crédits appliqués',bal:'Solde dû',avail:'Crédit disponible',page:'Page {0} de {1}',taxNo:'N° de TPS/TVH',taxNoQc:'N° de TPS/TVQ',type:'Type',no:'N°',balance:'Solde',inv:'Facture',cr:'Note de crédit',current:'Courant',d30:'1 à 30 jours',d60:'31 à 60 jours',d90:'61 à 90 jours',d90p:'Plus de 90 jours',totalDue:'Total dû',appliedTo:'Appliqué à la facture {0} : {1}',depAccept:'Dépôt pour accepter',depRecv:'Dépôt reçu'},
 };
 const dlang=()=>S.company.lang==='fr'?'fr':'en';
 const dl=(k,...a)=>DL[dlang()][k].replace(/\{(\d)\}/g,(m,i)=>a[i]);
@@ -55,7 +55,8 @@ function drawParty(pdf,y,label,contactId){
   if(ct.email){pdf.text(M,y,ct.email,{size:9.5,color:GREY});y+=12}
   return y+16;
 }
-function pageNumbers(pdf){const n=pdf.pageCount();if(n<2)return;for(let i=0;i<n;i++){pdf.goto(i);pdf.text(RIGHT,770,dl('page',i+1,n),{size:8,color:GREY,align:'right'})}}
+// Numbers the pages of one document: from its first page (from) to the end, so each in a combined PDF has its own “Page 1 of 2”.
+function pageNumbers(pdf,from=0){const n=pdf.pageCount()-from;if(n<2)return;for(let i=0;i<n;i++){pdf.goto(from+i);pdf.text(RIGHT,770,dl('page',i+1,n),{size:8,color:GREY,align:'right'})}}
 function drawFooter(pdf,text){
   if(!text)return;
   const lines=pdf.wrap(text,RIGHT-M,8.5).slice(0,6);
@@ -65,9 +66,12 @@ function drawFooter(pdf,text){
 }
 
 /** An invoice, credit note or estimate (kind 'estimate') as a PDF (Uint8Array). */
-async function docPdf(doc){PDFCUR=doc.currency||'';try{return await docPdfIn(doc)}finally{PDFCUR=''}}
-async function docPdfIn(doc){
-  const pdf=TallyPDF.create(),logo=await logoBytes(),cred=doc.kind==='credit',po=doc.kind==='po',est=doc.kind==='estimate'||po,sr=doc.kind==='sreceipt';
+async function docPdf(doc){PDFCUR=doc.currency||'';try{return await docPdfIn(doc,null,false)}finally{PDFCUR=''}}
+/** Draw a document onto the end of a PDF being built (null starts one) and return it: several documents in one file. */
+async function docPdfInto(doc,pdfIn){PDFCUR=doc.currency||'';try{return await docPdfIn(doc,pdfIn,true)}finally{PDFCUR=''}}
+async function docPdfIn(doc,pdfIn,keep){
+  const pdf=pdfIn||TallyPDF.create(),first=pdfIn?pdf.pageCount():0;if(pdfIn)pdf.addPage();
+  const logo=await logoBytes(),cred=doc.kind==='credit',po=doc.kind==='po',est=doc.kind==='estimate'||po,sr=doc.kind==='sreceipt';
   const st=est?{bal:+doc.total||0}:docStatus(doc),paid=est?0:paidOn(doc.id);
   const meta=[[po?dl('poNo'):sr?dl('srNo'):est?dl('estNo'):cred?dl('crNo'):dl('invNo'),doc.number||''],[dl('date'),ddate(doc.date)]];
   if(est&&!po&&doc.expires)meta.push([dl('until'),ddate(doc.expires)]);
@@ -95,11 +99,16 @@ async function docPdfIn(doc){
   const oldRate=doc.taxRate!=null&&Math.abs(+doc.taxRate-(+S.company.taxRate||0))>0.0001;
   if(+doc.tax)for(const p of (doc.taxParts&&doc.taxParts.length?doc.taxParts:oldRate?[{name:dlang()==='fr'?'Taxes':'Tax',rate:+doc.taxRate,amount:+doc.tax}]:splitTaxTotal(+doc.tax)))rows.push([`${p.name} ${p.rate}%`,dmoney(p.amount)]);
   rows.push([dl('total'),dmoney(doc.total),true]);
-  if(est){}
+  // An estimate asking for a deposit: what's been received, and what's still to pay to accept it.
+  if(est&&!po&&typeof TallyDeposits!=='undefined'&&doc.id){const req=TallyDeposits.requested(doc),got=TallyDeposits.forEstimate(doc.id,S.entries).received;
+    if(got)rows.push([dl('depRecv'),'-'+dmoney(got)]);if(req&&req-got>0.004)rows.push([dl('depAccept'),dmoney(r2(req-got)),true])}
+  else if(est){}
   else if(sr)rows.push([dl('paidBy'),dmoney(doc.total),true]);
   else if(!cred){
     const credits=r2(S.docs.filter(c=>c.applied).reduce((s,c)=>s+c.applied.filter(a=>a.docId===doc.id).reduce((t,a)=>t+(+a.amount||0),0),0));
-    const pays=r2(paid-credits);
+    const deps=r2(S.entries.filter(e=>e.type==='depapply'&&e.applyTo===doc.id).reduce((s,e)=>s+(+e.amount||0),0));
+    const pays=r2(paid-credits-deps);
+    if(deps)rows.push([dl('depRecv'),'-'+dmoney(deps)]);
     if(pays)rows.push([dl('paid'),'-'+dmoney(pays)]);
     if(credits)rows.push([dl('credits'),'-'+dmoney(credits)]);
     rows.push([dl('bal'),dmoney(st.bal),true]);
@@ -118,10 +127,14 @@ async function docPdfIn(doc){
     const how=opHowToPay(doc,link);
     if(how){if(notes.length)notes.push('');notes.push(dl('payHead'));for(const l of how.split('\n'))notes.push(...pdf.wrap(l,280,9))}
   }
+  // A deposit still to pay on an estimate: the same, for the deposit.
+  if(doc.kind==='estimate'&&doc.id&&typeof TallyDeposits!=='undefined'&&typeof opHowToPay==='function'){const out=TallyDeposits.outstanding(doc,S.entries);
+    if(out>0.004){const link=doc.payLink&&doc.payLink.active!==false&&typeof PAYCFG!=='undefined'&&PAYCFG&&PAYCFG.configured&&Math.round(out*100)===doc.payLink.cents?doc.payLink.url:'';
+      const how=opHowToPay({...doc,est:true},link);if(how){if(notes.length)notes.push('');notes.push(dl('payHead'));for(const l of how.split('\n'))notes.push(...pdf.wrap(l,280,9))}}}
   for(const n of notes.slice(0,40)){if(ly>700){pdf.addPage();ly=60}pdf.text(M,ly,n,{size:9,color:'#333333'});ly+=12}
   drawFooter(pdf,S.company.invoiceNote);
-  pageNumbers(pdf);
-  return pdf.output();
+  pageNumbers(pdf,first);
+  return keep?pdf:pdf.output();
 }
 /** A customer's statement as of a date: open invoices and unused credits, with aging. */
 async function statementPdf(contactId,asOf,pdfIn){PDFCUR=typeof contactCur==='function'?contactCur(contactId):'';try{return await statementPdfIn(contactId,asOf,pdfIn)}finally{PDFCUR=''}}
@@ -185,7 +198,7 @@ function templ(kind,v){
   };
   const out=T[kind].slice();
   // Invoices and reminders: how to pay, before the sign-off.
-  if(v.pay&&(kind==='invoice'||kind==='reminder')){const i=out[1].lastIndexOf('\n\n');out[1]=i>0?out[1].slice(0,i)+'\n\n'+v.pay+out[1].slice(i):out[1]+'\n\n'+v.pay}
+  if(v.pay&&(kind==='invoice'||kind==='reminder'||kind==='estimate')){const i=out[1].lastIndexOf('\n\n');out[1]=i>0?out[1].slice(0,i)+'\n\n'+v.pay+out[1].slice(i):out[1]+'\n\n'+v.pay}
   return out;
 }
 async function sendMail(to,subject,text,pdfBytes,fileName,docIds,what){
@@ -221,14 +234,14 @@ function docActions(doc){
   const st=docStatus(doc),late=doc.kind==='invoice'&&st.k==='overdue';
   const sent=(doc.sent||[]).slice(-1)[0];
   const link=doc.kind==='invoice'&&st.bal>0.004&&typeof PAYCFG!=='undefined'&&PAYCFG&&PAYCFG.configured;
-  return `<span class="doc-acts"><button type="button" class="btn ghost" data-dopdf>PDF</button><button type="button" class="btn ghost" data-domail>${late?'Send reminder':'Email'}</button>${link?'<button type="button" class="btn ghost" data-dolink>Copy pay link</button>':''}${doc.kind==='invoice'?'<button type="button" class="btn ghost" data-dorec>Make recurring</button>':''}${sent?`<span class="muted" style="font-size:12px">Emailed ${fmtDate(new Date(sent.at).toISOString().slice(0,10))}</span>`:''}</span>`;
+  return `<span class="doc-acts"><button type="button" class="btn ghost" data-dopdf>PDF</button><button type="button" class="btn ghost" data-domail>${late?'Send reminder':'Email'}</button>${link?'<button type="button" class="btn ghost" data-dolink>Copy pay link</button>':''}${doc.kind==='invoice'?'<button type="button" class="btn ghost" data-dorec>Make recurring</button>':''}${sent?`<span class="muted" style="font-size:12px">${sent.what==='marked'?'Marked as sent':'Emailed'} ${fmtDate(new Date(sent.at).toISOString().slice(0,10))}</span>`:''}</span>`;
 }
 function bindDocActions(f,doc){
   const p=$('[data-dopdf]',f),m=$('[data-domail]',f);
   const name=pdfName(doc.kind,doc.number);
   if(p)p.onclick=async()=>{try{if(doc.kind==='invoice'&&typeof opLinkFor==='function'&&PAYCFG&&PAYCFG.configured)await opLinkFor(doc);saveFile(name,new Blob([await docPdf(S.docs.find(x=>x.id===doc.id)||doc)],{type:'application/pdf'}))}catch(e){toast(e.message,true)}};
   const lk=$('[data-dolink]',f);if(lk)lk.onclick=async()=>{const url=await opLinkFor(doc);if(!url)return;try{await navigator.clipboard.writeText(url);toast('Pay link copied. Paste it in a message to the customer.')}catch(e){prompt('Copy this link:',url)}};
-  const rc=$('[data-dorec]',f);if(rc)rc.onclick=()=>{closeModal();recurringForm(null,doc.kind,{name:`${contactName(doc.contactId)} ${doc.kind==='invoice'?'invoice':'bill'}`.trim(),contactId:doc.contactId,memo:doc.memo||'',lines:doc.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode||(l.tax?'std':'none')})),next:recAfter({every:'month',n:1},doc.date),day:pd(doc.date).getDate()})};
+  const rc=$('[data-dorec]',f);if(rc)rc.onclick=()=>{closeModal();recurringForm(null,doc.kind,{name:`${contactName(doc.contactId)} ${doc.kind==='invoice'?'invoice':'bill'}`.trim(),contactId:doc.contactId,memo:doc.memo||'',lines:doc.lines.map(l=>({item:l.item||'',desc:l.desc,account:l.account,qty:l.qty,rate:l.rate,taxCode:l.taxCode||(l.tax?'std':'none')})),...recFrom(doc.date)})};
   if(m)m.onclick=()=>{
     const st=docStatus(doc),late=doc.kind==='invoice'&&st.k==='overdue';
     closeModal();
@@ -421,4 +434,95 @@ function lateFeesForm(){
     }
     if(await batch(writes)){closeModal();toast(`${picks.length} late fee${picks.length===1?'':'s'} charged`)}
   };
+}
+
+/* ---------- batch actions on the Sales list ----------
+   Tick invoices, credit notes and sales receipts, then: email them, print them as one PDF, send reminders for the
+   overdue ones, or mark invoices as sent. Which ones each action takes is decided in batch.js (TallyBatch.plan).
+   Bills have no PDF, so the Expenses list has no batch actions. */
+let BSEL=new Set(),BSEL_CO=null;
+// Only what's still on the list counts: a deleted invoice, or a change of company, drops out of the selection.
+function batchSel(){if(BSEL_CO!==CO){BSEL=new Set();BSEL_CO=CO}for(const id of [...BSEL])if(!S.docs.some(d=>d.id===id))BSEL.delete(id);return BSEL}
+const batchOn=()=>!!(typeof ME!=='undefined'&&ME&&!ME.readOnly&&typeof TallyBatch!=='undefined');
+const batchDocs=()=>TallyBatch.order(S.docs.filter(d=>batchSel().has(d.id)));
+/** The toolbar part: how many are ticked and the menu of actions. */
+function batchBar(){
+  if(!batchOn())return '';
+  const n=batchSel().size;
+  return `<span class="bbar" data-bbar ${n?'':'hidden'}><span class="muted" data-bcount>${n} selected</span><select data-bact aria-label="Batch actions"><option value="">Batch actions</option><option value="send">Send</option><option value="print">Print or download PDFs</option><option value="remind">Send reminders</option>${perm('sales','edit')?'<option value="mark">Mark as sent</option>':''}</select><button type="button" class="btn sm ghost" data-bclear>Clear</button></span>`;
+}
+const batchHeadCell=ids=>batchOn()?`<th class="bsel"><input type="checkbox" data-bselall aria-label="Select all" ${ids.length&&ids.every(id=>batchSel().has(id))?'checked':''}></th>`:'';
+const batchCell=d=>batchOn()?`<td class="bsel"><input type="checkbox" data-bsel="${d.id}" aria-label="Select" ${batchSel().has(d.id)?'checked':''}></td>`:'';
+function bindBatch(m){
+  if(S.view!=='sales'||!batchOn())return;
+  const bar=$('[data-bbar]',m);if(!bar)return;
+  const sync=()=>{const n=batchSel().size;bar.hidden=!n;$('[data-bcount]',bar).textContent=T(`${n} selected`);
+    const boxes=$$('[data-bsel]',m),all=$('[data-bselall]',m);if(all){all.checked=boxes.length>0&&boxes.every(b=>b.checked);all.indeterminate=!all.checked&&boxes.some(b=>b.checked)}};
+  // A tick in a row mustn't open the document the row stands for.
+  $$('td.bsel',m).forEach(td=>td.onclick=e=>e.stopPropagation());
+  $$('[data-bsel]',m).forEach(b=>b.onchange=()=>{if(b.checked)batchSel().add(b.dataset.bsel);else batchSel().delete(b.dataset.bsel);sync()});
+  const all=$('[data-bselall]',m);if(all)all.onchange=()=>{$$('[data-bsel]',m).forEach(b=>{b.checked=all.checked;if(all.checked)batchSel().add(b.dataset.bsel);else batchSel().delete(b.dataset.bsel)});sync()};
+  $('[data-bclear]',bar).onclick=()=>{batchSel().clear();$$('[data-bsel]',m).forEach(b=>b.checked=false);sync()};
+  const act=$('[data-bact]',bar);act.onchange=()=>{const a=act.value;act.value='';if(a)batchRun(a)};
+  sync();
+}
+const batchLabel=d=>`${T(d.kind==='credit'?'Credit note':d.kind==='sreceipt'?'Sales receipt':'Invoice')} ${d.number||'—'}`;
+const batchEmail=d=>String((contact(d.contactId)||{}).email||'').trim();
+const BATCH_WHY={kind:'Only invoices can be marked as sent',notoverdue:'Not overdue',noemail:'No email address'};
+async function batchRun(action){
+  const docs=batchDocs();if(!docs.length)return;
+  const p=TallyBatch.plan(action,docs,{emailOf:batchEmail,isOverdue:d=>docStatus(d).k==='overdue'});
+  if(action==='print')return batchPrint(p.go);
+  if(action==='mark')return batchMark(p);
+  if(!p.go.length)return batchSummary(action==='remind'?'Send reminders':'Send',p,[]);
+  await loadMail();
+  if(!MAILCFG||!MAILCFG.configured){toast('Set up email for this company first (Settings → Email).',true);return}
+  const n=p.go.length,sk=p.skip.length;
+  const what=action==='remind'?(n===1?`Email a reminder for ${n} overdue invoice?`:`Email reminders for ${n} overdue invoices?`):(n===1?`Email ${n} document to its customer?`:`Email ${n} documents to their customers?`);
+  if(!await confirmBox(T(what),`${T('Each one goes from this company’s email, one at a time, with its PDF attached.')}${sk?' '+T(sk===1?`${sk} is skipped (listed at the end).`:`${sk} are skipped (listed at the end).`):''}`,T(action==='remind'?'Send reminders':'Send')))return;
+  await batchSend(action,p);
+}
+/** Send one at a time, showing how far along it is. A failure is noted and the rest still go. */
+async function batchSend(action,p){
+  const title=action==='remind'?'Send reminders':'Send';
+  const f=openModal(title,`<div data-bprog aria-live="polite"><b data-bstep>Sending…</b><div class="bprog"><span data-bfill style="width:0%"></span></div></div>`,`<button type="button" class="btn" data-close disabled>Close</button>`);
+  if(typeof opHowToPay==='function'&&!PAYCFG)await opLoad();
+  const results=await TallyBatch.runSequential(p.go,async d=>{
+    d=S.docs.find(x=>x.id===d.id)||d;
+    const st=docStatus(d),rem=action==='remind';
+    const kind=rem?'reminder':d.kind==='credit'?'credit':d.kind==='sreceipt'?'sreceipt':'invoice';
+    // How to pay, and the card link, like a single send (only on invoices with something owing).
+    const pay=d.kind==='invoice'&&st.bal>0.004&&typeof opHowToPay==='function'?opHowToPay(d,await opLinkFor(d)):'';
+    const[subj,text]=templ(kind,{name:contactName(d.contactId),num:d.number||'',amount:dmoneyC(rem?st.bal:d.total,d.currency),due:ddate(d.due),pay});
+    await sendMail(batchEmail(d),subj,text,await docPdf(S.docs.find(x=>x.id===d.id)||d),pdfName(d.kind==='credit'?'credit':d.kind==='sreceipt'?'sreceipt':'invoice',d.number),[d.id],kind);
+  },(i,n)=>{if(!f.isConnected)return;$('[data-bstep]',f).textContent=T(`Sending ${i} of ${n}…`);$('[data-bfill]',f).style.width=Math.round((i-1)/n*100)+'%'});
+  await load();
+  if(results.some(r=>r.ok))for(const r of results)if(r.ok)batchSel().delete(r.item.id);
+  batchSummary(title,p,results);
+}
+/** What happened: sent, skipped (and why), failed (and why). */
+function batchSummary(title,p,results){
+  const t=TallyBatch.tally(results,p.skip),bad=results.filter(r=>!r.ok);
+  const row=(d,why)=>`<tr><td class="mono">${esc(batchLabel(d))}</td><td class="trunc" translate="no">${esc(contactName(d.contactId))}</td><td>${why}</td></tr>`;
+  const body=`<div class="chips" style="margin:0 0 12px"><div class="chip"><div class="lbl">Sent</div><div class="val">${t.sent}</div></div><div class="chip"><div class="lbl">Skipped</div><div class="val">${t.skipped}</div></div><div class="chip"><div class="lbl">Failed</div><div class="val ${t.failed?'neg':''}">${t.failed}</div></div></div>
+    ${bad.length||p.skip.length?`<div class="tbl-wrap"><table><thead><tr><th>Document</th><th>Customer</th><th>Why</th></tr></thead><tbody>${bad.map(r=>row(r.item,`<span class="neg">${esc(r.error)}</span>`)).join('')}${p.skip.map(s=>row(s.doc,`<span class="muted">${esc(T(BATCH_WHY[s.why]||s.why))}</span>`)).join('')}</tbody></table></div>`:''}
+    ${p.skip.some(s=>s.why==='noemail')?'<div class="muted" style="font-size:13px;margin-top:10px">Add an email address to those customers, then send again.</div>':''}`;
+  const f=openModal(title,body,`<button type="button" class="btn primary" data-close>Done</button>`,bad.length||p.skip.length?'wide':'');
+  void f;
+  renderMain();
+}
+/** One PDF with every ticked document, oldest first, each with its own page numbers. */
+async function batchDocsPdf(docs){let pdf=null;for(const d of docs)pdf=await docPdfInto(S.docs.find(x=>x.id===d.id)||d,pdf);return pdf?pdf.output():null}
+async function batchPrint(docs){
+  if(!docs.length)return;
+  try{toast('Making the PDF…');const out=await batchDocsPdf(docs);
+    saveFile(`${dlang()==='fr'?'Factures':'Invoices'}-${today()}.pdf`,new Blob([out],{type:'application/pdf'}));toast(T(docs.length===1?'PDF ready: 1 document':`PDF ready: ${docs.length} documents`))}
+  catch(e){toast(e.message,true)}
+}
+async function batchMark(p){
+  if(!p.go.length){toast('Only invoices can be marked as sent.',true);return}
+  try{const r=await api('POST','/api/docs/mark-sent',{docIds:p.go.map(d=>d.id)});await load();
+    for(const d of p.go)batchSel().delete(d.id);renderMain();
+    toast(T(r.marked===1?'1 invoice marked as sent':`${r.marked} invoices marked as sent`)+(p.skip.length?' · '+T(p.skip.length===1?'1 skipped (not an invoice)':`${p.skip.length} skipped (not invoices)`):''))}
+  catch(e){toast(e.message,true)}
 }
