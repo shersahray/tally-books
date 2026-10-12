@@ -48,10 +48,12 @@ const perm=(a,l='view')=>TallyRoles.can(typeof ME!=='undefined'&&ME?ME.perms:nul
 const permAll=l=>Object.keys(TallyRoles.AREAS).every(a=>perm(a,l));
 // Every transaction comes with Reports, Accounting, Banking or Sales tax (their totals need the whole ledger).
 const ledgerOn=()=>perm('reports')||perm('accounting')||perm('banking')||perm('salestax');
-const VIEW_AREA={dataimport:'accounting',sales:'sales',projects:'sales',expenses:'expenses',receipts:'expenses',yard:'expenses',banking:'banking',salestax:'salestax',payroll:'payroll',review:'accounting',accounts:'accounting',assets:'accounting',reports:'reports',settings:'settings',activity:'settings'};
-const viewOk=v=>v==='transactions'||v==='register'?ledgerOn():v==='convert'?permAll('edit'):!VIEW_AREA[v]||perm(VIEW_AREA[v]);
+const VIEW_AREA={sales:'sales',projects:'sales',expenses:'expenses',receipts:'expenses',yard:'expenses',banking:'banking',salestax:'salestax',payroll:'payroll',review:'accounting',accounts:'accounting',assets:'accounting',reports:'reports',settings:'settings',activity:'settings'};
+// Import data: open when the role can change at least one of the things it imports (TallyRoles.IMPORT_AREA).
+const importOk=k=>k==='items'?perm('sales','edit')||perm('expenses','edit'):perm(TallyRoles.IMPORT_AREA[k]||'accounting','edit');
+const viewOk=v=>v==='transactions'||v==='register'?ledgerOn():v==='convert'?permAll('edit'):v==='dataimport'?Object.keys(TallyRoles.IMPORT_AREA).some(importOk):!VIEW_AREA[v]||perm(VIEW_AREA[v]);
 const NEW_AREA={invoice:'sales',sreceipt:'sales',payment:'sales',credit:'sales',bill:'expenses',billpayment:'expenses',expense:'expenses',vcredit:'expenses',deposit:'banking',transfer:'banking',import:'banking',journal:'accounting',account:'accounting',payrun:'payroll',employee:'payroll'};
-const newOk=k=>k==='contact'?perm('sales','edit')||perm('expenses','edit'):!NEW_AREA[k]||perm(NEW_AREA[k],'edit');
+const newOk=k=>k==='contact'?perm('sales','edit')||perm('expenses','edit'):k==='dataimport'?viewOk('dataimport'):!NEW_AREA[k]||perm(NEW_AREA[k],'edit');
 let MODAL_AREA=null; // the area of the form being opened (set around each form; see the end of auth.js)
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
@@ -209,7 +211,7 @@ function banners(){
   return h;
 }
 // An Import button on a list, for people who can change the books (see dataimport.js).
-const diStaffBtn=(type,cls='btn sm')=>typeof diOpen==='function'&&ME&&ME.role!=='client'&&!ME.readOnly?`<button class="${cls}" data-diopen="${type}">Import</button>`:'';
+const diStaffBtn=(type,cls='btn sm')=>typeof diOpen==='function'&&ME&&ME.role!=='client'&&!ME.readOnly&&importOk(type)?`<button class="${cls}" data-diopen="${type}">Import</button>`:'';
 const head=(title,sub,actions='')=>`<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${sub}</div>`:''}</div><div class="actions">${actions}</div></div>`;
 const emptyRow=(cols,title,msg)=>`<tr><td colspan="${cols}"><div class="empty"><b>${title}</b>${msg}</div></td></tr>`;
 
@@ -254,7 +256,7 @@ function chart6(){
   const W=600,H=220,L=56,R=8,T=10,B=26,ch=H-T-B,cw=(W-L-R)/6,bw=Math.min(28,cw*.3);
   const y=v=>T+ch-(v/top)*ch;
   let g='';for(let v=0;v<=top+1e-9;v+=stepC){g+=`<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end">${v>=1000?(v/1000).toLocaleString(LOC())+'k':v}</text>`}
-  const bars=months.map((m,i)=>{const cx=L+cw*i+cw/2;return `<g><title>${m.lbl}: income ${money(m.inc)}, expenses ${money(m.exp)}</title><rect x="${cx-bw-2}" y="${y(m.inc)}" width="${bw}" height="${Math.max(0,T+ch-y(m.inc))}" rx="2" fill="var(--bar-in)"/><rect x="${cx+2}" y="${y(m.exp)}" width="${bw}" height="${Math.max(0,T+ch-y(m.exp))}" rx="2" fill="var(--bar-out)"/><text x="${cx}" y="${H-8}" text-anchor="middle">${m.lbl}</text></g>`}).join('');
+  const bars=months.map((m,i)=>{const cx=L+cw*i+cw/2;return `<g><title>${m.lbl}: ${(tr('Income')??'Income').toLowerCase()} ${money(m.inc)}, ${(tr('Expenses')??'Expenses').toLowerCase()} ${money(m.exp)}</title><rect x="${cx-bw-2}" y="${y(m.inc)}" width="${bw}" height="${Math.max(0,T+ch-y(m.inc))}" rx="2" fill="var(--bar-in)"/><rect x="${cx+2}" y="${y(m.exp)}" width="${bw}" height="${Math.max(0,T+ch-y(m.exp))}" rx="2" fill="var(--bar-out)"/><text x="${cx}" y="${H-8}" text-anchor="middle">${m.lbl}</text></g>`}).join('');
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly income and expenses">${g}<line class="base" x1="${L}" x2="${W-R}" y1="${T+ch}" y2="${T+ch}"/>${bars}</svg>`;
 }
 
@@ -412,7 +414,7 @@ function rGL(){
       run=r2(run+sign*(p.debit-p.credit));ad+=p.debit;ac+=p.credit;n++;
       const name=contactName(p.e.contactId)||(p.e.type==='payrun'?'Payroll':'');
       if(n<=glMax)h+=`<tr class="click" data-entry="${p.e.id}"><td style="white-space:nowrap">${fmtDate(p.date)}</td><td style="white-space:nowrap">${TLABEL[p.e.type]||p.e.type}</td><td class="mono">${esc(p.e.ref||'')}</td><td class="trunc" translate="no">${esc(name)}</td><td class="trunc muted" translate="no">${esc(p.memo||p.e.memo||'')}</td><td class="n">${p.debit?money(p.debit):''}</td><td class="n">${p.credit?money(p.credit):''}</td><td class="n">${mcell(run)}</td></tr>`;
-      csv.push([label,p.date,TLABEL[p.e.type]||p.e.type,p.e.ref||'',name,p.memo||p.e.memo||'',r2(p.debit)||'',r2(p.credit)||'',run]);
+      csv.push([label,p.date,T(TLABEL[p.e.type]||p.e.type),p.e.ref||'',name,p.memo||p.e.memo||'',r2(p.debit)||'',r2(p.credit)||'',run]);
     }
     td+=ad;tc+=ac;
     if(!skip)h+=`<tr class="tot"><td colspan="5">Total ${esc(label)}</td><td class="n">${money(ad)}</td><td class="n">${money(ac)}</td><td class="n">${mcell(run)}</td></tr></tbody>`;
@@ -502,7 +504,7 @@ function vSettings(){
   <div><button class="btn primary" type="submit">Save settings</button></div></form></div>
   ${featuresPanel()}
   ${typeof approvalsPanel==='function'?approvalsPanel():''}
-  ${ME&&ME.role!=='client'&&!ME.readOnly?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Import data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Add customers, vendors, products and services, accounts, invoices, bills or journal entries from a spreadsheet (CSV or Excel).</span><button class="btn" data-diopen="">Import data</button></div></div>`:''}
+  ${ME&&ME.role!=='client'&&!ME.readOnly&&viewOk('dataimport')?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Import data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Add customers, vendors, products and services, accounts, invoices, bills or journal entries from a spreadsheet (CSV or Excel).</span><button class="btn" data-diopen="">Import data</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
   ${typeof invoiceDetailsPanel==='function'?invoiceDetailsPanel():''}
@@ -1427,7 +1429,7 @@ function wireLineCls(f,topId){const top=$('#'+topId,f);if(top)top.addEventListen
 const topCls=(f,id)=>($('#'+id,f)||{}).value||'';
 function classesPanel(){
   if(!ME||ME.role==='client')return '';
-  const cs=S.company.classes||[],ro=ME.readOnly,w=clsWords(),lab=S.company.classLabel||'class';
+  const cs=S.company.classes||[],ro=ME.readOnly||!perm('accounting','edit'),w=clsWords(),lab=S.company.classLabel||'class';
   const lineUse=(r,id)=>(r.lines||[]).some(l=>l&&l.cls===id);
   const used=id=>S.entries.some(e=>e.cls===id||lineUse(e,id))||S.docs.some(d=>d.cls===id||lineUse(d,id))||S.rules.some(r=>r.cls===id);
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>${esc(w.many)}</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">

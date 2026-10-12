@@ -85,15 +85,15 @@ It runs two ways from the same code:
 - **Tags:** labels to follow an event, a campaign or a job, like QuickBooks Online's tags. Put several on an invoice, bill, sales receipt, credit, expense, deposit, journal entry or bank line (unlike a class, which goes on a transaction or a line). Tags can be in groups (group *Event*: *Trade show*, *Open house*).
   - **Settings → Tags:** add, rename, move into a group, or remove. A tag still on transactions comes off all of them first, after a confirmation; the transactions themselves don't change. On any form, type in the Tags box to find a tag, or press Enter to add a new one (type *Event: Spring fair* to put it in the Event group).
   - **Bank lines and rules:** pick tags on each line waiting for review; a bank rule can add tags, and a line from the same payee suggests the tags used last time.
-  - Tags show as small labels on the Sales and Expenses lists, Transactions, account registers and the bank lines already added. Transactions can be filtered by tag.
+  - Tags show as small labels on the Sales and Expenses lists, Transactions, account registers and the bank lines already added. The Transactions page and the reports' **Filter** (below) can show only the transactions with chosen tags.
   - **Money in and out by tag** (Reports → Tags): income, expenses and the net for each tag over a period, on the accrual or cash basis, with CSV and PDF. Click a tag to see its transactions. A transaction with two tags counts under both, so the tags don't add up to the profit and loss.
   - The server checks every transaction's tags: tags the company has, at most 20. Changing only the tags on a transaction is allowed in closed books. With a custom role, tags on a record follow its area (Sales, Expenses, Banking…); anyone who can change transactions can add a new tag from a form, and renaming or removing tags needs Accounting.
-- **Reports for accountants:**
+- **Reports for accountants:** profit and loss, balance sheet, cash flow statement, trial balance, general ledger, transaction list, A/R and A/P aging, sales by customer and by product, expenses by vendor, budget vs actual, inventory valuation, money in and out by tag, and the cash flow forecast, for any date range. All of them export to CSV and PDF.
   - Profit and loss, balance sheet and cash flow statement side by side with the previous period, the same period last year, or by month or quarter, with the change in dollars and percent.
-  - **Accrual or cash basis:** the profit and loss, balance sheet, cash flow statement, general ledger, sales by customer and expenses by vendor can be shown on the cash basis, like QuickBooks Online's *Accounting method*. Invoices, bills, credit notes and vendor credits count when they're paid (or a credit is used or refunded), in proportion: half paid counts half of every line, sales tax included. Sales receipts, expenses, deposits and journal entries don't change. On the cash basis the balance sheet has no A/R or A/P, and sales tax payable shows only the tax on what's been paid. Choose it on each report, or set the default in Settings; saved reports keep it. The trial balance, aging reports, sales tax returns and the year-end package stay on the accrual basis.
-  - **Filters**, like QuickBooks Online's report customization: the profit and loss, general ledger, sales by customer, expenses by vendor and transaction list can be filtered by customers, vendors, accounts and classes (tick as many of each as you like). Filters add up with the period, comparison, class and accounting method, and saved reports keep them. A customer filter includes bills, expenses and entries for that customer's projects. The balance sheet, cash flow and trial balance aren't filtered, since part of the books doesn't balance.
+  - **Accrual or cash basis:** the profit and loss, balance sheet, cash flow statement, general ledger, sales by customer and expenses by vendor can be shown on the cash basis, like QuickBooks Online's *Accounting method*. Invoices, bills, credit notes and vendor credits count when they're paid (or a credit is used or refunded), in proportion: half paid counts half of every line, sales tax included. Sales receipts, expenses, deposits and journal entries don't change. On the cash basis the balance sheet has no A/R or A/P, and sales tax payable shows only the tax on what's been paid. A deposit on an estimate is a liability (Customer deposits) on both bases, never income; when it's used on the invoice, that settles the invoice like a payment, so on the cash basis the invoice's income and tax count on the day the deposit is used, in proportion. Choose it on each report, or set the default in Settings; saved reports keep it. The trial balance, aging reports, sales tax returns and the year-end package stay on the accrual basis.
+  - **Filters**, like QuickBooks Online's report customization: the profit and loss, general ledger, sales by customer, expenses by vendor and transaction list can be filtered by customers, vendors, accounts, classes and tags (tick as many of each as you like; a transaction passes a tag filter when it has any of the tags ticked). Filters add up with the period, comparison, class and accounting method, and saved reports keep them. A customer filter includes bills, expenses and entries for that customer's projects. The balance sheet, cash flow and trial balance aren't filtered, since part of the books doesn't balance.
   - **Profit and loss by customer** (Compare → By customer): a column for each of the eight customers with the most sales, then *Other customers*, *Not specified* and the total, which is the whole profit and loss. Income goes to the customer on the invoice or sales receipt; costs go to a customer when the bill, expense or entry is for one of their projects.
-  - **Transaction list:** every transaction in the period with its date, type, number, name, memo, account, other accounts, class and amount. Click a column to sort by it, a row to open it. With an account filter it shows each transaction's change in those accounts. The **general ledger** is QuickBooks' *Transaction detail by account*: grouped by account with a running balance, and filterable the same way.
+  - **Transaction list:** every transaction in the period with its date, type, number, name, memo, account, other accounts, class and amount. Click a column to sort by it, a row to open it. With an account filter it shows each transaction's change in those accounts. The **general ledger** is QuickBooks' *Transaction detail by account*: every posting grouped by account with the opening balance, debits, credits, running balance and account totals (income and expense accounts open with their fiscal-year-to-date balance), for all accounts or one, and filterable the same way. Click any line to open the transaction.
   - **Cash flow statement** (indirect method): net income, changes in working capital, investing and financing activities, and cash at the start and end. Each balance sheet account can be set to operating, investing or financing.
   - **Saved reports**, a **PDF** of any report, and a **report package**: the reports you choose for a period in one PDF with a cover page, to download or email to the client.
   - **Working trial balance**: before adjustments, adjusting entries and the adjusted balance in three columns.
@@ -114,10 +114,10 @@ It runs two ways from the same code:
 - **Overview (administrators):** under **Overview** at the bottom left: how many firms use your server (active, waiting, suspended, by plan, new this month), how many people and companies, desktop licences sold (active, ending in 30 days, ended, by plan) with a **Renewals due** list and a Renew button, installer downloads per version (GitHub's public download counts), and AI spending this month. Desktop copies don't report back, so they're counted by the licences you've sold and the downloads.
 - **Plans (Essentials and Plus):** each firm on the server has a plan, so you can sell two levels.
   - **Essentials:** everyday bookkeeping, banking and bank rules, invoices and bills, receipts, GST/HST and QST returns (regular method), the standard reports, the review tools and the CaseWare export.
-  - **Plus:** everything in Essentials, and payroll (pay runs, remittances, ROE, T4 and RL-1), AI suggestions, receipts by email, advanced reports (comparisons, cash flow statement, saved reports, report packages, working trial balance), the cash flow forecast, bill approvals, the special sales tax methods (Quick Method, charity and non-profit calculations), and custom roles for staff.
+  - **Plus:** everything in Essentials, and payroll (pay runs, remittances, ROE, T4 and RL-1), AI suggestions, advanced reports (comparisons, cash flow statement, saved reports, report packages, working trial balance), the special sales tax methods (Quick Method, charity and non-profit calculations), projects and time, inventory, multi-currency, fixed assets and CCA, the cash flow forecast, receipts by email, bill approvals, and custom roles for staff (the list is `public/plans.js`).
   - Set each firm's plan in the **Plan** column on the **Firms** page, and choose the plan that new sign-ups get (Essentials by default). Your own firm starts on Plus, and so do firms from before plans existed.
   - Inside its plan, each company can switch features off under **Settings → Features**: a client who doesn't need payroll doesn't see it. Switching a feature off, or moving a firm to Essentials, hides it and keeps its records.
-  - The server enforces the plan, not just the screens: payroll records, special tax methods, AI and new saved reports are refused when they aren't in the plan. The plan lives on the server, so a copy of the desktop app that keeps books on its own computer always has everything.
+  - The server enforces the plan, not just the screens: payroll records, special tax methods, AI, new saved reports, projects, fixed assets, inventory items, the forecast's settings, receipts by email, turning on bill approvals and custom roles are refused when they aren't in the plan. The plan lives on the server, so a copy of the desktop app that keeps books on its own computer always has everything.
   - Before opening sign-ups to the public, you'll want terms of service and a privacy policy, and a plan for support and payment.
 - **Company code:** each company can have a 4-digit code (asked for when you create it, and changed or removed by an owner in Settings). Owners and staff type it every time they open that company, so nobody works in the wrong client's books. Clients never need it. Five wrong codes lock that person out of the company for 15 minutes, and an owner who forgets a code can set a new one.
 - **Close the books:** after a year-end or a filed return, an owner sets a closing date (with an optional closing password). Transactions, invoices, bills and pay runs on or before it can't be added, changed or deleted unless an owner or staff member unlocks the books for 15 minutes; clients never can. Reconciling and attaching receipts still work. Every closing change and unlock is in the activity log.
@@ -145,6 +145,8 @@ It runs two ways from the same code:
   - **Roles:** owners manage everything; **staff** work in the companies they're given; **clients** see only their own company. Staff and clients can be **view only**.
   - **Custom roles (Plus):** under **Users & security → Roles**, owners make their own roles, like QuickBooks Online Advanced. Each role sets **None**, **View** or **Edit** for eight areas: Sales (customers, invoices, sales receipts, credit notes, estimates, projects, payments received), Expenses (vendors, bills, expenses, purchase orders, receipts), Banking (bank lines, rules, feeds, reconciliation, deposits, transfers), Payroll (employees and pay runs; at View, social insurance and bank account numbers stay hidden), Reports, Accounting (chart of accounts, journal entries, fixed assets, review), Sales tax and Settings (company settings, email, online payments, the activity log). Give a role to a staff member instead of plain staff; owners always have everything.
     - The server enforces it, not just the screens: every change is checked against the area of the record (an invoice payment is Sales, an expense is Expenses, a journal entry is Accounting, a pay run is Payroll), and what a role can't see isn't sent to the browser at all. Menus, **+ New** and Save buttons for areas the role can't change are hidden.
+    - The same goes for everything else that changes the books: deposits on estimates (received, used, refunded) and **Mark as sent** are Sales; a recurring transaction follows what it makes (a recurring deposit or transfer is Banking, a recurring journal entry Accounting); **Import data** adds only what the role can change, record by record (an invoice import with new customers needs Sales); the Customer deposits account can be set up from Sales or Accounting.
+    - Company settings follow their area too: classes, tags, classes on each line and what they're called are Accounting (anyone who can change transactions can still add a new tag from a form); saved reports and the cash flow forecast's planned items are Reports; payroll settings Payroll; sales tax settings Sales tax; invoice wording, late fees and the e-Transfer address Sales; everything else (name, fiscal year, the reports' default accounting method, receipts-by-email senders and address) Settings. Bill approvals are changed by owners only. **Approve bills** is a separate tick on the role.
     - Creating, changing and giving roles is recorded in the sign-in activity. On Essentials, roles can't be made or given; anyone who already has one keeps its limits.
   - **Invitations:** new people get a one-time link (valid 7 days) to choose their own password. Owners can send a **password reset link** (valid 24 hours). Links are stored only as hashes.
   - **Two-step sign-in:** a 6-digit code from an authenticator app (Microsoft Authenticator, Google Authenticator, 1Password), set up by scanning a QR code, with ten one-time recovery codes. Owners can require it for owners or everyone; online servers require it for everyone.
@@ -161,8 +163,6 @@ It runs two ways from the same code:
 - **Bank feeds (Plaid):** on an online server, a bookkeeper connects a client's bank once (**Banking → Bank feeds → Connect a bank**), signing in through Plaid's own window, so Sumlora never sees the bank password. Each bank account is matched to a bank or credit card account in the chart of accounts, with a date to start from. Posted transactions then arrive in **For review** every 4 hours, when Banking is opened, or on **Sync now**: never twice, never while pending, and changes or removals by the bank update lines still waiting (reviewed lines are left alone). A connection that needs a new bank sign-in says so, with **Sign in again**. **Disconnect** removes it at Plaid, which stops its monthly charge. The server's administrator enters the Plaid keys in **Settings → Bank feeds** (Sandbox for test banks, Production for real ones), or sets `PLAID_CLIENT_ID`, `PLAID_SECRET` and `PLAID_ENV`. The keys and each bank's access token are kept in `plaid.json` in the data folder (readable only by the server's account), and never go to a browser, into a company's books, a backup or a year-end package. Clients can't connect banks. Bank feeds need the server: a desktop copy running on its own computer keeps importing statement files.
 - **Journal entries:** manual entries with debit and credit lines. The server rejects any entry that doesn't balance.
 - **Chart of accounts:** set up for a Canadian small business charging HST (13%). The tax name, rate and fiscal year start are all in Settings.
-- **Reports:** profit and loss, balance sheet, trial balance, general ledger, A/R aging and A/P aging, for any date range. All of them export to CSV.
-- **General ledger:** every posting in the period grouped by account, with opening balance, debits, credits, running balance and account totals. Show all accounts or pick one; click any line to open the transaction. Income and expense accounts open with their fiscal-year-to-date balance.
 - **Year-end:** the trial balance closes prior years into retained earnings, so the CSV is ready to import into working-paper software such as CaseWare.
 - **Backup and restore:** one JSON file holds everything. Use it to move books between computers.
 - **Example data:** sample customers, transactions and bank lines for trying things out. They're marked "Example" and can be removed in one click.
@@ -316,6 +316,15 @@ The Mac and Linux builds stay unsigned. Signing the Mac version needs Apple's se
 
 ```
 public/            Browser app (plain HTML, CSS and JavaScript, no build step)
+  index.html       The page, and the scripts in the order they load (the demo build reads the same list)
+  styles.css       All the styles, light and dark
+  theme.js         Light, dark or automatic screens (loaded first, so the page never flashes the wrong colours)
+  app.js           Core screens, forms (invoices, bills, payments, expenses, journal entries), settings, navigation
+  plans.js         Plans (Essentials, Plus), their features and the add-ons (shared with the server)
+  gifi.js          CRA GIFI codes and suggestions for each account (shared with the server)
+  accountlib.js    Library of standard Canadian accounts to add to a chart
+  coa.js           Adding accounts from the library to the chart of accounts
+  logo.js          The Sumlora logo
   industries.js    Starter accounts by type of business (shared with the server)
   roles.js         Custom roles: areas, None/View/Edit, which area each record belongs to (shared with the server)
   tags.js          Tags: cleaning the list, checking a transaction's tags, money in and out by tag (shared with the server)
@@ -324,6 +333,8 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   bill-approvals.js  Bill approvals screens: Waiting for approval, the approval box on a bill, Settings → Bill approvals
   bankparse.js     Bank file parsers (CSV column detection, OFX/QFX/QBO)
   banking.js       Banking screens: import, review, rules, reconcile
+  bankfeeds.js     Bank feeds through Plaid: connecting a bank and syncing
+  fx.js            Multi-currency: currencies on contacts and accounts, Bank of Canada rates, exchange gains and losses
   ai.js            AI suggestions for bank lines, reading receipts, AI settings
   assistant.js     The AI assistant add-on: the Ask AI chat box and its Settings switch
   receipts.js      Receipts inbox: sending from a phone, matching, attaching; receipts by email settings
@@ -331,6 +342,13 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   recurring-calc.js  Recurring schedule (next dates, month-end, catching up, closed periods) and the journal balance check, shared with the server
   deposits-calc.js  Deposits on estimates: amount requested, received, used and held (shared with the server)
   sales-extras.js  Estimates (with deposits), recurring transactions, online payments
+  items.js         Products and services
+  inventory.js     Inventory: quantities, average cost, adjustments
+  purchasing.js    Purchase orders and mileage
+  projects.js      Projects and time
+  assets.js        Fixed assets: register, amortization and the CCA schedule
+  budgets.js       Budgets and Budget vs actual
+  scrapyard.js     The Scrap yard add-on: vehicles, parts, weigh tickets, environmental checklist
   yearend.js       Year-end package (.zip) for the accountant; opening a client's books as a new company
   docout.js        Invoice, credit note and statement PDFs; email; statements and reminders
   batch.js         Batch actions on the Sales list: which ticked documents each action takes, sending one at a time
@@ -352,10 +370,16 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   payroll-yearend.js  T4 and RL-1 slips and summaries
   payroll-roe.js   Records of employment (ROE)
   activity.js      Activity log screen
-  auth.js          Sign-in, two-step codes, invitations, users and security
+  auth.js          Sign-in, two-step codes, invitations, users and security, custom roles, firms
+  billing.js       Paying for Sumlora: a firm's or a client's subscription
+  invoicing.js     The administrator's monthly invoices to firms paid by e-Transfer
+  licence.js       Desktop licence codes: entering one, and making them
+  overview.js      The administrator's Overview: firms, licences, downloads, AI use
+  backups.js       Automatic backup settings and status
   qr.js            QR code generator for the two-step setup screen
   i18n.js          Language switch and on-screen translation; fr-CA number and date formats
   fr.js            French (Canada) translations
+  legal/           Terms of service, Privacy policy and data agreement pages (English and French)
 src/server/
   app.js           HTTP server: JSON API, static files, live updates
   db.js            SQLite storage (Node's built-in node:sqlite)
@@ -366,10 +390,19 @@ src/server/
   mail.js          Sending email over SMTP from each company's own mailbox
   inbound.js       Receipts by email: each company's address, reading Postmark and SendGrid webhooks
   stripe.js        Card payment links and payments through the company's Stripe account
+  billing.js       Sumlora subscriptions through the server owner's Stripe account
+  plaid.js         Bank feeds through Plaid
+  licence.js       Desktop licence codes: checking them, and making them in the seller's copy
+  legal.js         The version of the Terms and Privacy policy people agree to
   auth.js          User accounts, password hashing, sessions, lockout, roles
   validate.js      Bookkeeping rules enforced on every write
   seed.js          Default chart of accounts and example data
   index.js         Command-line entry point
+scripts/
+  build-demo.js    Builds dist/demo.html, the whole app in one file with example companies
+  demo-shim.js     The demo's stand-in for the server, answering the app's requests from memory
+  azure-sign.js    Signs the Windows installer with Azure Artifact Signing
+  legal/           Builds the legal pages
 electron/main.js   Desktop wrapper: starts the server privately and opens a window
 deploy/azure/      Setup script and guide for an online server on Azure
 test/              API tests (node --test)

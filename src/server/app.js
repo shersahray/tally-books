@@ -117,6 +117,8 @@ function createApp(opts) {
     if (!canArea(user, area, level)) throw new ValidationError(level === 'edit' ? `Your role doesn’t allow changes in ${ROLES.AREAS[area].label}.` : `Your role doesn’t include ${ROLES.AREAS[area].label}.`, 403);
   };
   /** Every area at this level (for things that touch the whole books, like a backup or example data). */
+  /** Edit in the areas a write touches (roles.js writeAreas; a list there means any one of them). */
+  const needWrite = (user, col, data, prev) => { for (const a of ROLES.writeAreas(col, data, prev)) { const any = Array.isArray(a) ? a : [a]; if (!any.some(x => canArea(user, x, 'edit'))) needArea(user, any[0], 'edit'); } };
   const needAllAreas = (user, level) => { for (const a of Object.keys(ROLES.AREAS)) needArea(user, a, level); };
   /** Is a plan feature on for this company: in its firm's plan, and not switched off in its settings? */
   const featureOn = (cid, key, store) => {
@@ -657,7 +659,7 @@ function createApp(opts) {
     if (user && user.perms) {
       const prev = store.get(collection, id);
       if (collection === 'attachments') { const x = prev || {}; const t = x.target && store.get(x.target, x.targetId); needArea(user, ROLES.recordArea(x.target || 'entries', t), 'edit'); }
-      else for (const a of ROLES.writeAreas(collection, op === 'set' ? w.data || {} : null, prev)) needArea(user, a, 'edit');
+      else needWrite(user, collection, op === 'set' ? w.data || {} : null, prev);
     }
     // Plan features: payroll records, and the special sales tax methods on returns.
     if (ctx && op === 'set') {
@@ -1559,9 +1561,6 @@ function createApp(opts) {
       });
       return { ok: true, rev: docIds.length ? ctx.bump() : ctx.rev };
     }],
-    // Batch "Mark as sent": invoices that went out some other way (by hand, by post, from another mailbox) get the
-    // same "sent" record an email adds, with no address. Like the email record, it isn't a change to the books,
-    // so it's allowed in a closed period.
     // ---------- bill approvals ----------
     // The people who could be approvers (Settings → Bill approvals): owners and staff of the firm.
     ['GET', /^\/approvers$/, ctx => {
@@ -1599,7 +1598,11 @@ function createApp(opts) {
       });
       return { ok: true, status: after.approval.status, rev: ctx.bump() };
     }],
+    // Batch "Mark as sent": invoices that went out some other way (by hand, by post, from another mailbox) get the
+    // same "sent" record an email adds, with no address. Like the email record, it isn't a change to the books,
+    // so it's allowed in a closed period.
     ['POST', /^\/docs\/mark-sent$/, async (ctx, req) => {
+      needArea(ctx.user, 'sales'); // a change to the invoices, like sending them
       const body = (await readJson(req)) || {};
       if (!Array.isArray(body.docIds) || !body.docIds.length) throw new ValidationError('Pick at least one invoice.');
       if (body.docIds.length > 1000) throw new ValidationError('Mark at most 1,000 invoices at a time.');
@@ -1953,14 +1956,15 @@ function createApp(opts) {
       return { ok: true, id, rev: ctx.bump() };
     }],
     // Receipts by email: this company's forwarding address, and who may send to it.
+    // The address goes with the Receipts inbox (Expenses); who may send to it, and a new address, are Settings.
     ['GET', /^\/receipts\/email$/, ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); if (!canArea(ctx.user, 'settings', 'view')) needArea(ctx.user, 'expenses', 'view');
       const feature = featureOn(ctx.id, 'emailReceipts', ctx.store), cfg = ctx.store.getSetting('inboundEmail') || {};
       if (feature && inSet.ready()) inSet.ensure(ctx.id);
       return { feature, ready: inSet.ready(), address: feature ? inSet.address(ctx.id) : '', allowed: cfg.allowed || [], rejected: (cfg.rejected || []).slice(-10).reverse() };
     }],
     ['PUT', /^\/receipts\/email$/, async (ctx, req) => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       needFeature(ctx.id, 'emailReceipts', ctx.store);
       const body = (await readJson(req)) || {};
       const before = ctx.store.getSetting('inboundEmail') || {}, allowed = inbound.cleanAllowed(body.allowed);
@@ -1971,7 +1975,7 @@ function createApp(opts) {
       return { ok: true, allowed };
     }],
     ['POST', /^\/receipts\/email\/new$/, ctx => {
-      notClient(ctx.user);
+      notClient(ctx.user); needArea(ctx.user, 'settings');
       needFeature(ctx.id, 'emailReceipts', ctx.store);
       if (!inSet.ready()) throw new ValidationError('Receipts by email aren’t set up on this server yet. Ask the server’s administrator.', 409);
       inSet.rotate(ctx.id);
@@ -2102,6 +2106,9 @@ function createApp(opts) {
         if ((addOnly || w.collection !== 'accounts') && w.op === 'set' && ctx.store.get(w.collection, String(w.id))) throw new ValidationError('An import can only add new records, not change existing ones.');
         if (addOnly) { const k = w.collection + '/' + w.id; if (ids.has(k)) throw new ValidationError('The same record is listed twice in the import.'); ids.add(k); }
       }
+      // Custom roles: Edit in the area of every record the import adds (each is checked again as it's written, but
+      // saying so now means no copy of the books is made for an import that can't go ahead).
+      if (ctx.user.perms) for (const w of body.writes) needWrite(ctx.user, w.collection, w.op === 'set' ? w.data || {} : null, ctx.store.get(w.collection, String(w.id)));
       const snapDir = path.join(opts.dataDir, 'before-restore');
       fs.mkdirSync(snapDir, { recursive: true, mode: 0o700 });
       const snap = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: ctx.store.getSetting('company') };

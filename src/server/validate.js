@@ -1092,4 +1092,4 @@ function validateQuestion(data, store) {
     label: str(data.label, 200), created: Number(data.created) || 0 };
 }
 
-module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, isDate, str, sanitizeDraft, settledOn };
+module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, ENTRY_TYPES, isDate, str, sanitizeDraft, settledOn };
