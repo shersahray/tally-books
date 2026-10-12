@@ -45,6 +45,13 @@ Medium:
   rule; the pay run says to check it. Overtime averaging agreements and banked time aren't supported.
 - **Voiding** a pay run after later ones doesn't change those later runs: the next pay run catches up CPP and EI
   through year-to-date amounts, and their stubs keep the old figures.
+- **T4 XML and ROE XML** haven't been through CRA's or Service Canada's own validation yet (see "Before relying on
+  them" below).
+- **WSIB due dates on a weekend** aren't moved (WSIB doesn't publish a rule); the **EHT annual return** keeps March 15
+  even on a weekend (Ontario only states the next-business-day rule for instalments). Confirm both with the client's
+  accountant or the agency if it matters (March 15, 2026 was a Sunday).
+- **Paying WSIB and EHT** is recorded as an ordinary expense against the payable account: there's no "Record payment"
+  that marks a WSIB period or EHT instalment as paid, so they stay listed with their due dates.
 
 Low:
 - Client-role users can post and delete pay runs and see full SINs — confirm that's intended.
@@ -124,11 +131,13 @@ number) is in Settings → Payroll, from the employer's bank.
   group's agreement, none when the group's Ontario payroll is over $5,000,000), the rate from the tiered table
   (0.98% up to $200,000, then 1.101% … 1.829%, 1.95% over $400,000), monthly instalments (required when remuneration
   is over **$1,200,000** since 2021, not $600,000, which was the threshold before 2021; due the 15th of the next
-  month) and the March 15 return. It can record monthly accrual entries (Dr Employer health tax, Cr Employer health
+  month, or the next business day when the 15th is a weekend or Ontario holiday, as Ontario's EHT page says) and the
+  March 15 return. It can record monthly accrual entries (Dr Employer health tax, Cr Employer health
   tax payable). Checked against the Ontario Ministry of Finance EHT page, October 2026. The exemption is indexed
   again on January 1, 2029.
 - **WSIB:** Settings → Payroll: account number, reporting frequency (monthly / quarterly / once a year, with WSIB's
-  due dates: the last day of the next month, the month after the quarter, or April 30), maximum insurable earnings
+  due dates: the last day of the next month, the month after the quarter, or April 30, shown as they are: WSIB's
+  premium policy only says "due dates set by the WSIB" and nothing about weekends), maximum insurable earnings
   (blank = WSIB's 2026 maximum, $121,700) and rate groups with a rate per $100. Each employee gets a group (or
   "not covered"). Each pay run works out the premium (capped at the maximum for the year) and posts Dr Workers'
   compensation premiums (7155), Cr Workers' compensation payable (2335). Remittances shows the report by period and
@@ -136,13 +145,17 @@ number) is in Settings → Payroll, from the employer's bank.
   ordinary expense against the payable.
 - **Void a pay run:** posts a reversing entry on the date chosen (today by default, never before the pay date or in
   a closed period) and marks the run void. A void run is left out of year-to-date amounts, remittances, vacation and
-  holiday pay, WSIB, EHT, T4/RL-1 slips and the ROE. Later pay runs in the year that used it are listed; the next
+  holiday pay, WSIB, EHT, T4/RL-1 slips and the T4 XML, the ROE and ROE XML, the cash flow forecast's next pay
+  (each schedule repeats its last live run), the next pay date suggested in Run payroll, the Payroll add-on's
+  employees billed, workflow reminders about remittances, and its stubs can't be emailed (the server refuses too).
+  `test/void-everywhere.test.js` checks each of these together. Later pay runs in the year that used it are listed; the next
   pay run's CPP and EI are worked out without it, so they resume if they stopped too early. The server checks the
   reversing entry undoes the original line for line, refuses changes to a void run, and refuses deleting a pay run
   unless it's the latest for its employees and its bank payment isn't reconciled (void it otherwise).
 
 **Before relying on it:** check each client's WSIB rate per $100 against their premium rate notice, and update
 `WSIB_MAX` and the EHT exemption each year.
+
 ## Remittance schedules and emailed pay stubs (added October 2026)
 
 **Remitting frequencies.** Settings → Payroll has one setting for CRA and one for Revenu Québec (blank = the same as
@@ -174,7 +187,8 @@ Sources: CRA "When to remit" (canada.ca/cra-remit-due-date) and Revenu Québec "
 - **Changing frequency mid-year.** A payment keeps the period key it was recorded for. A pay date inside a period that
   already has a payment under another frequency stays in that period, so the payment still matches; later pay dates use
   the new frequency. Payments for periods with no pay runs still show, with their own due date. The cash flow forecast
-  uses the same periods.
+  and the "Payroll remittance coming due" workflow reminder use the same periods and due dates (the reminder used to
+  assume monthly or quarterly CRA remitting, and counted void pay runs).
 - The remittance guide gives the remitting period as the period's end date (YYYY-MM-DD) for accelerated remitters, and
   names the threshold 1 or 2 payee.
 

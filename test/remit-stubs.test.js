@@ -317,6 +317,11 @@ test('email pay stubs: one mail route call per employee, no email skipped, "sent
   assert.equal((await send({ to: 'ana@example.com', cc: 'boss@example.com', employeeId: 'e1' })).status, 400);
   assert.equal((await send({ to: 'ana@example.com', employeeId: 'e9' })).status, 404);
   assert.equal((await send({ to: 'ana@example.com', employeeId: 'e1', payrunId: 'nope' })).status, 404);
+  // A void pay run's stubs aren't sent (the screen hides the button; the server says no too).
+  server.registry.store(co).put('payruns', 'runV', { ...run, void: { date: '2026-10-10', reason: 'Wrong', entryId: '' } });
+  r = await send({ to: 'ana@example.com', employeeId: 'e1', payrunId: 'runV' });
+  assert.equal(r.status, 409); assert.match(r.json.error, /voided/);
+  server.registry.store(co).delete('payruns', 'runV');
   assert.equal(got.length, before + 2, 'nothing refused was sent');
   // Saving the pay run again keeps the record of what was sent, in its own shape only.
   const saved = (await call('GET', '/api/c/state')).json.payruns[0];

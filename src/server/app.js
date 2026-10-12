@@ -1721,6 +1721,9 @@ function createApp(opts) {
       for (const [k, r] of Object.entries(company.workflows.rules)) if (r.on && r.who === 'people' && !r.people.length) throw new ValidationError(`${WF.TEMPLATES[k].label}: choose at least one person to remind.`);
       const prevWf = (() => { try { return WF.clean(before && before.workflows); } catch { return { rules: {} }; } })();
       if (JSON.stringify(company.workflows) !== JSON.stringify(prevWf) && WF.anyOn(company.workflows)) needFeature(ctx.id, 'workflows', ctx.store);
+      // Payroll settings (remitting frequencies, overtime, EHT, WSIB, stub emails, direct deposit) change only when payroll
+      // is on for this company (Thrive, or the Payroll add-on); settings saved earlier stay as they were.
+      if (JSON.stringify(company.payroll) !== JSON.stringify(validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) }).payroll)) needFeature(ctx.id, 'payroll', ctx.store);
       // The cash flow forecast's own settings (planned items, lines left out) change only when the plan includes it.
       if (JSON.stringify(company.cashForecast) !== JSON.stringify(validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) }).cashForecast)) needFeature(ctx.id, 'cashForecast', ctx.store);
       ctx.store.transaction(() => {
@@ -1774,6 +1777,7 @@ function createApp(opts) {
         const run = ctx.store.get('payruns', String(body.payrunId || ''));
         const li = run ? (run.lines || []).findIndex(l => l.employeeId === String(body.employeeId || '')) : -1;
         if (li < 0) throw new ValidationError('That pay stub isn’t in this pay run.', 404);
+        if (run.void) throw new ValidationError('That pay run was voided, so its pay stubs aren’t sent.', 409);
         const emp = ctx.store.get('employees', run.lines[li].employeeId) || {};
         if (to.length !== 1 || cc.length || to[0].toLowerCase() !== String(emp.email || '').trim().toLowerCase()) throw new ValidationError('A pay stub goes only to the employee’s own email address.');
         stub = { run, li };

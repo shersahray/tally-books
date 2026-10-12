@@ -182,6 +182,12 @@ function remittances(){
     x.lastEmps=x.lastRun?x.lastRun.lines.filter(l=>PR.remitSplit(l.ded,l.er)[x.agency]).length:0;return x})
     .sort((a,b)=>b.key.localeCompare(a.key)||a.agency.localeCompare(b.agency));
 }
+/** The last pay run on each pay schedule (void ones left out), with what it paid and owes: the cash flow forecast
+    repeats it for the next pay dates. */
+function paySchedules(){
+  const last={};for(const r of liveRuns().sort(runOrder))last[r.freq||'biweekly']=r;
+  return Object.entries(last).map(([freq,r])=>{const x=runTotals(r);return{freq,last:{payDate:r.payDate,net:x.net,cra:x.cra,rq:x.rq}}});
+}
 const overdueRemits=()=>liveRuns().length?remittances().filter(x=>x.st.k==='overdue').length:0;
 
 /** How often an agency is paid and when, from its frequency (each part its own text, so it translates). */
@@ -370,9 +376,9 @@ function defaultPeriod(freq,payDate){
 function payRunForm(){
   const act=S.employees.filter(e=>e.active!==false);
   const freqs=[...new Set(act.map(e=>e.freq))];
-  const last=S.payruns.slice().sort(runOrder).pop();
+  const last=liveRuns().sort(runOrder).pop();// a void run is redone on its own date, so the next date comes from the last live one
   let freq=last&&freqs.includes(last.freq)?last.freq:freqs[0];
-  const nextDate=()=>{const l=S.payruns.filter(r=>r.freq===freq).sort(runOrder).pop();if(!l)return today();if(freq==='weekly')return addDays(l.payDate,7);if(freq==='biweekly')return addDays(l.payDate,14);const d=pd(l.payDate);if(freq==='monthly')return monthEnd(d.getFullYear(),d.getMonth()+2);return d.getDate()<=15?monthEnd(d.getFullYear(),d.getMonth()+1):`${d.getFullYear()+(d.getMonth()===11?1:0)}-${pad(d.getMonth()===11?1:d.getMonth()+2)}-15`};
+  const nextDate=()=>{const l=liveRuns().filter(r=>r.freq===freq).sort(runOrder).pop();if(!l)return today();if(freq==='weekly')return addDays(l.payDate,7);if(freq==='biweekly')return addDays(l.payDate,14);const d=pd(l.payDate);if(freq==='monthly')return monthEnd(d.getFullYear(),d.getMonth()+2);return d.getDate()<=15?monthEnd(d.getFullYear(),d.getMonth()+1):`${d.getFullYear()+(d.getMonth()===11?1:0)}-${pad(d.getMonth()===11?1:d.getMonth()+2)}-15`};
   const defBank=(sortAccts(S.accounts.filter(a=>a.detail==='bank'))[0]||{}).id;
   const f=openModal('Run payroll',`
     <div class="fields">${fld('rFreq','Pay schedule',`<select id="rFreq">${freqs.map(k=>`<option value="${k}" ${k===freq?'selected':''}>${PR.FREQ_LABEL[k]}</option>`).join('')}</select>`)}
@@ -815,7 +821,7 @@ function vEht(){
       <tr class="tot"><td><b>EHT for the year</b></td><td class="n"><b>${money(X.tax)}</b></td></tr>
       ${X.instalmentsRequired?row('Minus: monthly instalments',money(X.instalments))+`<tr class="tot"><td>Balance with the annual return</td><td class="n">${money(X.balance)}</td></tr>`:''}
     </tbody></table></div>
-    <div class="muted" style="font-size:13px"><p style="margin-top:0">${X.instalmentsRequired?`<span>Ontario remuneration is over ${money(PR.EHT.instalments)}, so EHT is paid in monthly instalments, due the 15th of the next month (below).</span>`:`<span>Remuneration is ${money(PR.EHT.instalments)} or less, so there are no instalments: pay it all with the annual return.</span>`} <span>The annual return is due ${fmtDate(X.due)}, even when no tax is owed.</span></p>
+    <div class="muted" style="font-size:13px"><p style="margin-top:0">${X.instalmentsRequired?`<span>Ontario remuneration is over ${money(PR.EHT.instalments)}, so EHT is paid in monthly instalments, due the 15th of the next month (below).</span> <span>An instalment due on a weekend or holiday is due the next business day.</span>`:`<span>Remuneration is ${money(PR.EHT.instalments)} or less, so there are no instalments: pay it all with the annual return.</span>`} <span>The annual return is due ${fmtDate(X.due)}, even when no tax is owed.</span></p>
       <p>${X.notes.includes('group')?`<span class="neg">Your associated group’s Ontario payroll is over ${money(PR.EHT.groupLimit)}, so no exemption can be claimed.</span> `:''}${payCfg().eht?.eligible===false?'<span>Not eligible for the exemption (Settings → Payroll).</span> ':''}<span>Remuneration includes taxable benefits and amounts paid before Sumlora. The rate is set by the year’s total, so it can still change until December.</span> <span>File and pay in ONT-TAXS online.</span></p></div></div>
     <div class="tbl-wrap"><table><thead><tr><th>Month</th><th class="n">Remuneration</th><th class="n">Year to date</th><th class="n">Above the exemption</th><th class="n">Accrual</th>${X.instalmentsRequired?'<th class="n">Instalment</th><th>Due</th>':''}<th></th></tr></thead><tbody>
       ${X.months.filter(m=>m.remuneration||m.instalment).map(m=>{const rec=S.entries.find(e=>e.id===ehtEntryId(m.month));return `<tr><td>${pd(m.month+'-01').toLocaleDateString(LOC(),{month:'long',year:'numeric'})}</td><td class="n">${money(m.remuneration)}</td><td class="n">${money(m.cumulative)}</td><td class="n">${money(m.taxable)}</td><td class="n">${money(m.accrual)}</td>${X.instalmentsRequired?`<td class="n">${m.instalment?money(m.instalment):''}</td><td class="muted" style="white-space:nowrap">${m.instalment?fmtDate(m.due):''}</td>`:''}<td>${rec?'<span class="pill paid">Recorded</span>':''}</td></tr>`}).join('')}

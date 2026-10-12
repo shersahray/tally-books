@@ -85,7 +85,7 @@ function invoicingPanel(){
       <div class="field"><label class="check" style="margin-top:24px"><input type="checkbox" id="slTax" ${s.tax?'checked':''}> <span>Charge sales tax on the invoices</span></label><span class="hint">The company’s own rate (${co?'set in its Settings':'GST/HST, or GST and QST'}). Leave off if you aren’t registered.</span></div>
     </div>
     <div class="actions"><button class="btn" data-slsave>Save</button>${s.companyId?`<button class="btn primary" data-slopen>Make ${esc(label)} invoices</button>`:''}</div>
-    <h3 class="fsec" style="margin:4px 0 0">${esc(label)}: what each customer owes</h3>
+    <h3 class="fsec" style="margin:4px 0 0"><span>${esc(label)}</span>${isFr()?"\u00a0:":":"} <span>what each customer owes</span></h3>
     <div class="tbl-wrap"><table><thead><tr><th>Customer</th><th>Email</th><th>Plan</th><th class="n">Companies</th><th class="n">Add-ons</th><th class="n">Before tax</th></tr></thead><tbody>
       ${list.length?list.map(cu=>`<tr><td><b translate="no">${esc(cu.name)}</b>${cu.key.startsWith('co:')?' <span class="pill quiet">Client pays</span>':''}</td><td class="mono" style="font-size:12.5px" translate="no">${esc(cu.email||'—')}</td><td>${esc(slPlanLabel(s,cu.plan))}</td><td class="n">${cu.companies}</td><td class="n">${Object.entries(slAddons(cu)).filter(([,n])=>n>0).map(([k,n])=>`${esc(slAddonLabel(s,k))}: ${n}`).join('<br>')||'—'}</td><td class="n">${money(slAmount(s,cu))}</td></tr>`).join('')+`<tr><td colspan="5"><b>Total</b></td><td class="n"><b>${money(tot)}</b></td></tr>`:emptyRow(6,'No one to bill yet','Firms you invite show here once they add companies.')}
     </tbody></table></div>

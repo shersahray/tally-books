@@ -919,7 +919,7 @@ function validateTransmitter(t) {
 }
 
 function validatePayrollSettings(p) {
-  if (!isObj(p)) return { hsfRate: 1.65, remitFreq: 'monthly' };
+  if (!isObj(p)) p = {}; // the same defaults, in the same shape, as an empty object (so "unchanged" compares equal)
   const hsf = Number(p.hsfRate);
   const out = {
     hsfRate: Number.isFinite(hsf) && hsf >= 0 && hsf <= 10 ? hsf : 1.65,

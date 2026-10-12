@@ -223,6 +223,36 @@ test('gating: Seed refuses payroll without the add-on, new bank connections, bud
   assert.equal((await req(owner, 'PUT', `/api/c/${plainCo}/settings`, { ...s2, classes: [...s2.classes, { id: 'k3', name: 'Kingston' }], classPerLine: true })).status, 200);
 });
 
+test('gating this batch: delayed charges on every plan; workflows need Thrive; payroll settings and pay stub emails need payroll', async () => {
+  await req(admin, 'PUT', `/api/firms/${oldFirm}`, { plan: 'seed' });
+  const s = (await req(owner, 'GET', `/api/c/${plainCo}/state`)).json;
+  const income = s.accounts.find(a => a.type === 'Income');
+  const cust = await req(owner, 'PUT', `/api/c/${plainCo}/records/contacts/c1`, { kind: 'customer', name: 'Client' });
+  assert.equal(cust.status, 200);
+  let r = await req(owner, 'PUT', `/api/c/${plainCo}/records/delayed/d1`, { kind: 'charge', date: '2026-09-02', contactId: 'c1', lines: [{ desc: 'Visit', account: income.id, qty: 1, rate: 50, taxCode: 'none' }] });
+  assert.equal(r.status, 200, 'delayed charges are in Seed: ' + JSON.stringify(r.json));
+  r = await req(owner, 'PUT', `/api/c/${plainCo}/settings`, { ...s.company, workflows: { rules: { billDue: { on: true, days: 3 } } } });
+  assert.equal(r.status, 403); assert.match(r.json.error, /Workflow reminders isn’t part/);
+  assert.equal((await req(owner, 'POST', `/api/c/${plainCo}/workflows/check`, {})).status, 403);
+  // Payroll settings (overtime, EHT, WSIB, Revenu Québec frequency, stub emails) need payroll; other settings still save.
+  for (const payroll of [{ otThreshold: 40 }, { remitFreq: 'accel1' }, { remitFreqRq: 'quarterly' }, { wsib: { on: true, groups: [{ id: 'g1', rate: 1 }] } }, { eht: { eligible: false } }, { stubMail: { en: { subject: 'Pay', text: '' } } }]) {
+    r = await req(owner, 'PUT', `/api/c/${plainCo}/settings`, { ...s.company, payroll });
+    assert.equal(r.status, 403, JSON.stringify(payroll)); assert.match(r.json.error, /Payroll add-on/);
+  }
+  assert.equal((await req(owner, 'PUT', `/api/c/${plainCo}/settings`, { ...s.company, phone: '613-555-0000' })).status, 200, 'saving other settings keeps the payroll defaults');
+  // The pay stub email checks payroll before anything else about the stub.
+  r = await req(owner, 'POST', `/api/c/${plainCo}/mail/send`, { to: 'a@example.com', subject: 'x', text: 'x', what: 'paystub', payrunId: 'r1', employeeId: 'e1' });
+  assert.ok([403, 409].includes(r.status), 'refused: ' + r.status);
+  // With the add-on on, payroll settings save.
+  server.registry.update(plainCo, { payroll: true });
+  r = await req(owner, 'PUT', `/api/c/${plainCo}/settings`, { ...s.company, payroll: { otThreshold: 40, remitFreq: 'accel1' } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  server.registry.update(plainCo, { payroll: false });
+  await req(admin, 'PUT', `/api/firms/${oldFirm}`, { plan: 'thrive' });
+  r = await req(owner, 'PUT', `/api/c/${plainCo}/settings`, { ...(await req(owner, 'GET', `/api/c/${plainCo}/state`)).json.company, workflows: { rules: { billDue: { on: true, days: 3 } } } });
+  assert.equal(r.status, 200, 'Thrive has workflows');
+});
+
 test('firms page: choosing a plan ends the old price; payroll billing for an old-price firm is the administrator’s choice', async () => {
   let f = (await req(admin, 'GET', '/api/firms')).json.firms.find(x => x.id === plusFirm);
   assert.equal(f.legacy, 'plus');

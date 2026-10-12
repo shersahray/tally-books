@@ -191,3 +191,14 @@ test('a plan without custom roles refuses them', async () => {
     await req(owner, 'PUT', `/api/firms/${firms.myFirm}`, { plan: 'plus' });
   }
 });
+
+test('areas for this batch’s settings and records: payroll settings, workflows, delayed charges', () => {
+  // Overtime, EHT, WSIB, transmitter, employer address, stub emails and Revenu Québec's frequency all live in `payroll`.
+  assert.equal(R.settingArea('payroll'), 'payroll');
+  assert.equal(R.settingArea('workflows'), 'settings');
+  assert.equal(R.settingArea('reminders'), 'settings');
+  assert.equal(R.recordArea('delayed', { kind: 'charge' }), 'sales');
+  assert.equal(R.recordArea('delayed', { kind: 'credit' }), 'sales');
+  assert.equal(R.recordArea('payruns', { void: { date: '2026-10-01' } }), 'payroll');
+  assert.equal(R.recordArea('entries', { type: 'payremit' }), 'payroll');
+});

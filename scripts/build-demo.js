@@ -41,7 +41,15 @@ const pub = f => fs.readFileSync(path.join(root, 'public', f), 'utf8');
   const scripts = [...index.split('<body>')[1].matchAll(/<script src="([a-z0-9-]+\.js)"><\/script>/g)].map(m => m[1]);
   if (scripts.length < 40 || scripts[0] !== 'i18n.js') throw new Error('Couldn’t read the script list from public/index.html.');
   const safe = s => s.replace(/<\/script/gi, '<\\/script');
-  const html = `<title>Sumlora Demo</title>
+  // The charset comes first: opened from disk, a page without it is read in the browser's default encoding, and the
+  // non-ASCII in the scripts (accents, the bank-file regular expressions in payroll-dd.js) breaks.
+  const html = `<!doctype html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Sumlora Demo</title>
 <meta name="description" content="Try Sumlora in your browser. Example data; nothing is saved.">
 ${fonts}
 <style>

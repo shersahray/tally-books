@@ -1,5 +1,5 @@
 'use strict';
-/* ---------- Workflow reminders (Plus): screens ----------
+/* ---------- Workflow reminders (Thrive): screens ----------
    The rules live in workflows.js (shared with the server, which checks them every hour and when a company is opened).
    Here: the Reminders bell beside the company name (a count, and a list where each reminder opens its record and can
    be dismissed or snoozed), and Settings → Workflows, where ready-made rules are turned on and adjusted. */
@@ -62,7 +62,7 @@ function wfNote(k){
 }
 function workflowsPanel(){
   if(!ME||ME.role==='client')return '';
-  if(!feat('workflows'))return TallyPlans.inPlan(ME.firmPlan,'workflows')?'':`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Workflows</h3><div class="pad muted" style="font-size:13px"><span>Rules that remind the right people about overdue invoices, bills coming due and more.</span> <span class="pill quiet">${esc(T('In the Plus plan'))}</span></div></div>`;
+  if(!feat('workflows'))return TallyPlans.inPlan(ME.firmPlan,'workflows')?'':`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Workflows</h3><div class="pad muted" style="font-size:13px"><span>Rules that remind the right people about overdue invoices, bills coming due and more.</span> ${inPlanPill('workflows')}</div></div>`;
   const can=perm('settings','edit')&&!ME.readOnly,dis=can?'':'disabled',s=S.company.workflows||{rules:{}};
   if(WF_PEOPLE===null){WF_PEOPLE=[];wfLoadPeople()}
   const rows=WF.KEYS.map(k=>{const t=WF.TEMPLATES[k],r=WF.rule(s,k),note=wfNote(k);

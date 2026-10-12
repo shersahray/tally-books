@@ -343,6 +343,8 @@
       closed Monday the 28th). CRA's list keeps the weekend date, so its due dates are never moved later than it says. */
   const DUE_HOLIDAYS = {
     cra: prov => ['newyear', 'goodfriday', 'eastermonday', 'victoria', ...(prov === 'QC' ? ['stjean24'] : []), 'canada', ...(prov === 'QC' ? [] : ['civic']), 'labour', 'truth', 'thanksgiving', 'remembrance', 'christmas', 'boxing'],
+    // Ontario (EHT instalments): the holidays in Ontario's Legislation Act, s. 87.
+    on: () => ['newyear', 'family', 'goodfriday', 'eastermonday', 'victoria', 'canada', 'civic', 'labour', 'thanksgiving', 'remembrance', 'christmas', 'boxing'],
     rq: () => ['newyear', 'jan2', 'goodfriday', 'eastermonday', 'patriots', 'stjean24', 'canada', 'labour', 'thanksgiving', 'remembrance', 'dec24', 'christmas', 'boxing', 'dec31'],
   };
   const DUE_EXTRA = {
@@ -902,7 +904,9 @@
      $1,000,000 exemption (until 2028; indexed from 2029), shared by associated employers, and lost when the
      associated group's Ontario payroll is over $5,000,000. Since 2021, employers with more than $1,200,000 of
      Ontario remuneration pay monthly instalments, due the 15th of the next month; the annual return and any
-     balance are due March 15. Ontario Ministry of Finance, Employer Health Tax (checked October 2026). */
+     balance are due March 15. Ontario Ministry of Finance, Employer Health Tax (checked October 2026): an instalment due
+     on a weekend or holiday is due the next business day. Ontario doesn't say the same for the annual return, so its
+     March 15 is kept as it is. */
   const EHT = {
     exemption: 1000000, instalments: 1200000, groupLimit: 5000000,
     rates: [[200000, 0.0098], [230000, 0.01101], [260000, 0.01223], [290000, 0.01344], [320000, 0.01465], [350000, 0.01586], [380000, 0.01708], [400000, 0.01829], [Infinity, 0.0195]],
@@ -958,7 +962,8 @@
       const instalment = instalmentsRequired && cum > EHT.instalments ? r2(tx * rate - inst) : 0;
       inst = r2(inst + instalment);
       const ny = i === 11 ? Number(year) + 1 : Number(year), nm = i === 11 ? 1 : i + 2;
-      return { month: `${year}-${String(i + 1).padStart(2, '0')}`, remuneration: v, cumulative: cum, taxable: add, accrual, instalment, due: `${ny}-${String(nm).padStart(2, '0')}-15` };
+      // Ontario: an instalment due on a weekend or holiday is due the next business day.
+      return { month: `${year}-${String(i + 1).padStart(2, '0')}`, remuneration: v, cumulative: cum, taxable: add, accrual, instalment, due: nextBusinessDay(`${ny}-${String(nm).padStart(2, '0')}-15`, 'on') };
     });
     // Rounding: the accruals add up to the year's tax exactly (December takes the difference).
     out[11].accrual = r2(tax - out.slice(0, 11).reduce((t, m) => t + m.accrual, 0));

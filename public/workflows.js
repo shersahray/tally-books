@@ -96,20 +96,23 @@
     const byId = new Map(docs.map(d => [d.id, d]));
     return id => { const d = byId.get(id); return d ? r2((Number(d.total) || 0) - (paid[id] || 0)) : 0; };
   }
-  /** Source deductions owed for each agency and remitting period (as on Payroll → Remittances). */
-  function remittances(payruns, entries, freq) {
-    const P = PRx(), m = {};
-    const period = date => {
-      const y = date.slice(0, 4), mo = Number(date.slice(5, 7));
-      if (freq === 'quarterly') { const q = Math.ceil(mo / 3); return { key: `${y}-Q${q}`, due: P.remittanceDue(`${y}-${pad(q * 3)}-01`) }; }
-      return { key: date.slice(0, 7), due: P.remittanceDue(date) };
-    };
+  /**
+   * Source deductions owed for each agency and remitting period, worked out as on Payroll → Remittances (payroll.js):
+   * void pay runs left out, CRA and Revenu Québec each on their own frequency (Revenu Québec's is CRA's unless set),
+   * accelerated periods, due dates moved to the next business day, and a pay date inside a period paid under an
+   * earlier frequency kept in that period. company: the company settings (payroll and province).
+   */
+  function remittances(payruns, entries, company) {
+    const P = PRx(), m = {}, pc = (company && company.payroll) || {}, prov = (company && company.province) || '';
+    const freqOf = ag => (ag === 'rq' ? (pc.remitFreqRq || pc.remitFreq || 'monthly') : (pc.remitFreq || 'monthly'));
+    const paidKeys = ag => [...new Set(entries.filter(e => e.type === 'payremit' && e.agency === ag).map(e => e.period))];
+    const paid = { cra: paidKeys('cra'), rq: paidKeys('rq') };
     for (const r of payruns) {
-      if (!isDate(r.payDate)) continue;
-      const p = period(r.payDate);
+      if (!isDate(r.payDate) || r.void) continue; // a void pay run owes nothing
       for (const ag of ['cra', 'rq']) {
-        const owed = r2((r.lines || []).reduce((s, l) => s + (P.remitSplit(l.ded, l.er)[ag] || 0), 0));
+        const owed = r2((r.lines || []).reduce((s, l) => s + (P.remitSplit(l.ded || {}, l.er || {})[ag] || 0), 0));
         if (!owed) continue;
+        const p = P.remitPeriodFor(r.payDate, freqOf(ag), ag, prov, paid[ag]);
         const x = m[ag + '|' + p.key] = m[ag + '|' + p.key] || { agency: ag, key: p.key, due: p.due, owed: 0, paid: 0 };
         x.owed = r2(x.owed + owed);
       }
@@ -220,8 +223,7 @@
           add(`${x.id}|${sent}`, 'estimates', x.id, sent, { number: x.number || '', who: name(x.contactId), amount: r2(x.total) });
         }
       } else if (k === 'payrollRemit') {
-        const freq = (b.company.payroll || {}).remitFreq === 'quarterly' ? 'quarterly' : 'monthly';
-        for (const x of remittances(b.payruns, b.entries, freq)) {
+        for (const x of remittances(b.payruns, b.entries, b.company)) {
           const until = daysBetween(today, x.due);
           if (x.bal <= 0.004 || until > r.days || until < -LATE_WINDOW) continue;
           add(`${x.agency}|${x.key}`, 'payroll', x.agency, x.due, { agency: x.agency, period: x.key, amount: x.bal });

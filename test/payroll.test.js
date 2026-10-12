@@ -423,6 +423,12 @@ test('EHT: monthly instalments once remuneration passes $1,200,000, due the 15th
   assert.equal(by['2026-09'].due, '2026-10-15');
   assert.equal(by['2026-10'].instalment, P.r2(150000 * 0.0195));
   assert.equal(by['2026-12'].due, '2027-01-15');
+  // On a weekend or Ontario holiday, an instalment is due the next business day (November 15, 2026 is a Sunday;
+  // March 15, 2026 too). The annual return keeps March 15 (Ontario only says this for instalments).
+  assert.equal(by['2026-10'].due, '2026-11-16');
+  assert.equal(by['2026-02'].due, '2026-03-16');
+  assert.equal(P.nextBusinessDay('2027-02-15', 'on'), '2027-02-16', 'Family Day is an Ontario holiday');
+  assert.equal(X.due, '2027-03-15');
   assert.equal(X.instalments, 15600); assert.equal(X.balance, 0);
   // Accruals add up to the year's tax.
   assert.equal(P.r2(X.months.reduce((t, m) => t + m.accrual, 0)), 15600);

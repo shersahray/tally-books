@@ -3433,3 +3433,10 @@ addFr({
   'A remittance is paid to CRA or Revenu Québec.':'Un versement est payé à l’ARC ou à Revenu Québec.',
   'The remitting period isn’t valid.':'La période de versement n’est pas valide.',
 });
+/* ---------- fitting the batch together: EHT due dates, void stubs, monthly invoices ---------- */
+addFr({
+  'For customers who pay you by e-Transfer. From the {0}st of each month, the first time you open the company below, Sumlora makes one invoice for each firm (its companies on its plan, plus any add-ons, like the AI assistant or the scrap yard tools) and for each company whose client pays for themselves. Each gets one invoice a month. Review the invoices, email them, and record each e-Transfer as a payment. Prices come from the Subscriptions settings.':'Pour les clients qui vous paient par virement Interac. À partir du {0}er de chaque mois, la première fois que vous ouvrez l’entreprise ci-dessous, Sumlora prépare une facture pour chaque cabinet (ses entreprises selon son forfait, plus les modules complémentaires comme l’assistant IA ou les outils pour cours à ferraille) et pour chaque entreprise dont le client paie lui-même. Chacun reçoit une facture par mois. Vérifiez les factures, envoyez-les par courriel et inscrivez chaque virement comme un paiement. Les prix viennent des paramètres des abonnements.',
+  'what each customer owes':'ce que chaque client doit',
+  'An instalment due on a weekend or holiday is due the next business day.':'Un acompte dont l’échéance tombe la fin de semaine ou un jour férié est exigible le jour ouvrable suivant.',
+  'That pay run was voided, so its pay stubs aren’t sent.':'Cette paie a été annulée : ses relevés de paie ne sont donc pas envoyés.',
+});
