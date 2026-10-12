@@ -566,6 +566,11 @@ function createApp(opts) {
    * saved reports to Reports, the rest to Settings). Settings in an area they can't see were never sent, so they're
    * kept as they were; changing one in an area they can only view is refused.
    */
+  /** The tag list only grew: every tag and group already there is unchanged, and nothing was removed. */
+  function tagsOnlyAdded(before, after) {
+    const same = (a, b) => (a || []).every(x => (b || []).some(y => JSON.stringify(x) === JSON.stringify(y)));
+    return same(before.tags, after.tags) && same(before.tagGroups, after.tagGroups);
+  }
   function roleSettings(user, company, before) {
     for (const k of Object.keys(company)) {
       const a = ROLES.settingArea(k);
@@ -608,7 +613,7 @@ function createApp(opts) {
   const isUnlocked = (user, store) => { const k = `${user && user.token}|${store.file}`, t = unlocks.get(k); if (t && t > Date.now()) return true; unlocks.delete(k); return false; };
   const DATED = { entries: 'date', docs: 'date', payruns: 'payDate' };
   const canon = x => JSON.stringify(x, (k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o, key) => { o[key] = v[key]; return o; }, {}) : v));
-  const sameBut = (a, b) => { const drop = o => { const { clear, receiptId, applied, sent, id, ...rest } = o || {}; return canon(rest); }; return drop(a) === drop(b); };
+  const sameBut = (a, b) => { const drop = o => { const { clear, receiptId, applied, sent, id, tags, ...rest } = o || {}; return canon(rest); }; return drop(a) === drop(b); };
   function closedCheck(store, w, data, user) {
     const field = DATED[w.collection];
     if (!field) return;
@@ -1419,7 +1424,20 @@ function createApp(opts) {
       const before = ctx.store.getSetting('company');
       const company = validateCompany(await readJson(req));
       company.logoFile = (before && before.logoFile) || ''; // changed only through the logo route
-      if (ctx.user.perms) roleSettings(ctx.user, company, validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) }));
+      if (ctx.user.perms) {
+        const prev = validateCompany({ ...DEFAULT_COMPANY, ...(before || {}) });
+        // Tags: anyone who can change transactions can add a new tag from a form; renaming or removing tags needs Accounting.
+        const tagsChanged = JSON.stringify([prev.tags, prev.tagGroups]) !== JSON.stringify([company.tags, company.tagGroups]);
+        if (tagsChanged && tagsOnlyAdded(prev, company) && ['sales', 'expenses', 'banking', 'accounting'].some(a => canArea(ctx.user, a, 'edit'))) { prev.tags = company.tags; prev.tagGroups = company.tagGroups; }
+        else if (tagsChanged) needArea(ctx.user, 'accounting', 'edit'); // everyone sees the tags, so say no rather than quietly keep them
+        roleSettings(ctx.user, company, prev);
+      }
+      // A tag still on transactions can't just disappear from the list (they'd point at nothing): take it off them first.
+      const gone = new Set(((before && before.tags) || []).map(t => t.id).filter(id => !company.tags.some(t => t.id === id)));
+      if (gone.size) {
+        const on = r => Array.isArray(r && r.tags) && r.tags.some(id => gone.has(id));
+        if (['entries', 'docs', 'rules'].some(c => ctx.store.list(c).some(on)) || ctx.store.list('bankTxns').some(b => on(b.cat))) throw new ValidationError('That tag is still on transactions. Remove it from them first.', 409);
+      }
       // Plan features: can't be turned on here when the plan doesn't include them (settings already saved stay as they were).
       if (company.quickMethod && company.quickMethod.on && !(before && before.quickMethod && before.quickMethod.on)) needFeature(ctx.id, 'specialTax', ctx.store);
       if (!featureOn(ctx.id, 'advancedReports', ctx.store) && JSON.stringify(company.savedReports || []) !== JSON.stringify((before && before.savedReports) || [])) {

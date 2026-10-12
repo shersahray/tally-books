@@ -3,6 +3,7 @@ const GIFI = require('../../public/gifi.js');
 const PLANS = require('../../public/plans.js');
 const IND = require('../../public/industries.js');
 const RECUR = require('../../public/recurring-calc.js');
+const TAGS = require('../../public/tags.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -31,6 +32,18 @@ const cents = n => Math.round(Number(n) * 100);
 const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
 const isDate = s => typeof s === 'string' && DATE_RE.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z'));
 const str = (v, max = 500) => (v === undefined || v === null ? '' : String(v).slice(0, max));
+
+/** Tags on a transaction, invoice, bill or bank rule: known tag ids of the company, at most 20. Sets or removes out.tags. */
+function withTags(out, data, store) {
+  let tags;
+  try {
+    const has = data.tags !== undefined && data.tags !== null && !(Array.isArray(data.tags) && !data.tags.length);
+    const known = has && store && typeof store.getSetting === 'function' ? ((store.getSetting('company') || {}).tags || []).map(t => t.id) : [];
+    tags = TAGS.cleanTags(data.tags, known);
+  } catch (e) { throw new ValidationError(e.message); }
+  if (tags) out.tags = tags; else delete out.tags;
+  return out;
+}
 
 function checkId(id) {
   if (typeof id !== 'string' || !ID_RE.test(id)) throw new ValidationError('Invalid record id.');
@@ -130,7 +143,7 @@ function validateDoc(data, store, id) {
   } else { delete data.currency; delete data.fx; }
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Document total must be a number.');
   if (!Array.isArray(data.lines)) throw new ValidationError('Document lines must be a list.');
-  return data;
+  return withTags(data, data, store);
 }
 
 function validateEntry(data, store, id) {
@@ -177,7 +190,7 @@ function validateEntry(data, store, id) {
     if (!isDate(data.reverseOn) || data.reverseOn <= data.date) throw new ValidationError('The reversing date has to be after the entry’s date.');
   }
   if (data.reversalOf !== undefined) out.reversalOf = str(data.reversalOf, 60);
-  return out;
+  return withTags(out, data, store);
 }
 
 function bankAccount(store, id) {
@@ -199,6 +212,12 @@ function validateBankTxn(data, store, id) {
   // AI suggestions are only written by the server's AI route; an edit can keep one but not make one up.
   const prev = id ? store.get('bankTxns', id) : null;
   const out = { ...data, amount: cents(amt) / 100, desc: str(data.desc, 300), entryId: data.status === 'added' || data.status === 'matched' ? data.entryId : '' };
+  // What a line was added as is remembered for the next line from the same payee; its tags only if they still exist.
+  if (isObj(out.cat) && out.cat.tags !== undefined) {
+    const known = new Set(((store.getSetting && store.getSetting('company')) || {}).tags?.map(t => t.id) || []);
+    const tags = (Array.isArray(out.cat.tags) ? out.cat.tags : []).map(String).filter(id => known.has(id)).slice(0, TAGS.MAX_PER_TXN);
+    out.cat = { ...out.cat }; if (tags.length) out.cat.tags = tags; else delete out.cat.tags;
+  }
   delete out.ai;
   if (data.ai && prev && prev.ai && JSON.stringify(prev.ai) === JSON.stringify(data.ai)) out.ai = prev.ai;
   return out;
@@ -211,7 +230,7 @@ function validateRule(data, store) {
   if (!a) throw new ValidationError('Choose the account this rule should use.');
   if (a.detail === 'bank' || a.detail === 'card') throw new ValidationError('A rule can’t categorize into a bank or card account; use a transfer instead.');
   if (data.contactId && !store.get('contacts', data.contactId)) throw new ValidationError('The payee on this rule doesn’t exist.');
-  return { ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: data.tax === 'gst' ? 'gst' : !!data.tax, contactId: data.contactId || '', cls: str(data.cls, 40) };
+  return withTags({ ...data, text: str(data.text, 100).trim(), direction: data.direction || 'any', tax: data.tax === 'gst' ? 'gst' : !!data.tax, contactId: data.contactId || '', cls: str(data.cls, 40) }, data, store);
 }
 
 function validateRecon(data, store) {
@@ -787,11 +806,13 @@ function validateCompany(data) {
     // What the company calls its classes.
     classLabel: ['class', 'location', 'department', 'division'].includes(data.classLabel) ? data.classLabel : 'class',
     classes: (() => { const seen = new Set(); return (Array.isArray(data.classes) ? data.classes : []).filter(isObj).slice(0, 200).map(c => ({ id: str(c.id, 40), name: str(c.name, 60).trim(), active: c.active !== false })).filter(c => c.id && c.name && !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase())); })(),
+    // Tags: labels on transactions, several per transaction, optionally in groups (tags.js).
+    ...(() => { const t = TAGS.cleanList(data.tagGroups, data.tags); return { tagGroups: t.groups, tags: t.tags }; })(),
     mileage: isObj(data.mileage) ? { expenseAccount: str(data.mileage.expenseAccount, 40), payAccount: str(data.mileage.payAccount, 40), territories: !!data.mileage.territories, rates: isObj(data.mileage.rates) ? Object.fromEntries(Object.entries(data.mileage.rates).filter(([y, v]) => /^\d{4}$/.test(y) && isObj(v)).slice(0, 20).map(([y, v]) => [y, { first: Math.max(0, Math.min(5, Number(v.first) || 0)), after: Math.max(0, Math.min(5, Number(v.after) || 0)) }])) : {} } : { expenseAccount: '', payAccount: '', territories: false, rates: {} },
     // Reports' default accounting method: accrual (as the books are kept) or cash (invoices and bills when paid).
     reportBasis: data.reportBasis === 'cash' ? 'cash' : 'accrual',
     savedReports: (Array.isArray(data.savedReports) ? data.savedReports : []).slice(0, 30).filter(isObj).map(r => ({
-      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap', 'sc', 'si', 'ev', 'bva', 'iv'].includes(r.tab) ? r.tab : 'pl', ...(r.cls ? { cls: str(r.cls, 40) } : {}), ...(r.budget ? { budget: str(r.budget, 120) } : {}),
+      id: str(r.id, 40), name: str(r.name, 60).trim(), tab: ['pl', 'bs', 'cf', 'tb', 'gl', 'ar', 'ap', 'sc', 'si', 'ev', 'bva', 'iv', 'tg'].includes(r.tab) ? r.tab : 'pl', ...(r.cls ? { cls: str(r.cls, 40) } : {}), ...(r.budget ? { budget: str(r.budget, 120) } : {}),
       period: ['month', 'lastmonth', 'quarter', 'ytd', 'fy', 'lastfy', 'all', 'custom'].includes(r.period) ? r.period : 'fy',
       from: isDate(r.from) ? r.from : '', to: isDate(r.to) ? r.to : '', compare: ['prev', 'prevyear', 'months', 'quarters', 'prevmonth', 'byclass'].includes(r.compare) ? r.compare : '', acct: str(r.acct, 40), ...(r.tbAdj ? { tbAdj: r.tbAdj === 'aje' ? 'aje' : true } : {}),
       ...(['accrual', 'cash'].includes(r.basis) ? { basis: r.basis } : {}),

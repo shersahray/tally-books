@@ -83,7 +83,7 @@
     payroll: 'payroll',
     quickMethod: 'salestax', qstRate: 'salestax', pstRate: 'salestax', pstName: 'salestax', pstFreq: 'salestax', filingFreq: 'salestax', taxName: 'salestax', taxRate: 'salestax',
     savedReports: 'reports',
-    notDuplicates: 'accounting', classes: 'accounting', ccaOpening: 'accounting',
+    notDuplicates: 'accounting', classes: 'accounting', ccaOpening: 'accounting', tags: 'accounting', tagGroups: 'accounting',
     mileage: 'expenses',
     lateFee: 'sales', invoiceNote: 'sales', docStyle: 'sales', customFields: 'sales', etransfer: 'sales',
   };

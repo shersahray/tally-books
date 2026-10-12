@@ -10,7 +10,7 @@ let RIX=null;
 const repCls=()=>['pl','bva'].includes(S.rep.tab)&&(S.company.classes||[]).length&&!(S.rep.tab==='pl'&&S.rep.compare==='byclass')?S.rep.cls||'':'';
 /* Accrual or cash basis (cashbasis.js). The Reports page's choice, else the company's default. Only the reports
    below change; everything else (trial balance, aging, sales tax, budgets…) stays on the books' accrual basis. */
-const BASIS_TABS=['pl','bs','cf','gl','sc','ev'];
+const BASIS_TABS=['pl','bs','cf','gl','sc','ev','tg'];
 const basisChoice=()=>(S.rep.basis||S.company.reportBasis)==='cash'?'cash':'accrual';
 const repBasis=()=>BASIS_TABS.includes(S.rep.tab)&&basisChoice()==='cash'?'cash':'accrual';
 /** " · Cash basis" for a report's subtitle (the French has the whole subtitle as a key, e.g. "As of {0} · Cash basis"). */
@@ -111,7 +111,7 @@ function colReport({title,sub,C,rows,name}){
   const cell=(v,i)=>v===null||v===undefined?'':i===pctCol?`${v>0?'+':''}${v.toLocaleString(LOC(),{maximumFractionDigits:1})}%`:many&&Math.abs(v)<0.005?'<span class="muted">—</span>':mcell(v);
   const body=full.map(r=>{
     if(r.cls==='spacer')return `<tr class="spacer"><td colspan="${head.length+1}"></td></tr>`;
-    const label=r.acct?`<button class="link" data-acct="${r.acct}" translate="no">${esc(r.label)}</button>`:r.data?`<span translate="no">${esc(r.label)}</span>`:esc(r.label);
+    const label=r.acct?`<button class="link" data-acct="${r.acct}" translate="no">${esc(r.label)}</button>`:r.tag?`<button class="link" data-tagtx="${esc(r.tag)}"${r.data?' translate="no"':''}>${esc(r.label)}</button>`:r.data?`<span translate="no">${esc(r.label)}</span>`:esc(r.label);
     return `<tr class="${r.cls}"><td>${label}</td>${r.cells?r.cells.map((v,i)=>`<td class="n">${cell(v,i)}</td>`).join(''):`<td colspan="${head.length}"></td>`}</tr>`;
   }).join('');
   const csv=[['Account',...head]];
@@ -297,8 +297,8 @@ function reportsPdf(reports,{cover}={}){
   for(let i=0;i<pages;i++){doc.goto(i);doc.text(W0-M,H0-24,`${i+1} / ${pages}`,{size:8,align:'right',color:'#888888'})}
   return doc.output();
 }
-const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor',bva:()=>'Budget vs actual',iv:()=>'Inventory valuation'};
-function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}${basisSub()}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
+const REPORT_TITLES={pl:()=>W('Profit and loss'),bs:()=>W('Balance sheet'),cf:()=>'Cash flow statement',tb:()=>'Trial balance',gl:()=>'General ledger',ar:()=>'Accounts receivable aging',ap:()=>'Accounts payable aging',sc:()=>'Sales by customer',si:()=>'Sales by product or service',ev:()=>'Expenses by vendor',bva:()=>'Budget vs actual',iv:()=>'Inventory valuation',tg:()=>'Money in and out by tag'};
+function reportPdfNow(){const k=S.rep.tab,r=({pl:rPL,bs:rBS,cf:rCF,tb:tbReport,gl:rGL,ar:()=>rAging('invoice'),ap:()=>rAging('bill'),sc:rSalesByCustomer,si:rSalesByItem,ev:rExpensesByVendor,bva:rBudgetVsActual,iv:rInventoryValuation,tg:rTags})[k]();r.title=r.title||REPORT_TITLES[k]();r.sub=r.sub??(k==='ar'||k==='ap'?`As of ${fmtDate(today())}`:k==='tb'?`As of ${fmtDate(S.rep.to)}`:`${fmtDate(S.rep.from)} – ${fmtDate(S.rep.to)}${basisSub()}`);saveFile(r.name+'.pdf',new Blob([reportsPdf([r])],{type:'application/pdf'}))}
 
 /* ---------- report package: several reports for a period, as one PDF ---------- */
 function packageForm(){
