@@ -140,7 +140,7 @@ async function inviteFirmForm(after){
     ${fld('ivFirm','Firm name','<input type="text" id="ivFirm" maxlength="120" autocomplete="off">',true)}
     ${fld('ivName','Owner’s name','<input type="text" id="ivName" maxlength="80" autocomplete="off">')}
     ${fld('ivEmail','Owner’s email','<input type="email" id="ivEmail" autocapitalize="none" spellcheck="false" autocomplete="off">')}
-    ${fld('ivPlan','Plan',`<select id="ivPlan">${ovPlanOpts(FIRMS&&FIRMS.defaultPlan||'essentials')}</select>`,true)}
+    ${fld('ivPlan','Plan',`<select id="ivPlan">${ovPlanOpts(FIRMS&&FIRMS.defaultPlan||'seed')}</select>`,true)}
     </div>`,`<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Invite and get link</button>`);
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     try{const r=await api('POST','/api/firms/invite',{firmName:$('#ivFirm',f).value,name:$('#ivName',f).value,email:$('#ivEmail',f).value,plan:$('#ivPlan',f).value});
@@ -156,7 +156,7 @@ async function inviteBusinessForm(after){
     ${fld('ibProv','Province',`<select id="ibProv">${provinceOptions('ON')}</select>`,true)}
     ${fld('ibPerson','Owner’s name','<input type="text" id="ibPerson" maxlength="80" autocomplete="off">')}
     ${fld('ibEmail','Owner’s email','<input type="email" id="ibEmail" autocapitalize="none" spellcheck="false" autocomplete="off">')}
-    ${paid?fld('ibPlan','Plan they pay for',`<select id="ibPlan">${ovPlanOpts('essentials')}</select>`,true):''}
+    ${paid?fld('ibPlan','Plan they pay for',`<select id="ibPlan">${ovPlanOpts('seed')}</select>`,true):''}
     </div>
     ${paid?'<label class="check"><input type="checkbox" id="ibFree"> My firm pays for this one instead (they don’t pay Sumlora)</label>':''}`,
     `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Invite and get link</button>`);

@@ -98,17 +98,17 @@
 
   const auditLogs = {};
   // The demo's firms (see /api/firms below).
-  let demoSignups = 'approval', demoDefaultPlan = 'essentials', m0;
+  let demoSignups = 'approval', demoDefaultPlan = 'seed', m0;
   const day = 864e5;
   let demoFirms = [
-    { id: 'f_demo', name: 'Demo firm', status: 'active', ai: true, aiCapUsd: 10, plan: 'plus', created: Date.now() - 90 * day, users: 1, companies: 0, owner: { name: 'Demo user', username: 'demo' }, lastLogin: Date.now(), aiSpentUsd: 0, main: true },
-    { id: 'f_north', name: 'North Ledger Bookkeeping (example)', status: 'pending', ai: false, aiCapUsd: 10, plan: 'essentials', created: Date.now() - 2 * 3600e3, users: 1, companies: 0, owner: { name: 'Nora Example', username: 'nora@example.com' }, lastLogin: 0, aiSpentUsd: 0 },
-    { id: 'f_coast', name: 'Coast Accounting (example)', status: 'active', ai: true, aiCapUsd: 25, plan: 'plus', created: Date.now() - 40 * day, users: 4, companies: 12, owner: { name: 'Cal Example', username: 'cal@example.com' }, lastLogin: Date.now() - 3 * day, aiSpentUsd: 6.4 },
+    { id: 'f_demo', name: 'Demo firm', status: 'active', ai: true, aiCapUsd: 10, plan: 'thrive', created: Date.now() - 90 * day, users: 1, companies: 0, owner: { name: 'Demo user', username: 'demo' }, lastLogin: Date.now(), aiSpentUsd: 0, main: true },
+    { id: 'f_north', name: 'North Ledger Bookkeeping (example)', status: 'pending', ai: false, aiCapUsd: 10, plan: 'seed', legacy: 'essentials', created: Date.now() - 2 * 3600e3, users: 1, companies: 0, owner: { name: 'Nora Example', username: 'nora@example.com' }, lastLogin: 0, aiSpentUsd: 0 },
+    { id: 'f_coast', name: 'Coast Accounting (example)', status: 'active', ai: true, aiCapUsd: 25, plan: 'grow', created: Date.now() - 40 * day, users: 4, companies: 12, owner: { name: 'Cal Example', username: 'cal@example.com' }, lastLogin: Date.now() - 3 * day, aiSpentUsd: 6.4 },
   ];
   // Licence codes: a made-up key and codes that don't turn anything on (the demo has no private key).
   const demoLic = { key: { publicKey: 'DEMO-public-key-shown-here-in-your-own-copy', created: Date.now() - 30 * day }, issued: [
-    { id: 'd1', name: 'Harbour Yoga (example)', email: 'owner@example.com', plan: 'plus', kind: 'business', period: 'annual', until: new Date(Date.now() + 200 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 165 * day).toISOString().slice(0, 10), note: '', code: 'TB1-DEMO.example-code-not-real' },
-    { id: 'd2', name: 'Birch Bookkeeping (example)', email: '', plan: 'essentials', kind: 'firm', maxCompanies: 10, period: 'monthly', until: new Date(Date.now() + 12 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 353 * day).toISOString().slice(0, 10), note: 'Paid by e-transfer', code: 'TB1-DEMO.example-code-not-real' },
+    { id: 'd1', name: 'Harbour Yoga (example)', email: 'owner@example.com', plan: 'thrive', kind: 'business', period: 'annual', until: new Date(Date.now() + 200 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 165 * day).toISOString().slice(0, 10), note: '', code: 'TB1-DEMO.example-code-not-real' },
+    { id: 'd2', name: 'Birch Bookkeeping (example)', email: '', plan: 'seed', kind: 'firm', maxCompanies: 10, period: 'monthly', until: new Date(Date.now() + 12 * day).toISOString().slice(0, 10), issued: new Date(Date.now() - 353 * day).toISOString().slice(0, 10), note: 'Paid by e-transfer', code: 'TB1-DEMO.example-code-not-real' },
   ] };
   let auditSeq = 0;
   let demoRoles = [{ id: 'r_ar', name: 'Accounts receivable clerk (example)', perms: { sales: 'edit', expenses: 'view', banking: 'none', payroll: 'none', reports: 'view', accounting: 'none', salestax: 'none', settings: 'none' } }];
@@ -122,10 +122,10 @@
       const act = demoFirms.filter(f => f.status === 'active'), iso = d => new Date(d).toISOString().slice(0, 10);
       return { firms: { total: demoFirms.length, active: act.length, pending: demoFirms.filter(f => f.status === 'pending').length, suspended: demoFirms.filter(f => f.status === 'suspended').length,
           people: demoFirms.reduce((t, f) => t + f.users, 0), companies: demoFirms.reduce((t, f) => t + (f.main ? cos.length : f.companies), 0), newThisMonth: 1, activeLast30: 2,
-          byPlan: { essentials: act.filter(f => f.plan === 'essentials').length, plus: act.filter(f => f.plan === 'plus').length },
+          byPlan: { seed: act.filter(f => f.plan === 'seed').length, grow: act.filter(f => f.plan === 'grow').length, thrive: act.filter(f => f.plan === 'thrive').length },
           recent: demoFirms.filter(f => !f.main).map(f => ({ name: f.name, created: f.created })) },
         ai: { totalUsd: 6.4, top: [{ name: 'Coast Accounting (example)', usd: 6.4 }] },
-        licences: { made: demoLic.issued.length, active: 2, endingSoon: 1, ended: 0, byPlan: { essentials: 1, plus: 1 }, byKind: { firm: 1, business: 1 },
+        licences: { made: demoLic.issued.length, active: 2, endingSoon: 1, ended: 0, byPlan: { seed: 1, grow: 0, thrive: 1 }, byKind: { firm: 1, business: 1 },
           due: demoLic.issued.filter(l => l.until <= iso(Date.now() + 30 * day)).map(({ id, name, email, plan, until }) => ({ id, name, email, plan, until })) } };
     }
     if (path === '/api/overview/downloads') return { repo: 'example', releases: [{ tag: 'v1.3.1', published: new Date(Date.now() - 3 * day).toISOString(), installs: 41, windows: 37, mac: 3, linux: 1 }, { tag: 'v1.3.0', published: new Date(Date.now() - 20 * day).toISOString(), installs: 63, windows: 58, mac: 4, linux: 1 }], totals: { installs: 104, windows: 95, mac: 7, linux: 2 } };

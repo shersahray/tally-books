@@ -45,6 +45,9 @@ async function feedsForm(){
   let r;
   try{r=await api('GET','/api/feeds')}catch(e){return toast(e.message,true)}
   const items=r.items||[];
+  // Automatic feeds are in Grow and Thrive. On Seed, banks connected before keep working; new ones can't be added.
+  const canConnect=r.canConnect!==false;
+  const why=canConnect?'':r.inPlan===false?`<div class="banner"><span>${esc(T('Automatic bank feeds are in the Grow and Thrive plans, because each connected bank has a monthly cost.'))} ${items.length?esc(T('The banks already connected keep working. To connect another, your firm needs the Grow plan.')):esc(T('You can still import bank statements (CSV, OFX, QFX or PDF) in Banking.'))}</span></div>`:`<div class="banner"><span>${esc(T('Bank feeds are switched off for this company in Settings → Features.'))}</span></div>`;
   const banks=S.accounts.filter(a=>(a.detail==='bank'||a.detail==='card')&&a.active!==false&&!a.stripe);
   const usedBy={};items.forEach(it=>Object.entries(it.links).forEach(([k,v])=>{usedBy[v]=it.id+'|'+k}));
   const row=(it,a)=>{
@@ -62,9 +65,9 @@ async function feedsForm(){
     <div class="pad" style="padding-top:8px"><button type="button" class="btn sm" data-fdo="save" data-fid="${it.id}">Save</button></div></div>`;
   const f=openModal('Bank feeds',`<div class="muted" style="font-size:13px">Connect this company’s bank once, and new transactions arrive in <b>For review</b> every few hours. You sign in to the bank in Plaid’s secure window; Sumlora never sees the bank password. Nothing goes into the books until you review it. A bank line that matches one already imported from a statement (same account and amount, within 3 days) isn’t added twice.</div>
     <div class="muted" style="font-size:13px;margin-top:8px">Plaid connects to the bank and shares the accounts and transactions with Sumlora. Plaid handles that data under its own privacy policy: <a href="https://plaid.com/legal/#end-user-privacy-policy" target="_blank" rel="noopener noreferrer">Plaid’s End User Privacy Policy</a></div>
-    ${banks.length?'':'<div class="banner err">Add a bank or credit card account in the chart of accounts first.</div>'}
+    ${why}${banks.length||!canConnect?'':'<div class="banner err">Add a bank or credit card account in the chart of accounts first.</div>'}
     <div style="margin-top:12px">${items.length?items.map(card).join(''):'<div class="empty"><b>No banks connected yet</b>Connect a bank to start.</div>'}</div>`,
-    `<button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" data-fdo="connect" ${banks.length?'':'disabled'}>Connect a bank</button>`,'wide');
+    `<button type="button" class="btn" data-close>Close</button>${canConnect?`<button type="button" class="btn primary" data-fdo="connect" ${banks.length?'':'disabled'}>Connect a bank</button>`:''}`,'wide');
   $$('[data-flink]',f).forEach(sel=>sel.onchange=()=>{const inp=$(`[data-fstart="${sel.dataset.flink}"]`,f);inp.disabled=!sel.value;if(sel.value&&!inp.value)inp.value=feedStartFor(sel.value)});
   f.onclick=async e=>{
     const b=e.target.closest('[data-fdo]');if(!b)return;

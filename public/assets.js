@@ -67,7 +67,7 @@ function ccaSchedule(fy){
 }
 
 function vAssets(){
-  if(!feat('fixedAssets'))return head('Fixed assets','')+'<div class="panel"><div class="empty"><b>Fixed assets aren’t on</b>Fixed assets and CCA are in the Plus plan. They can also be switched off for this company in Settings.</div></div>';
+  if(!feat('fixedAssets'))return head('Fixed assets','')+'<div class="panel"><div class="empty"><b>Fixed assets aren’t on</b>Fixed assets and CCA are in the Grow plan. They can also be switched off for this company in Settings.</div></div>';
   const F=S.fa||(S.fa={tab:'register',fy:fyStartOf(today())});
   const staff=ME&&ME.role!=='client'&&!ME.readOnly;
   const first=[...S.assets.map(a=>fyStartOf(a.acquired)),...Object.values(S.company.ccaOpening||{}).map(o=>o.fy)].sort()[0]||fyStartOf(today());

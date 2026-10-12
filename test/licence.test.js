@@ -69,7 +69,7 @@ test('the seller makes a licence key and codes in their own Sumlora', async () =
   const read = L.readCode(code, [pub]);
   assert.ok(read.at >= at.getTime() - 1000 && read.at < at.getTime() + 60000, 'when it was made, signed with it');
   delete read.at;
-  assert.deepEqual(read, { id: codeRec.id, name: 'Maple Dental', plan: 'essentials', kind: 'firm', maxCompanies: null, until: '2027-10-01', issued: '2026-10-02' });
+  assert.deepEqual(read, { id: codeRec.id, name: 'Maple Dental', plan: 'seed', kind: 'firm', maxCompanies: null, until: '2027-10-01', issued: '2026-10-02' });
   const list = (await req('GET', '/api/licences')).json;
   assert.equal(list.issued.length, 1); assert.equal(list.licensing, false);
   // A copy of the key, to keep safe.
@@ -98,7 +98,7 @@ test('a client’s desktop: trial, then view only, then a code turns it back on 
   const { req } = await start({ dataDir: tmp(), licenceDir: appDir, licenceKeys: [pub], now: () => at });
   let me = (await req('GET', '/api/auth/me')).json;
   assert.equal(me.licence.state, 'trial'); assert.equal(me.licence.daysLeft, 29); assert.equal(me.licence.until, '2026-10-31');
-  assert.equal(me.user.firmPlan, 'plus', 'the trial has everything');
+  assert.equal(me.user.firmPlan, 'thrive', 'the trial has everything');
   assert.equal(me.licence.canIssue, false, 'a client’s copy doesn’t make codes');
   assert.equal((await req('GET', '/api/licences')).status, 403);
   assert.equal((await req('POST', '/api/licences/key', {})).status, 403);
@@ -120,8 +120,8 @@ test('a client’s desktop: trial, then view only, then a code turns it back on 
   assert.equal((await req('PUT', '/api/licence', { code: code.replace('TB1-', 'TB1-x') })).status, 400);
   r = await req('PUT', '/api/licence', { code: '\n' + code + '\n' });
   assert.equal(r.status, 200);
-  assert.equal(r.json.state, 'active'); assert.equal(r.json.name, 'Maple Dental'); assert.equal(r.json.plan, 'essentials'); assert.equal(r.json.until, '2027-10-01');
-  assert.equal((await req('GET', '/api/auth/me')).json.user.firmPlan, 'essentials', 'the code’s plan applies');
+  assert.equal(r.json.state, 'active'); assert.equal(r.json.name, 'Maple Dental'); assert.equal(r.json.plan, 'seed'); assert.equal(r.json.until, '2027-10-01');
+  assert.equal((await req('GET', '/api/auth/me')).json.user.firmPlan, 'seed', 'the code’s plan applies');
   assert.equal((await req('PUT', `/api/c/${co}/records/contacts/k1`, { name: 'Client', kind: 'customer' })).status, 200);
   r = await req('PUT', `/api/c/${co}/records/employees/e2`, { ...emp, name: 'Sam' });
   assert.equal(r.status, 403, 'payroll isn’t in Essentials'); assert.match(r.json.error, /plan/);
@@ -148,7 +148,7 @@ test('a client’s desktop: trial, then view only, then a code turns it back on 
   const renewal = (await seller.req('POST', '/api/licences', { name: 'Maple Dental', plan: 'plus', until: '2028-10-01', renews: codeRec.id })).json.licence;
   assert.equal(renewal.renews, codeRec.id);
   r = await req('PUT', '/api/licence', { code: renewal.code });
-  assert.equal(r.json.state, 'active'); assert.equal(r.json.plan, 'plus');
+  assert.equal(r.json.state, 'active'); assert.equal(r.json.plan, 'thrive');
   assert.equal((await req('PUT', `/api/c/${co}/records/employees/e2`, { ...emp, name: 'Sam' })).status, 200);
   // The old email's code can't replace the renewal.
   assert.equal((await req('PUT', '/api/licence', { code })).status, 409);
@@ -177,7 +177,7 @@ test('the seller’s own desktop copy: its key makes it licensed, and a key can 
   const r = await req('POST', '/api/licences/key/restore', keyCopy);
   assert.equal(r.status, 200); assert.equal(r.json.inBuild, true); assert.equal(r.json.issued.length, 2, 'the list of codes comes with it');
   const me = (await req('GET', '/api/auth/me')).json;
-  assert.equal(me.licence.state, 'issuer'); assert.equal(me.licence.canIssue, true); assert.equal(me.user.firmPlan, 'plus');
+  assert.equal(me.licence.state, 'issuer'); assert.equal(me.licence.canIssue, true); assert.equal(me.user.firmPlan, 'thrive');
   assert.equal((await req('POST', '/api/licences', { name: 'Birch Cafe', plan: 'plus', until: '2027-10-01' })).status, 200);
   if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(appDir, 'licence-issuer.json')).mode & 0o077, 0, 'the key file is private');
 });
@@ -251,7 +251,7 @@ test('the client creates their account with the licence code: checked first, the
   r = await call('POST', '/api/auth/setup', { ...owner, licenceCode: good });
   assert.equal(r.status, 200);
   me = await call('GET', '/api/auth/me', null, r.cookie);
-  assert.equal(me.json.licence.state, 'active'); assert.equal(me.json.licence.name, 'Maple Dental'); assert.equal(me.json.user.firmPlan, 'essentials');
+  assert.equal(me.json.licence.state, 'active'); assert.equal(me.json.licence.name, 'Maple Dental'); assert.equal(me.json.user.firmPlan, 'seed');
 
   // No trial (SUMLORA_TRIAL_DAYS = 0): a code is needed to create the account.
   call = await fresh(0);

@@ -1,5 +1,5 @@
 'use strict';
-/* ---------- Bill approvals (Plus): screens ----------
+/* ---------- Bill approvals (Thrive): screens ----------
    The rules live in approvals.js (shared with the server). Here: the Expenses → Waiting for approval list and its
    nav count, the approval box on a bill (status, history, Approve / Reject), and the settings panel.
    A bill waiting for approval (or rejected) is in Accounts payable, but its Pay buttons are hidden and the
@@ -79,7 +79,7 @@ async function apLoadPeople(){try{AP_PEOPLE=(await api('GET','/api/approvers')).
 function approvalsPanel(){
   if(!ME||ME.role==='client')return '';
   const inPlan=TallyPlans.inPlan(ME.firmPlan,'billApprovals');
-  if(!feat('billApprovals'))return inPlan?'':`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bill approvals</h3><div class="pad muted" style="font-size:13px"><span>Bills over an amount wait for an owner or approver before they can be paid.</span> <span class="pill quiet">${esc(T('In the Plus plan'))}</span></div></div>`;
+  if(!feat('billApprovals'))return inPlan?'':`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bill approvals</h3><div class="pad muted" style="font-size:13px"><span>Bills over an amount wait for an owner or approver before they can be paid.</span> ${inPlanPill('billApprovals')}</div></div>`;
   const s=TallyApprovals.clean(S.company.approvals),own=ME.role==='owner'&&!ME.readOnly,dis=own?'':'disabled';
   if(AP_PEOPLE===null){AP_PEOPLE=[];apLoadPeople()}
   const vendors=S.contacts.filter(c=>c.kind==='vendor').sort((a,b)=>a.name.localeCompare(b.name));

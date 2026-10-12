@@ -123,6 +123,7 @@ class Auth {
     try { const d = JSON.parse(fs.readFileSync(this.file, 'utf8')); this.data = { ...this.data, ...d, settings: { ...this.data.settings, ...(d.settings || {}) } }; } catch { /* first run */ }
     if (!Array.isArray(this.data.firms)) this.data.firms = [];
     this.adoptFirm();
+    this.migratePlans();
     this.forced2fa = ['owners', 'everyone'].includes(opts.require2fa) ? opts.require2fa : 'off';
     this.sessions = new Map(); // token -> { userId, created, lastSeen }
     this.failures = new Map(); // username -> { count, until }
@@ -171,10 +172,27 @@ class Auth {
   adoptFirm() {
     if (!this.data.users.length || this.data.users.every(u => u.firmId)) return;
     let f = this.data.firms[0];
-    if (!f) { f = this.newFirm('My firm', 'active', true, 'plus'); }
+    if (!f) { f = this.newFirm('My firm', 'active', true, 'thrive'); }
     for (const u of this.data.users) if (!u.firmId) u.firmId = f.id;
     if (!this.data.users.some(u => u.platformAdmin)) for (const u of this.data.users) if (u.role === 'owner' && u.firmId === f.id) u.platformAdmin = true;
     this.save();
+  }
+  /**
+   * Seed, Grow and Thrive replaced Essentials and Plus: Essentials firms move to Seed and Plus firms to Thrive (the same
+   * features or more), each keeping its old price (f.legacy) until the administrator changes its plan or price.
+   * The server owner's own firm doesn't pay, so it has no old price to keep. Runs at every start; does nothing once done.
+   */
+  migratePlans() {
+    let changed = false;
+    for (const f of this.data.firms) {
+      if (!PLANS.LEGACY[f.plan] && (f.plan === undefined || PLANS.PLANS[f.plan])) continue;
+      const m = PLANS.migratePlan(f.plan === undefined ? 'plus' : f.plan);
+      f.plan = m.plan;
+      if (m.legacy && f.id !== this.mainFirmId) f.legacy = m.legacy;
+      changed = true;
+    }
+    if (PLANS.LEGACY[this.data.settings.defaultPlan]) { this.data.settings.defaultPlan = PLANS.planOf(this.data.settings.defaultPlan); changed = true; }
+    if (changed) this.save();
   }
   newFirm(name, status, ai, plan) {
     const f = { id: 'f_' + crypto.randomBytes(6).toString('hex'), name: String(name || '').trim().slice(0, 120) || 'My firm', status, ai: !!ai, aiCapUsd: 10, plan: PLANS.planOf(plan), created: Date.now() };
@@ -186,10 +204,10 @@ class Auth {
   firm(id) { return this.data.firms.find(f => f.id === id) || null; }
   firmUsers(id) { return this.data.users.filter(u => u.firmId === id); }
   /** The plan a firm gets when it signs itself up. */
-  get defaultPlan() { return PLANS.PLANS[this.data.settings.defaultPlan] ? this.data.settings.defaultPlan : 'essentials'; }
+  get defaultPlan() { return PLANS.PLANS[this.data.settings.defaultPlan] ? this.data.settings.defaultPlan : 'seed'; }
   setDefaultPlan(v) {
-    if (!PLANS.PLANS[v]) throw new AuthError('Choose one of the plans.', 400);
-    this.data.settings.defaultPlan = v;
+    if (!PLANS.PLANS[v] && !PLANS.LEGACY[v]) throw new AuthError('Choose one of the plans.', 400);
+    this.data.settings.defaultPlan = PLANS.planOf(v);
     this.save();
   }
   get signups() { return ['approval', 'open'].includes(this.data.settings.signups) ? this.data.settings.signups : 'off'; }
@@ -223,7 +241,7 @@ class Auth {
   inviteFirm({ firmName, name, username, plan }, actor) {
     firmName = String(firmName || '').trim();
     if (!firmName) throw new AuthError('Enter the firm’s name.', 400);
-    const f = this.newFirm(firmName, 'active', false, PLANS.PLANS[plan] ? plan : this.defaultPlan);
+    const f = this.newFirm(firmName, 'active', false, PLANS.PLANS[plan] || PLANS.LEGACY[plan] ? plan : this.defaultPlan);
     try {
       const u = this.addUser({ name, username, role: 'owner', firmId: f.id, invite: true });
       this.log('firm-invited', { username: u.username, firm: f.name, by: actor && actor.username });
@@ -246,10 +264,19 @@ class Auth {
     }
     if (patch.name !== undefined) { const n = String(patch.name).trim().slice(0, 120); if (!n) throw new AuthError('Enter the firm’s name.', 400); f.name = n; }
     if (patch.ai !== undefined) f.ai = !!patch.ai;
+    // Old plan names (essentials, plus) are still understood. Choosing a plan ends an old price (legacy).
     if (patch.plan !== undefined) {
-      if (!PLANS.PLANS[patch.plan]) throw new AuthError('Choose one of the plans.', 400);
-      f.plan = patch.plan;
+      if (!PLANS.PLANS[patch.plan] && !PLANS.LEGACY[patch.plan]) throw new AuthError('Choose one of the plans.', 400);
+      f.plan = PLANS.planOf(patch.plan);
+      delete f.legacy;
     }
+    // Move a firm with an old price to its plan's price, without changing its plan.
+    if (patch.legacy !== undefined) {
+      if (patch.legacy !== '' && patch.legacy !== false) throw new AuthError('An old price can only be ended, not added.', 400);
+      delete f.legacy;
+    }
+    // Firms with an old price aren't billed for the Payroll add-on until the administrator says so.
+    if (patch.billPayroll !== undefined) f.billPayroll = !!patch.billPayroll;
     if (patch.aiCapUsd !== undefined) {
       const c = Number(patch.aiCapUsd);
       if (!Number.isFinite(c) || c < 0 || c > 10000) throw new AuthError('The monthly AI limit must be between $0 and $10,000.', 400);
@@ -294,7 +321,7 @@ class Auth {
     const cr = this.customRoleOf(u);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
       customRole: cr ? cr.id : '', roleName: cr ? cr.name : '', perms: cr ? { ...cr.perms } : null, approveBills: !!(cr && cr.approveBills),
-      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: (this.planOverride && this.planOverride()) || (f ? PLANS.planOf(f.plan) : 'plus'), platformAdmin: !!u.platformAdmin,
+      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: PLANS.planOf((this.planOverride && this.planOverride()) || (f ? f.plan : 'thrive')), platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '', terms: u.terms ? { v: u.terms.v, at: u.terms.at } : null };
   }
@@ -310,7 +337,7 @@ class Auth {
   /** Is a plan feature in this firm's plan (or the desktop licence's)? */
   firmHas(firmId, key) {
     const f = this.firm(firmId);
-    return PLANS.inPlan((this.planOverride && this.planOverride()) || (f ? f.plan : 'plus'), key);
+    return PLANS.inPlan((this.planOverride && this.planOverride()) || (f ? f.plan : 'thrive'), key);
   }
   needCustomRoles(firmId) {
     if (!this.firmHas(firmId, 'customRoles')) throw new AuthError(`${PLANS.FEATURES.customRoles.label} aren’t part of your firm’s plan.`, 403);
@@ -372,7 +399,7 @@ class Auth {
   /** First-time setup: create the owner account. Only works while there are no users. */
   setup({ name, username, password, firmName }) {
     if (!this.needsSetup()) throw new AuthError('Setup is already done. Sign in instead.', 409);
-    const f = this.data.firms[0] || this.newFirm(firmName || 'My firm', 'active', true, 'plus');
+    const f = this.data.firms[0] || this.newFirm(firmName || 'My firm', 'active', true, 'thrive');
     if (firmName && String(firmName).trim()) f.name = String(firmName).trim().slice(0, 120);
     const u = this.addUser({ name, username, password, role: 'owner', firmId: f.id });
     this.byId(u.id).platformAdmin = true;
@@ -450,7 +477,8 @@ class Auth {
     const f = this.firm(id);
     if (!f) return;
     f.billing = rec;
-    if (plan && PLANS.PLANS[plan]) f.plan = plan;
+    // Checkout on another plan than the firm's: that plan, at its own price.
+    if (plan && PLANS.PLANS[plan] && plan !== f.plan) { f.plan = plan; delete f.legacy; }
     this.save();
   }
   /** Someone agreed to the Terms of service and Privacy policy: keep which version, when, and from where. */

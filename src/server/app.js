@@ -78,6 +78,17 @@ function createApp(opts) {
   };
   const auth = new Auth(opts.dataDir, { require2fa: opts.require2fa });
   reg.adoptFirm(auth.mainFirmId);
+  // Seed, Grow and Thrive (plans.js): a company that already has employees or pay runs gets the Payroll add-on, so it keeps
+  // payroll whatever plan its firm is on. Firms keeping an old price aren't billed for it until the administrator says so
+  // (addonBilled below). Done once, when the server first starts with this version.
+  if (!reg.data.payrollAddonDone) {
+    for (const c of reg.list()) {
+      if (c.payroll !== undefined) continue;
+      try { const st = reg.store(c.id); if (st && (st.list('employees').length || st.list('payruns').length)) c.payroll = true; } catch { /* a damaged file is left as it is */ }
+    }
+    reg.data.payrollAddonDone = true;
+    reg.save();
+  }
   // Desktop licence codes (licence.js). With a licence, its plan is the plan for everything in this copy.
   // The first day and latest day seen are also kept with the books (users.json), so deleting licence.json doesn't start a new trial.
   const licence = new Licence(opts.licenceDir || opts.dataDir, { publicKeys: opts.licenceKeys || [], now: opts.now, trialDays: opts.licenceTrialDays,
@@ -120,17 +131,27 @@ function createApp(opts) {
   /** Edit in the areas a write touches (roles.js writeAreas; a list there means any one of them). */
   const needWrite = (user, col, data, prev) => { for (const a of ROLES.writeAreas(col, data, prev)) { const any = Array.isArray(a) ? a : [a]; if (!any.some(x => canArea(user, x, 'edit'))) needArea(user, any[0], 'edit'); } };
   const needAllAreas = (user, level) => { for (const a of Object.keys(ROLES.AREAS)) needArea(user, a, level); };
-  /** Is a plan feature on for this company: in its firm's plan, and not switched off in its settings? */
+  /**
+   * Add-ons that bring a plan feature (payroll on Seed or Grow) for this company. A desktop licence's plan decides
+   * everything there (add-ons aren't sold with licence codes), so they bring nothing on a licensed copy.
+   */
+  const featureAddons = c => (licence.on || !c ? {} : Object.fromEntries(Object.entries(PLANS.ADDONS).filter(([, a]) => a.feature).map(([k]) => [k, !!c[k]])));
+  /** Is a plan feature on for this company: in its firm's plan (or an add-on), and not switched off in its settings? */
   const featureOn = (cid, key, store) => {
     const c = reg.get(cid), f = c && auth.firm(c.firmId);
     const settings = (store || reg.store(cid)).getSetting('company') || {};
-    return PLANS.featureOn(licencePlan() || (f ? f.plan : 'plus'), settings.features, key);
+    return PLANS.featureOn(licencePlan() || (f ? f.plan : 'thrive'), settings.features, key, featureAddons(c));
   };
+  /** In the plan or an add-on, whatever the company's own switches say (for "can it be used at all?"). */
+  const companyHas = (cid, key) => { const c = reg.get(cid), f = c && auth.firm(c.firmId); return PLANS.hasFeature(licencePlan() || (f ? f.plan : 'thrive'), key, featureAddons(c)); };
   const needAddon = (cid, key) => {
     if (!(reg.get(cid) || {})[key]) throw new ValidationError(`The ${PLANS.ADDONS[key].label} add-on isn’t on for this company. An owner can add it in Settings.`, 403);
   };
   const needFeature = (cid, key, store) => {
-    if (!featureOn(cid, key, store)) throw new ValidationError(`${PLANS.FEATURES[key].label} isn’t part of this company’s plan.`, 403);
+    if (featureOn(cid, key, store)) return;
+    // Payroll on Seed or Grow: say how to get it (the add-on), not just that it's missing.
+    if (key === 'payroll' && !licence.on && !companyHas(cid, key)) throw new ValidationError('Payroll isn’t part of this company’s plan. An owner can add the Payroll add-on in Settings → Features.', 403);
+    throw new ValidationError(`${PLANS.FEATURES[key].label} isn’t part of this company’s plan.`, 403);
   };
   const firmAi = cid => { const c = reg.get(cid); const f = c && auth.firm(c.firmId); return !!(f && f.ai) && featureOn(cid, 'ai'); };
   const needFirmAi = cid => {
@@ -172,17 +193,65 @@ function createApp(opts) {
   const coNeedsPay = c => billing.configured() && !!c && c.payer === 'client' && !billingPaid(c.billing);
   /** Companies a firm pays for: the ones it keeps that aren't archived and whose client doesn't pay. At least one. */
   const firmCount = fid => Math.max(1, reg.list(fid).filter(c => !c.archived && c.payer !== 'client').length);
-  /** Of those, the companies with an add-on (the AI assistant, the scrap yard tools…). */
-  const firmAddons = (fid, key) => reg.list(fid).filter(c => !c.archived && c.payer !== 'client' && c[key]).length;
+  /** The plan a company is paid for on, and the old price it keeps (if any): the client's own, or its firm's. */
+  const payPlan = c => { const f = auth.firm(c.firmId) || {}; return c.payer === 'client' ? { plan: PLANS.planOf(c.clientPlan || f.plan), legacy: c.clientLegacy || '' } : { plan: PLANS.planOf(f.plan), legacy: f.legacy || '' }; };
+  /**
+   * Is a company billed for an add-on it has on? Not when its plan already includes it (payroll's base fee on Thrive),
+   * and not payroll at all for a firm keeping an old price, until the administrator turns payroll billing on.
+   */
+  const addonBilled = (c, key) => {
+    if (!c[key]) return false;
+    const { plan, legacy } = payPlan(c);
+    if (PLANS.addonIncluded(plan, key)) return false;
+    if (key === 'payroll' && legacy && !(auth.firm(c.firmId) || {}).billPayroll) return false;
+    return true;
+  };
+  /** Is a company billed for each employee it pays (payroll in its plan or add-on, and not kept free on an old price)? */
+  const employeesBilled = c => {
+    const { plan, legacy } = payPlan(c);
+    if (!PLANS.hasFeature(plan, 'payroll', { payroll: !!c.payroll })) return false;
+    return !(legacy && !(auth.firm(c.firmId) || {}).billPayroll);
+  };
+  /** Employees paid in a month (YYYY-MM) in these companies, for those billed for them. */
+  const employeesPaidIn = (list, month) => list.filter(employeesBilled).reduce((t, c) => { const st = reg.store(c.id); return t + (st ? PLANS.employeesPaid(st.list('payruns'), month) : 0); }, 0);
+  /** Of those, the companies billed for an add-on (the AI assistant, the scrap yard tools, payroll…). */
+  const firmAddons = (fid, key) => reg.list(fid).filter(c => !c.archived && c.payer !== 'client' && addonBilled(c, key)).length;
   const firmAssistants = fid => firmAddons(fid, 'assistant');
-  /** How many companies have each add-on, for a subscription: { assistant: 2, scrapyard: 1 }. */
-  const addonCounts = list => Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, list.filter(c => c[k]).length]));
+  /** How many companies are billed for each add-on, for a subscription: { assistant: 2, scrapyard: 1, payroll: 0 }. */
+  const addonCounts = list => Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, list.filter(c => addonBilled(c, k)).length]));
   /** The address people come back to after Stripe's pages. */
   const originOf = req => {
     const proto = (opts.trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()) || (req.socket.encrypted ? 'https' : 'http');
     const host = String(req.headers.host || '').replace(/[^A-Za-z0-9.:\[\]-]/g, '');
     return `${proto === 'https' ? 'https' : 'http'}://${host}`;
   };
+  /** A firm's plan or price changed: its subscription's plan line moves to the new price, and its add-ons follow. */
+  async function syncFirmPlan(fid) {
+    const f = auth.firm(fid);
+    if (!billing.configured() || !f || firmExempt(fid) || !f.billing || !billingPaid(f.billing)) return;
+    try { auth.setFirmBilling(fid, await billing.setPlan(f.billing, PLANS.priceKey(f.plan, f.legacy), f.plan)); } catch (e) { console.error('Sumlora subscription: couldn’t change the plan:', e.message); }
+    await syncFirmCount(fid);
+  }
+  /**
+   * Payroll's charge for each employee paid in a month, added to each subscription's next invoice once the month is over.
+   * Runs with the twice-daily check; each subscription remembers the last month charged, so a month is never charged twice.
+   * A free trial doesn't pay for employees, and nor does the month before a subscription started.
+   */
+  async function chargePayrollEmployees(now = new Date()) {
+    if (!billing.configured()) return;
+    const month = PLANS.prevMonth(now.toISOString().slice(0, 10));
+    const charge = async (rec, list, save) => {
+      if (!rec || !rec.sub || !billingPaid(rec) || rec.employeesBilled === month) return;
+      if (rec.employeesBilled === undefined) { save({ ...rec, employeesBilled: month }); return; } // started before this charge existed
+      if (rec.status === 'trialing') { save({ ...rec, employeesBilled: month, employees: { month, count: 0 } }); return; }
+      try { save(await billing.chargeEmployees(rec, month, employeesPaidIn(list, month))); } catch (e) { console.error('Sumlora subscription: couldn’t charge payroll employees:', e.message); }
+    };
+    for (const f of auth.data.firms) {
+      if (f.status !== 'active' || firmExempt(f.id)) continue;
+      await charge(f.billing, reg.list(f.id).filter(c => c.payer !== 'client'), rec => auth.setFirmBilling(f.id, rec));
+    }
+    for (const c of reg.list()) if (c.payer === 'client') await charge(c.billing, [c], rec => reg.update(c.id, { billing: rec }));
+  }
   /** Keep a firm's subscription at its number of companies (quietly: a Stripe hiccup is retried at the next change or check). */
   async function syncFirmCount(fid) {
     const f = auth.firm(fid);
@@ -201,10 +270,12 @@ function createApp(opts) {
   async function setAddonFor(cid, key, on) {
     const c = reg.get(cid), f = auth.firm(c.firmId);
     if (!!c[key] === on) return;
+    if (on && PLANS.ADDONS[key].feature && licence.on) throw new ValidationError(`With a licence code, ${PLANS.FEATURES[PLANS.ADDONS[key].feature].label.toLowerCase()} comes with the plan in the code.`, 409);
     const clientPays = c.payer === 'client';
     const rec = clientPays ? c.billing : f && f.billing;
     const billed = billing.configured() && !(clientPays ? false : firmExempt(c.firmId)) && rec && rec.sub && billingPaid(rec);
-    if (!billed) { reg.update(cid, { [key]: on }); return; }
+    // Included in the plan (payroll on Thrive) or kept free on an old price: just the switch.
+    if (!billed || (on && !addonBilled({ ...c, [key]: true }, key))) { reg.update(cid, { [key]: on }); return; }
     if (on) {
       const next = await billing.setAddon(rec, key, clientPays ? 1 : firmAddons(c.firmId, key) + (c.archived ? 0 : 1));
       reg.update(cid, { [key]: true });
@@ -330,7 +401,7 @@ function createApp(opts) {
   // Twice a day, read every subscription again from Stripe (trials ending, cards failing, cancellations).
   let billTimer = null;
   if (opts.autoFeeds !== false) {
-    billTimer = setInterval(() => refreshBilling(auth.data.firms.map(f => f.id), reg.list().filter(c => c.billing).map(c => c.id), true).catch(() => {}), 12 * 3600e3);
+    billTimer = setInterval(() => refreshBilling(auth.data.firms.map(f => f.id), reg.list().filter(c => c.billing).map(c => c.id), true).then(() => chargePayrollEmployees()).catch(() => {}), 12 * 3600e3);
     billTimer.unref();
   }
   let feedTimer = null;
@@ -621,6 +692,8 @@ function createApp(opts) {
     // Add-ons on for this company (the AI assistant has its own details above).
     const co = reg.get(ctx.id) || {};
     out.addons = Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, !!co[k]]));
+    // Add-ons that bring a plan feature here (payroll on Seed or Grow), for the screens' feature checks.
+    out.featureAddons = featureAddons(co);
     return out;
   }
 
@@ -667,6 +740,7 @@ function createApp(opts) {
       if (collection === 'employees' || collection === 'payruns' || (collection === 'entries' && ['payrun', 'payremit'].includes(d.type))) needFeature(ctx.id, 'payroll', store);
       if (collection === 'projects' || collection === 'times') needFeature(ctx.id, 'projects', store);
       if (collection === 'assets') needFeature(ctx.id, 'fixedAssets', store);
+      if (collection === 'budgets') needFeature(ctx.id, 'budgets', store);
       if (collection === 'vehicles') needAddon(ctx.id, 'scrapyard');
       if (collection === 'items' && d.type === 'inventory') needFeature(ctx.id, 'inventory', store);
       if (collection === 'filings' && ['quick', 'charity', 'npo'].includes(d.method)) {
@@ -934,7 +1008,7 @@ function createApp(opts) {
       auth.log('user-added', { username: u.username, by: user.username, role: u.roleName ? `${u.role} (${u.roleName})` : u.role });
       // "They pay for Sumlora for this company": the client starts a subscription for it when they first sign in.
       if (u.role === 'client' && b.clientPays === true) {
-        const plan = PLANS.PLANS[b.clientPlan] ? b.clientPlan : PLANS.planOf((auth.firm(user.firmId) || {}).plan);
+        const plan = PLANS.PLANS[b.clientPlan] || PLANS.LEGACY[b.clientPlan] ? PLANS.planOf(b.clientPlan) : PLANS.planOf((auth.firm(user.firmId) || {}).plan);
         for (const cid of u.companies || []) reg.update(cid, { payer: 'client', clientPlan: plan });
         syncFirmCount(user.firmId);
       }
@@ -1046,15 +1120,15 @@ function createApp(opts) {
       // Online subscriptions (Stripe): firms that pay per company, and single businesses whose client pays.
       if (billing.configured()) {
         const amounts = billing.offer().amounts, week = now + 7 * 864e5;
-        const row = (kind, id, name, plan, rec, firm) => {
+        const row = (kind, id, name, plan, rec, firm, legacy) => {
           const d = billingDescribe(rec), state = d.state;
-          const qty = kind === 'firm' ? firmCount(id) : 1, monthly = (amounts[PLANS.planOf(plan)] || 0) * qty / 100;
+          const qty = kind === 'firm' ? firmCount(id) : 1, monthly = (amounts[PLANS.priceKey(plan, legacy)] || 0) * qty / 100;
           const next = state === 'trialing' ? d.trialEnd : state === 'active' || state === 'pastdue' ? d.periodEnd : 0;
           return { kind, id, name, firm: firm || '', plan: PLANS.planOf(plan), state, quantity: qty, monthly, next: next || 0, cancelAtEnd: !!d.cancelAtEnd, graceUntil: d.graceUntil || 0 };
         };
         const rows = [
-          ...auth.data.firms.filter(f => f.status === 'active' && !firmExempt(f.id)).map(f => row('firm', f.id, f.name, f.plan, f.billing)),
-          ...reg.list().filter(c => c.payer === 'client' && !c.archived).map(c => { const f = auth.firm(c.firmId) || {}; return row('company', c.id, c.name, c.clientPlan || f.plan, c.billing, f.id === user.firmId ? '' : f.name); }),
+          ...auth.data.firms.filter(f => f.status === 'active' && !firmExempt(f.id)).map(f => row('firm', f.id, f.name, f.plan, f.billing, '', f.legacy)),
+          ...reg.list().filter(c => c.payer === 'client' && !c.archived).map(c => { const f = auth.firm(c.firmId) || {}; return row('company', c.id, c.name, c.clientPlan || f.plan, c.billing, f.id === user.firmId ? '' : f.name, c.clientPlan ? c.clientLegacy : f.legacy); }),
         ];
         const by = s => rows.filter(r => r.state === s);
         const due = rows.filter(r => r.state === 'pastdue' || ((r.state === 'trialing' || r.state === 'active') && r.next && r.next <= week))
@@ -1079,10 +1153,10 @@ function createApp(opts) {
           out.licences = {
             made: info.issued.length,
             active: count(current, l => l.until >= today), endingSoon: count(current, l => l.until >= today && l.until <= soon), ended: count(current, l => l.until < today),
-            byPlan: Object.fromEntries(Object.keys(PLANS.PLANS).map(k => [k, count(current, l => l.until >= today && l.plan === k)])),
+            byPlan: Object.fromEntries(Object.keys(PLANS.PLANS).map(k => [k, count(current, l => l.until >= today && PLANS.planOf(l.plan) === k)])),
             byKind: { firm: count(current, l => l.until >= today && (l.kind || 'firm') === 'firm'), business: count(current, l => l.until >= today && l.kind === 'business') },
             due: current.filter(l => l.until <= soon && l.until >= longAgo).sort((a, b) => a.until.localeCompare(b.until))
-              .map(({ id, name, email, plan, kind, until }) => ({ id, name, email, plan, kind: kind || 'firm', until })),
+              .map(({ id, name, email, plan, kind, until }) => ({ id, name, email, plan: PLANS.planOf(plan), kind: kind || 'firm', until })),
           };
         } else out.licences = { noKey: true };
       }
@@ -1144,9 +1218,10 @@ function createApp(opts) {
       const firms = auth.data.firms.map(f => {
         const people = auth.firmUsers(f.id), owner = people.find(u => u.role === 'owner');
         return { ...f, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
-          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan), billing: undefined, subscription: billingDescribe(f.billing) };
+          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan), legacy: f.legacy || '', billPayroll: !!f.billPayroll,
+          payrollCompanies: reg.list(f.id).filter(c => !c.archived && c.payroll).length, billing: undefined, subscription: billingDescribe(f.billing) };
       });
-      return { firms, signups: auth.signups, defaultPlan: auth.defaultPlan, myFirm: user.firmId, plans: PLANS.PLANS, features: PLANS.FEATURES };
+      return { firms, signups: auth.signups, defaultPlan: auth.defaultPlan, myFirm: user.firmId, plans: PLANS.PLANS, legacy: PLANS.LEGACY, features: PLANS.FEATURES, addons: PLANS.ADDONS };
     }],
     ['PUT', /^\/api\/firms\/settings$/, async (req, m, res, user) => {
       adminOnly(user);
@@ -1167,8 +1242,11 @@ function createApp(opts) {
       adminOnly(user);
       const b = await readJson(req);
       const patch = {};
-      for (const k of ['status', 'name', 'ai', 'aiCapUsd', 'plan']) if (b[k] !== undefined) patch[k] = b[k];
+      for (const k of ['status', 'name', 'ai', 'aiCapUsd', 'plan', 'legacy', 'billPayroll']) if (b[k] !== undefined) patch[k] = b[k];
       const f = auth.updateFirm(decodeURIComponent(m[1]), patch, user);
+      // A new plan or price reaches the firm's subscription; payroll billing changes its add-on line.
+      if (patch.plan !== undefined || patch.legacy !== undefined) await syncFirmPlan(f.id);
+      else if (patch.billPayroll !== undefined) await syncFirmCount(f.id);
       broadcast({ companies: true, firmId: f.id });
       return { ok: true, firm: f };
     }],
@@ -1199,7 +1277,7 @@ function createApp(opts) {
       }
       auth.log('user-added', { username: u.username, by: user.username, role: u.role });
       const pays = billing.configured() && b.clientPays !== false;
-      if (pays) reg.update(entry.id, { payer: 'client', clientPlan: PLANS.PLANS[b.plan] ? b.plan : PLANS.planOf((auth.firm(user.firmId) || {}).plan) });
+      if (pays) reg.update(entry.id, { payer: 'client', clientPlan: PLANS.PLANS[b.plan] || PLANS.LEGACY[b.plan] ? PLANS.planOf(b.plan) : PLANS.planOf((auth.firm(user.firmId) || {}).plan) });
       syncFirmCount(user.firmId);
       return { ok: true, company: summary(reg.get(entry.id)), user: u, clientPays: pays };
     }],
@@ -1341,13 +1419,15 @@ function createApp(opts) {
       const amounts = billing.offer().amounts;
       const ownCos = reg.list(user.firmId).filter(c => !c.archived).map(c => ({ id: c.id, name: c.name }));
       const emailOf = u => u && mail.EMAIL_RE.test(u.username) ? u.username : '';
+      // Payroll employees are billed the month after they're paid (this month's invoice has last month's).
+      const lastMonth = PLANS.prevMonth(new Date().toISOString().slice(0, 10));
       const customers = [];
       for (const f of auth.data.firms) {
         if (firmExempt(f.id) || f.status !== 'active') continue;
         const cos = reg.list(f.id).filter(c => !c.archived && c.payer !== 'client');
         const owner = auth.firmUsers(f.id).find(u => u.role === 'owner' && !u.disabled);
-        customers.push({ key: 'firm:' + f.id, name: f.name, email: emailOf(owner), person: owner ? owner.name : '', plan: PLANS.planOf(f.plan),
-          companies: cos.length, assistant: cos.filter(c => c.assistant).length, addons: addonCounts(cos) });
+        customers.push({ key: 'firm:' + f.id, name: f.name, email: emailOf(owner), person: owner ? owner.name : '', plan: PLANS.planOf(f.plan), priceKey: PLANS.priceKey(f.plan, f.legacy),
+          companies: cos.length, assistant: cos.filter(c => addonBilled(c, 'assistant')).length, addons: addonCounts(cos), employees: employeesPaidIn(cos, lastMonth), employeesMonth: lastMonth });
       }
       // Companies whose client pays for themselves (marked on the company), in any firm.
       for (const c of reg.list()) {
@@ -1355,10 +1435,11 @@ function createApp(opts) {
         const f = auth.firm(c.firmId);
         if (!f || f.status !== 'active') continue;
         const client = auth.data.users.find(u => u.role === 'client' && !u.disabled && (u.companies || []).includes(c.id));
-        customers.push({ key: 'co:' + c.id, name: c.name, email: emailOf(client), person: client ? client.name : '', plan: PLANS.planOf(c.clientPlan || f.plan),
-          companies: 1, assistant: c.assistant ? 1 : 0, addons: addonCounts([c]) });
+        const pp = payPlan(c);
+        customers.push({ key: 'co:' + c.id, name: c.name, email: emailOf(client), person: client ? client.name : '', plan: pp.plan, priceKey: PLANS.priceKey(pp.plan, pp.legacy),
+          companies: 1, assistant: addonBilled(c, 'assistant') ? 1 : 0, addons: addonCounts([c]), employees: employeesPaidIn([c], lastMonth), employeesMonth: lastMonth });
       }
-      return { companyId: ownCos.some(c => c.id === set.companyId) ? set.companyId : '', tax: set.tax !== false, companies: ownCos, amounts, plans: PLANS.PLANS, addons: PLANS.ADDONS, customers };
+      return { companyId: ownCos.some(c => c.id === set.companyId) ? set.companyId : '', tax: set.tax !== false, companies: ownCos, amounts, plans: { ...PLANS.LEGACY, ...PLANS.PLANS }, addons: PLANS.ADDONS, units: PLANS.UNITS, customers };
     }],
     ['PUT', /^\/api\/invoicing$/, async (req, m, res, user) => {
       adminOnly(user);
@@ -1381,9 +1462,9 @@ function createApp(opts) {
       const mine = user.role === 'client' ? reg.list(user.firmId).filter(c => canSeeCo(user, c.id) && c.payer === 'client' && !c.archived) : [];
       await refreshBilling([user.firmId], mine.map(c => c.id));
       const f = auth.firm(user.firmId);
-      return { configured: true, offer: billing.offer(), plans: PLANS.PLANS,
-        firm: { exempt: firmExempt(user.firmId), needs: firmNeedsPay(f), plan: PLANS.planOf(f && f.plan), companies: firmCount(user.firmId), canPay: user.role === 'owner', ...billingDescribe(f && f.billing) },
-        companies: mine.map(c => ({ id: c.id, name: c.name, needs: coNeedsPay(c), plan: PLANS.planOf(c.clientPlan || (f && f.plan)), ...billingDescribe(c.billing) })) };
+      return { configured: true, offer: billing.offer(), plans: PLANS.PLANS, legacy: PLANS.LEGACY, addons: PLANS.ADDONS, units: PLANS.UNITS,
+        firm: { exempt: firmExempt(user.firmId), needs: firmNeedsPay(f), plan: PLANS.planOf(f && f.plan), legacy: (f && f.legacy) || '', companies: firmCount(user.firmId), canPay: user.role === 'owner', ...billingDescribe(f && f.billing) },
+        companies: mine.map(c => { const pp = payPlan(c); return { id: c.id, name: c.name, needs: coNeedsPay(c), plan: pp.plan, legacy: pp.legacy, ...billingDescribe(c.billing) }; }) };
     }],
     // Start (or restart) a subscription on Stripe's page. The free trial is only the first time.
     ['POST', /^\/api\/billing\/checkout$/, async (req, m, res, user) => {
@@ -1394,12 +1475,14 @@ function createApp(opts) {
         if (firmExempt(user.firmId)) throw new ValidationError('Your firm doesn’t pay for Sumlora on this server.');
         if (billingPaid(f.billing)) throw new ValidationError('Your firm’s subscription is already running.');
         const plan = PLANS.PLANS[b.plan] ? b.plan : PLANS.planOf(f.plan);
-        return { url: await billing.checkout({ kind: 'firm', id: f.id, plan, quantity: firmCount(f.id), addons: Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, firmAddons(f.id, k)])), email: user.username, customer: f.billing && f.billing.customer, trial: !(f.billing && f.billing.hadTrial), base: originOf(req) }) };
+        // The firm's own plan keeps its old price; another plan is at that plan's price.
+        return { url: await billing.checkout({ kind: 'firm', id: f.id, plan, legacy: plan === PLANS.planOf(f.plan) ? f.legacy || '' : '', quantity: firmCount(f.id), addons: Object.fromEntries(Object.keys(PLANS.ADDONS).map(k => [k, firmAddons(f.id, k)])), email: user.username, customer: f.billing && f.billing.customer, trial: !(f.billing && f.billing.hadTrial), base: originOf(req) }) };
       }
       const c = reg.get(String(b.id || ''));
       if (b.kind !== 'company' || !c || !canSeeCo(user, c.id) || c.payer !== 'client') throw new ValidationError('That company doesn’t exist.', 404);
       if (billingPaid(c.billing)) throw new ValidationError('This company’s subscription is already running.');
-      return { url: await billing.checkout({ kind: 'company', id: c.id, plan: PLANS.planOf(c.clientPlan || (f && f.plan)), quantity: 1, addons: addonCounts([c]), email: user.username, customer: c.billing && c.billing.customer, trial: !(c.billing && c.billing.hadTrial), base: originOf(req) }) };
+      const pp = payPlan(c);
+      return { url: await billing.checkout({ kind: 'company', id: c.id, plan: pp.plan, legacy: pp.legacy, quantity: 1, addons: addonCounts([c]), email: user.username, customer: c.billing && c.billing.customer, trial: !(c.billing && c.billing.hadTrial), base: originOf(req) }) };
     }],
     // Back from Stripe's page: record the subscription.
     ['POST', /^\/api\/billing\/finish$/, async (req, m, res, user) => {
@@ -1478,6 +1561,10 @@ function createApp(opts) {
       }
       // Plan features: can't be turned on here when the plan doesn't include them (settings already saved stay as they were).
       if (company.quickMethod && company.quickMethod.on && !(before && before.quickMethod && before.quickMethod.on)) needFeature(ctx.id, 'specialTax', ctx.store);
+      // Classes are in Thrive: making one, or turning on classes on each line. Classes already made stay usable on every plan
+      // (picked on transactions, renamed, turned off, in reports), so no one loses what they've sorted.
+      const hadCls = new Set(((before && before.classes) || []).map(c => c.id));
+      if (company.classes.some(c => !hadCls.has(c.id)) || (company.classPerLine && !(before && before.classPerLine))) needFeature(ctx.id, 'classes', ctx.store);
       // Bill approvals: only owners decide them (staff could otherwise make themselves approvers), and only on a plan that has them.
       // Approvers must be people in this firm.
       const firmId = (reg.get(ctx.id) || {}).firmId;
@@ -1827,16 +1914,20 @@ function createApp(opts) {
       return { ok: true, minutes: 15 };
     }],
     // Bank feeds for this company. Only the bookkeeper's team connects banks (each connection costs money each month).
-    ['GET', /^\/feeds$/, ctx => { notClient(ctx.user); needArea(ctx.user, 'banking', 'view'); return { configured: plaid.configured(), items: plaid.list(ctx.id) }; }],
+    // Automatic feeds are in Grow and Thrive (Plaid charges for each connection). A company that connected a bank before
+    // its firm moved to Seed keeps that connection working (signing in again to it too), but can't connect new ones.
+    ['GET', /^\/feeds$/, ctx => { notClient(ctx.user); needArea(ctx.user, 'banking', 'view'); return { configured: plaid.configured(), items: plaid.list(ctx.id), canConnect: featureOn(ctx.id, 'bankFeeds', ctx.store), inPlan: companyHas(ctx.id, 'bankFeeds') }; }],
     ['POST', /^\/feeds\/link$/, async (ctx, req) => {
       notClient(ctx.user); needArea(ctx.user, 'banking');
       const body = await readJson(req);
+      if (!body.itemId) needFeature(ctx.id, 'bankFeeds', ctx.store);
       const company = ctx.store.getSetting('company') || {};
       return { linkToken: await plaid.linkToken({ userId: ctx.user.id || ctx.user.username, lang: body.lang || company.lang, itemId: body.itemId ? String(body.itemId) : '', companyId: ctx.id }) };
     }],
     ['POST', /^\/feeds$/, async (ctx, req) => {
       notClient(ctx.user); needArea(ctx.user, 'banking');
       const body = await readJson(req);
+      needFeature(ctx.id, 'bankFeeds', ctx.store);
       const c = reg.get(ctx.id);
       const item = await plaid.connect({ publicToken: body.publicToken, institution: body.institution, companyId: ctx.id, firmId: c && c.firmId, userName: ctx.user.name || ctx.user.username });
       ctx.store.audit(ctx.user, 'feed', { collection: 'settings', id: 'feeds', summary: `connected a bank feed: ${item.institution}` });
@@ -2402,6 +2493,7 @@ function createApp(opts) {
     server.closeIdleConnections();
   });
   server.registry = reg;
+  server.chargePayrollEmployees = chargePayrollEmployees;
   server.backups = backups;
   server.auth = auth;
   return server;

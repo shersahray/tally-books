@@ -32,7 +32,7 @@ test('invite a firm: active straight away, with an invitation link for its owner
   assert.equal((await call('POST', '/api/firms/invite', { firmName: '', name: 'Ana', email: 'ana@maple.example' }, admin)).status, 400);
   const r = (await call('POST', '/api/firms/invite', { firmName: 'Maple Firm', name: 'Ana', email: 'ana@maple.example', plan: 'plus' }, admin)).json;
   assert.equal(r.firm.status, 'active');
-  assert.equal(r.firm.plan, 'plus');
+  assert.equal(r.firm.plan, 'thrive');
   assert.equal(r.user.role, 'owner');
   assert.ok(r.user.link);
   // A taken email leaves no empty firm behind.
@@ -58,8 +58,8 @@ test('invite a business: its company and its owner as a client, in one step', as
 
 test('overview: subscription numbers once subscriptions are on', async () => {
   assert.equal((await call('GET', '/api/overview', undefined, admin)).json.subs, null);
-  await call('PUT', '/api/billing', { key: KEY, amounts: { essentials: 15, plus: 30 }, trialDays: 14 }, admin);
-  const r = (await call('POST', '/api/companies/invite', { name: 'Shop Two', province: 'QC', person: 'Cy', email: 'cy@shop.example', plan: 'essentials' }, admin)).json;
+  await call('PUT', '/api/billing', { key: KEY, amounts: { seed: 15, thrive: 30 }, trialDays: 14 }, admin);
+  const r = (await call('POST', '/api/companies/invite', { name: 'Shop Two', province: 'QC', person: 'Cy', email: 'cy@shop.example', plan: 'seed' }, admin)).json;
   assert.equal(r.clientPays, true);
   const s = (await call('GET', '/api/overview', undefined, admin)).json.subs;
   assert.equal(s.total, 2, 'Maple Firm and Shop Two; the server owner’s firm doesn’t pay');

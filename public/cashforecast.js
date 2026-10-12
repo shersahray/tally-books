@@ -1,5 +1,5 @@
 'use strict';
-/* ---------- Cash flow forecast (Reports → Cash flow forecast, Plus plan) ----------
+/* ---------- Cash flow forecast (Reports → Cash flow forecast, Thrive plan) ----------
    Like QuickBooks Online's Cash flow planner: today's bank balance, then the money expected in and out over the
    next 30, 60 or 90 days. This file gathers the lines from the books; the arithmetic is in forecast.js
    (TallyForecast), which the tests check. Settings (how it's worked out, planned items, lines left out) are kept

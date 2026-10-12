@@ -62,9 +62,9 @@ test('billing: off until the administrator adds a key; the key is checked and ne
   assert.deepEqual((await call('GET', '/api/billing/me', undefined, admin)).json, { configured: false });
   assert.equal((await call('PUT', '/api/billing', { key: 'not-a-key' }, admin)).status, 400);
   assert.equal((await call('PUT', '/api/billing', { key: 'sk_test_' + 'b'.repeat(24) }, admin)).status, 400, 'Stripe refuses it');
-  assert.equal((await call('PUT', '/api/billing', { amounts: { essentials: 0.5 } }, admin)).status, 400);
-  const s = (await call('PUT', '/api/billing', { key: KEY, amounts: { essentials: 15, plus: 30 }, trialDays: 14 }, admin)).json;
-  assert.deepEqual([s.configured, s.mode, s.amounts.essentials, s.amounts.plus, s.trialDays], [true, 'test', 1500, 3000, 14]);
+  assert.equal((await call('PUT', '/api/billing', { amounts: { seed: 0.5 } }, admin)).status, 400);
+  const s = (await call('PUT', '/api/billing', { key: KEY, amounts: { seed: 15, thrive: 30 }, trialDays: 14 }, admin)).json;
+  assert.deepEqual([s.configured, s.mode, s.amounts.seed, s.amounts.thrive, s.trialDays], [true, 'test', 1500, 3000, 14]);
   assert.ok(!JSON.stringify(s).includes(KEY));
   if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(dir, 'billing.json')).mode & 0o077, 0);
   // The server owner's own firm never pays.
@@ -81,7 +81,7 @@ test('billing: a firm that signs up starts a trial on Stripe, then pays per comp
   const me = (await call('GET', '/api/billing/me', undefined, firmOwner)).json;
   assert.deepEqual([me.firm.needs, me.firm.canPay, me.firm.companies, me.offer.trialDays], [true, true, 1, 14]);
 
-  const co = await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'essentials' }, firmOwner);
+  const co = await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'seed' }, firmOwner);
   assert.match(co.json.url, /^https:\/\/checkout\.stripe\.com\//);
   const sess = st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body;
   assert.equal(sess.mode, 'subscription'); assert.equal(sess['line_items[0][quantity]'], '1'); assert.equal(sess['subscription_data[trial_period_days]'], '14');
@@ -93,7 +93,7 @@ test('billing: a firm that signs up starts a trial on Stripe, then pays per comp
   const fin = (await call('POST', '/api/billing/finish', { session: id }, firmOwner)).json;
   assert.equal(fin.state, 'trialing');
   assert.equal((await call('GET', '/api/companies', undefined, firmOwner)).status, 200);
-  assert.equal((await call('GET', '/api/auth/me', undefined, firmOwner)).json.user.firmPlan, 'essentials', 'the plan they chose');
+  assert.equal((await call('GET', '/api/auth/me', undefined, firmOwner)).json.user.firmPlan, 'seed', 'the plan they chose');
 
   // Adding companies raises the count; archiving lowers it.
   firmCo = (await call('POST', '/api/companies', { name: 'One', province: 'ON' }, firmOwner)).json.company.id;
@@ -110,7 +110,7 @@ test('billing: a firm that signs up starts a trial on Stripe, then pays per comp
   const f = server.auth.data.firms.find(x => x.name === 'Maple Firm'); f.billing.checked = 0;
   assert.equal((await call('GET', '/api/billing/me', undefined, firmOwner)).json.firm.state, 'stopped');
   after402(await call('GET', '/api/companies', undefined, firmOwner));
-  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'plus' }, firmOwner);
+  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'thrive' }, firmOwner);
   const again = st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body;
   assert.equal(again['subscription_data[trial_period_days]'], undefined, 'no second trial');
   assert.equal(again.customer, 'cus_' + id, 'same Stripe customer');
@@ -129,7 +129,7 @@ test('billing: a firm that signs up starts a trial on Stripe, then pays per comp
 
 test('billing: a client who pays for their own company starts a trial before opening it; the bookkeeper isn’t held up', async () => {
   const co = (await call('POST', '/api/companies', { name: 'ABC Inc.', province: 'ON' }, admin)).json.company.id;
-  const link = (await call('POST', '/api/users', { name: 'Client', username: 'client@abc.example', role: 'client', companies: [co], invite: true, clientPays: true, clientPlan: 'essentials' }, admin)).json.user.link;
+  const link = (await call('POST', '/api/users', { name: 'Client', username: 'client@abc.example', role: 'client', companies: [co], invite: true, clientPays: true, clientPlan: 'seed' }, admin)).json.user.link;
   const cl = (await call('POST', '/api/auth/link/accept', { token: link, password: 'client long phrase' })).cookie;
   const b = after402(await call('GET', `/api/c/${co}/state`, undefined, cl));
   assert.deepEqual([b.billing, b.companyId], ['company', co]);
@@ -140,7 +140,7 @@ test('billing: a client who pays for their own company starts a trial before ope
   assert.equal((await call('POST', '/api/billing/checkout', { kind: 'company', id: firmCo }, cl)).status, 404, 'nor another firm’s company');
   await call('POST', '/api/billing/checkout', { kind: 'company', id: co }, cl);
   const sess = st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body;
-  assert.deepEqual([sess.client_reference_id, sess['line_items[0][quantity]'], sess['subscription_data[trial_period_days]'], sess['subscription_data[metadata][sumlora_plan]']], [`company:${co}`, '1', '14', 'essentials'], 'the plan the bookkeeper chose for them');
+  assert.deepEqual([sess.client_reference_id, sess['line_items[0][quantity]'], sess['subscription_data[trial_period_days]'], sess['subscription_data[metadata][sumlora_plan]']], [`company:${co}`, '1', '14', 'seed'], 'the plan the bookkeeper chose for them');
   await call('POST', '/api/billing/finish', { session: Object.keys(st.sessions).at(-1) }, cl);
   assert.equal((await call('GET', `/api/c/${co}/state`, undefined, cl)).status, 200);
   // The company list shows who pays, without Stripe's ids.
@@ -163,13 +163,13 @@ test('billing: sales tax with Stripe Tax: only once Stripe Tax is set up; checko
   assert.equal((await call('GET', '/api/billing/me', undefined, admin)).json.offer.tax, true);
   const owner = (await call('POST', '/api/auth/signup', { firmName: 'Birch Books', name: 'Bo', username: 'bo@birch.example', password: 'birch long phrase here' })).cookie;
   const prices = st.calls.length;
-  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'essentials' }, owner);
+  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'seed' }, owner);
   const sess = st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body;
   assert.deepEqual([sess['automatic_tax[enabled]'], sess.billing_address_collection, sess['tax_id_collection[enabled]'], sess.customer_email], ['true', 'required', 'true', 'bo@birch.example']);
   for (const c of st.calls.slice(prices).filter(c => c.p === 'prices' && c.method === 'POST')) assert.equal(c.body.tax_behavior, 'exclusive', 'prices are plus tax');
   // Off again: no tax on the next checkout.
   assert.equal((await call('PUT', '/api/billing', { tax: false }, admin)).json.tax, false);
-  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'essentials' }, owner);
+  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'seed' }, owner);
   assert.equal(st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body['automatic_tax[enabled]'], undefined);
 });
 
@@ -181,7 +181,7 @@ test('sign-up: a business keeping its own books gets its company made, then star
   assert.equal(after402(await call('GET', '/api/companies', undefined, owner)).billing, 'firm', 'the trial is started first');
   const me = (await call('GET', '/api/billing/me', undefined, owner)).json;
   assert.equal(me.firm.companies, 1);
-  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'essentials' }, owner);
+  await call('POST', '/api/billing/checkout', { kind: 'firm', plan: 'seed' }, owner);
   assert.equal(st.calls.filter(c => c.p === 'checkout/sessions').at(-1).body['line_items[0][quantity]'], '1');
   await call('POST', '/api/billing/finish', { session: Object.keys(st.sessions).at(-1) }, owner);
   const cos = (await call('GET', '/api/companies', undefined, owner)).json.companies;
