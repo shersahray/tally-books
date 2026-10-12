@@ -171,9 +171,16 @@
     const F5B = r2(Math.max(0, F5 - F5A));
     const lowFed = t.fed.R[0];
     const tdFed = optNum(input.td1Fed);
-    const cppCredit = Math.min(P * Creg * (pp.baseRate / pp.rate), pp.baseMaxCredit);
-    const eiCredit = Math.min(P * EIreg, eiMax);
-    const qpipCredit = qc ? Math.min(P * QPIPreg, t.qpip.max) : 0;
+    // Once the employee has reached the year's maximum (on this pay or before it), CRA uses the annual
+    // maximum for the CPP/QPP, EI and QPIP credits for the rest of the year (T4032 worked example
+    // "Pensionable income above YMPE"). Without this, every pay after the maximum over-withholds tax.
+    const reached = (ytdPaid, now, max) => num(ytdPaid) + now >= max - 0.005;
+    const cppReached = !input.cppExempt && reached(qc ? ytd.qpp : ytd.cpp, C, pp.max);
+    const eiReached = !input.eiExempt && reached(ytd.ei, EI, eiMax);
+    const qpipReached = qc && !input.qpipExempt && reached(ytd.qpip, QPIP, t.qpip.max);
+    const cppCredit = cppReached ? pp.baseMaxCredit : Math.min(P * Creg * (pp.baseRate / pp.rate), pp.baseMaxCredit);
+    const eiCredit = eiReached ? eiMax : Math.min(P * EIreg, eiMax);
+    const qpipCredit = qc ? (qpipReached ? t.qpip.max : Math.min(P * QPIPreg, t.qpip.max)) : 0;
     /** Federal tax for a year at annual taxable income A (T1, after the Quebec abatement). */
     const fedYear = A => {
       const fb = bracket(A, t.fed.A, t.fed.R, t.fed.K);
