@@ -2100,3 +2100,17 @@ addFr({
   '{s}: the bank transit (branch) number has {0} digits.':'{s} : le numéro de transit (succursale) a {0} chiffres.',
   '{s}: the bank account number has {0} to {1} digits.':'{s} : le numéro de compte bancaire a de {0} à {1} chiffres.',
 });
+
+/* ---------- Cash-basis reports ---------- */
+addFr({
+  'Accounting method':'Méthode de comptabilité',
+  'Accrual basis':'Comptabilité d’exercice',
+  'Cash basis':'Comptabilité de caisse',
+  'Reports’ accounting method':'Méthode de comptabilité des rapports',
+  'Cash counts invoices and bills when they’re paid. You can switch on each report.':'La comptabilité de caisse compte les factures quand elles sont payées. Vous pouvez changer de méthode dans chaque rapport.',
+  '{0} – {1} · Cash basis':'Du {0} au {1} · comptabilité de caisse',
+  '{0} – {1} · Cash basis ·':'Du {0} au {1} · comptabilité de caisse ·',
+  'As of {0} · Cash basis':'Au {0} · comptabilité de caisse',
+  '{0} – {1} · before sales tax':'Du {0} au {1} · avant taxes',
+  '{0} – {1} · before sales tax · Cash basis':'Du {0} au {1} · avant taxes · comptabilité de caisse',
+});
