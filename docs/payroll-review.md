@@ -50,7 +50,7 @@ Medium:
 - Ontario **overtime** (1.5× after 44 hours a week) isn't calculated.
 - **Vacation pay** isn't earned on non-discretionary bonuses; Ontario **holiday pay** leaves out vacation pay
   on the current run.
-- No Ontario **EHT**, **WSIB**, **direct deposit (CPA-005 file)** or emailed pay stubs.
+- No Ontario **EHT**, **WSIB** or emailed pay stubs.
 
 Low:
 - Remittance due dates on a weekend or holiday aren't moved to the next business day.
@@ -64,3 +64,17 @@ Low:
 Run 20–30 real employee scenarios through CRA's Payroll Deductions Online Calculator and compare: different
 pay frequencies, TD1 amounts, a bonus, someone reaching the CPP and EI maximums mid-year, and someone above
 the YAMPE. Add each one to `test/payroll-cra.test.js` as you go.
+
+## Direct deposit (added October 2026)
+
+Employees can be set to **direct deposit** with their institution, transit and account numbers. A posted pay run
+then has a **Direct deposit file** button that makes a Payments Canada Standard 005 (CPA-005, 1464-byte) file of
+payroll deposits (transaction code 200). The employer uploads it to their own business banking; Sumlora never
+moves money. Setup (originator ID, destination data centre, names, the employer's account and the next file
+number) is in Settings → Payroll, from the employer's bank.
+
+- Each file gets a new file creation number, saved before the file is downloaded, so a number is never reused.
+  Making a second file for the same pay run asks first, because uploading both would pay employees twice.
+- Bank account numbers are masked (last 3 digits) in the activity log, and for clients and view-only users.
+- **Before the first real payroll with a bank:** send the bank a test file. Banks add their own rules on top of the
+  standard (data centre code, segments per record, line endings), so confirm with each bank a client uses.

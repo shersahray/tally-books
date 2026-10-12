@@ -511,10 +511,18 @@ function createApp(opts) {
     return { ok: true };
   }
 
+  /** An employee record with the bank account number masked (•••• and the last 3 digits). */
+  function maskPrivate(r) {
+    if (!r || !r.bank || !r.bank.account) return r;
+    return { ...r, bank: { ...r.bank, account: '••••' + String(r.bank.account).slice(-3) } };
+  }
+
   function state(ctx) {
     const cl = ctx.store.getSetting('closing') || {};
     const out = { rev: ctx.rev, companyId: ctx.id, company: { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}), closingDate: cl.date || '', closingPassword: !!cl.hash, hasCode: hasCode(ctx.store) } };
     for (const c of COLLECTIONS) out[c] = ctx.store.list(c);
+    // Clients and view-only users see only the last 3 digits of employees' bank accounts.
+    if (ctx.user && (ctx.user.role === 'client' || ctx.user.readOnly) && out.employees) out.employees = out.employees.map(maskPrivate);
     out.assistant = assistantInfo(ctx.id, ctx.store);
     // Add-ons on for this company (the AI assistant has its own details above).
     const co = reg.get(ctx.id) || {};
@@ -585,7 +593,13 @@ function createApp(opts) {
     }
     // Social insurance numbers never go into the activity log in full.
     // Nor do the ID numbers of people who sold a vehicle to a scrap yard.
-    const hideSin = r => (r && r.sin ? { ...r, sin: '•••••' + String(r.sin).slice(-3) } : r && r.seller && r.seller.idNumber ? { ...r, seller: { ...r.seller, idNumber: '•••••' + String(r.seller.idNumber).slice(-3) } } : r);
+    // Nor do employees' bank account numbers (direct deposit).
+    const hideSin = r => maskPrivate(r && r.sin ? { ...r, sin: '•••••' + String(r.sin).slice(-3) } : r && r.seller && r.seller.idNumber ? { ...r, seller: { ...r.seller, idNumber: '•••••' + String(r.seller.idNumber).slice(-3) } } : r);
+    // Someone who only sees masked bank numbers saves them back unchanged: keep the real ones.
+    if (collection === 'employees' && op === 'set' && w.data && w.data.bank && /•/.test(String(w.data.bank.account || ''))) {
+      const cur = store.get('employees', id);
+      w.data = { ...w.data, bank: { ...w.data.bank, account: cur && cur.bank ? cur.bank.account : '' } };
+    }
     const masked = collection === 'employees' || collection === 'vehicles';
     const before = masked ? hideSin(store.get(collection, id)) : store.get(collection, id);
     if (op === 'set') {

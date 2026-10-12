@@ -262,6 +262,16 @@ function validateEmployee(data) {
     out.sin = sin;
   } else out.sin = '';
   out.dental = [1, 2, 3, 4, 5].includes(Number(data.dental)) ? Number(data.dental) : 0; // 0 = not chosen yet
+  // Direct deposit: the employee's bank account (institution, transit, account).
+  out.payMethod = data.payMethod === 'deposit' ? 'deposit' : 'cheque';
+  const bk = isObj(data.bank) ? data.bank : {};
+  const bank = { inst: String(bk.inst ?? '').replace(/\D/g, ''), transit: String(bk.transit ?? '').replace(/\D/g, ''), account: String(bk.account ?? '').replace(/\D/g, '') };
+  if (bank.inst || bank.transit || bank.account || out.payMethod === 'deposit') {
+    if (!/^\d{3}$/.test(bank.inst)) throw new ValidationError(`${name}: the bank institution number has 3 digits.`);
+    if (!/^\d{5}$/.test(bank.transit)) throw new ValidationError(`${name}: the bank transit (branch) number has 5 digits.`);
+    if (!/^\d{5,12}$/.test(bank.account)) throw new ValidationError(`${name}: the bank account number has 5 to 12 digits.`);
+    out.bank = bank;
+  } else out.bank = null;
   out.pensionType = data.pensionType === 'rpp' ? 'rpp' : 'rrsp';
   const rppNo = String(data.rppNo ?? '').replace(/\D/g, '');
   if (rppNo.length > 7) throw new ValidationError('A pension plan registration number has up to 7 digits.');
@@ -691,6 +701,25 @@ function checkDelete(collection, id, store) {
   }
 }
 
+/** Direct deposit setup (from the employer's bank) and the CPA-005 files made so far. */
+function validateDirectDeposit(d) {
+  if (!isObj(d)) return { files: [] };
+  const dig = (v, n) => String(v ?? '').replace(/\D/g, '').slice(0, n);
+  const files = (Array.isArray(d.files) ? d.files : []).filter(isObj).slice(-200).map(f => ({
+    run: str(f.run, 60), no: Math.max(1, Math.min(9999, parseInt(f.no, 10) || 1)), date: isDate(f.date) ? f.date : '',
+    count: Math.max(0, parseInt(f.count, 10) || 0), total: Math.round((Number(f.total) || 0) * 100) / 100 }));
+  const last = parseInt(d.lastFileNo, 10);
+  return {
+    originatorId: str(d.originatorId, 10).trim().toUpperCase().replace(/[^A-Z0-9]/g, ''),
+    dataCentre: dig(d.dataCentre, 5),
+    shortName: str(d.shortName, 15).trim(),
+    longName: str(d.longName, 30).trim(),
+    returnInst: dig(d.returnInst, 3), returnTransit: dig(d.returnTransit, 5), returnAccount: dig(d.returnAccount, 12),
+    lastFileNo: Number.isInteger(last) && last >= 0 && last <= 9999 ? last : 0,
+    files,
+  };
+}
+
 function validatePayrollSettings(p) {
   if (!isObj(p)) return { hsfRate: 1.65, remitFreq: 'monthly' };
   const hsf = Number(p.hsfRate);
@@ -701,6 +730,7 @@ function validatePayrollSettings(p) {
     rqId: str(p.rqId, 20).toUpperCase().replace(/\s/g, ''),
     hsfPrimary: !!p.hsfPrimary,
     assocPayroll: optAmount(p.assocPayroll, 'Associated employers’ payroll') || 0,
+    dd: validateDirectDeposit(p.dd),
   };
 }
 

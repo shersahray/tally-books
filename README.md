@@ -298,7 +298,8 @@ public/            Browser app (plain HTML, CSS and JavaScript, no build step)
   reports.js       Comparative reports, cash flow, saved reports, PDFs, report packages, reconciliation reports
   review.js        Attachments, reclassify, the Review page and questions to the client
   payroll-calc.js  Payroll deductions (CPP/QPP, EI/QPIP, income tax) from CRA's T4127 formulas, year-end slip figures, public holidays, vacation pay rates and ROE figures
-  payroll.js       Employees, pay runs, pay stubs, remittances
+  payroll-dd.js    Direct deposit files for the employer's bank (Payments Canada Standard 005 / CPA-005)
+  payroll.js       Employees, pay runs, pay stubs, remittances, direct deposit
   payroll-yearend.js  T4 and RL-1 slips and summaries
   payroll-roe.js   Records of employment (ROE)
   activity.js      Activity log screen
