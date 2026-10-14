@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // The French translation layer: lookups with numbers, dates and names, and every pattern compiles.
 const test = require('node:test');
 const assert = require('node:assert/strict');

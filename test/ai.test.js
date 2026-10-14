@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // AI suggestions for bank lines, against a stand-in for the Claude API (no real calls, no key needed).
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

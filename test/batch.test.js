@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Batch actions on invoices: which ticked documents each action takes, sending one at a time through the mail
 // route (with a stub SMTP server), "Mark as sent", and the combined PDF.
 const { test, before, after } = require('node:test');

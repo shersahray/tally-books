@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Tags: the company's list, tags on transactions (checked by the server), the money in and out by tag totals,
 // and who can change them.
 const { test, before, after } = require('node:test');

@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // "Forgot your password?" on the sign-in screen, unlocking a locked-out account, and the administrator's
 // sign-in help for another firm's owners.
 const { test, before, after } = require('node:test');

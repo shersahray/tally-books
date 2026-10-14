@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Report filters, the profit and loss by customer and the transaction list (public/report-filters.js), the
 // Reports page code that uses them (public/reports.js, run with the few app globals it needs), and saved reports.
 const { test, before, after } = require('node:test');

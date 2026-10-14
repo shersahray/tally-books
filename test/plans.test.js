@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Seed, Grow and Thrive; the Payroll add-on (a base fee plus each employee paid in a month); moving firms over from Essentials and Plus.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

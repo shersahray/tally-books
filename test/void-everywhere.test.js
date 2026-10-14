@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // A void pay run counts for nothing anywhere: ROEs, T4/RL-1 and the T4 XML, EHT, WSIB, remittances, the cash flow
 // forecast's next pay, the payroll add-on's employees billed, workflow reminders and year-to-date on later stubs.
 // Each feature was built on its own; this checks they agree once together.

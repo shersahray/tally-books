@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // How the features built side by side fit together: custom roles on the routes and records the other features added
 // (mark as sent, Import data, deposits on estimates, recurring kinds, company settings, receipts by email), tags in the
 // report filters, and the cash basis with deposits on estimates.

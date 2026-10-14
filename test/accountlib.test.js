@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // The account library: every account is valid for the chart, has French, a sensible code and a valid GIFI suggestion.
 const test = require('node:test');
 const assert = require('node:assert/strict');

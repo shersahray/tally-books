@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Correcting pay runs: voiding with a reversing entry, when deleting is still allowed, and the new pay-run fields
 // (overtime, non-discretionary bonus, workers' compensation premium) and payroll settings (overtime, EHT, WSIB).
 const { test, before, after } = require('node:test');

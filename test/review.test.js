@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Accountant tools: attachments, questions to the client, adjusting and reversing entries, saved reports.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

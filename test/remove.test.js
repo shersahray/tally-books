@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Removing what was made by mistake: an empty company, and a person who never signed in.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

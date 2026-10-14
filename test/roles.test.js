@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Custom roles: a firm's own roles for staff (None / View / Edit per area), enforced by the server.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

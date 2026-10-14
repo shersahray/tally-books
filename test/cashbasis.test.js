@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Cash-basis reports: invoices and bills counted when they're paid, in proportion (public/cashbasis.js),
 // and the company setting and saved reports that keep the choice.
 const { test, before, after } = require('node:test');

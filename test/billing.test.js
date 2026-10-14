@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Paying for Sumlora on an online server, with a stand-in for Stripe's API.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
