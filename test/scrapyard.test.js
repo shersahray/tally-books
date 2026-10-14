@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // The Scrap yard add-on: choosing "Scrap yard or auto recycler" sets up the accounts, materials and add-on;
 // vehicles are bought by VIN with the seller's details; their transactions are protected; seller IDs stay out of the log.
 const { test, before, after } = require('node:test');

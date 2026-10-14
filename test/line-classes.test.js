@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Classes on each line (company setting classPerLine): one bill or invoice split across classes. How the forms post
 // them (app.js calcLines, docPostLines, moneyLines), how the reports add them up (reports.js rix, report-filters.js,
 // cashbasis.js) and what the server accepts.

@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 /*
  * Payroll checked against CRA's own published numbers (2026, Ontario).
  *

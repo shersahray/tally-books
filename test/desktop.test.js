@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // The desktop app's choice of where the books are, run against a stand-in for Electron.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

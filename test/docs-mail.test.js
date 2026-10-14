@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Credit notes and vendor credits, the PDF writer, and email through the company's own mailbox.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Bank feeds through Plaid, with a stand-in for Plaid's API.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

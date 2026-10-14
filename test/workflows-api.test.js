@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Workflow reminders (Plus) on the server: settings validation, plan gating, the check making each reminder once,
 // dismiss and snooze, custom roles, customer emails (logged, limited) and the daily digest to staff.
 const { test, before, after } = require('node:test');

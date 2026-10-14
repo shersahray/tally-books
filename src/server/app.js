@@ -1806,7 +1806,7 @@ function createApp(opts) {
     // ---------- email from the company's own mailbox ----------
     ['GET', /^\/mail$/, ctx => {
       const m = ctx.store.getSetting('mail');
-      return { ...mail.publicMail(m), sentToday: Number(ctx.store.getMeta('mail-sent:' + new Date().toISOString().slice(0, 10)) || 0) };
+      return { ...mail.publicMail(m), sentToday: Number(ctx.store.getMeta('mail-sent:' + (opts.now ? opts.now() : new Date()).toISOString().slice(0, 10)) || 0) };
     }],
     ['PUT', /^\/mail$/, async (ctx, req) => {
       notClient(ctx.user); needArea(ctx.user, 'settings');
@@ -1826,7 +1826,7 @@ function createApp(opts) {
       else if (!['sales', 'expenses', 'reports', 'payroll'].some(a => canArea(ctx.user, a, 'view'))) needArea(ctx.user, 'sales', 'view');
       const cfg = ctx.store.getSetting('mail');
       if (!cfg || !cfg.host) throw new ValidationError('Set up email for this company first (Settings → Email).', 409);
-      const dayKey = 'mail-sent:' + new Date().toISOString().slice(0, 10);
+      const dayKey = 'mail-sent:' + (opts.now ? opts.now() : new Date()).toISOString().slice(0, 10);
       const body = (await readJson(req, 12 * 1024 * 1024)) || {};
       const list = v => (Array.isArray(v) ? v : String(v || '').split(/[,;]/)).map(x => String(x).trim()).filter(Boolean);
       const to = m[1] === 'test' ? list(body.to || cfg.fromEmail) : list(body.to), cc = m[1] === 'test' ? [] : list(body.cc);

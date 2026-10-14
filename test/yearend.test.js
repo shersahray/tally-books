@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // The zip writer and reader behind the year-end package (public/yearend.js), run outside the browser.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');

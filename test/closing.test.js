@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Closing the books: closed periods can't be changed without unlocking, clients never.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

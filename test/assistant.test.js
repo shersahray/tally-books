@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // The AI assistant add-on: off until an owner adds it, read-only answers worked out from the books,
 // a monthly number of questions, and the add-on's line on a Stripe subscription.
 const { test, before, after } = require('node:test');
