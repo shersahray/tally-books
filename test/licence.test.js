@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Licence codes for the desktop app: a trial, codes that turn it on until a date, view only after that.
 const { test, after } = require('node:test');
 const assert = require('node:assert/strict');

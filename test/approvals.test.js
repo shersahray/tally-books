@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Bill approvals (Plus): bills over a limit wait for an owner or approver before they can be paid; enforced by the server.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

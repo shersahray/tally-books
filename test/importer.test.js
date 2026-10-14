@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Import data from a spreadsheet: column matching (English and French), dates, tax codes, grouping lines into
 // invoices, bills and journal entries, the problems each row can have, and the import itself.
 const { test, before, after } = require('node:test');

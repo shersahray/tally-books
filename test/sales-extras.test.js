@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Estimates, recurring invoices and bills, and online payments through Stripe (with a stand-in for Stripe's API).
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

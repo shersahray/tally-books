@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Delayed charges and credits (delayed-calc.js and the server), and tags and line classes on recurring templates and
 // estimates: what they pass to the transactions made from them.
 const { test, before, after } = require('node:test');

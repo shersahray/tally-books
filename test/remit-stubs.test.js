@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Remitting schedules (monthly, quarterly, accelerated threshold 1 and 2; Revenu Québec's own frequency), due dates moved
 // off weekends and holidays, and emailed pay stubs (the PDF, and one mail route call per employee).
 const { test, before, after } = require('node:test');

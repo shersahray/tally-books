@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Several firms on one server: each sees only its own companies, people and sign-ins.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

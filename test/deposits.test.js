@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Deposits on estimates: the shared sums (deposits-calc.js) and the server's rules, with a stand-in for Stripe.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Recurring expenses, deposits, transfers and journal entries: the schedule (recurring-calc.js) and the server's checks.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

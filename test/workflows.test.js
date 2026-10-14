@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // Workflow reminders (Plus): the rules in public/workflows.js, each template due / not due, repeats, dismiss and snooze, roles.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');

@@ -1,4 +1,5 @@
 'use strict';
+require('./setup-payroll-on'); // payroll on, as `npm test` does, so the server's own test run passes too
 // The browser scripts share one global scope, so two files declaring the same top-level name means the
 // later one silently replaces the earlier (that once made "Add account" open "Your account").
 const { test } = require('node:test');
