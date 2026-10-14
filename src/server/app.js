@@ -43,6 +43,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {boolean} [opts.trustProxy] Behind a reverse proxy (Caddy): take the client's address from X-Forwarded-For.
  * @param {string} [opts.backupBlobUrl] Azure Blob Storage container URL with a SAS token, for off-site backups.
  * @param {Function} [opts.stripeFetch]    Tests only: answers in place of Stripe's API.
+ * @param {string}  [opts.publicUrl]       The address people sign in at (https://app.sumlora.ca), for links in "Forgot your password?" emails.
  * @param {boolean} [opts.mailInsecureTls] Tests only: accept the test mail server's certificate.
  * @param {boolean} [opts.mailAllowLocal]  Tests only: allow a mail server on this computer or the local network.
  * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
@@ -191,6 +192,20 @@ function createApp(opts) {
   const sysMail = { get() { try { return JSON.parse(fs.readFileSync(sysMailFile, 'utf8')); } catch { return null; } },
     set(m) { const tmp = sysMailFile + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(m || {}), { mode: 0o600 }); fs.renameSync(tmp, sysMailFile); try { fs.chmodSync(sysMailFile, 0o600); } catch { /* Windows */ } } };
   const sysMailSent = new Map(); // firm|day -> emails sent through the server's mailbox
+  /**
+   * The address reset links in "Forgot your password?" emails point to: PUBLIC_URL if it's set, otherwise the address the
+   * administrator uses when setting up (or looking at) the mailbox. Never the address in a stranger's request, which they
+   * could make up to send people a link to their own site.
+   */
+  const appUrl = () => { try { const v = opts.publicUrl || (sysMail.get() || {}).appUrl || ''; return v ? new URL(v).origin : ''; } catch { return ''; } };
+  const forgotReady = () => { const c = sysMail.get(); return !!(c && c.host && appUrl()); };
+  const forgotByIp = new Map(); // address|hour -> reset requests
+  /** The "Forgot your password?" email, in the person's own language. */
+  const forgotEmail = (u, url) => {
+    const first = String(u.name || '').split(' ')[0] || u.username;
+    if (u.lang === 'fr') return { subject: 'Réinitialiser votre mot de passe Sumlora', text: `Bonjour ${first},\n\nQuelqu’un (probablement vous) a demandé à réinitialiser le mot de passe de votre compte Sumlora. Ouvrez ce lien pour choisir un nouveau mot de passe (il fonctionne une fois, pendant une heure) :\n\n${url}\n\nVotre nom d’utilisateur est ${u.username}.\n\nSi vous n’avez rien demandé, ignorez ce courriel : votre mot de passe ne change pas.\n` };
+    return { subject: 'Reset your Sumlora password', text: `Hi ${first},\n\nSomeone (probably you) asked to reset the password for your Sumlora account. Open this link to choose a new password (it works once, for one hour):\n\n${url}\n\nYour username is ${u.username}.\n\nIf you didn’t ask for this, ignore this email: your password stays the same.\n` };
+  };
   const firmExempt = fid => fid === auth.mainFirmId;            // the server owner's own firm doesn't pay itself
   const firmNeedsPay = f => billing.configured() && !!f && f.status === 'active' && !firmExempt(f.id) && !billingPaid(f.billing);
   const coNeedsPay = c => billing.configured() && !!c && c.payer === 'client' && !billingPaid(c.billing);
@@ -1025,7 +1040,7 @@ function createApp(opts) {
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
     ['GET', /^\/api\/auth\/me$/, req => {
       const user = auth.userFor(req);
-      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode, signups: auth.signups !== 'off' && !auth.needsSetup() ? auth.signups : '',
+      if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Please sign in.', 401, { setup: auth.needsSetup(), setupCode: auth.needsSetup() && !!opts.setupCode, signups: auth.signups !== 'off' && !auth.needsSetup() ? auth.signups : '', forgot: !auth.needsSetup() && forgotReady(),
         ...(auth.needsSetup() && licence.on ? { licenceSetup: { required: licence.trialDays === 0, trialDays: licence.trialDays } } : {}) });
       const { token, ...u } = user;
       return { user: u, idleMinutes: auth.data.settings.idleMinutes, require2fa: auth.policy2fa, licence: licenceInfo(u),
@@ -1116,6 +1131,33 @@ function createApp(opts) {
         return auth.login(u.username, body.password, meta);
       });
     }],
+    // "Forgot your password?" on the sign-in screen. If the email belongs to an account that can sign in, a reset link
+    // (good for an hour) goes to it from the server's mailbox. The answer is the same either way and the email goes out
+    // after replying, so neither the words nor the time taken show whether an account exists. Two-step sign-in still applies.
+    ['POST', /^\/api\/auth\/forgot$/, async req => {
+      const body = (await readJson(req)) || {};
+      const ip = clientIp(req);
+      ipCheck(ip);
+      const cfg = sysMail.get(), base = appUrl();
+      if (!cfg || !cfg.host || !base) throw new ValidationError('Ask your bookkeeper or the account owner for a reset link.', 409);
+      const hour = Math.floor(Date.now() / 3600000), k = `${ip}|${hour}`;
+      if ((forgotByIp.get(k) || 0) >= 5) throw new AuthError('Too many reset requests from your network. Try again in an hour.', 429);
+      forgotByIp.set(k, (forgotByIp.get(k) || 0) + 1);
+      if (forgotByIp.size > 5000) for (const key of forgotByIp.keys()) if (!key.endsWith('|' + hour)) forgotByIp.delete(key);
+      await new Promise(r => setTimeout(r, 250));
+      const name = String(body.username || '').trim().toLowerCase().slice(0, 200);
+      const day = 'forgot|' + new Date().toISOString().slice(0, 10), sent = sysMailSent.get(day) || 0;
+      if (mail.EMAIL_RE.test(name) && sent < 300) {
+        const out = auth.forgotLink(name, ip);
+        if (out) {
+          sysMailSent.set(day, sent + 1);
+          const msg = forgotEmail(out.user, `${base}/#link=${encodeURIComponent(out.token)}`);
+          mail.send(cfg, { to: [out.user.username], ...msg }, { insecureTls: !!opts.mailInsecureTls, allowLocal: !!opts.mailAllowLocal })
+            .catch(e => console.error('Forgot password: couldn’t send the reset email:', e.message));
+        }
+      }
+      return { ok: true };
+    }],
     ['PUT', /^\/api\/auth\/prefs$/, async (req, m, res, user) => ({ ok: true, user: auth.setPrefs(user, await readJson(req)) })],
     ['POST', /^\/api\/auth\/2fa\/start$/, async (req, m, res, user) => auth.start2fa(user, (await readJson(req)).password)],
     ['POST', /^\/api\/auth\/2fa\/confirm$/, async (req, m, res, user) => ({ ok: true, ...auth.confirm2fa(user, (await readJson(req)).code) })],
@@ -1171,10 +1213,17 @@ function createApp(opts) {
       auth.log(out.kind === 'invite' ? 'invite-link' : 'reset-link', { username: auth.byId(decodeURIComponent(m[1])).username, by: user.username });
       return { ok: true, ...out };
     }],
+    ['POST', /^\/api\/users\/([^/]+)\/unlock$/, (req, m, res, user) => {
+      ownerOnly(user);
+      return { ok: true, user: auth.unlock(decodeURIComponent(m[1]), user) };
+    }],
     // The server's mailbox: the administrator sets it up; everyone else only learns whether it's there.
     ['GET', /^\/api\/sysmail$/, (req, m, res, user) => {
       const cfg = sysMail.get();
-      if (user.role === 'owner' && user.platformAdmin) return { ...mail.publicMail(cfg), admin: true };
+      if (user.role === 'owner' && user.platformAdmin) {
+        if (cfg && cfg.host && !cfg.appUrl && !opts.publicUrl) sysMail.set({ ...cfg, appUrl: originOf(req) }); // set up before reset emails existed
+        return { ...mail.publicMail(cfg), admin: true, appUrl: appUrl(), forgot: forgotReady() };
+      }
       return { configured: !!(cfg && cfg.host) };
     }],
     ['PUT', /^\/api\/sysmail$/, async (req, m, res, user) => {
@@ -1182,9 +1231,9 @@ function createApp(opts) {
       const body = (await readJson(req)) || {};
       if (body.remove) { sysMail.set({}); auth.log('security-changed', { by: user.username, change: 'invitation email turned off' }); return mail.publicMail(null); }
       const cfg = mail.validateMail(body, sysMail.get() || {}, { allowLocal: !!opts.mailAllowLocal });
-      sysMail.set(cfg);
+      sysMail.set({ ...cfg, appUrl: originOf(req) });
       auth.log('security-changed', { by: user.username, change: `invitation email set up for ${cfg.fromEmail}` });
-      return { ...mail.publicMail(cfg), admin: true };
+      return { ...mail.publicMail(cfg), admin: true, appUrl: appUrl(), forgot: forgotReady() };
     }],
     ['POST', /^\/api\/sysmail\/test$/, async (req, m, res, user) => {
       adminOnly(user);
@@ -1389,6 +1438,23 @@ function createApp(opts) {
       else if (patch.billPayroll !== undefined) await syncFirmCount(f.id);
       broadcast({ companies: true, firmId: f.id });
       return { ok: true, firm: f };
+    }],
+    // Sign-in help for another firm's owners (the administrator): their own owners look after everyone else in the firm.
+    ['GET', /^\/api\/firms\/([^/]+)\/owners$/, (req, m, res, user) => {
+      adminOnly(user);
+      const f = auth.firm(decodeURIComponent(m[1]));
+      if (!f) throw new ValidationError('That firm doesn’t exist.', 404);
+      return { firm: { id: f.id, name: f.name, status: f.status }, owners: auth.firmUsers(f.id).filter(u => u.role === 'owner').map(u => auth.publicUser(u)) };
+    }],
+    ['POST', /^\/api\/firms\/([^/]+)\/owners\/([^/]+)\/(link|unlock|reset2fa)$/, (req, m, res, user) => {
+      adminOnly(user);
+      const fid = decodeURIComponent(m[1]), uid = decodeURIComponent(m[2]), u = auth.byId(uid);
+      if (!u || u.firmId !== fid || u.role !== 'owner') throw new ValidationError('That user doesn’t exist.', 404);
+      if (m[3] === 'unlock') return { ok: true, user: auth.unlock(uid, user, true) };
+      if (m[3] === 'reset2fa') return { ok: true, user: auth.reset2fa(uid, user, true) };
+      const out = auth.issueLink(uid, user, true);
+      auth.log(out.kind === 'invite' ? 'invite-link' : 'reset-link', { username: u.username, by: user.username });
+      return { ok: true, ...out, user: auth.publicUser(u) };
     }],
     ['DELETE', /^\/api\/firms\/([^/]+)$/, (req, m, res, user) => {
       adminOnly(user);
@@ -2616,9 +2682,9 @@ function createApp(opts) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
         // Everything except signing in needs a signed-in user.
         let user = null;
-        if (!/^\/api\/(health|auth\/(me|setup|signup|login|login\/code|logout|link|link\/accept))$/.test(url.pathname)) {
+        if (!/^\/api\/(health|auth\/(me|setup|signup|login|login\/code|logout|link|link\/accept|forgot))$/.test(url.pathname)) {
           user = auth.userFor(req);
-          if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup() });
+          if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup(), forgot: !auth.needsSetup() && forgotReady() });
           if (user.mustChange && !['/api/auth/password', '/api/auth/prefs', '/api/events'].includes(url.pathname)) throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
           if (user.mustEnroll && !/^\/api\/(auth\/(password|prefs|2fa\/start|2fa\/confirm)|events)$/.test(url.pathname)) throw new AuthError('Set up two-step sign-in before continuing.', 403, { mustEnroll: true });
           if (!termsOk(user) && !/^\/api\/(auth\/.*|events)$/.test(url.pathname)) throw new AuthError('Read and agree to the Terms of service and Privacy policy to continue.', 403, { mustAgree: true });
@@ -2674,7 +2740,7 @@ function createApp(opts) {
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.mustAgree ? { mustAgree: true } : {}), ...(err.billing ? { billing: err.billing, companyId: err.companyId || '' } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}), ...(err.licenceSetup ? { licenceSetup: err.licenceSetup } : {}) });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : err.message, ...(err.setup !== undefined ? { setup: err.setup } : {}), ...(err.setupCode ? { setupCode: true } : {}), ...(err.signups ? { signups: err.signups } : {}), ...(err.forgot ? { forgot: true } : {}), ...(err.mustChange ? { mustChange: true } : {}), ...(err.mustEnroll ? { mustEnroll: true } : {}), ...(err.mustAgree ? { mustAgree: true } : {}), ...(err.billing ? { billing: err.billing, companyId: err.companyId || '' } : {}), ...(err.restart ? { restart: true } : {}), ...(err.closedThrough ? { closedThrough: err.closedThrough } : {}), ...(err.codeRequired ? { codeRequired: true } : {}), ...(err.licence ? { licence: true } : {}), ...(err.licenceSetup ? { licenceSetup: err.licenceSetup } : {}) });
     }
   });
 

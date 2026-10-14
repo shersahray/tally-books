@@ -32,6 +32,8 @@ const ROLES = ['owner', 'staff', 'client'];
 const TICKET_MS = 5 * 60 * 1000;
 const INVITE_MS = 7 * 24 * 60 * 60 * 1000;
 const RESET_MS = 24 * 60 * 60 * 1000;
+const FORGOT_MS = 60 * 60 * 1000;       // a link someone asked for themselves ("Forgot your password?") works for an hour
+const FORGOT_GAP_MS = 5 * 60 * 1000;    // and they can ask again after 5 minutes
 const LOG_MAX = 5 * 1024 * 1024;
 const sha256 = s => crypto.createHash('sha256').update(String(s)).digest('hex');
 
@@ -323,7 +325,8 @@ class Auth {
       customRole: cr ? cr.id : '', roleName: cr ? cr.name : '', perms: cr ? { ...cr.perms } : null, approveBills: !!(cr && cr.approveBills),
       firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: PLANS.planOf((this.planOverride && this.planOverride()) || (f ? f.plan : 'thrive')), platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
-      linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '', terms: u.terms ? { v: u.terms.v, at: u.terms.at } : null };
+      linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '', terms: u.terms ? { v: u.terms.v, at: u.terms.at } : null,
+      locked: this.isLocked(u.username) };
   }
   /**
    * The custom role a staff member works under, or null (owners, clients, plain staff).
@@ -437,17 +440,64 @@ class Auth {
   /* ---------- invitation and password reset links ---------- */
   setLink(u, kind) {
     const token = crypto.randomBytes(24).toString('base64url');
-    u.invite = { hash: sha256(token), kind, expires: Date.now() + (kind === 'invite' ? INVITE_MS : RESET_MS) };
+    u.invite = { hash: sha256(token), kind, expires: Date.now() + (kind === 'invite' ? INVITE_MS : RESET_MS), issued: Date.now() };
     return token;
   }
+  /**
+   * The person a sign-in action is for: someone in the actor's own firm or, when the server's administrator is helping
+   * another firm (anyFirm), that firm's owner. Firms' owners look after their own people; the administrator looks after owners.
+   */
+  targetFor(id, actor, anyFirm = false) {
+    if (!anyFirm) return this.inFirm(id, actor);
+    const u = this.byId(id);
+    if (!actor.platformAdmin || !u || u.role !== 'owner') throw new AuthError('That user doesn’t exist.', 404);
+    return u;
+  }
   /** A new invitation (someone who hasn't set a password) or password reset link. Returns the token. */
-  issueLink(id, actor) {
-    const u = this.inFirm(id, actor);
+  issueLink(id, actor, anyFirm = false) {
+    const u = this.targetFor(id, actor, anyFirm);
     this.guardAdmin(u, actor);
     if (u.disabled) throw new AuthError('Turn this account back on first.', 409);
     const token = this.setLink(u, u.hash ? 'reset' : 'invite');
     this.save();
     return { token, kind: u.invite.kind, expires: u.invite.expires };
+  }
+  /**
+   * "Forgot your password?" on the sign-in screen: a reset link for an account that can use one, or null. It never
+   * says why not, so the sign-in screen can't be used to learn which emails have accounts. Someone who was invited
+   * but never chose a password, or whose account or firm is off, gets nothing. At most one every 5 minutes per account,
+   * so the latest email's link stays the one that works.
+   */
+  forgotLink(username, ip = '') {
+    const u = this.byName(username);
+    if (!u || u.disabled || !u.hash || this.firmBlock(u)) return null;
+    if (u.invite && u.invite.kind === 'reset' && u.invite.expires > Date.now() && Date.now() - (u.invite.issued || 0) < FORGOT_GAP_MS) return null;
+    const token = this.setLink(u, 'reset');
+    u.invite.expires = Date.now() + FORGOT_MS;
+    this.save();
+    this.log('reset-requested', { username: u.username, ip: String(ip || '').slice(0, 64) });
+    return { user: u, token };
+  }
+  /** Let someone locked out by wrong passwords or codes try again now, instead of waiting the 15 minutes. */
+  unlock(id, actor, anyFirm = false) {
+    const u = this.targetFor(id, actor, anyFirm);
+    this.guardAdmin(u, actor);
+    const was = this.isLocked(u.username);
+    this.clearFailures(u.username);
+    if (was) this.log('unlocked', { username: u.username, by: actor.username });
+    return this.publicUser(u);
+  }
+  /** Someone lost their phone: they sign in with their password again (and set up a new authenticator app if required). */
+  reset2fa(id, actor, anyFirm = false) {
+    const u = this.targetFor(id, actor, anyFirm);
+    this.guardAdmin(u, actor);
+    if (u.id === actor.id) throw new AuthError('Turn off your own two-step sign-in from Account instead.', 409);
+    if (!u.totp && !u.totpPending) throw new AuthError('Two-step sign-in isn’t on for this person.', 409);
+    delete u.totp; delete u.totpPending;
+    this.endSessionsFor(u.id);
+    this.save();
+    this.log('user-changed', { username: u.username, by: actor.username, changes: ['reset2fa'] });
+    return this.publicUser(u);
   }
   userForLink(token) {
     const h = sha256(token || '');
@@ -673,6 +723,12 @@ class Auth {
     const n = bump(`${name}|${ip}`, LOCK_AFTER);
     if (n === LOCK_AFTER || total === LOCK_TOTAL) this.log('locked', { username: name, ip, everywhere: total >= LOCK_TOTAL });
     return total >= LOCK_TOTAL ? 0 : LOCK_AFTER - n;
+  }
+  /** Is this account locked out right now, from any address? */
+  isLocked(name) {
+    const now = Date.now();
+    for (const [k, f] of this.failures) if (f.until > now && (k === name || k.startsWith(name + '|'))) return true;
+    return false;
   }
   clearFailures(name) { for (const k of this.failures.keys()) if (k === name || k.startsWith(name + '|')) this.failures.delete(k); }
 

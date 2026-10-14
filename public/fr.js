@@ -3443,3 +3443,23 @@ addFr({
   'An instalment due on a weekend or holiday is due the next business day.':'Un acompte dont l’échéance tombe la fin de semaine ou un jour férié est exigible le jour ouvrable suivant.',
   'That pay run was voided, so its pay stubs aren’t sent.':'Cette paie a été annulée : ses relevés de paie ne sont donc pas envoyés.',
 });
+
+/* ---------- Forgot your password?, unlocking and sign-in help for firms’ owners ---------- */
+addFr({
+  'Forgot your password?':'Mot de passe oublié?','Reset your password':'Réinitialiser votre mot de passe',
+  'Enter the email you sign in with. If it has a Sumlora account, we’ll email it a link to choose a new password.':'Entrez le courriel avec lequel vous vous connectez. S’il correspond à un compte Sumlora, nous y enverrons un lien pour choisir un nouveau mot de passe.',
+  'Email me a link':'M’envoyer un lien','Check your email':'Vérifiez vos courriels','If':'Si',
+  'has a Sumlora account, a link to choose a new password is on its way. It works once, for one hour.':'correspond à un compte Sumlora, un lien pour choisir un nouveau mot de passe est en route. Il fonctionne une fois, pendant une heure.',
+  'Nothing after a few minutes? Check your junk folder, or ask your bookkeeper or the account owner for a reset link.':'Rien après quelques minutes? Vérifiez vos courriels indésirables, ou demandez un lien de réinitialisation à votre teneur de livres ou au propriétaire du compte.',
+  'Enter the email you sign in with.':'Entrez le courriel avec lequel vous vous connectez.',
+  'Ask your bookkeeper or the account owner for a reset link.':'Demandez un lien de réinitialisation à votre teneur de livres ou au propriétaire du compte.',
+  'Too many reset requests from your network. Try again in an hour.':'Trop de demandes de réinitialisation à partir de votre réseau. Réessayez dans une heure.',
+  'Locked':'Verrouillé','Unlock now':'Déverrouiller maintenant','Locked after too many wrong tries.':'Verrouillé après trop d’essais erronés.',
+  'It unlocks by itself after 15 minutes, or unlock it now once you know it’s really them.':'Il se déverrouille de lui-même après 15 minutes, ou déverrouillez-le maintenant une fois certain que c’est bien la bonne personne.',
+  '{s} can try again now':'{s} peut réessayer maintenant','Asked for a reset link':'A demandé un lien de réinitialisation','Account unlocked':'Compte déverrouillé',
+  'Sign-in help':'Aide à la connexion','Sign-in help: {s}':'Aide à la connexion : {s}','Never signed in':'Jamais connecté','Two-step on':'Deux étapes activée',
+  'Make sure it’s really them asking before you help, for example by calling the phone number you have for the firm. The firm’s owners look after their own staff and clients under Users & security.':'Assurez-vous que c’est bien la bonne personne avant d’aider, par exemple en appelant le numéro de téléphone que vous avez pour le cabinet. Les propriétaires du cabinet s’occupent de leur personnel et de leurs clients dans Utilisateurs et sécurité.',
+  'This firm is suspended.':'Ce cabinet est suspendu.','Nobody in it can sign in until you reactivate it.':'Personne ne peut s’y connecter tant que vous ne l’avez pas réactivé.',
+  'This firm has no owners.':'Ce cabinet n’a aucun propriétaire.','Two-step sign-in isn’t on for this person.':'La connexion en deux étapes n’est pas activée pour cette personne.',
+  '“Forgot your password?” on the sign-in screen emails people a reset link that works for one hour. Links point to':'« Mot de passe oublié? » à l’écran de connexion envoie par courriel un lien de réinitialisation valide une heure. Les liens mènent à',
+});

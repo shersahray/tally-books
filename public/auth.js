@@ -56,7 +56,7 @@ function renderLock(mode,opt=''){
   if(mode==='signin')html=lockCard('Sign in',esc(msg||'Sign in to see your books.'),`
       ${fld('lgUser','Username or email',`<input type="text" id="lgUser" autocomplete="username" autocapitalize="none" spellcheck="false">`,true)}
       ${fld('lgPass','Password',`<input type="password" id="lgPass" autocomplete="current-password">`,true)}`,'Sign in',
-      `<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>${SIGNUPS?'<button type="button" class="btn ghost block" data-locksignup>New to Sumlora? Create an account</button>':''}`);
+      `${FORGOT?'<button type="button" class="btn ghost block" data-lockforgot>Forgot your password?</button>':'<div class="muted" style="font-size:12.5px">Forgot your password? Ask your bookkeeper or the account owner for a reset link.</div>'}${SIGNUPS?'<button type="button" class="btn ghost block" data-locksignup>New to Sumlora? Create an account</button>':''}`);
   else if(mode==='setup')html=lockCard('Welcome to Sumlora','Create the owner account. You’ll use it to sign in, add staff and clients, and manage security. Only people with an account can see the books.',`
       ${opt&&opt.setupCode?fld('suCode','Setup code',`<input type="text" id="suCode" autocomplete="off" autocapitalize="none" spellcheck="false"><span class="hint">The setup code chosen when this server was installed.</span>`,true):''}
       ${opt&&opt.licence?fld('suLic','Licence code',`<textarea id="suLic" rows="3" class="mono" spellcheck="false" autocomplete="off" placeholder="TB1-…" style="font-size:12.5px;word-break:break-all"></textarea><span class="hint">${opt.licence.required?'Paste the licence code you received with Sumlora. It starts with TB1-.':`Paste the licence code you received with Sumlora. No code yet? Leave it empty for a ${opt.licence.trialDays}-day free trial.`}</span>`,!!opt.licence.required):''}
@@ -83,6 +83,11 @@ function renderLock(mode,opt=''){
       <div class="muted" style="font-size:12.5px">Your books are private: other accounts on Sumlora never see them.</div>
       ${termsBox('sgTerms')}`,'Create account',
       '<button type="button" class="btn ghost block" data-lockback>Already have an account? Sign in</button>');}
+  else if(mode==='forgot')html=lockCard('Reset your password','Enter the email you sign in with. If it has a Sumlora account, we’ll email it a link to choose a new password.',`
+      ${fld('fgUser','Email',`<input type="email" id="fgUser" autocomplete="username" autocapitalize="none" spellcheck="false" value="${esc(msg)}">`,true)}`,'Email me a link',
+      '<button type="button" class="btn ghost block" data-lockback>Back to sign in</button>');
+  else if(mode==='forgot-sent')html=lockCard('Check your email',`<span>If</span> <b translate="no">${esc(msg)}</b> <span>has a Sumlora account, a link to choose a new password is on its way. It works once, for one hour.</span>`,
+      '<div class="muted" style="font-size:12.5px">Nothing after a few minutes? Check your junk folder, or ask your bookkeeper or the account owner for a reset link.</div>','','<button type="button" class="btn primary block" data-lockback>Back to sign in</button>');
   else if(mode==='pending')html=lockCard('Thanks! Your account is waiting for approval','The server’s administrator approves new accounts. Once yours is approved, sign in with the email and password you just chose.','','','<button type="button" class="btn primary block" data-lockback>Back to sign in</button>');
   else if(mode==='code')html=lockCard('Enter your code','Open your authenticator app (Microsoft Authenticator, Google Authenticator, 1Password…) and enter the 6-digit code for Sumlora.',`
       ${fld('lgCode','Code',`<input type="text" id="lgCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123456" style="font-size:20px;letter-spacing:.2em;text-align:center">`,true)}
@@ -104,9 +109,10 @@ function renderLock(mode,opt=''){
   const lo=$('[data-lockout]',f);if(lo)lo.onclick=()=>signOut();
   const bk=$('[data-lockback]',f);if(bk)bk.onclick=()=>renderLock('signin');
   const sg=$('[data-locksignup]',f);if(sg)sg.onclick=()=>renderLock('signup');
+  const fg=$('[data-lockforgot]',f);if(fg)fg.onclick=()=>renderLock('forgot',/@/.test($('#lgUser').value)?$('#lgUser').value.trim():'');
   if(mode==='signup')$$('input[name=sgKind]',f).forEach(r=>r.onchange=()=>{const b=r.value==='business'&&r.checked||r.value==='firm'&&!r.checked;
     $('[data-sgfirmlbl]',f).textContent=T(b?'Business name':'Firm name');$('[data-sgprov]',f).style.display=b?'':'none'});
-  if(mode==='pending')return;
+  if(mode==='pending'||mode==='forgot-sent')return;
   if(mode==='link')return linkScreen(f);
   if(mode==='enroll')return enrollScreen(f,opt);
   if(mode==='terms'&&!(opt&&opt.version)){api('GET','/api/auth/me').then(me=>{if(me.terms)renderLock('terms',me.terms)}).catch(()=>{});return}
@@ -116,6 +122,11 @@ function renderLock(mode,opt=''){
         const r=await api('POST','/api/auth/login',{username:$('#lgUser').value,password:$('#lgPass').value});
         if(r.needCode)return renderLock('code',{ticket:r.ticket});
         await afterSignIn();
+      }else if(mode==='forgot'){
+        const email=$('#fgUser').value.trim();
+        if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))throw new Error('Enter the email you sign in with.');
+        await api('POST','/api/auth/forgot',{username:email});
+        return renderLock('forgot-sent',email);
       }else if(mode==='code'){
         await api('POST','/api/auth/login/code',{ticket:opt.ticket,code:$('#lgCode').value});
         await afterSignIn();
@@ -222,6 +233,7 @@ function showRecovery(codes,fromAccount){
 let reauthing=null;
 function sessionEnded(info){
   if(reauthing)return reauthing;
+  if(info&&info.forgot!==undefined)FORGOT=!!info.forgot;
   $('#main').innerHTML='';ME=null;
   reauthing=requireSignIn(info&&info.setup?'setup':'signin',info&&info.setup?{setupCode:!!info.setupCode,licence:info.licenceSetup||null}:info&&info.idle?`Locked after ${IDLE_MIN} minutes without activity. Sign in to continue.`:'Your session ended. Sign in to continue.')
     .then(()=>{reauthing=null;if(CO)load();renderMain()});
@@ -232,7 +244,7 @@ async function authStart(){
   if(/[#&]link=/.test(location.hash))return requireSignIn('link');
   let me;
   try{me=await api('GET','/api/auth/me')}
-  catch(e){if(e.status===401){SIGNUPS=(e.info&&e.info.signups)||'';if(e.info&&e.info.setup)return requireSignIn('setup',{setupCode:!!e.info.setupCode,licence:e.info.licenceSetup||null});
+  catch(e){if(e.status===401){SIGNUPS=(e.info&&e.info.signups)||'';FORGOT=!!(e.info&&e.info.forgot);if(e.info&&e.info.setup)return requireSignIn('setup',{setupCode:!!e.info.setupCode,licence:e.info.licenceSetup||null});
     // From the website: ?signup opens the sign-up form (?signup=firm with "firm" chosen).
     const q=new URLSearchParams(location.search);if(SIGNUPS&&q.has('signup')){const k=q.get('signup');history.replaceState(null,'',location.pathname+location.hash);return requireSignIn('signup',k==='firm'?'firm':'')}
     return requireSignIn('signin')}throw e}
@@ -299,14 +311,14 @@ function myAccountForm(){
 }
 
 /* ---------- Users & security (owners) ---------- */
-let USERS=null,SIGNINS=null,SIGNUPS='';
+let USERS=null,SIGNINS=null,SIGNUPS='',FORGOT=false;
 async function showUsers(){if(typeof loadBillMe==='function')loadBillMe();S.view='users';renderMain();try{USERS=await api('GET','/api/users');IDLE_MIN=USERS.idleMinutes}catch(e){toast(e.message,true)}if(S.view==='users')renderMain()}
 function vUsers(){
   if(!ME||ME.role!=='owner')return head('Users & security','')+'<div class="panel"><div class="empty"><b>Owners only</b>Ask an owner to change users or security settings.</div></div>';
   if(!USERS)return head('Users & security','Loading…');
   const coName=id=>(CO_LIST.find(c=>c.id===id)||{}).name||'(removed company)';
   const access=u=>u.role==='owner'||(u.role==='staff'&&!u.companies.length)?'All companies':u.companies.map(coName).join(', ');
-  const status=u=>u.disabled?'<span class="pill overdue">Turned off</span>':u.invited?`<span class="pill partial">${u.linkPending==='invite'?'Invited':'Invite expired'}</span>`:u.mustChange?'<span class="pill partial">Must set password</span>':u.mustEnroll?'<span class="pill partial">Must set up two-step</span>':'<span class="pill paid">Active</span>';
+  const status=u=>u.disabled?'<span class="pill overdue">Turned off</span>':u.locked?'<span class="pill overdue">Locked</span>':u.invited?`<span class="pill partial">${u.linkPending==='invite'?'Invited':'Invite expired'}</span>`:u.mustChange?'<span class="pill partial">Must set password</span>':u.mustEnroll?'<span class="pill partial">Must set up two-step</span>':'<span class="pill paid">Active</span>';
   const rank={off:0,owners:1,everyone:2},forced=USERS.forced2fa||'off',eff=rank[USERS.require2fa]>=rank[forced]?USERS.require2fa:forced;
   const firm=USERS.firm||{};
   return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Users & security','Who can sign in, what they can see, and how sign-in is protected',`<button class="btn" data-signins>Sign-in activity</button><button class="btn primary" data-useradd>+ Add user</button>`)+
@@ -387,7 +399,8 @@ function userForm(u){
     <div data-colist style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 16px;margin-top:6px">${cos.map(c=>`<label class="check"><input type="checkbox" data-usco="${c.id}" ${sel.has(c.id)?'checked':''}> ${esc(c.name)}${c.archived?' <span class="muted">(archived)</span>':''}</label>`).join('')}</div></div>
   ${u?`<div class="subpanel"><div class="flabel">Sign-in</div>
     <div class="muted" style="font-size:13px">${u.invited?'They haven’t accepted their invitation yet.':`Two-step sign-in is ${u.twoStep?'on':'off'}.`}</div>
-    <div class="actions" style="justify-content:flex-start">${u.id!==ME.id?`<button type="button" class="btn sm" data-uslink>${u.invited?'New invitation link':'Password reset link'}</button>`:''}${u.twoStep&&u.id!==ME.id?'<button type="button" class="btn sm" data-us2fa>Reset two-step sign-in</button>':''}</div></div>`
+    ${u.locked?'<div class="banner" style="margin:0"><span><b>Locked after too many wrong tries.</b> <span>It unlocks by itself after 15 minutes, or unlock it now once you know it’s really them.</span></span></div>':''}
+    <div class="actions" style="justify-content:flex-start">${u.locked&&u.id!==ME.id?'<button type="button" class="btn sm primary" data-usunlock>Unlock now</button>':''}${u.id!==ME.id?`<button type="button" class="btn sm" data-uslink>${u.invited?'New invitation link':'Password reset link'}</button>`:''}${u.twoStep&&u.id!==ME.id?'<button type="button" class="btn sm" data-us2fa>Reset two-step sign-in</button>':''}</div></div>`
    :`<div class="muted" style="font-size:13px">You’ll get an invitation link to send them. They choose their own password${REQ2FA!=='off'?' and set up two-step sign-in':''}.</div>`}`,
   `${u&&u.id!==ME.id?`<button type="button" class="btn ${u.disabled?'':'danger'} left" data-usdis>${u.disabled?'Turn account back on':'Turn account off'}</button>${!u.lastLogin?'<button type="button" class="btn ghost" data-usdel>Remove</button>':''}`:'<span class="left"></span>'}<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">${u?'Save':'Add and get invitation link'}</button>`);
   const role=$('#usRole',f),all=$('#usAll',f);
@@ -396,6 +409,7 @@ function userForm(u){
   const dis=$('[data-usdis]',f);if(dis)dis.onclick=async()=>{try{await api('PUT','/api/users/'+u.id,{disabled:!u.disabled});closeModal();await showUsers();toast(u.disabled?`${u.name} can sign in again`:`${u.name} is signed out and can’t sign in`)}catch(ex){f.err(ex.message)}};
   const del=$('[data-usdel]',f);if(del)del.onclick=async()=>{if(!await confirmBox('Remove this person?',`${u.name} (${u.username}) has never signed in. Their invitation stops working and they’re taken off the list.`,'Remove'))return;
     try{await api('DELETE','/api/users/'+u.id);closeModal();await showUsers();toast(`${u.name} removed`)}catch(ex){f.err(ex.message)}};
+  const ul=$('[data-usunlock]',f);if(ul)ul.onclick=async()=>{try{await api('POST',`/api/users/${u.id}/unlock`,{});closeModal();await showUsers();toast(`${u.name} can try again now`)}catch(ex){f.err(ex.message)}};
   const ln=$('[data-uslink]',f);if(ln)ln.onclick=async()=>{try{const r=await api('POST',`/api/users/${u.id}/link`,{});closeModal();await showUsers();showLink(u,r.token,r.kind)}catch(ex){f.err(ex.message)}};
   const r2f=$('[data-us2fa]',f);if(r2f)r2f.onclick=async()=>{if(!await confirmBox('Reset two-step sign-in?',`${u.name} will be signed out. They’ll sign in with their password${REQ2FA!=='off'?' and set up their authenticator app again':''}. Do this only if you’re sure it’s really them asking, for example after a lost phone.`,'Reset'))return;
     try{await api('PUT','/api/users/'+u.id,{reset2fa:true});closeModal();await showUsers();toast('Two-step sign-in reset')}catch(ex){f.err(ex.message)}};
@@ -465,7 +479,7 @@ function roleForm(r){
 })();
 
 /* ---------- sign-in activity (owners) ---------- */
-const SIGNIN_EVENT={login:'Signed in','login-failed':'Wrong password','code-failed':'Wrong code',locked:'Account locked',logout:'Signed out','2fa-on':'Two-step turned on','2fa-off':'Two-step turned off','recovery-code-used':'Used a recovery code','invite-accepted':'Accepted invitation','password-reset':'Reset password with link','password-changed':'Changed password','user-added':'User added','user-changed':'User changed','invite-link':'Invitation link made','reset-link':'Reset link made','security-changed':'Security settings changed','role-added':'Role added','role-changed':'Role changed','role-removed':'Role removed'};
+const SIGNIN_EVENT={login:'Signed in','login-failed':'Wrong password','code-failed':'Wrong code',locked:'Account locked',logout:'Signed out','2fa-on':'Two-step turned on','2fa-off':'Two-step turned off','recovery-code-used':'Used a recovery code','invite-accepted':'Accepted invitation','password-reset':'Reset password with link','password-changed':'Changed password','user-added':'User added','user-changed':'User changed','invite-link':'Invitation link made','reset-link':'Reset link made','reset-requested':'Asked for a reset link',unlocked:'Account unlocked','security-changed':'Security settings changed','role-added':'Role added','role-changed':'Role changed','role-removed':'Role removed'};
 async function showSignins(){S.view='signins';SIGNINS=null;renderMain();try{SIGNINS=(await api('GET','/api/security/log')).log}catch(e){toast(e.message,true)}if(S.view==='signins')renderMain()}
 function vSignins(){
   const bad=new Set(['login-failed','code-failed','locked']);
@@ -501,13 +515,14 @@ function vFirms(){
       <td>${firmPlanCell(f)}</td>
       ${BILLADM&&BILLADM.configured?`<td style="white-space:nowrap">${f.main?'<span class="muted">Your firm (free)</span>':({trialing:'<span class="pill paid">Free trial</span>',active:'<span class="pill paid">Paying</span>',pastdue:'<span class="pill overdue">Payment failed</span>',stopped:'<span class="pill overdue">Stopped</span>'})[f.subscription&&f.subscription.state]||'<span class="pill quiet">Not started</span>'}</td>`:''}
       <td style="white-space:nowrap"><label class="check"><input type="checkbox" data-firmai="${f.id}" ${f.ai?'checked':''} aria-label="AI suggestions"> On</label>${f.main?'<div class="muted" style="font-size:12px">Server limit</div>':`<div class="muted" style="font-size:12px;display:flex;gap:4px;align-items:center"><span translate="no">${money(f.aiSpentUsd||0)}</span> / $<input type="number" min="0" step="1" value="${f.aiCapUsd??10}" data-firmcap="${f.id}" aria-label="Monthly AI limit (US$)" style="width:64px;padding:2px 4px"></div>`}</td><td><span class="pill ${st[0]}">${st[1]}</span></td>
-      <td style="white-space:nowrap">${f.status==='pending'?`<button class="btn sm primary" data-firmset="${f.id}" data-to="active">Approve</button>`:''}${f.status==='suspended'?`<button class="btn sm" data-firmset="${f.id}" data-to="active">Reactivate</button>`:''}${f.status!=='suspended'&&!mine?` <button class="btn sm ${f.status==='pending'?'ghost':'danger'}" data-firmset="${f.id}" data-to="suspended">${f.status==='pending'?'Decline':'Suspend'}</button>`:''}${f.status==='suspended'&&!f.companies&&!mine?` <button class="btn sm ghost" data-firmdel="${f.id}">Remove</button>`:''}</td></tr>`}).join('')}</tbody></table></div></div>`;
+      <td style="white-space:nowrap">${f.status==='pending'?`<button class="btn sm primary" data-firmset="${f.id}" data-to="active">Approve</button>`:''}${f.status==='suspended'?`<button class="btn sm" data-firmset="${f.id}" data-to="active">Reactivate</button>`:''}${f.status!=='suspended'&&!mine?` <button class="btn sm ${f.status==='pending'?'ghost':'danger'}" data-firmset="${f.id}" data-to="suspended">${f.status==='pending'?'Decline':'Suspend'}</button>`:''}${f.status==='suspended'&&!f.companies&&!mine?` <button class="btn sm ghost" data-firmdel="${f.id}">Remove</button>`:''}${f.owner&&!mine?` <button class="btn sm ghost" data-firmhelp="${f.id}">Sign-in help</button>`:''}</td></tr>`}).join('')}</tbody></table></div></div>`;
 }
 function bindFirms(m){
   m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
     if(b.hasAttribute('data-back-co'))return showCompanies();
     if(b.hasAttribute('data-firminvite'))return inviteFirmForm(showFirms);
     if(b.dataset.sysmail)return sysMailAction(b.dataset.sysmail);
+    if(b.dataset.firmhelp)return firmHelp(b.dataset.firmhelp);
     if(typeof invoicingAction==='function'&&await invoicingAction(b))return;
     if(typeof billingAdminAction==='function'&&await billingAdminAction(b))return;
     if(b.dataset.firmlegacy){const f=FIRMS.firms.find(x=>x.id===b.dataset.firmlegacy);
@@ -529,6 +544,31 @@ function bindFirms(m){
     if(t.dataset.firmai){try{await api('PUT','/api/firms/'+encodeURIComponent(t.dataset.firmai),{ai:t.checked});toast(t.checked?'AI suggestions turned on for this firm':'AI suggestions turned off for this firm')}catch(ex){t.checked=!t.checked;toast(ex.message,true)}}};
 }
 
+/* ---------- Sign-in help for another firm's owners (administrators) ----------
+   A firm's owners look after their own staff and clients from Users & security. When an owner is the one locked out,
+   they have nobody else to ask, so the administrator can send them a reset link, unlock them or reset two-step sign-in. */
+async function firmHelp(fid){
+  let r;try{r=await api('GET',`/api/firms/${encodeURIComponent(fid)}/owners`)}catch(ex){return toast(ex.message,true)}
+  const row=u=>`<div class="subpanel" style="margin:0"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b translate="no">${esc(u.name)}</b><span class="muted mono" style="font-size:12.5px" translate="no">${esc(u.username)}</span>
+      ${u.disabled?'<span class="pill overdue">Turned off</span>':u.locked?'<span class="pill overdue">Locked</span>':u.invited?'<span class="pill partial">Invited</span>':''}${u.twoStep?'<span class="pill quiet">Two-step on</span>':''}</div>
+    <div class="muted" style="font-size:12.5px;margin-top:2px">${u.lastLogin?`<span>Last sign-in</span> ${fmtWhen(u.lastLogin)}`:'Never signed in'}</div>
+    ${u.disabled?'':`<div class="actions" style="justify-content:flex-start;margin-top:6px"><button type="button" class="btn sm" data-fhlink="${u.id}">${u.invited?'New invitation link':'Password reset link'}</button>${u.locked?`<button type="button" class="btn sm" data-fhunlock="${u.id}">Unlock now</button>`:''}${u.twoStep?`<button type="button" class="btn sm" data-fh2fa="${u.id}">Reset two-step sign-in</button>`:''}</div>`}</div>`;
+  const f=openModal(`Sign-in help: ${r.firm.name}`,`
+    <div class="muted" style="font-size:13px">Make sure it’s really them asking before you help, for example by calling the phone number you have for the firm. The firm’s owners look after their own staff and clients under Users &amp; security.</div>
+    ${r.firm.status==='suspended'?'<div class="banner" style="margin:0"><span><b>This firm is suspended.</b> <span>Nobody in it can sign in until you reactivate it.</span></span></div>':''}
+    <div style="display:flex;flex-direction:column;gap:8px">${r.owners.length?r.owners.map(row).join(''):'<div class="muted">This firm has no owners.</div>'}</div>`,
+    '<button type="button" class="btn primary" data-close>Done</button>');
+  const who=id=>r.owners.find(x=>x.id===id),path=(id,a)=>`/api/firms/${encodeURIComponent(fid)}/owners/${encodeURIComponent(id)}/${a}`;
+  f.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
+    try{
+      if(b.dataset.fhlink){const x=await api('POST',path(b.dataset.fhlink,'link'),{});closeModal();showLink(x.user,x.token,x.kind)}
+      else if(b.dataset.fhunlock){const u=who(b.dataset.fhunlock);await api('POST',path(u.id,'unlock'),{});toast(`${u.name} can try again now`);closeModal();firmHelp(fid)}
+      else if(b.dataset.fh2fa){const u=who(b.dataset.fh2fa);
+        if(!await confirmBox('Reset two-step sign-in?',`${u.name} will be signed out. They’ll sign in with their password${REQ2FA!=='off'?' and set up their authenticator app again':''}. Do this only if you’re sure it’s really them asking, for example after a lost phone.`,'Reset'))return;
+        await api('POST',path(u.id,'reset2fa'),{});toast('Two-step sign-in reset');firmHelp(fid)}
+    }catch(ex){f.err?f.err(ex.message):toast(ex.message,true)}};
+}
+
 /* ---------- Invitation email: the server's own mailbox (administrators) ---------- */
 let SYSMAIL=null;
 async function loadSysMail(force){if(SYSMAIL&&!force)return SYSMAIL;try{SYSMAIL=await api('GET','/api/sysmail')}catch(e){SYSMAIL=null}return SYSMAIL}
@@ -537,6 +577,7 @@ function sysMailPanel(){
   return `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>Invitation email</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="muted" style="font-size:13px">Sumlora emails invitation and password reset links from this mailbox, for every firm on your server. Replies go to the person who sent the invitation. The password stays on the server and is never shown again.</div>
     <div>${m.configured?`<span class="pill paid">On</span> <span>Sending from</span> <b translate="no">${esc(m.fromEmail)}</b>`:'<span class="pill partial">Not set up</span> <span class="muted">Invitations show a link to copy and send yourself.</span>'}</div>
+    ${m.configured&&m.forgot?`<div class="muted" style="font-size:13px"><span>“Forgot your password?” on the sign-in screen emails people a reset link that works for one hour. Links point to</span> <b translate="no">${esc(m.appUrl)}</b><span>.</span></div>`:''}
     <div class="actions" style="justify-content:flex-start"><button class="btn sm ${m.configured?'':'primary'}" data-sysmail="edit">${m.configured?'Change mailbox':'Set up mailbox'}</button>${m.configured?'<button class="btn sm" data-sysmail="test">Send a test</button><button class="btn sm ghost" data-sysmail="off">Turn off</button>':''}</div></div></div>`;
 }
 async function sysMailAction(a){

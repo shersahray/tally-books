@@ -39,6 +39,7 @@ const server = createApp({
   aiKey: process.env.ANTHROPIC_API_KEY || undefined,
   requireTerms: process.env.REQUIRE_TERMS !== '0',
   plaid: process.env.PLAID_CLIENT_ID ? { clientId: process.env.PLAID_CLIENT_ID, secret: process.env.PLAID_SECRET || '', env: process.env.PLAID_ENV || 'production' } : undefined,
+  publicUrl: process.env.PUBLIC_URL || undefined, // the address people sign in at, for links in "Forgot your password?" emails
   mailAllowLocal: process.env.MAIL_ALLOW_LOCAL === '1', // testing only
 });
 server.on('error', err => {
