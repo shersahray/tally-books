@@ -143,7 +143,10 @@ test('server: staff make a year-end file; it must add up, and a final one is loc
   y = (await req(owner, 'GET', c('/state'))).json.engagements.find(x => x.id === 'y1');
   r = await req(owner, 'PUT', c('/records/engagements/y1'), { ...y, notes: 'changed' });
   assert.equal(r.status, 409, 'a final file can’t change');
-  assert.equal((await req(owner, 'PUT', c('/records/engagements/y1'), { ...y, status: 'open' })).status, 200, 'but it can be reopened');
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/y1'), { ...y, status: 'progress' })).status, 400, 'reopening needs a reason');
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/y1'), { ...y, status: 'progress', unlockReason: 'Late invoice' })).status, 200, 'but it can be reopened');
+  y = (await req(owner, 'GET', c('/state'))).json.engagements.find(x => x.id === 'y1');
+  assert.equal(y.unlocks.length, 1); assert.equal(y.unlocks[0].reason, 'Late invoice'); assert.equal(y.unlocks[0].by, 'Sher');
 });
 
 test('server: clients never see or change year-end files', async () => {
@@ -161,4 +164,93 @@ test('server: a company with year-end files switched off can’t make them', asy
   assert.deepEqual((await req(owner, 'GET', c('/state'))).json.engagements, [], 'hidden while off');
   const r = await req(owner, 'PUT', c('/records/engagements/y3'), file({ yearEnd: '2024-12-31' }));
   assert.equal(r.status, 403);
+});
+
+/* ---------- the review layer ---------- */
+async function staffMember(name, username) {
+  const r = await req(owner, 'POST', '/api/users', { name, username, password: 'temporary pass 123', role: 'staff' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password: 'temporary pass 123' }) });
+  const ck = login.headers.get('set-cookie').split(';')[0];
+  assert.equal((await req(ck, 'POST', '/api/auth/password', { current: 'temporary pass 123', password: name + ' picks a long phrase' })).status, 200);
+  return { id: r.json.user.id, cookie: ck };
+}
+const getY = async id => (await req(owner, 'GET', c('/state'))).json.engagements.find(x => x.id === id);
+
+test('review: sign-offs carry who and when from the server, and only an owner or the reviewer can finalize', async () => {
+  const { rev, closingDate, closingPassword, hasCode, ...co0 } = (await req(owner, 'GET', c('/state'))).json.company;
+  await req(owner, 'PUT', c('/settings'), { ...co0, features: { ...(co0.features || {}), yearEndFiles: true } });
+  const sam = await staffMember('Sam Staff', 'sam@example.com');
+  const team = (await req(sam.cookie, 'GET', c('/state'))).json.team;
+  assert.ok(team.some(u => u.id === sam.id) && !team.some(u => u.role === 'client'), 'the team list is the firm’s staff');
+  // Sam prepares; a forged sign-off in someone else's name is replaced with Sam's own.
+  let r = await req(sam.cookie, 'PUT', c('/records/engagements/r1'), file({ yearEnd: '2023-12-31', team: { preparer: { id: sam.id, name: 'Sam Staff' } },
+    wps: { A: { status: 'progress', notes: 'Agreed to bank statement', prepared: { by: 'Owner', id: 'someone', at: 5 } } },
+    ajes: [{ id: 'j1', num: 1, memo: 'Accrual', lines: [{ account: rent, debit: 50 }, { account: bank, credit: 50 }], reviewedBy: { by: 'Owner', at: 5 } }] }));
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  let y = await getY('r1');
+  assert.equal(y.wps.A.prepared.by, 'Sam Staff'); assert.ok(y.wps.A.prepared.at > 5);
+  assert.equal(y.ajes[0].preparedBy.by, 'Sam Staff'); assert.equal(y.ajes[0].reviewedBy, null, 'a new entry starts as a draft');
+  // Reviewing the AJE, then changing it, undoes the review.
+  await req(owner, 'PUT', c('/records/engagements/r1'), { ...y, ajes: [{ ...y.ajes[0], reviewedBy: { at: 1 } }] });
+  y = await getY('r1'); assert.equal(y.ajes[0].reviewedBy.by, 'Sher');
+  await req(sam.cookie, 'PUT', c('/records/engagements/r1'), { ...y, ajes: [{ ...y.ajes[0], lines: [{ account: rent, debit: 60 }, { account: bank, credit: 60 }] }] });
+  y = await getY('r1'); assert.equal(y.ajes[0].reviewedBy, null);
+  // Sam can't sign the file off as reviewed or make it final; an open review note blocks the owner.
+  assert.equal((await req(sam.cookie, 'PUT', c('/records/engagements/r1'), { ...y, signoffs: { reviewed: { at: 1 } } })).status, 403);
+  assert.equal((await req(sam.cookie, 'PUT', c('/records/engagements/r1'), { ...y, status: 'final' })).status, 403);
+  await req(owner, 'PUT', c('/records/engagements/r1'), { ...y, reviewNotes: [{ id: 'n1', num: 1, wp: 'A', text: 'Get the December statement', assignee: sam.id, assigneeName: 'Sam Staff', priority: 'high', status: 'open' }] });
+  y = await getY('r1'); assert.equal(y.reviewNotes[0].created.by, 'Sher');
+  r = await req(owner, 'PUT', c('/records/engagements/r1'), { ...y, status: 'final' });
+  assert.equal(r.status, 409); assert.match(r.json.error, /open review notes/);
+  await req(sam.cookie, 'PUT', c('/records/engagements/r1'), { ...y, reviewNotes: [{ ...y.reviewNotes[0], status: 'resolved', resolution: 'Attached' }] });
+  y = await getY('r1'); assert.equal(y.reviewNotes[0].resolved.by, 'Sam Staff');
+  // Made the reviewer, Sam can finalize.
+  await req(owner, 'PUT', c('/records/engagements/r1'), { ...y, team: { ...y.team, reviewer: { id: sam.id, name: 'Sam Staff' } } });
+  y = await getY('r1');
+  assert.equal((await req(sam.cookie, 'PUT', c('/records/engagements/r1'), { ...y, status: 'final' })).status, 200);
+  y = await getY('r1'); assert.equal(y.finalBy, 'Sam Staff');
+  // The activity log says what happened in words.
+  const log = (await req(owner, 'GET', c('/audit?collection=engagements'))).json.rows.map(x => x.summary).join(' | ');
+  for (const words of ['AJE 1 created', 'AJE 1 reviewed', 'AJE 1 changed', 'working paper Cash prepared', 'review note 1 added', 'review note 1 resolved', 'made final']) assert.ok(log.includes(words), `${words} in: ${log}`);
+});
+
+test('review: documents on working papers are for staff only, Office files are accepted, and a final file keeps them', async () => {
+  const pdf = Buffer.from('%PDF-1.4\n% test\n').toString('base64');
+  const docx = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(40), Buffer.from('[Content_Types].xml word/document.xml')]).toString('base64');
+  let y = await getY('y1');
+  let r = await req(owner, 'POST', c('/attachments'), { target: 'engagements', targetId: 'y1', wp: 'A', fileName: 'bank.pdf', data: pdf });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  r = await req(owner, 'POST', c('/attachments'), { target: 'engagements', targetId: 'y1', wp: 'C', fileName: 'ar-listing.docx', data: docx });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal((await req(owner, 'POST', c('/attachments'), { target: 'engagements', targetId: 'y1', wp: 'A', fileName: 'x.exe', data: Buffer.from('MZ.....').toString('base64') })).status, 400);
+  assert.equal((await req(client, 'POST', c('/attachments'), { target: 'engagements', targetId: 'y1', wp: 'A', fileName: 'b.pdf', data: pdf })).status, 403);
+  const staff = (await req(owner, 'GET', c('/state'))).json.attachments.filter(a => a.target === 'engagements');
+  assert.deepEqual(staff.map(a => a.wp).sort(), ['A', 'C']);
+  assert.deepEqual((await req(client, 'GET', c('/state'))).json.attachments.filter(a => a.target === 'engagements'), [], 'clients never get them');
+  const fileId = staff[0].fileId;
+  assert.equal((await fetch(base + c(`/files/${fileId}`), { headers: { cookie: client } })).status, 404);
+  assert.equal((await fetch(base + c(`/files/${fileId}`), { headers: { cookie: owner } })).status, 200);
+  // Final: documents can't be removed; deleting a (reopened) file takes them with it.
+  y = await getY('y1');
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/y1'), { ...y, status: 'final' })).status, 200);
+  assert.equal((await req(owner, 'DELETE', c(`/records/attachments/${staff[0].id}`))).status, 409);
+  y = await getY('y1');
+  await req(owner, 'PUT', c('/records/engagements/y1'), { ...y, status: 'progress', unlockReason: 'Tidy up' });
+  assert.equal((await req(owner, 'DELETE', c('/records/engagements/y1'))).status, 200);
+  assert.equal((await req(owner, 'GET', c('/state'))).json.attachments.filter(a => a.target === 'engagements' && a.targetId === 'y1').length, 0);
+});
+
+test('review: the checklist and progress follow the file', () => {
+  const f = { id: 'f', snapshot: { lines: [{ account: 'bank', name: 'Chequing', type: 'Asset', detail: 'bank', cur: 100, prior: 0 }, { account: 'sales', name: 'Sales', type: 'Income', cur: -100, prior: 0 }] } };
+  let p = E.progress(f, [], []);
+  assert.equal(p.unreviewed, 5, 'Cash, Revenue and the three standing sections'); assert.equal(p.noDocs, 1); assert.ok(p.pct < 30);
+  const signed = { prepared: { by: 'S', at: 1 }, reviewed: { by: 'S', at: 1 } };
+  f.wps = Object.fromEntries(['GEN', 'A', 'R', 'RP', 'SUB'].map(k => [k, signed]));
+  f.checklist = Object.fromEntries(E.CHECKLIST.flatMap(g => g.items).filter(i => !i.auto).map(([k]) => [k, { by: 'S', at: 1 }]));
+  f.signoffs = signed; f.report = { date: '2026-01-31' };
+  p = E.progress(f, [], [{ target: 'engagements', targetId: 'f', wp: 'A' }]);
+  assert.deepEqual([p.pct, p.unreviewed, p.noDocs, p.openNotes], [100, 0, 0, 0]);
+  f.reviewNotes = [{ status: 'open' }];
+  assert.equal(E.progress(f, [], []).openNotes, 1);
 });

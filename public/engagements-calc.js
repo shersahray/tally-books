@@ -17,8 +17,13 @@
   'use strict';
 
   // Engagement types. Compilation (CSRS 4200, the Notice to Reader's replacement) first; others can follow.
-  const KINDS = { compilation: 'Compilation' };
-  const STATUS = ['open', 'final'];
+  const KINDS = { compilation: 'Compilation', internal: 'Internal financial statements' };
+  // Accounting frameworks. More (IFRS…) can be added here.
+  const FRAMEWORKS = { ASPE: 'Accounting Standards for Private Enterprises (ASPE)', ASNPO: 'Accounting Standards for Not-for-Profit Organizations (ASNPO)' };
+  // The file's stage. 'open' is the old name for 'progress'. A final file is locked until it's reopened with a reason.
+  const STATUS = ['progress', 'ready', 'reviewing', 'final'];
+  const STATUS_LABEL = { progress: 'In progress', ready: 'Ready for review', reviewing: 'Review in progress', final: 'Final (locked)' };
+  const statusOf = s => (s === 'open' ? 'progress' : STATUS.includes(s) ? s : 'progress');
 
   // Sumlora's own leadsheets, in the order they appear on the financial statements. side: which statement.
   const LEADSHEETS = [
@@ -266,5 +271,69 @@
     return { lines, missing, agrees };
   }
 
-  return { KINDS, STATUS, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
+  /* ---------- working papers, review notes and the completion checklist ---------- */
+  // A working paper for each leadsheet with a balance, plus these, which every file has.
+  const EXTRA_WPS = [
+    { code: 'GEN', label: 'Engagement planning and client acceptance' },
+    { code: 'RP', label: 'Related parties' },
+    { code: 'SUB', label: 'Subsequent events and commitments' },
+  ];
+  const WP_STATUS = { notstarted: 'Not started', progress: 'In progress', done: 'Done' };
+  const TICKS = { agreed: { mark: '✓', label: 'Agreed to supporting document' }, py: { mark: 'PY', label: 'Agreed to prior year' }, recalc: { mark: 'R', label: 'Recalculated' }, conf: { mark: 'C', label: 'Confirmed with client' }, issue: { mark: '!', label: 'Needs follow-up' } };
+  const NOTE_STATUS = { open: 'Open', progress: 'In progress', resolved: 'Resolved', closed: 'Closed' };
+  const PRIORITY = { high: 'High', normal: 'Normal', low: 'Low' };
+  /** The working papers of a file: [{ code, label, lines, cur, prior, final, wp }] (wp: what's saved for it). */
+  function workingPapers(file, accounts) {
+    const saved = (file && file.wps) || {};
+    const ls = leadsheets(file, accounts).map(l => ({ code: l.code, label: l.label, lines: l.lines, cur: l.cur, prior: l.prior, final: l.final, adj: l.adj }));
+    return [...EXTRA_WPS.slice(0, 1).map(x => ({ ...x, lines: [] })), ...ls, ...EXTRA_WPS.slice(1).map(x => ({ ...x, lines: [] }))]
+      .map(w => ({ ...w, wp: saved[w.code] || {} }));
+  }
+  const openNote = n => n.status === 'open' || n.status === 'progress';
+  // The completion checklist. auto: worked out from the file (not ticked by hand).
+  const CHECKLIST = [
+    { group: 'Engagement setup', items: [['setupClient', 'Client information confirmed'], ['setupYear', 'Fiscal year-end confirmed'], ['setupFramework', 'Accounting framework confirmed'], ['setupKind', 'Engagement type confirmed']] },
+    { group: 'Trial balance', items: [['tbBalances', 'Trial balance balances', 'auto'], ['tbMapping', 'Account mapping reviewed'], ['tbPrior', 'Prior-year figures agreed to last year’s statements']] },
+    { group: 'Working papers', items: [['wpPrepared', 'Every working paper prepared', 'auto'], ['wpReviewed', 'Every working paper reviewed', 'auto'], ['wpDocs', 'Supporting documents attached where needed']] },
+    { group: 'Adjustments', items: [['ajeReviewed', 'Every adjusting entry reviewed', 'auto'], ['ajeBalances', 'Adjusted trial balance balances', 'auto']] },
+    { group: 'Financial statements', items: [['fsBalance', 'Balance sheet balances', 'auto'], ['fsReviewed', 'Statements and comparative figures reviewed'], ['fsNotes', 'Notes reviewed']] },
+    { group: 'Finalization', items: [['finReport', 'Compilation report reviewed and dated', 'auto'], ['finNotes', 'No open review notes', 'auto'], ['finPrepared', 'Preparer sign-off', 'auto'], ['finReviewed', 'Reviewer sign-off', 'auto']] },
+  ];
+  /** Each checklist item with whether it's done: [{ group, items: [{ key, label, auto, done, by }] }]. */
+  function checklist(file, accounts, attachments) {
+    const f = file || {}, wps = workingPapers(f, accounts), st = statements(f, accounts), manual = f.checklist || {};
+    const tb = workingTb(f, accounts), zero = col => Math.abs(tb.reduce((s, r) => s + (r[col] || 0), 0)) < 0.005;
+    const auto = {
+      tbBalances: zero('cur') && zero('prior'),
+      wpPrepared: wps.every(w => w.wp.prepared),
+      wpReviewed: wps.every(w => w.wp.reviewed),
+      ajeReviewed: (f.ajes || []).every(j => j.reviewedBy),
+      ajeBalances: zero('final'),
+      fsBalance: Math.abs(st.bs.off.cur) < 0.01 && Math.abs(st.bs.off.prior) < 0.01,
+      finReport: !!(f.report && f.report.date),
+      finNotes: !(f.reviewNotes || []).some(openNote),
+      finPrepared: !!(f.signoffs && f.signoffs.prepared),
+      finReviewed: !!(f.signoffs && f.signoffs.reviewed),
+    };
+    void attachments;
+    return CHECKLIST.map(g => ({ group: g.group, items: g.items.map(([key, label, a]) => ({ key, label, auto: !!a, done: a ? !!auto[key] : !!manual[key], by: a ? null : manual[key] || null })) }));
+  }
+  /** The file's progress at a glance (for the list and the file's overview). attachments: the company's attachment records. */
+  function progress(file, accounts, attachments) {
+    const f = file || {}, cl = checklist(f, accounts, attachments).flatMap(g => g.items), wps = workingPapers(f, accounts);
+    const docs = new Set((attachments || []).filter(a => a.target === 'engagements' && a.targetId === f.id).map(a => a.wp));
+    const st = statements(f, accounts);
+    return {
+      pct: Math.round(cl.filter(i => i.done).length / cl.length * 100),
+      openNotes: (f.reviewNotes || []).filter(openNote).length,
+      unreviewed: wps.filter(w => !w.wp.reviewed).length, wps: wps.length,
+      draftAjes: (f.ajes || []).filter(j => !j.reviewedBy).length,
+      // Balance sheet working papers with a balance and no document attached.
+      noDocs: wps.filter(w => w.lines.length && BY_CODE[w.code] && BY_CODE[w.code].side === 'bs' && Math.abs(w.final) >= 0.005 && !docs.has(w.code)).length,
+      fsOk: Math.abs(st.bs.off.cur) < 0.01 && Math.abs(st.bs.off.prior) < 0.01,
+      final: statusOf(f.status) === 'final',
+    };
+  }
+
+  return { KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
 });
