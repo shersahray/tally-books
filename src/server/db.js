@@ -173,15 +173,25 @@ class Store {
   /** Run fn inside a transaction; roll back if it throws. */
   transaction(fn) {
     this.db.exec('BEGIN IMMEDIATE');
+    this._after = [];
+    let after;
     try {
       const out = fn();
       this.db.exec('COMMIT');
+      after = this._after;
       return out;
     } catch (err) {
       this.db.exec('ROLLBACK');
       throw err;
+    } finally {
+      this._after = null;
+      // Work that must only happen once the change is saved (a rolled-back change never runs it).
+      for (const f of after || []) { try { f(); } catch (e) { console.error('after commit:', e.message); } }
     }
   }
+
+  /** Run fn once the current transaction is saved; straight away when there's no transaction. */
+  afterCommit(fn) { if (this._after) this._after.push(fn); else fn(); }
 
   close() { this.db.close(); }
 }

@@ -3672,4 +3672,11 @@ addFr({
   "The server’s administrator adds the QuickBooks Online and Xero app keys in Settings first.":"L’administrateur du serveur doit d’abord ajouter les clés d’application QuickBooks Online et Xero dans les paramètres.",
   "QuickBooks Online or Xero":"QuickBooks Online ou Xero",
   "Connect QuickBooks Online or Xero first.":"Connectez d’abord QuickBooks Online ou Xero.",
+  "Year-end files started":"Dossiers de fin d’exercice commencés",
+  "Your firm · not charged":"Votre cabinet · non facturé",
+  "file":"dossier","files":"dossiers",
+  "Client company":"Société cliente","Started":"Commencé","Started by":"Commencé par","Charged":"Facturé",
+  "Download CSV":"Télécharger le CSV","Files to charge":"Dossiers à facturer",
+  "No year-end files were started this month.":"Aucun dossier de fin d’exercice n’a été commencé ce mois-ci.",
+  "A file counts once per client company and year-end, in the month it was started. Deleting it and starting again, reopening it or bringing the trial balance in again doesn’t count it twice.":"Un dossier compte une fois par société cliente et fin d’exercice, dans le mois où il a été commencé. Le supprimer et le recommencer, le rouvrir ou importer de nouveau la balance de vérification ne le compte pas deux fois.",
 });

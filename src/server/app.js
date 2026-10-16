@@ -10,6 +10,7 @@ const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
+const { YearEndUsage } = require('./usage');
 const assistant = require('./assistant');
 const mail = require('./mail');
 const stripe = require('./stripe');
@@ -338,6 +339,23 @@ function createApp(opts) {
   const notClient = u => { if (u.role === 'client') throw new ValidationError('Only your bookkeeper can do that.', 403); };
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
+  // Year-end files started, per firm, for charging per file (usage.js).
+  const yeUsage = new YearEndUsage(opts.dataDir);
+  /** Count a year-end file as started (once per company and year-end). */
+  function countYearEnd(cid, store, e, by) {
+    const c = reg.get(cid), f = c && auth.firm(c.firmId), s = store.getSetting('company') || {};
+    yeUsage.record({ firmId: c ? c.firmId : '', firmName: f ? f.name : '', companyId: cid, companyName: s.name || (c && c.name) || '', yearEnd: e.yearEnd, startedAt: e.created || Date.now(), by: by || '', fileId: e.id || '' });
+  }
+  /** Files started before counting began: counted once, from each file's own start date. */
+  function backfillYearEnds() {
+    if (yeUsage.data.backfilled) return;
+    for (const c of reg.list()) {
+      let store; try { store = reg.store(c.id); } catch { continue; }
+      if (!store) continue;
+      for (const e of store.list('engagements')) countYearEnd(c.id, store, { ...e, created: e.created || (e.snapshot && e.snapshot.takenAt) || 0 }, (e.team && e.team.preparer && e.team.preparer.name) || '');
+    }
+    yeUsage.data.backfilled = true; yeUsage.save();
+  }
   // Plaid's keys and the banks' access tokens stay with this computer (the licence folder on desktop), never in a books folder that may be shared.
   const plaid = new Plaid(opts.licenceDir || opts.dataDir, { env: opts.plaid || {}, fetch: opts.plaidFetch });
   // QuickBooks Online and Xero connections, for year-end files of clients whose books are kept there (ledgers.js).
@@ -1089,6 +1107,11 @@ function createApp(opts) {
       closedCheck(store, w, data, user);
       store.put(collection, id, data);
       if (collection === 'docs') syncDelayed(store, id, data);
+      // A year-end file started (or moved to a year-end not counted yet): counted for charging, once the change is saved.
+      if (collection === 'engagements' && ctx && data.yearEnd && (!before || before.yearEnd !== data.yearEnd)) {
+        const by = user ? user.name || user.username : '';
+        store.afterCommit(() => countYearEnd(ctx.id, store, { ...data, id, created: Date.now() }, by));
+      }
       const after = masked ? hideSin(store.get(collection, id)) : store.get(collection, id);
       if (JSON.stringify(before) !== JSON.stringify(after)) store.audit(user, before ? 'change' : 'add', { collection, id, summary: collection === 'engagements' ? `year-end file ${after.yearEnd}: ${engagementChanges(before, after).join('; ')}`.slice(0, 500) : auditSummary(collection, after), before, after });
     } else if (op === 'delete') {
@@ -1497,6 +1520,24 @@ function createApp(opts) {
         } else out.licences = { noKey: true };
       }
       return out;
+    }],
+    // Year-end files started, by firm and month, for charging per file. month: YYYY-MM (this month when left out).
+    ['GET', /^\/api\/overview\/yearends$/, (req, m, res, user) => {
+      adminOnly(user);
+      backfillYearEnds();
+      const q = new URL(req.url, 'http://x').searchParams, now = opts.now ? opts.now() : new Date();
+      const month = /^\d{4}-\d{2}$/.test(q.get('month') || '') ? q.get('month') : localDay(now).slice(0, 7);
+      const all = yeUsage.list().map(x => ({ ...x, month: localDay(new Date(x.startedAt)).slice(0, 7) }));
+      const months = [...new Set([localDay(now).slice(0, 7), ...all.map(x => x.month)])].sort().reverse();
+      const by = new Map();
+      for (const x of all.filter(x => x.month === month).sort((a, b) => a.startedAt - b.startedAt)) {
+        const f = auth.firm(x.firmId);
+        const row = by.get(x.firmId) || { firmId: x.firmId, firmName: f ? f.name : x.firmName || 'Removed firm', mine: x.firmId === user.firmId, exempt: firmExempt(x.firmId), files: [] };
+        row.files.push({ companyId: x.companyId, companyName: (reg.get(x.companyId) || {}).name || x.companyName, yearEnd: x.yearEnd, startedAt: x.startedAt, by: x.by });
+        by.set(x.firmId, row);
+      }
+      const firms = [...by.values()].map(r => ({ ...r, count: r.files.length })).sort((a, b) => (a.exempt - b.exempt) || b.count - a.count || a.firmName.localeCompare(b.firmName));
+      return { month, months, firms, total: firms.reduce((t, r) => t + r.count, 0), billable: firms.filter(r => !r.exempt).reduce((t, r) => t + r.count, 0) };
     }],
     // Installer downloads, from the GitHub releases the desktop app updates from (public counts; cached for 10 minutes).
     ['GET', /^\/api\/overview\/downloads$/, async (req, m, res, user) => {

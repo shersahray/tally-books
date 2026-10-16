@@ -3,14 +3,44 @@
    installer downloads (GitHub's public counts) and AI use. Desktop copies don't report back, so they're
    counted by the licences sold and the downloads, not by who's using them. */
 
-let OVW=null,OVW_DL=null;
+let OVW=null,OVW_DL=null,OVW_YE=null;
 
 async function showOverview(){
   S.view='overview';OVW=null;OVW_DL=null;renderMain();
   try{OVW=await api('GET','/api/overview')}catch(e){toast(e.message,true)}
   if(S.view==='overview')renderMain();
+  await ovYearEnds();
   try{OVW_DL=await api('GET','/api/overview/downloads')}catch(e){OVW_DL={error:e.message}}
   if(S.view==='overview')renderMain();
+}
+/* ---------- Year-end files started, by firm, for charging per file ---------- */
+async function ovYearEnds(month){
+  try{OVW_YE=await api('GET','/api/overview/yearends'+(month?'?month='+encodeURIComponent(month):''))}catch(e){OVW_YE={error:e.message}}
+  if(S.view==='overview')renderMain();
+}
+const ovMonthName=ym=>{const[y,m]=ym.split('-').map(Number);return new Date(y,m-1,1).toLocaleDateString(LOC(),{month:'long',year:'numeric'})};
+function ovYePanel(){
+  const Y=OVW_YE;
+  let body;
+  if(!Y)body='<div class="muted">Loading…</div>';
+  else if(Y.error)body=`<div class="muted">${esc(Y.error)}</div>`;
+  else{
+    const pick=`<select data-ovyemonth aria-label="${esc(T('Month'))}">${Y.months.map(x=>`<option value="${x}" ${x===Y.month?'selected':''}>${esc(ovMonthName(x))}</option>`).join('')}</select>`;
+    const rows=Y.firms.map(r=>`<details class="ov-ye"><summary style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--line);cursor:pointer"><span><b translate="no">${esc(r.firmName)}</b>${r.exempt?` <span class="pill quiet">${esc(T('Your firm · not charged'))}</span>`:''}</span><b>${ovNum(r.count)} ${esc(T(r.count===1?'file':'files'))}</b></summary>
+      <div class="tbl-wrap"><table><thead><tr><th>${esc(T('Client company'))}</th><th>${esc(T('Year-end'))}</th><th>${esc(T('Started'))}</th></tr></thead><tbody>${r.files.map(x=>`<tr><td translate="no">${esc(x.companyName)}</td><td>${esc(fmtDate(x.yearEnd))}</td><td class="muted">${esc(fmtDate(isoDay(new Date(x.startedAt))))}${x.by?` · <span translate="no">${esc(x.by)}</span>`:''}</td></tr>`).join('')}</tbody></table></div></details>`).join('');
+    body=`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${pick}<span class="grow"></span>${Y.firms.length?`<button class="btn sm" data-ov="ye-csv">${esc(T('Download CSV'))}</button>`:''}</div>
+      <div class="ov-stats"><div><b>${ovNum(Y.billable)}</b><span>${esc(T('Files to charge'))}</span></div><div><b>${ovNum(Y.firms.filter(r=>!r.exempt).length)}</b><span>${esc(T('Firms'))}</span></div></div>
+      ${rows||`<div class="muted">${esc(T('No year-end files were started this month.'))}</div>`}
+      <div class="muted" style="font-size:12.5px">${esc(T('A file counts once per client company and year-end, in the month it was started. Deleting it and starting again, reopening it or bringing the trial balance in again doesn’t count it twice.'))}</div>`;
+  }
+  return `<div class="panel"><h3>${esc(T('Year-end files started'))}</h3><div class="pad" style="display:flex;flex-direction:column;gap:8px;font-size:14px">${body}</div></div>`;
+}
+function ovYeCsv(){
+  const Y=OVW_YE;if(!Y||!Y.firms)return;
+  const q=v=>{const t=String(v??'');return /[",\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t};
+  const lines=[[T('Firm'),T('Client company'),T('Year-end'),T('Started'),T('Started by'),T('Charged')].map(q).join(',')];
+  for(const r of Y.firms)for(const x of r.files)lines.push([r.firmName,x.companyName,x.yearEnd,isoDay(new Date(x.startedAt)),x.by,r.exempt?T('No'):T('Yes')].map(q).join(','));
+  saveFile(`year-end-files_${Y.month}.csv`,new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}));
 }
 const ovNum=n=>Number(n||0).toLocaleString(LOC());
 const ovUsd=n=>Number(n||0).toLocaleString(LOC(),{style:'currency',currency:'USD'});
@@ -121,6 +151,7 @@ function vOverview(){
     :`<div class="ov-stats"><div><b>${ovNum(D.totals.installs)}</b><span>All downloads</span></div><div><b>${ovNum(D.totals.windows)}</b><span>Windows</span></div><div><b>${ovNum(D.totals.mac)}</b><span>Mac</span></div><div><b>${ovNum(D.totals.linux)}</b><span>Linux</span></div></div>
       <div class="tbl-wrap"><table><thead><tr><th>Version</th><th>Published</th><th class="n">Installer downloads</th></tr></thead><tbody>${D.releases.slice(0,8).map(r=>`<tr><td><b translate="no">${esc(r.tag)}</b>${r.prerelease?' <span class="pill quiet">Pre-release</span>':''}</td><td class="muted">${r.published?esc(fmtDate(r.published.slice(0,10))):''}</td><td class="n">${ovNum(r.installs)}</td></tr>`).join('')}</tbody></table></div>
       <div class="muted" style="font-size:12.5px">GitHub counts every download of an installer, including your own. Automatic updates are counted too, so one computer can count more than once.</div>`}</div></div>`;
+  h+=ovYePanel();
   // AI
   h+=`<div class="panel"><h3>AI suggestions this month</h3><div class="pad" style="display:flex;flex-direction:column;gap:8px;font-size:14px">
     <div><span>Spent across all firms:</span> <b translate="no">${ovUsd(OVW.ai.totalUsd)}</b></div>
@@ -167,10 +198,12 @@ async function inviteBusinessForm(after){
     catch(ex){f.err(ex.message)}};
 }
 function bindOverview(m){
+  const sel=$('[data-ovyemonth]',m);if(sel)sel.onchange=()=>{OVW_YE=null;renderMain();ovYearEnds(sel.value)};
   m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
     if(b.hasAttribute('data-back-co'))return showCompanies();
     const a=b.dataset.ov;
     if(a==='refresh')return showOverview();
+    if(a==='ye-csv')return ovYeCsv();
     if(a==='firms')return showFirms();
     if(a==='licences'){LIC_FORM=null;return showLicences()}
     if(a==='invite-firm')return inviteFirmForm(showOverview);
