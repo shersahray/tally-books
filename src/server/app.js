@@ -820,6 +820,8 @@ function createApp(opts) {
     // Clients and view-only users see only the last 3 digits of employees' bank accounts.
     if (ctx.user && (ctx.user.role === 'client' || ctx.user.readOnly) && out.employees) out.employees = out.employees.map(maskPrivate);
     if (ctx.user && ctx.user.perms) roleView(ctx.user, out);
+    // Year-end files are the accountant's: clients never get them, and nobody does while the feature is off.
+    if (!ctx.user || ctx.user.role === 'client' || !featureOn(ctx.id, 'yearEndFiles', ctx.store)) out.engagements = [];
     out.assistant = assistantInfo(ctx.id, ctx.store);
     // Bill approvals: how many owners the firm has (one owner may approve their own bills).
     const cf = reg.get(ctx.id);
@@ -884,6 +886,11 @@ function createApp(opts) {
       const prev = store.get(collection, id);
       if (collection === 'attachments') { const x = prev || {}; const t = x.target && store.get(x.target, x.targetId); needArea(user, ROLES.recordArea(x.target || 'entries', t), 'edit'); }
       else needWrite(user, collection, op === 'set' ? w.data || {} : null, prev);
+    }
+    // Year-end files: the firm's staff only, and only with the feature on (it's coming soon for now).
+    if (collection === 'engagements') {
+      if (!user || user.role === 'client') throw new ValidationError('Year-end files are for the firm’s accountants.', 403);
+      if (ctx) needFeature(ctx.id, 'yearEndFiles', store);
     }
     // Plan features: payroll records, and the special sales tax methods on returns.
     if (ctx && op === 'set') {
@@ -2517,6 +2524,8 @@ function createApp(opts) {
       const s = state(ctx);
       const body = { format: BACKUP_FORMAT, version: 1, exportedAt: new Date().toISOString(), company: s.company };
       for (const c of COLLECTIONS) body[c] = s[c];
+      // Year-end files stay in a staff member's backup even while the feature is switched off, so a restore keeps them.
+      body.engagements = ctx.user && ctx.user.role !== 'client' ? ctx.store.list('engagements') : [];
       const safe = String(s.company.name || 'books').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'books';
       const name = `${safe}-backup-${new Date().toISOString().slice(0, 10)}.json`;
       send(res, 200, JSON.stringify(body, null, 2), { 'Content-Type': MIME['.json'], 'Content-Disposition': `attachment; filename="${name}"` });

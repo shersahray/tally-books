@@ -36,7 +36,7 @@ const S={more:{},accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Bu
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:'',tag:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','delayed','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions'];
+const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','delayed','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions','engagements'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
@@ -50,7 +50,7 @@ const perm=(a,l='view')=>TallyRoles.can(typeof ME!=='undefined'&&ME?ME.perms:nul
 const permAll=l=>Object.keys(TallyRoles.AREAS).every(a=>perm(a,l));
 // Every transaction comes with Reports, Accounting, Banking or Sales tax (their totals need the whole ledger).
 const ledgerOn=()=>perm('reports')||perm('accounting')||perm('banking')||perm('salestax');
-const VIEW_AREA={sales:'sales',projects:'sales',expenses:'expenses',receipts:'expenses',yard:'expenses',banking:'banking',salestax:'salestax',payroll:'payroll',review:'accounting',accounts:'accounting',assets:'accounting',reports:'reports',settings:'settings',activity:'settings'};
+const VIEW_AREA={sales:'sales',projects:'sales',expenses:'expenses',receipts:'expenses',yard:'expenses',banking:'banking',salestax:'salestax',payroll:'payroll',review:'accounting',accounts:'accounting',yearfiles:'accounting',assets:'accounting',reports:'reports',settings:'settings',activity:'settings'};
 // Import data: open when the role can change at least one of the things it imports (TallyRoles.IMPORT_AREA).
 const importOk=k=>k==='items'?perm('sales','edit')||perm('expenses','edit'):perm(TallyRoles.IMPORT_AREA[k]||'accounting','edit');
 const viewOk=v=>v==='transactions'||v==='register'?ledgerOn():v==='convert'?permAll('edit'):v==='dataimport'?Object.keys(TallyRoles.IMPORT_AREA).some(importOk):!VIEW_AREA[v]||perm(VIEW_AREA[v]);
@@ -186,6 +186,9 @@ function renderMain(){
   const yb=$('#nav [data-view=yard]');if(yb)yb.hidden=!(typeof yardOn==='function'&&yardOn())||!!(ME&&ME.role==='client');
   if(S.view==='yard'&&!(typeof yardOn==='function'&&yardOn()))S.view='dashboard';
   for(const[v,k]of[['projects','projects'],['assets','fixedAssets']]){const b=$(`#nav [data-view=${v}]`);if(b)b.hidden=!feat(k)||(v==='assets'&&ME&&ME.role==='client');if(S.view===v&&!feat(k))S.view='dashboard'}
+  // Year-end files: firm staff only, and only once the feature is on (coming soon for now).
+  const yfb=$('#nav [data-view=yearfiles]');if(yfb)yfb.hidden=!(typeof yfOn==='function'&&yfOn());
+  if(S.view==='yearfiles'&&!(typeof yfOn==='function'&&yfOn()))S.view='dashboard';
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
   // A custom role: hide what it doesn't include, and the ways to change what it can only view.
@@ -193,13 +196,14 @@ function renderMain(){
   if(lim){$$('#nav button').forEach(b=>{if(!viewOk(b.dataset.view))b.hidden=true});if(!noCo&&!viewOk(S.view))S.view='dashboard'}
   document.body.classList.toggle('area-ro',lim&&!!VIEW_AREA[S.view]&&!perm(VIEW_AREA[S.view],'edit'));
   document.body.classList.toggle('perm-limited',lim&&!permAll('edit'));
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,yearfiles:typeof vYearFiles==='function'?vYearFiles:vDashboard,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
   $$('[data-new]').forEach(b=>{b.hidden=!newOk(b.dataset.new)});
   $$('#newMenu .col').forEach(c=>{c.hidden=!$$('[data-new]',c).some(b=>!b.hidden)});$('#newBtn').hidden=!$$('#newMenu [data-new]').some(b=>!b.hidden);
   bindMain(main);
+  if(S.view==='yearfiles'&&typeof yfBind==='function')yfBind(main);
   if(typeof syncAssistant==='function')syncAssistant();
   if(keepFocus){const el=document.getElementById(keepFocus);if(el){el.focus();if(el.setSelectionRange&&el.type==='search'){const n=el.value.length;el.setSelectionRange(n,n)}}}
 }
@@ -572,6 +576,7 @@ function bindMain(m){
     if(S.view==='salestax'&&await stClick(e,t,d))return;
     if(S.view==='payroll'&&await payClick(e,t,d))return;
     if(S.view==='review'&&await reviewClick(e,t,d))return;
+    if(S.view==='yearfiles'&&typeof yfClick==='function'&&await yfClick(e,t,d))return;
     if(S.view==='activity'&&await actClick(e,t,d))return;
     if(S.view==='receipts'&&rcClick(e,t,d))return;
     if(S.view==='convert'&&cvClick(e,t,d))return;

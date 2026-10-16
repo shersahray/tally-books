@@ -10,6 +10,7 @@ const DEP = require('../../public/deposits-calc.js');
 const PAYCALC = require('../../public/payroll-calc.js');
 const DELAYED = require('../../public/delayed-calc.js');
 const WF = require('../../public/workflows.js');
+const ENGAGE = require('../../public/engagements-calc.js');
 // Server-side rules that keep the books consistent no matter what the client sends.
 
 const TYPES = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
@@ -781,6 +782,64 @@ function validateVehicle(data, store, id) {
   };
 }
 
+/*
+ * Year-end files (engagements-calc.js): the accountant's working file for one year-end. The trial balance snapshot
+ * is kept as it was taken (names and all), so it still reads the same if accounts are renamed later. It must add up
+ * to zero. Adjusting entries must balance and use accounts in the books; one posted to the books keeps its entry's id.
+ * A final file can't be changed, only reopened (status back to 'open').
+ */
+const ENG_MAX_LINES = 5000;
+function validateEngagement(data, store, id) {
+  if (!isDate(data.yearEnd)) throw new ValidationError('Choose the year-end date.');
+  const kind = ENGAGE.KINDS[data.kind] ? data.kind : 'compilation';
+  const status = ENGAGE.STATUS.includes(data.status) ? data.status : 'open';
+  const prev = id && store.get('engagements', id);
+  if (prev && prev.status === 'final' && status === 'final') throw new ValidationError('This year-end file is final. Reopen it to make changes.', 409);
+  const accountIds = new Set(store.list('accounts').map(a => a.id));
+  const snap = isObj(data.snapshot) ? data.snapshot : null;
+  if (!snap || !Array.isArray(snap.lines)) throw new ValidationError('Take the trial balance snapshot first.');
+  if (snap.lines.length > ENG_MAX_LINES) throw new ValidationError('That trial balance has too many lines.');
+  let tc = 0, tp = 0;
+  const seen = new Set();
+  const lines = snap.lines.map((l, i) => {
+    if (!isObj(l)) throw new ValidationError(`Trial balance line ${i + 1} is not valid.`);
+    const account = str(l.account, 120);
+    if (!account || seen.has(account)) throw new ValidationError(`Trial balance line ${i + 1} has no account, or the account is there twice.`);
+    seen.add(account);
+    if (account !== ENGAGE.RE_OPEN && !accountIds.has(account)) throw new ValidationError(`Trial balance line ${i + 1} uses an account that doesn’t exist.`);
+    const cur = cents(l.cur || 0), prior = cents(l.prior || 0);
+    if (!Number.isFinite(cur) || !Number.isFinite(prior) || Math.abs(cur) > 1e14 || Math.abs(prior) > 1e14) throw new ValidationError(`Trial balance line ${i + 1} has an invalid amount.`);
+    tc += cur; tp += prior;
+    return { account, code: str(l.code, 30).trim(), name: str(l.name, 200).trim() || 'Account', type: TYPES.includes(l.type) ? l.type : 'Expense',
+      detail: str(l.detail, 30), gifi: /^\d{4}$/.test(String(l.gifi || '')) ? String(l.gifi) : '', cur: cur / 100, prior: prior / 100 };
+  });
+  if (tc !== 0) throw new ValidationError(`The trial balance doesn’t add up to zero (off by ${(tc / 100).toFixed(2)}). Check for unbalanced entries in the books.`);
+  if (tp !== 0) throw new ValidationError(`The prior year’s trial balance doesn’t add up to zero (off by ${(tp / 100).toFixed(2)}).`);
+  const map = {};
+  if (isObj(data.map)) for (const [k, v] of Object.entries(data.map).slice(0, ENG_MAX_LINES)) if (ENGAGE.BY_CODE[v] && (accountIds.has(k) || k === ENGAGE.RE_OPEN)) map[k] = v;
+  const ajes = (Array.isArray(data.ajes) ? data.ajes : []).slice(0, 1000).map((j, i) => {
+    if (!isObj(j)) throw new ValidationError(`Adjusting entry ${i + 1} is not valid.`);
+    const jl = (Array.isArray(j.lines) ? j.lines : []).slice(0, 200).filter(l => isObj(l) && (Number(l.debit) || Number(l.credit))).map(l => {
+      if (!accountIds.has(l.account)) throw new ValidationError(`Adjusting entry ${i + 1} uses an account that doesn’t exist.`);
+      const d = cents(l.debit || 0), c = cents(l.credit || 0);
+      if (!Number.isFinite(d) || !Number.isFinite(c) || d < 0 || c < 0 || (d && c)) throw new ValidationError(`Adjusting entry ${i + 1} has an invalid amount.`);
+      return { account: String(l.account), debit: d / 100, credit: c / 100, memo: str(l.memo, 200).trim() };
+    });
+    const out = { id: str(j.id, 40).trim() || `aje${i + 1}`, num: Math.max(1, Math.floor(Number(j.num) || i + 1)), date: isDate(j.date) ? j.date : data.yearEnd,
+      memo: str(j.memo, 300).trim(), lines: jl, entryId: j.entryId ? str(j.entryId, 120) : '' };
+    const bad = ENGAGE.ajeProblem(out);
+    if (bad) throw new ValidationError(`Adjusting entry ${out.num}: ${bad}`);
+    return out;
+  });
+  return {
+    yearEnd: data.yearEnd, kind, status,
+    snapshot: { takenAt: Number(snap.takenAt) || Date.now(), by: str(snap.by, 120).trim(), priorEnd: isDate(snap.priorEnd) ? snap.priorEnd : '', lines },
+    map, ajes, notes: str(data.notes, 5000),
+    finalAt: status === 'final' ? Number(data.finalAt) || Date.now() : 0, finalBy: status === 'final' ? str(data.finalBy, 120).trim() : '',
+    ...(data.created ? { created: Number(data.created) || 0 } : {}),
+  };
+}
+
 function validateRecord(collection, id, data, store) {
   checkId(id);
   if (!isObj(data)) throw new ValidationError('Record body must be a JSON object.');
@@ -809,6 +868,7 @@ function validateRecord(collection, id, data, store) {
     case 'estimates': return validateEstimate(data, store, id);
     case 'recurring': return validateRecurring(data, store, id);
     case 'delayed': return validateDelayed(data, store, id);
+    case 'engagements': return validateEngagement(data, store, id);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -826,6 +886,9 @@ function checkDelete(collection, id, store) {
     throw new ValidationError('This account has imported bank transactions or bank rules, so it can’t be deleted. Mark it inactive instead.', 409);
   }
   const onLines = r => (r.lines || []).some(l => l.account === id) || r.bank === id || r.from === id || r.to === id;
+  if (collection === 'accounts' && store.list('engagements').some(e => (e.ajes || []).some(onLines) || ((e.snapshot || {}).lines || []).some(l => l.account === id && (l.cur || l.prior)))) {
+    throw new ValidationError('This account is on a year-end file, so it can’t be deleted. Mark it inactive instead.', 409);
+  }
   if (collection === 'accounts' && (store.list('recurring').some(onLines) || store.list('estimates').some(onLines) || store.list('delayed').some(onLines))) {
     throw new ValidationError('This account is used on a recurring transaction or an estimate, so it can’t be deleted. Mark it inactive instead.', 409);
   }
