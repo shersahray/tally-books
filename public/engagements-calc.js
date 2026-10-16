@@ -163,5 +163,108 @@
     return out;
   }
 
-  return { KINDS, STATUS, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince };
+  /* ---------- financial statements ---------- */
+  // Where each leadsheet goes on the balance sheet. Assets are shown as debits, liabilities and equity as credits.
+  const BS_GROUPS = [
+    { key: 'ca', label: 'Current assets', codes: ['A', 'B', 'C', 'D', 'E'], sign: 1 },
+    { key: 'la', label: 'Long-term assets', codes: ['F', 'G', 'H'], sign: 1 },
+    { key: 'cl', label: 'Current liabilities', codes: ['AA', 'BB', 'CC', 'DD', 'EE'], sign: -1 },
+    { key: 'll', label: 'Long-term liabilities', codes: ['FF', 'GG'], sign: -1 },
+  ];
+  const isDividend = r => /dividend/i.test(r.name || '');
+
+  /**
+   * The financial statements from a year-end file, in presentation signs (assets, liabilities, equity, revenue and
+   * expenses all positive in their normal direction). Each amount is { cur, prior }: cur is the adjusted figure.
+   *   bs: groups of leadsheet lines with totals, share capital, retained earnings, and the totals that must agree
+   *   is: revenue, cost of sales, gross profit, each operating expense account, other items, income taxes, net income
+   *   re: retained earnings at the start, net income, dividends, other changes, at the end
+   */
+  function statements(file, accounts) {
+    const tb = workingTb(file, accounts);
+    const pick = (rows, sign) => ({ cur: r2(sign * rows.reduce((s, r) => s + r.final, 0)), prior: r2(sign * rows.reduce((s, r) => s + r.prior, 0)) });
+    const add = (...xs) => ({ cur: r2(xs.reduce((s, x) => s + x.cur, 0)), prior: r2(xs.reduce((s, x) => s + x.prior, 0)) });
+    const neg = x => ({ cur: -x.cur, prior: -x.prior });
+    const of = code => tb.filter(r => r.lead === code);
+    const nz = x => Math.abs(x.cur) >= 0.005 || Math.abs(x.prior) >= 0.005;
+    // Income statement
+    const revenue = pick(of('R'), -1), cos = pick(of('COS'), 1), gross = add(revenue, neg(cos));
+    const opex = of('X').map(r => ({ label: r.name, account: r.account, ...pick([r], 1) })).filter(nz).sort((a, b) => a.label.localeCompare(b.label));
+    const opexTotal = add(...opex.map(x => x), { cur: 0, prior: 0 });
+    const other = pick(of('OI'), -1); // other income, less other expenses
+    const beforeTax = add(gross, neg(opexTotal), other), taxes = pick(of('IT'), 1), net = add(beforeTax, neg(taxes));
+    // Retained earnings: the opening balance, net income, dividends, and any other retained earnings lines.
+    const reRows = of('RE');
+    const opening = pick(reRows.filter(r => r.account === RE_OPEN), -1);
+    const dividends = pick(reRows.filter(r => r.account !== RE_OPEN && isDividend(r)), 1);
+    const otherRe = pick(reRows.filter(r => r.account !== RE_OPEN && !isDividend(r)), -1);
+    const closing = add(opening, net, neg(dividends), otherRe);
+    // Balance sheet
+    const groups = BS_GROUPS.map(g => {
+      const lines = g.codes.map(c => ({ code: c, label: BY_CODE[c].label, ...pick(of(c), g.sign) })).filter(nz);
+      return { key: g.key, label: g.label, lines, total: add(...lines, { cur: 0, prior: 0 }) };
+    });
+    const G = Object.fromEntries(groups.map(g => [g.key, g]));
+    const shareCapital = pick(of('SC'), -1);
+    const assets = add(G.ca.total, G.la.total), liabilities = add(G.cl.total, G.ll.total), equity = add(shareCapital, closing);
+    const totalLE = add(liabilities, equity);
+    const off = { cur: r2(assets.cur - totalLE.cur), prior: r2(assets.prior - totalLE.prior) };
+    return {
+      is: { revenue, cos, gross, opex, opexTotal, other, beforeTax, taxes, net },
+      re: { opening, net, dividends, other: otherRe, closing },
+      bs: { groups, assets, liabilities, shareCapital, retained: closing, equity, totalLE, off },
+    };
+  }
+
+  /* ---------- GIFI (T2 Schedules 100 and 125) ---------- */
+  const GR = (g, a, b) => g >= a && g <= b;
+  /**
+   * The GIFI figures for the T2 from the adjusted trial balance: [{ schedule, code, cur, prior }], with the totals CRA
+   * expects, plus { missing }: accounts with a balance but no GIFI code (they're left out until they get one).
+   * Schedule 100 amounts are positive for assets and for liabilities and equity (contra accounts negative); Schedule 125
+   * amounts are positive for revenue and for expenses. Retained earnings come from the statements, not from accounts.
+   */
+  function gifi(file, accounts) {
+    const tb = workingTb(file, accounts), by = {}, missing = [];
+    const put = (sch, code, cur, prior) => { const k = sch + code; by[k] = by[k] || { schedule: sch, code, cur: 0, prior: 0 }; by[k].cur = r2(by[k].cur + cur); by[k].prior = r2(by[k].prior + prior); };
+    for (const r of tb) {
+      if (r.lead === 'RE') continue; // retained earnings come from the statement of retained earnings
+      if (Math.abs(r.final) < 0.005 && Math.abs(r.prior) < 0.005) continue;
+      // An account's GIFI code as it is now in the chart of accounts (it may have been filled in after the snapshot).
+      const acc = (accounts || []).find(a => a.id === r.account), g = parseInt((acc && acc.gifi) || r.gifi, 10);
+      if (!g) { missing.push({ account: r.account, name: r.name, type: r.type }); continue; }
+      if (r.type === 'Asset') put('100', String(g), r.final, r.prior);
+      else if (r.type === 'Liability' || r.type === 'Equity') put('100', String(g), -r.final, -r.prior);
+      else if (r.type === 'Income') put('125', String(g), -r.final, -r.prior);
+      else put('125', String(g), r.final, r.prior);
+    }
+    const st = statements(file, accounts);
+    const lines = Object.values(by);
+    const sum = (sch, test) => lines.filter(l => l.schedule === sch && test(+l.code)).reduce((s, l) => ({ cur: r2(s.cur + l.cur), prior: r2(s.prior + l.prior) }), { cur: 0, prior: 0 });
+    const tot = (sch, code, x) => { if (Math.abs(x.cur) >= 0.005 || Math.abs(x.prior) >= 0.005 || ['2599', '3640', '9999', '3849'].includes(code)) lines.push({ schedule: sch, code, cur: x.cur, prior: x.prior, total: true }); };
+    const ca = sum('100', g => GR(g, 1000, 1598)), assets = sum('100', g => GR(g, 1000, 2589));
+    const cl = sum('100', g => GR(g, 2600, 3138)), ll = sum('100', g => GR(g, 3140, 3449)), liab = sum('100', g => GR(g, 2600, 3498));
+    const shares = sum('100', g => GR(g, 3500, 3599) || GR(g, 3610, 3619));
+    const re = st.re, eq = { cur: r2(shares.cur + re.closing.cur), prior: r2(shares.prior + re.closing.prior) };
+    tot('100', '1599', ca); tot('100', '2599', assets); tot('100', '3139', cl); tot('100', '3450', ll); tot('100', '3499', liab);
+    lines.push({ schedule: '100', code: '3600', cur: re.closing.cur, prior: re.closing.prior });
+    tot('100', '3620', eq); tot('100', '3640', { cur: r2(liab.cur + eq.cur), prior: r2(liab.prior + eq.prior) });
+    tot('100', '3660', re.opening); tot('100', '3680', re.net); tot('100', '3700', re.dividends);
+    if (Math.abs(re.other.cur) >= 0.005 || Math.abs(re.other.prior) >= 0.005) lines.push({ schedule: '100', code: '3740', cur: re.other.cur, prior: re.other.prior });
+    tot('100', '3849', re.closing);
+    const rev = sum('125', g => GR(g, 8000, 8298)), cos = sum('125', g => GR(g, 8300, 8517));
+    const opex = sum('125', g => GR(g, 8520, 9366)), taxes = sum('125', g => GR(g, 9990, 9995));
+    const exp = { cur: r2(cos.cur + opex.cur), prior: r2(cos.prior + opex.prior) };
+    const before = { cur: r2(rev.cur - exp.cur), prior: r2(rev.prior - exp.prior) };
+    tot('125', '8299', rev); tot('125', '8518', cos); tot('125', '8519', { cur: r2(rev.cur - cos.cur), prior: r2(rev.prior - cos.prior) });
+    tot('125', '9367', opex); tot('125', '9368', exp); tot('125', '9970', before);
+    tot('125', '9999', { cur: r2(before.cur - taxes.cur), prior: r2(before.prior - taxes.prior) });
+    lines.sort((a, b) => a.schedule.localeCompare(b.schedule) || +a.code - +b.code);
+    // Net income on Schedule 125 should agree with the statements once every account has a GIFI code.
+    const ni = lines.find(l => l.schedule === '125' && l.code === '9999');
+    const agrees = !missing.length && Math.abs(ni.cur - st.is.net.cur) < 0.01 && Math.abs((lines.find(l => l.code === '2599') || {}).cur - (lines.find(l => l.code === '3640') || {}).cur) < 0.01;
+    return { lines, missing, agrees };
+  }
+
+  return { KINDS, STATUS, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
 });

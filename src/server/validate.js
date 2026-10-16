@@ -835,6 +835,9 @@ function validateEngagement(data, store, id) {
     yearEnd: data.yearEnd, kind, status,
     snapshot: { takenAt: Number(snap.takenAt) || Date.now(), by: str(snap.by, 120).trim(), priorEnd: isDate(snap.priorEnd) ? snap.priorEnd : '', lines },
     map, ajes, notes: str(data.notes, 5000),
+    // The financial statements' words: the compilation engagement report and the notes, written by the accountant.
+    report: isObj(data.report) ? { text: str(data.report.text, 8000), signer: str(data.report.signer, 120).trim(), city: str(data.report.city, 80).trim(), date: isDate(data.report.date) ? data.report.date : '' } : { text: '', signer: '', city: '', date: '' },
+    fsNotes: (Array.isArray(data.fsNotes) ? data.fsNotes : []).slice(0, 30).filter(isObj).map(n => ({ title: str(n.title, 150).trim(), text: str(n.text, 8000) })).filter(n => n.title || n.text.trim()),
     finalAt: status === 'final' ? Number(data.finalAt) || Date.now() : 0, finalBy: status === 'final' ? str(data.finalBy, 120).trim() : '',
     ...(data.created ? { created: Number(data.created) || 0 } : {}),
   };

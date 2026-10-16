@@ -54,9 +54,9 @@ function yfDetail(f){
   else if(ch.length)h+=`<div class="banner"><span><b>The books changed since the snapshot.</b> ${ch.length} account${ch.length===1?'':'s'} no longer match${ch.length===1?'es':''} (${ch.slice(0,3).map(x=>esc(x.name||acct(x.account)?.name||'')).join(', ')}${ch.length>3?'…':''}). Take the snapshot again to bring the changes in; your leadsheets and adjusting entries are kept.</span>${edit?'<button class="btn sm" data-yfact="retake">Take the snapshot again</button>':''}</div>`;
   const ni=c=>TallyEngage.netIncome(tb,c);
   h+=`<div class="chips"><div class="chip"><div class="lbl">${esc(T('Net income before adjustments'))}</div><div class="val">${mcell(ni('cur'))}</div></div><div class="chip"><div class="lbl">${esc(T('Adjustments'))}</div><div class="val">${mcell(r2(ni('final')-ni('cur')))}</div></div><div class="chip"><div class="lbl">${esc(T('Net income, adjusted'))}</div><div class="val">${mcell(ni('final'))}</div></div><div class="chip"><div class="lbl">${esc(T('Prior year'))}</div><div class="val">${mcell(ni('prior'))}</div></div></div>`;
-  const tabs=[['tb','Trial balance'],['ls','Leadsheets'],['aje',`Adjusting entries${unposted?` (${unposted} not posted)`:''}`]];
+  const tabs=[['tb','Trial balance'],['ls','Leadsheets'],['aje',`Adjusting entries${unposted?` (${unposted} not posted)`:''}`],['fs','Financial statements'],['gifi','GIFI']];
   h+=`<div class="tabs" role="tablist">${tabs.map(([k,v])=>`<button role="tab" data-yftab="${k}" aria-selected="${YF.tab===k}">${esc(v)}</button>`).join('')}</div>`;
-  return h+(YF.tab==='ls'?yfLeadsheets(f):YF.tab==='aje'?yfAjes(f,edit):yfTb(f,tb,edit));
+  return h+(YF.tab==='ls'?yfLeadsheets(f):YF.tab==='aje'?yfAjes(f,edit):YF.tab==='fs'?yfStatements(f,edit):YF.tab==='gifi'?yfGifi(f):yfTb(f,tb,edit));
 }
 
 const yfName=r=>`<span translate="no">${esc((r.code?r.code+' ':'')+r.name)}</span>`;
@@ -132,6 +132,10 @@ async function yfClick(e,t,d){
   if(t.hasAttribute('data-yfback')){YF.open=null;renderMain();return true}
   if(d.yftab){YF.tab=d.yftab;renderMain();return true}
   const f=YF.open&&yfFile(YF.open);if(!f)return false;
+  if(t.hasAttribute('data-yfwords')){yfWordsForm(f);return true}
+  if(t.hasAttribute('data-yfpdf')){const safe=String(S.company.name||'company').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();saveFile(`${safe}-financial-statements-${f.yearEnd}.pdf`,new Blob([yfPdf(f)],{type:'application/pdf'}));return true}
+  if(t.hasAttribute('data-yfgificsv')){yfGifiCsv(f);return true}
+  if(t.hasAttribute('data-yfgifiedit')){gifiForm();return true}
   if(d.yfaje){yfAjeForm(f,d.yfaje==='new'?null:f.ajes.find(x=>x.id===d.yfaje));return true}
   if(d.yfajedel){const j=f.ajes.find(x=>x.id===d.yfajedel);if(j&&await confirmBox(`Delete AJE ${j.num}?`,'It comes off this file’s leadsheets.'))await yfSave(f,{ajes:f.ajes.filter(x=>x.id!==j.id)});return true}
   if(d.yfpost){const j=f.ajes.find(x=>x.id===d.yfpost);if(j)await yfPost(f,j);return true}
@@ -150,4 +154,127 @@ async function yfClick(e,t,d){
 /** Leadsheet changes on the trial balance tab. */
 function yfBind(m){
   $$('[data-yfmap]',m).forEach(s=>s.onchange=async()=>{const f=yfFile(YF.open);if(!f)return;await yfSave(f,{map:{...(f.map||{}),[s.dataset.yfmap]:s.value}})});
+}
+
+/* ---------- financial statements, notes and GIFI ---------- */
+/** The default compilation engagement report: the elements CSRS 4200 asks for, in Sumlora's own words. Replace it with your firm's approved wording. */
+function yfDefaultReport(f){
+  const co=S.company.name||'the company',ye=fmtDate(f.yearEnd);
+  return `To the management of ${co}
+
+At management’s request and using information management gave us, we compiled the balance sheet of ${co} as at ${ye}, the statement of income and retained earnings for the year then ended, and Note 1, which describes the basis of accounting used.
+
+Management is responsible for this financial information, for the accuracy and completeness of the information used to prepare it, and for choosing the basis of accounting.
+
+We carried out this engagement under Canadian Standard on Related Services (CSRS) 4200, Compilation Engagements, and met the relevant ethical requirements. Our role was to help management prepare the financial information.
+
+This was not an audit or a review, and we were not required to verify the information management provided. We therefore give no audit opinion, no review conclusion, and no assurance of any kind on this financial information.
+
+Readers should note that this financial information may not suit their purposes.`;
+}
+const yfDefaultNotes=()=>[{title:'Basis of accounting',text:'The financial information is prepared on the historical cost basis, using the accrual basis of accounting. Revenue is recognized when services are performed or goods are delivered. Capital assets are recorded at cost and amortized over their useful lives. Income taxes are recorded using the taxes payable method.'}];
+const yfReport=f=>({text:(f.report&&f.report.text)||yfDefaultReport(f),signer:(f.report&&f.report.signer)||(typeof ME!=='undefined'&&ME?ME.firmName||'':''),city:(f.report&&f.report.city)||'',date:(f.report&&f.report.date)||''});
+const yfNotes=f=>f.fsNotes&&f.fsNotes.length?f.fsNotes:yfDefaultNotes();
+
+/** The statements as rows ({cls, label, cur, prior}) for the screen and the PDF. */
+function yfRows(f){
+  const st=TallyEngage.statements(f,S.accounts),bs=st.bs,is=st.is,re=st.re,nz=x=>Math.abs(x.cur)>=0.005||Math.abs(x.prior)>=0.005;
+  const row=(cls,label,x)=>({cls,label,cur:x?x.cur:null,prior:x?x.prior:null});
+  const B=[row('sec','Assets')];
+  for(const g of bs.groups.filter(g=>g.key==='ca'||g.key==='la')){if(!g.lines.length)continue;B.push(row('sub',g.label));g.lines.forEach(l=>B.push(row('item',l.label,l)));B.push(row('tot','Total '+g.label.toLowerCase(),g.total))}
+  B.push(row('grand','Total assets',bs.assets),row('spacer',''),row('sec','Liabilities'));
+  for(const g of bs.groups.filter(g=>g.key==='cl'||g.key==='ll')){if(!g.lines.length)continue;B.push(row('sub',g.label));g.lines.forEach(l=>B.push(row('item',l.label,l)));B.push(row('tot','Total '+g.label.toLowerCase(),g.total))}
+  B.push(row('tot','Total liabilities',bs.liabilities),row('spacer',''),row('sec','Shareholders’ equity'));
+  if(nz(bs.shareCapital))B.push(row('item','Share capital',bs.shareCapital));
+  B.push(row('item','Retained earnings',bs.retained),row('tot','Total shareholders’ equity',bs.equity),row('spacer',''),row('grand','Total liabilities and shareholders’ equity',bs.totalLE));
+  const I=[row('item','Revenue',is.revenue)];
+  if(nz(is.cos))I.push(row('item','Cost of sales',is.cos),row('tot','Gross profit',is.gross));
+  if(is.opex.length){I.push(row('sec','Operating expenses'));is.opex.forEach(x=>I.push(row('item',x.label,x)));I.push(row('tot','Total operating expenses',is.opexTotal))}
+  if(nz(is.other))I.push(row('item','Other income (expenses)',is.other));
+  if(nz(is.taxes))I.push(row('tot','Income before income taxes',is.beforeTax),row('item','Income taxes',is.taxes));
+  I.push(row('grand','Net income',is.net),row('spacer',''),row('item','Retained earnings, beginning of year',re.opening),row('item','Net income',re.net));
+  if(nz(re.dividends))I.push(row('item','Dividends',{cur:-re.dividends.cur,prior:-re.dividends.prior}));
+  if(nz(re.other))I.push(row('item','Other changes',re.other));
+  I.push(row('grand','Retained earnings, end of year',re.closing));
+  return{st,bs:B,is:I};
+}
+const yfPriorEnd=f=>f.snapshot.priorEnd||addDays(fyStartOf(f.yearEnd),-1);
+function yfTable(rows,f){
+  const c=v=>v===null?'':mcell(v);
+  return `<table><thead><tr><th></th><th class="n">${esc(fmtDate(f.yearEnd))}</th><th class="n">${esc(fmtDate(yfPriorEnd(f)))}</th></tr></thead><tbody>${rows.map(r=>r.cls==='spacer'?'<tr class="spacer"><td colspan="3"></td></tr>':`<tr class="${r.cls==='sub'?'sec':r.cls}"><td>${esc(T(r.label))}</td><td class="n">${c(r.cur)}</td><td class="n">${c(r.prior)}</td></tr>`).join('')}</tbody></table>`;
+}
+function yfStatements(f,edit){
+  const{st,bs,is}=yfRows(f),rp=yfReport(f),notes=yfNotes(f);
+  const co=esc(S.company.name||''),off=st.bs.off;
+  let h=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><span class="grow muted">Built from the adjusted leadsheets, with the prior year beside each figure.</span>${edit?'<button class="btn" data-yfwords>Edit the report and notes</button>':''}<button class="btn primary" data-yfpdf>Download PDF</button></div></div>`;
+  if(Math.abs(off.cur)>=0.01||Math.abs(off.prior)>=0.01)h+=`<div class="banner err"><span><b>The balance sheet doesn’t balance</b> (off by ${money(off.cur)} this year, ${money(off.prior)} last year). Check the leadsheets of equity accounts.</span></div>`;
+  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${esc(T('Compilation engagement report'))}</b></div><div class="pad" style="white-space:pre-wrap;line-height:1.55">${esc(rp.text)}</div><div class="pad muted">${esc(rp.signer||'')}${rp.city?'<br>'+esc(rp.city):''}${rp.date?'<br>'+esc(fmtDate(rp.date)):''}</div></div>`;
+  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T('Balance sheet'))} · ${esc(T('As at'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(bs,f)}</div></div>`;
+  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T('Statement of income and retained earnings'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(is,f)}</div></div>`;
+  h+=`<div class="panel report"><div class="rh"><b>${co}</b><span>${esc(T('Notes to the financial information'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="pad">${notes.map((n,i)=>`<p><b>${i+1}. ${esc(n.title)}</b></p><p style="white-space:pre-wrap;line-height:1.55">${esc(n.text)}</p>`).join('')}</div></div>`;
+  return h;
+}
+function yfWordsForm(f){
+  const rp=yfReport(f),notes=yfNotes(f);
+  const noteHTML=(n,i)=>`<div class="field" style="grid-column:1/-1" data-ynote><label>Note ${i+1}</label><input type="text" data-ntitle value="${esc(n.title)}" placeholder="Title, e.g. Capital assets" maxlength="150"><textarea data-ntext rows="4" maxlength="8000" style="margin-top:6px">${esc(n.text)}</textarea></div>`;
+  const m=openModal('Report and notes',`<div class="fields">${fld('yrText','Compilation engagement report',`<textarea id="yrText" rows="12" maxlength="8000">${esc(rp.text)}</textarea><span class="hint">Sumlora’s starting wording. Replace it with your firm’s approved wording if you have one.</span>`,true)}${fld('yrSigner','Signed by (firm)',`<input type="text" id="yrSigner" value="${esc(rp.signer)}" maxlength="120">`)}${fld('yrCity','City',`<input type="text" id="yrCity" value="${esc(rp.city)}" maxlength="80" placeholder="e.g. Ottawa, Ontario">`)}${fld('yrDate','Report date',`<input type="date" id="yrDate" value="${esc(rp.date)}">`)}</div><div class="fields" data-ynotes>${notes.map(noteHTML).join('')}</div><button type="button" class="btn sm" data-ynadd>+ Note</button>`,
+    '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>','wide');
+  $('[data-ynadd]',m).onclick=()=>{const box=$('[data-ynotes]',m);box.insertAdjacentHTML('beforeend',noteHTML({title:'',text:''},box.children.length))};
+  m.onsubmit=async e=>{e.preventDefault();
+    const fsNotes=$$('[data-ynote]',m).map(x=>({title:$('[data-ntitle]',x).value.trim(),text:$('[data-ntext]',x).value})).filter(n=>n.title||n.text.trim());
+    const report={text:$('#yrText',m).value,signer:$('#yrSigner',m).value.trim(),city:$('#yrCity',m).value.trim(),date:$('#yrDate',m).value};
+    if(await yfSave(f,{report,fsNotes}))closeModal()};
+}
+
+/** The statements package as a PDF: cover, compilation engagement report, balance sheet, income and retained earnings, notes. */
+function yfPdf(f){
+  const{bs,is}=yfRows(f),rp=yfReport(f),notes=yfNotes(f),co=S.company.name||'';
+  const doc=TallyPDF.create(),W0=doc.width,H0=doc.height,M=56,C1=W0-M-110,C2=W0-M;
+  let fresh=true,y=0;const page=()=>{if(fresh)fresh=false;else doc.addPage();y=M};
+  const title=(t,sub)=>{page();doc.text(W0/2,y,co,{size:14,bold:true,align:'center'});y+=18;doc.text(W0/2,y,tl(t),{size:12,bold:true,align:'center'});y+=15;if(sub){doc.text(W0/2,y,sub,{size:10,align:'center',color:'#555555'});y+=12}y+=18};
+  const para=(text,size=10)=>{for(const line of doc.wrap(text,W0-2*M,size)){if(y>H0-M){page()}doc.text(M,y,line,{size});y+=size*1.45}};
+  // Cover
+  page();y=250;doc.text(W0/2,y,co,{size:22,bold:true,align:'center'});y+=34;doc.text(W0/2,y,tl('Financial statements'),{size:15,align:'center'});y+=22;doc.text(W0/2,y,`${tl('Year ended')} ${fmtDate(f.yearEnd)}`,{size:11,align:'center',color:'#555555'});
+  // Report
+  title('Compilation engagement report');para(rp.text);y+=18;
+  for(const l of [rp.signer,rp.city,rp.date?fmtDate(rp.date):''].filter(Boolean)){doc.text(M,y,l,{size:10});y+=14}
+  // Statements
+  const table=(rows,t,sub)=>{
+    const headRow=()=>{doc.text(C1,y,fmtDate(f.yearEnd),{size:9,bold:true,align:'right'});doc.text(C2,y,fmtDate(yfPriorEnd(f)),{size:9,bold:true,align:'right'});y+=6;doc.line(M,y,W0-M,y,{color:'#999999'});y+=14};
+    title(t,sub);headRow();
+    for(const r of rows){
+      if(y>H0-M-20){title(t,sub);headRow()}
+      if(r.cls==='spacer'){y+=6;continue}
+      const bold=['sec','sub','tot','grand'].includes(r.cls),ind=r.cls==='item'?14:0;
+      if(r.cls==='tot'||r.cls==='grand')doc.line(C1-90,y-9,W0-M,y-9,{color:'#bbbbbb'});
+      doc.text(M+ind,y,tl(r.label),{size:10,bold});
+      if(r.cur!==null){doc.text(C1,y,money(r.cur),{size:10,bold:r.cls==='grand',align:'right'});doc.text(C2,y,money(r.prior),{size:10,bold:r.cls==='grand',align:'right'})}
+      if(r.cls==='grand'){doc.line(C1-90,y+4,W0-M,y+4,{color:'#555555'});doc.line(C1-90,y+6,W0-M,y+6,{color:'#555555'})}
+      y+=r.cls==='sec'?16:14;
+    }
+  };
+  table(bs,'Balance sheet',`${tl('As at')} ${fmtDate(f.yearEnd)}`);
+  table(is,'Statement of income and retained earnings',`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
+  // Notes
+  title('Notes to the financial information',`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
+  notes.forEach((n,i)=>{if(y>H0-M-40)page();doc.text(M,y,`${i+1}. ${n.title}`,{size:10,bold:true});y+=15;para(n.text);y+=10});
+  const pages=doc.pageCount();
+  for(let i=1;i<pages;i++){doc.goto(i);doc.text(W0/2,H0-28,`${tl('Unaudited – see compilation engagement report')} · ${i+1}`,{size:8,align:'center',color:'#888888'})}
+  return doc.output();
+}
+
+function yfGifi(f){
+  const g=TallyEngage.gifi(f,S.accounts);
+  let h='';
+  if(g.missing.length)h+=`<div class="banner"><span><b>${g.missing.length} account${g.missing.length===1?' has':'s have'} no GIFI code</b> and ${g.missing.length===1?'is':'are'} left out: ${g.missing.slice(0,4).map(x=>esc(x.name)).join(', ')}${g.missing.length>4?'…':''}.</span>${yfEdit()?'<button class="btn sm" data-yfgifiedit>Fill in GIFI codes</button>':''}</div>`;
+  else if(!g.agrees)h+=`<div class="banner err"><span>The GIFI totals don’t agree with the financial statements. Check the GIFI codes of accounts on the balance sheet and income statement.</span></div>`;
+  const rows=g.lines.map(l=>`<tr${l.total?' class="tot"':''}><td>${l.schedule}</td><td class="mono">${l.code}</td><td>${esc(TallyGIFI.describe(l.code,isFr()?'fr':'en'))}</td><td class="n">${mcell(l.cur)}</td><td class="n">${mcell(l.prior)}</td></tr>`).join('');
+  return h+`<div class="panel"><div class="toolbar"><span class="grow muted">T2 Schedule 100 (balance sheet) and Schedule 125 (income statement) from the adjusted figures. Amounts are positive in their normal direction.</span><button class="btn primary" data-yfgificsv>Download CSV</button></div><div class="tbl-wrap"><table><thead><tr><th>Schedule</th><th>GIFI</th><th>Description</th><th class="n">${esc(fmtDate(f.yearEnd))}</th><th class="n">${esc(fmtDate(yfPriorEnd(f)))}</th></tr></thead><tbody>${rows||emptyRow(5,'Nothing to show','The trial balance has no balances.')}</tbody></table></div></div>`;
+}
+function yfGifiCsv(f){
+  const g=TallyEngage.gifi(f,S.accounts);
+  const rows=[['Schedule','GIFI code','Description','Current year','Prior year'],...g.lines.map(l=>[l.schedule,l.code,TallyGIFI.describe(l.code,'en'),l.cur.toFixed(2),l.prior.toFixed(2)])];
+  const csv='﻿'+rows.map(r=>r.map(v=>{const s=String(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}).join(',')).join('\r\n');
+  const safe=String(S.company.name||'company').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();
+  saveFile(`${safe}-gifi-${f.yearEnd}.csv`,new Blob([csv],{type:'text/csv'}));
 }

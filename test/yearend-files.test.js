@@ -68,6 +68,32 @@ test('leadsheets: adjustments change the working trial balance, leadsheet totals
   assert.deepEqual(E.changedSince(file, { bank: 5000, eq: 3000, sales: -10500, rent: 2000 }).map(x => x.account), ['sales']);
 });
 
+test('statements and GIFI: the balance sheet balances, retained earnings roll forward, and Schedule 125 agrees', () => {
+  const f = { snapshot: { lines: [
+    { account: 'bank', name: 'Chequing', type: 'Asset', detail: 'bank', gifi: '1001', cur: 5000, prior: 3000 },
+    { account: 'eq', name: 'Equipment', type: 'Asset', detail: 'capital', gifi: '1740', cur: 3000, prior: 0 },
+    { account: 'ap', name: 'Accounts payable', type: 'Liability', detail: 'ap', gifi: '2620', cur: -1000, prior: -500 },
+    { account: 'sh', name: 'Common shares', type: 'Equity', gifi: '3500', cur: -100, prior: -100 },
+    { account: E.RE_OPEN, name: 'Retained earnings, beginning of year', type: 'Equity', gifi: '3600', cur: -2400, prior: 0 },
+    { account: 'div', name: 'Dividends', type: 'Equity', gifi: '3700', cur: 500, prior: 0 },
+    { account: 'sales', name: 'Sales', type: 'Income', gifi: '8000', cur: -10000, prior: -8000 },
+    { account: 'rent', name: 'Rent', type: 'Expense', gifi: '8910', cur: 5000, prior: 5600 },
+  ] }, ajes: [{ lines: [{ account: 'amort', debit: 600 }, { account: 'eq', credit: 600 }] }] };
+  const accts = [{ id: 'amort', name: 'Amortization', type: 'Expense', gifi: '8670' }];
+  const st = E.statements(f, accts);
+  assert.deepEqual(st.is.net, { cur: 4400, prior: 2400 });
+  assert.deepEqual(st.re.closing, { cur: 6300, prior: 2400 });
+  assert.deepEqual(st.bs.off, { cur: 0, prior: 0 });
+  assert.deepEqual(st.bs.assets, { cur: 7400, prior: 3000 });
+  const g = E.gifi(f, accts), at = code => g.lines.find(l => l.code === code);
+  assert.ok(g.agrees);
+  assert.deepEqual([at('2599').cur, at('3640').cur, at('3600').cur, at('3700').cur, at('9367').cur, at('9999').cur], [7400, 7400, 6300, 500, 5600, 4400]);
+  assert.equal(at('1740').cur, 2400, 'the adjustment reaches the GIFI line');
+  // An account with no GIFI code is listed, and fixing it in the chart of accounts is used without a new snapshot.
+  const g2 = E.gifi(f, [{ id: 'amort', name: 'Amortization', type: 'Expense' }]);
+  assert.deepEqual(g2.missing.map(m => m.account), ['amort']); assert.equal(g2.agrees, false);
+});
+
 /* ---------- on the server ---------- */
 let server, base, dir, owner, client, co;
 async function req(cookie, method, url, body) {
