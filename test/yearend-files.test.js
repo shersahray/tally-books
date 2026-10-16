@@ -267,3 +267,66 @@ test('review: bringing in a changed trial balance takes back the review of the w
   const log = (await req(owner, 'GET', c('/audit?collection=engagements'))).json.rows[0].summary;
   assert.match(log, /trial balance updated from the books \(.*\$1000\.00 → \$1200\.00/); assert.match(log, /working paper Cash review removed/);
 });
+
+/* ---------- roll forward, imported trial balances, templates, cash flow, analysis ---------- */
+test('roll forward: the prior year is checked against last year’s final figures, and can be taken from them', () => {
+  const last = { snapshot: { lines: [{ account: 'bank', name: 'Chequing', type: 'Asset', cur: 1000, prior: 0 }, { account: 'sales', name: 'Sales', type: 'Income', cur: -1000, prior: 0 }] },
+    ajes: [{ lines: [{ account: 'rent', debit: 100 }, { account: 'bank', credit: 100 }] }] };
+  const accts = [{ id: 'rent', name: 'Rent', type: 'Expense' }];
+  const now = { snapshot: { lines: [{ account: 'bank', name: 'Chequing', type: 'Asset', cur: 1500, prior: 1000 }, { account: 'sales', name: 'Sales', type: 'Income', cur: -500, prior: -1000 }, { account: E.RE_OPEN, name: 'RE', type: 'Equity', cur: -1000, prior: 0 }] } };
+  // Last year's AJE never reached the books: Chequing and Rent differ.
+  assert.deepEqual(E.priorCheck(now, last, accts).map(x => x.account).sort(), ['bank', 'rent']);
+  const lines = E.withPriorFrom(now.snapshot.lines, last, accts);
+  assert.equal(lines.find(l => l.account === 'bank').prior, 900);
+  assert.equal(lines.find(l => l.account === 'rent').prior, 100, 'an account only last year had is added');
+  assert.equal(Math.round(lines.reduce((t, l) => t + l.prior, 0) * 100), 0, 'still balances');
+  assert.deepEqual(E.priorCheck({ snapshot: { lines } }, last, accts), []);
+});
+
+test('report wording comes from one place, by engagement type and date', () => {
+  const R = require('../public/report-templates.js');
+  assert.equal(R.current('compilation', '2025-12-31').id, 'compilation-v1');
+  assert.equal(R.current('internal', '2025-12-31').title, 'Notice to the reader');
+  const t = R.render(R.current('compilation', '2025-12-31'), { entity: 'Maple Dental', statements: 'the balance sheet of Maple Dental as at Dec 31, 2025' });
+  assert.match(t, /^To the management of Maple Dental/); assert.match(t, /CSRS\) 4200/); assert.ok(!/\{/.test(t));
+});
+
+test('cash flow and capital assets continuity add up', () => {
+  const f = { snapshot: { lines: [
+    { account: 'bank', name: 'Chequing', type: 'Asset', detail: 'bank', cur: 5000, prior: 3000 }, { account: 'ar', name: 'Accounts receivable', type: 'Asset', detail: 'ar', cur: 2000, prior: 1000 },
+    { account: 'eq', name: 'Equipment', type: 'Asset', detail: 'capital', cur: 3000, prior: 1000 }, { account: 'acc', name: 'Accumulated amortization', type: 'Asset', cur: -500, prior: -200 },
+    { account: 'ap', name: 'Accounts payable', type: 'Liability', detail: 'ap', cur: -1500, prior: -500 }, { account: 'loan', name: 'Bank loan', type: 'Liability', cur: -2000, prior: -1000 },
+    { account: 'sh', name: 'Common shares', type: 'Equity', cur: -100, prior: -100 }, { account: E.RE_OPEN, name: 'RE', type: 'Equity', cur: -3200, prior: 0 },
+    { account: 'sales', name: 'Sales', type: 'Income', cur: -10000, prior: -8000 }, { account: 'am', name: 'Amortization', type: 'Expense', cur: 300, prior: 200 }, { account: 'rent', name: 'Rent', type: 'Expense', cur: 7000, prior: 4600 }] } };
+  const cf = E.cashFlow(f, []);
+  assert.deepEqual([cf.operating, cf.inv, cf.fin, cf.change, cf.begin, cf.end, cf.gap], [3000, -2000, 1000, 2000, 3000, 5000, 0]);
+  const c = E.continuity(f, [], { eq: { debits: 2500, credits: 500 } });
+  assert.deepEqual(c.totals.cost, { open: 1000, up: 2500, down: 500, other: 0, close: 3000 });
+  assert.deepEqual(c.totals.accum, { open: 200, up: 300, down: 0, other: 0, close: 500 });
+  assert.deepEqual(c.totals.nbv, { open: 800, close: 2500 });
+});
+
+test('analysis points out changes, odd balances, missing documents and possible duplicates', () => {
+  const f = { id: 'f', snapshot: { lines: [{ account: 'bank', name: 'Chequing', type: 'Asset', detail: 'bank', cur: 5000, prior: 3000 }, { account: 'eq', name: 'Equipment', type: 'Asset', detail: 'capital', cur: 40000, prior: 1500 }, { account: 'ap', name: 'Accounts payable', type: 'Liability', cur: 500, prior: -500 }, { account: 'sales', name: 'Sales', type: 'Income', cur: -45500, prior: -4000 }] } };
+  const a = E.analyze(f, [], [{ target: 'engagements', targetId: 'f', wp: 'A' }]);
+  const has = (kind, re) => a.some(x => x.kind === kind && re.test(x.text));
+  assert.ok(has('variance', /Revenue increased 1037\.5%/));
+  assert.ok(has('sign', /Accounts payable has a debit balance/));
+  assert.ok(has('docs', /Capital asset additions of \$38,500\.00 have no supporting document/));
+  assert.ok(!has('docs', /^Cash/), 'Cash has its bank statement');
+  const u = E.unusual([{ entryId: 'a', date: '2026-01-02', account: 'r', name: 'Rent', amount: 100 }, { entryId: 'b', date: '2026-01-02', account: 'r', name: 'Rent', amount: 100 }], '2026-01-01', '2026-12-31');
+  assert.equal(u[0].kind, 'duplicate');
+});
+
+test('server: an imported trial balance can use the file’s own accounts and be out of balance until it’s final', async () => {
+  const lines = [{ account: 'x:1000', code: '1000', name: 'Bank', type: 'Asset', cur: 500, prior: 0 }, { account: 'x:4000', code: '4000', name: 'Sales', type: 'Income', cur: -400, prior: 0 }];
+  let r = await req(owner, 'PUT', c('/records/engagements/i1'), file({ yearEnd: '2022-12-31', snapshot: { source: 'import', lines } }));
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  r = await req(owner, 'PUT', c('/records/engagements/i1'), file({ yearEnd: '2022-12-31', snapshot: { source: 'import', lines }, ajes: [{ id: 'j', num: 1, memo: 'x', lines: [{ account: 'x:4000', debit: 10 }, { account: 'x:1000', credit: 10 }] }] }));
+  assert.equal(r.status, 200, 'adjusting entries can use the file’s own accounts');
+  const y = await getY('i1');
+  r = await req(owner, 'PUT', c('/records/engagements/i1'), { ...y, status: 'final' });
+  assert.equal(r.status, 400); assert.match(r.json.error, /doesn’t add up to zero \(off by 100\.00\)/);
+  // From the books, the file's own accounts aren't allowed.
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/i2'), file({ yearEnd: '2021-12-31', snapshot: { lines } }))).status, 400);
+});

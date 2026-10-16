@@ -335,5 +335,158 @@
     };
   }
 
-  return { KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
+  /* ---------- roll forward ---------- */
+  /**
+   * Does this file's prior year agree with last year's final figures? [{ account, name, prior, last }] for each account
+   * that differs (an adjusting entry last year that never reached the books is the usual reason).
+   */
+  function priorCheck(file, prevFile, accounts) {
+    if (!file || !prevFile) return [];
+    const last = {}, names = {};
+    for (const r of workingTb(prevFile, accounts)) { last[r.account] = r.final; names[r.account] = r.name; }
+    const prior = {};
+    for (const l of (file.snapshot && file.snapshot.lines) || []) { prior[l.account] = l.prior; names[l.account] = names[l.account] || l.name; }
+    const out = [];
+    for (const id of new Set([...Object.keys(last), ...Object.keys(prior)])) {
+      const a = r2(prior[id] || 0), b = r2(last[id] || 0);
+      if (Math.abs(a - b) >= 0.005) out.push({ account: id, name: names[id] || id, prior: a, last: b });
+    }
+    return out;
+  }
+  /** Snapshot lines with the prior year replaced by last year's final figures (lines added for accounts only last year had). */
+  function withPriorFrom(lines, prevFile, accounts) {
+    const last = {}, info = {};
+    for (const r of workingTb(prevFile, accounts)) { last[r.account] = r.final; info[r.account] = r; }
+    const out = lines.map(l => ({ ...l, prior: r2(last[l.account] || 0) }));
+    for (const [id, v] of Object.entries(last)) {
+      if (Math.abs(v) < 0.005 || out.some(l => l.account === id)) continue;
+      const r = info[id];
+      out.push({ account: id, code: r.code || '', name: r.name, type: r.type, detail: r.detail || '', gifi: r.gifi || '', cur: 0, prior: r2(v) });
+    }
+    return out;
+  }
+
+  /* ---------- fixed-asset continuity and cash flow ---------- */
+  const isAccum = r => /accum|amorti[sz]|depreci|amort\./i.test(r.name || '') || (r.type === 'Asset' && r.final < 0 && r.prior <= 0 && (r.final || r.prior));
+  /**
+   * The capital assets continuity schedule from the capital assets leadsheet (G): for each cost account, opening,
+   * additions, disposals and closing; for each accumulated amortization account, opening, amortization for the year,
+   * disposals and closing; and net book value. activity: { account: { debits, credits } } for the year from the books
+   * (without entries posted from this file); without it (an imported trial balance) the year's change is used.
+   */
+  function continuity(file, accounts, activity) {
+    const tb = workingTb(file, accounts).filter(r => r.lead === 'G');
+    const aje = {};
+    for (const j of (file && file.ajes) || []) for (const l of j.lines || []) { const a = aje[l.account] = aje[l.account] || { debits: 0, credits: 0 }; a.debits = r2(a.debits + (Number(l.debit) || 0)); a.credits = r2(a.credits + (Number(l.credit) || 0)); }
+    const row = (r, accum) => {
+      const act = activity && activity[r.account], a = aje[r.account] || { debits: 0, credits: 0 };
+      const sign = accum ? -1 : 1, open = r2(sign * r.prior), close = r2(sign * r.final);
+      let up, down; // additions (or amortization) and disposals, in the account's own direction
+      if (act || aje[r.account]) { const d = r2((act ? act.debits : 0) + a.debits), c = r2((act ? act.credits : 0) + a.credits); up = accum ? c : d; down = accum ? d : c; }
+      else { const ch = r2(close - open); up = ch > 0 ? ch : 0; down = ch < 0 ? -ch : 0; }
+      const other = r2(close - (open + up - down));
+      return { account: r.account, name: r.name, code: r.code, open, up: r2(up), down: r2(down), other, close };
+    };
+    const cost = tb.filter(r => !isAccum(r)).map(r => row(r, false)), accum = tb.filter(isAccum).map(r => row(r, true));
+    const sum = (rows, k) => r2(rows.reduce((t, x) => t + x[k], 0));
+    const tot = rows => ({ open: sum(rows, 'open'), up: sum(rows, 'up'), down: sum(rows, 'down'), other: sum(rows, 'other'), close: sum(rows, 'close') });
+    const tc = tot(cost), ta = tot(accum);
+    return { cost, accum, totals: { cost: tc, accum: ta, nbv: { open: r2(tc.open - ta.open), close: r2(tc.close - ta.close) } } };
+  }
+
+  /**
+   * The statement of cash flows (indirect method) from the balance sheet changes and net income. Cash is Cash (A) less
+   * bank indebtedness (AA). Amortization is added back from expense accounts named for it. A difference left over
+   * (there shouldn't be one) is shown so it can't hide.
+   */
+  function cashFlow(file, accounts) {
+    const st = statements(file, accounts), tb = workingTb(file, accounts);
+    const d = (code, sign) => { const rows = tb.filter(r => r.lead === code); return r2(sign * rows.reduce((t, r) => t + r.final - r.prior, 0)); };
+    const amortRows = tb.filter(r => ['X', 'COS', 'OI'].includes(r.lead) && /amorti[sz]|depreci/i.test(r.name || ''));
+    const amort = { cur: r2(amortRows.reduce((t, r) => t + r.final, 0)), prior: r2(amortRows.reduce((t, r) => t + r.prior, 0)) };
+    // Changes this year (cur) only: the prior year's own changes would need the year before it.
+    const wc = [
+      ['Accounts receivable', -d('C', 1)], ['Inventory', -d('D', 1)], ['Prepaid expenses and other current assets', -d('E', 1)],
+      ['Accounts payable and accrued liabilities', d('BB', -1)], ['Government remittances and sales taxes payable', d('CC', -1)], ['Income taxes payable', d('DD', -1)], ['Deferred revenue', d('EE', -1)],
+    ].filter(x => Math.abs(x[1]) >= 0.005);
+    const opening = r2(st.is.net.cur + amort.cur + wc.reduce((t, x) => t + x[1], 0));
+    const investing = [
+      ['Purchase of capital assets, net', r2(-(d('G', 1) + amort.cur))], ['Short-term investments', -d('B', 1)], ['Intangible and other assets', -d('H', 1)], ['Advances to related parties', -d('F', 1)],
+    ].filter(x => Math.abs(x[1]) >= 0.005);
+    const reGap = r2(st.re.opening.cur - st.re.closing.prior); // opening retained earnings not equal to last year's closing
+    const financing = [
+      ['Long-term debt', d('FF', -1)], ['Advances from shareholders and related parties', d('GG', -1)], ['Share capital', d('SC', -1)],
+      ['Dividends paid', -st.re.dividends.cur], ['Other changes in equity', r2(st.re.other.cur - st.re.other.prior + reGap)],
+    ].filter(x => Math.abs(x[1]) >= 0.005);
+    const inv = r2(investing.reduce((t, x) => t + x[1], 0)), fin = r2(financing.reduce((t, x) => t + x[1], 0));
+    const cashOf = col => r2(tb.filter(r => r.lead === 'A' || r.lead === 'AA').reduce((t, r) => t + r[col], 0));
+    const begin = cashOf('prior'), end = cashOf('final'), change = r2(opening + inv + fin);
+    return { net: st.is.net.cur, amort: amort.cur, wc, operating: opening, investing, inv, financing, fin, change, begin, end, gap: r2(end - begin - change) };
+  }
+
+  /* ---------- analysis (suggestions for the accountant, never conclusions) ---------- */
+  const NORMAL_DEBIT = { Asset: true, Expense: true, 'Cost of Goods Sold': true, Liability: false, Equity: false, Income: false };
+  const SIDE = { Asset: 'bs', Liability: 'bs', Equity: 'bs', Income: 'is', Expense: 'is', 'Cost of Goods Sold': 'is' };
+  /**
+   * Things worth a look: large changes from last year, balances on the wrong side, accounts on a leadsheet that doesn't
+   * match their type, balance sheet working papers with no document, capital asset additions with no document, and
+   * unfinished parts of the file. Each is { kind, wp, level ('high'|'normal'), text }.
+   * opts: { minChange (dollars, default 1,000), minPct (default 20), activity (see continuity) }.
+   */
+  function analyze(file, accounts, attachments, opts = {}) {
+    const minChange = opts.minChange ?? 1000, minPct = opts.minPct ?? 20, out = [];
+    const money = n => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const ls = leadsheets(file, accounts), tb = workingTb(file, accounts);
+    const signOf = l => (l.side === 'bs' ? (l.type === 'Asset' ? 1 : -1) : (l.type === 'Income' ? -1 : 1));
+    for (const l of ls) {
+      const sg = signOf(l), cur = r2(sg * l.final), pr = r2(sg * l.prior), ch = r2(cur - pr);
+      if (Math.abs(ch) < minChange || !pr || l.code === 'RE') continue;
+      const pct = Math.round(ch / Math.abs(pr) * 1000) / 10;
+      if (Math.abs(pct) < minPct) continue;
+      const hint = { C: ' Consider reviewing the A/R aging and collectibility.', D: ' Consider the inventory count and costing.', G: ' Check additions and disposals against invoices.', BB: ' Check for unrecorded or duplicate liabilities.', R: ' Compare with sales tax returns and cut-off.', X: ' Look at the expense accounts that moved most.', FF: ' Agree to the loan statement.', GG: ' Agree with the shareholder.' }[l.code] || '';
+      out.push({ kind: 'variance', wp: l.code, level: Math.abs(pct) >= 50 ? 'high' : 'normal', text: `${l.label} ${ch > 0 ? 'increased' : 'decreased'} ${Math.abs(pct)}% from the prior year (${money(pr)} to ${money(cur)}).${hint}` });
+    }
+    for (const r of tb) {
+      if (r.account === RE_OPEN || Math.abs(r.final) < 0.005) continue;
+      const nd = NORMAL_DEBIT[r.type];
+      if (nd !== undefined && (nd ? r.final < 0 : r.final > 0) && !/accum|amorti|depreci|allowance|drawing|dividend|contra|discount|return/i.test(r.name)) out.push({ kind: 'sign', wp: r.lead, level: 'normal', text: `${r.name} has a ${r.final < 0 ? 'credit' : 'debit'} balance of ${money(Math.abs(r.final))}, which is unusual for ${r.type.toLowerCase()} accounts. Check whether it should be reclassified.` });
+      const lsSide = BY_CODE[r.lead] && BY_CODE[r.lead].side;
+      if (lsSide && SIDE[r.type] && lsSide !== SIDE[r.type]) out.push({ kind: 'mapping', wp: r.lead, level: 'high', text: `${r.name} is a ${r.type.toLowerCase()} account but sits on ${BY_CODE[r.lead].label}, on the ${lsSide === 'bs' ? 'balance sheet' : 'income statement'}. Check its leadsheet.` });
+    }
+    const docs = new Set((attachments || []).filter(a => a.target === 'engagements' && a.targetId === (file && file.id)).map(a => a.wp));
+    for (const l of ls) if (l.side === 'bs' && Math.abs(l.final) >= 0.005 && !docs.has(l.code) && !['RE', 'SC'].includes(l.code)) out.push({ kind: 'docs', wp: l.code, level: 'normal', text: `${l.label} of ${money(Math.abs(l.final))} has no supporting document attached.` });
+    const cont = continuity(file, accounts, opts.activity);
+    if (cont.totals.cost.up >= minChange && !docs.has('G')) out.push({ kind: 'docs', wp: 'G', level: 'high', text: `Capital asset additions of ${money(cont.totals.cost.up)} have no supporting document attached.` });
+    for (const j of (file && file.ajes) || []) if (!j.explanation) out.push({ kind: 'aje', wp: j.wp || '', level: 'normal', text: `AJE ${j.num} (${j.memo || 'no description'}) has no explanation of where the figure comes from.` });
+    for (const g of checklist(file, accounts, attachments)) { const left = g.items.filter(i => !i.done); if (left.length) out.push({ kind: 'checklist', wp: '', level: 'normal', text: `${g.group}: ${left.length} item${left.length === 1 ? '' : 's'} not done (${left.map(i => i.label.toLowerCase()).join('; ')}).` }); }
+    return out;
+  }
+  /**
+   * Transactions in the year that look unusual, from the books' postings ({ entryId, date, account, name, amount, memo }):
+   * possible duplicates (same account, amount and date, or same amount and memo within 7 days) and single postings much
+   * bigger than the account's usual ones.
+   */
+  function unusual(postingsList, from, to) {
+    const out = [], list = postingsList.filter(p => p.date >= from && p.date <= to && Math.abs(p.amount) >= 0.005);
+    const seen = new Map();
+    for (const p of list) {
+      const k = `${p.account}|${Math.round(p.amount * 100)}`;
+      for (const q of seen.get(k) || []) {
+        const days = Math.abs((new Date(p.date) - new Date(q.date)) / 864e5);
+        if (q.entryId !== p.entryId && (days === 0 || (days <= 7 && p.memo && p.memo === q.memo))) { out.push({ kind: 'duplicate', entryId: p.entryId, other: q.entryId, text: `Possible duplicate: ${p.name} ${p.amount.toFixed(2)} on ${p.date} and ${q.date}${p.memo ? ` (${p.memo})` : ''}.` }); break; }
+      }
+      seen.set(k, [...(seen.get(k) || []), p]);
+    }
+    const byAcct = new Map();
+    for (const p of list) byAcct.set(p.account, [...(byAcct.get(p.account) || []), Math.abs(p.amount)]);
+    for (const p of list) {
+      const a = byAcct.get(p.account).slice().sort((x, y) => x - y);
+      if (a.length < 6) continue;
+      const med = a[Math.floor(a.length / 2)];
+      if (Math.abs(p.amount) >= 5 * med && Math.abs(p.amount) >= 1000) out.push({ kind: 'large', entryId: p.entryId, text: `${p.name}: ${Math.abs(p.amount).toFixed(2)} on ${p.date} is much larger than this account’s usual postings (about ${med.toFixed(2)}).${p.memo ? ` ${p.memo}` : ''}` });
+    }
+    return out.slice(0, 50);
+  }
+
+  return { analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
 });
