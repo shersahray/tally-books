@@ -2363,6 +2363,44 @@ function createApp(opts) {
       });
       return { ok: true, count: n, usd, rev: ctx.bump() };
     }],
+    /*
+     * Year-end files: AI suggestions for the accountant. 'review' gives review points from the leadsheets and the
+     * analysis Sumlora already did; 'note' drafts one financial statement note. Nothing is saved: the screen shows the
+     * suggestions as suggestions, and the accountant decides what to use. Firm staff with AI turned on only.
+     */
+    ['POST', /^\/engagements\/([A-Za-z0-9_-]+)\/ai$/, async (ctx, req, m) => {
+      notClient(ctx.user); needArea(ctx.user, 'accounting', 'view');
+      needFeature(ctx.id, 'yearEndFiles', ctx.store); needFirmAi(ctx.id);
+      if (!ai.key()) throw new ValidationError('AI isn’t set up on this server yet. The server’s administrator adds the AI key in Settings.', 409);
+      const f = ctx.store.get('engagements', m[1]);
+      if (!f) throw new ValidationError('That year-end file doesn’t exist.', 404);
+      const body = (await readJson(req)) || {};
+      const task = body.task === 'note' ? 'note' : 'review';
+      const accounts = ctx.store.list('accounts');
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      const ls = ENGAGE.leadsheets(f, accounts).map(l => ({ leadsheet: `${l.code} ${l.label}`, prior: l.prior, unadjusted: l.cur, adjustments: l.adj, final: l.final, accounts: l.lines.map(r => `${r.name}: prior ${r.prior}, final ${r.final}`).slice(0, 25) }));
+      const st = ENGAGE.statements(f, accounts);
+      const ctxData = { entity: (f.client && f.client.legalName) || company.name, industry: (f.client && f.client.industry) || company.industry || '', province: company.province, yearEnd: f.yearEnd, framework: f.framework, engagement: f.kind,
+        netIncome: st.is.net, revenue: st.is.revenue, leadsheets: ls, adjustingEntries: (f.ajes || []).map(j => ({ no: j.num, memo: j.memo, amount: j.lines.reduce((t, l) => t + l.debit, 0) })),
+        findings: ENGAGE.analyze(f, accounts, ctx.store.list('attachments')).filter(x => x.kind !== 'checklist').map(x => x.text).slice(0, 30), notes: (f.fsNotes || []).map(n => n.title) };
+      const rules = 'You assist a Canadian accountant preparing a year-end engagement (signs: balance sheet leadsheets are debit-positive; income and liabilities are negative in the figures). '
+        + 'You make suggestions only; the accountant decides. Never state a professional conclusion as settled, never say the statements are correct or complete. Be specific to the figures. Plain English, short. '
+        + (task === 'review'
+          ? 'Reply with JSON only: {"points":[{"wp":"<leadsheet code or empty>","priority":"high|normal|low","text":"<one review point or question for the preparer or the client>"}]} with at most 10 points, most important first.'
+          : `Reply with JSON only: {"title":"<note title>","text":"<draft note wording>"} drafting the financial statement note "${String(body.title || 'Significant accounting policies').slice(0, 120)}" for statements prepared under ${f.framework === 'ASNPO' ? 'ASNPO' : 'ASPE'}. Use only facts in the data; put [square brackets] where the accountant must supply a fact.`);
+      const model = ai.settings.model;
+      const req1 = { model, max_tokens: 1500, system: rules, messages: [{ role: 'user', content: 'Engagement data:\n' + JSON.stringify(ctxData) }] };
+      const r = await ai.reserve(model, Math.ceil(JSON.stringify(req1).length / 3), req1.max_tokens, () => ai.call(req1));
+      const usd = ai.record(r.usage || {}, 0, model);
+      chargeFirm(ctx.id, usd);
+      const text = (Array.isArray(r.content) ? r.content : []).filter(c => c.type === 'text').map(c => c.text).join('');
+      let out = {};
+      try { out = JSON.parse((text.match(/\{[\s\S]*\}/) || ['{}'])[0]); } catch { out = {}; }
+      ctx.store.audit(ctx.user, 'ai', { collection: 'engagements', id: f.id, summary: `year-end file ${f.yearEnd}: asked AI for ${task === 'note' ? 'a draft note' : 'review points'}` });
+      if (task === 'note') return { suggestion: true, title: String(out.title || body.title || '').slice(0, 150), text: String(out.text || '').slice(0, 8000) };
+      const codes = new Set([...ENGAGE.LEADSHEETS.map(l => l.code), ...ENGAGE.EXTRA_WPS.map(x => x.code)]);
+      return { suggestion: true, points: (Array.isArray(out.points) ? out.points : []).slice(0, 10).map(p => ({ wp: codes.has(String(p.wp || '').split(' ')[0]) ? String(p.wp).split(' ')[0] : '', priority: ['high', 'normal', 'low'].includes(p.priority) ? p.priority : 'normal', text: String(p.text || '').slice(0, 1000) })).filter(p => p.text) };
+    }],
     // The AI assistant add-on: answers questions about these books. Read-only; see assistant.js.
     ['POST', /^\/assistant$/, async (ctx, req) => {
       needArea(ctx.user, 'reports', 'view'); // it answers from the whole books
@@ -2498,6 +2536,16 @@ function createApp(opts) {
       if (eng) { needFeature(ctx.id, 'yearEndFiles', ctx.store); if (ENGAGE.statusOf(rec0.status) === 'final') throw new ValidationError('This year-end file is final. Reopen it to add documents.', 409); }
       const max = eng ? 300 : 20;
       if (ctx.store.list('attachments').filter(x => x.target === target && x.targetId === targetId).length >= max) throw new ValidationError(`That’s ${max} files on this ${eng ? 'year-end file' : 'transaction'} already.`, 409);
+      // A receipt from the Receipts inbox (photographed on a phone, emailed, or uploaded) attached to a working paper:
+      // its file is copied, so the receipt keeps its own and either can be removed later.
+      let fromReceipt = null;
+      if (eng && body.receiptId) {
+        needArea(ctx.user, 'expenses', 'view');
+        fromReceipt = ctx.store.get('receipts', String(body.receiptId));
+        const rf = fromReceipt && ctx.store.getFile(fromReceipt.fileId);
+        if (!rf) throw new ValidationError('That receipt isn’t here any more.', 404);
+        body.data = rf.data.toString('base64'); body.fileName = fromReceipt.fileName || rf.name || 'receipt';
+      }
       const data = Buffer.from(String(body.data || ''), 'base64');
       if (!data.length) throw new ValidationError('That file is empty.');
       if (data.length > 10 * 1024 * 1024) throw new ValidationError('That file is over 10 MB.', 413);
@@ -2509,7 +2557,7 @@ function createApp(opts) {
       ctx.store.transaction(() => {
         ctx.store.putFile(fileId, { mediaType, name, data });
         ctx.store.put('attachments', id, rec);
-        ctx.store.audit(ctx.user, 'add', { collection: 'attachments', id, summary: `attached ${name}`, after: rec });
+        ctx.store.audit(ctx.user, 'add', { collection: 'attachments', id, summary: eng ? `year-end file ${rec0.yearEnd}: attached ${name} to working paper ${rec.wp || '(file)'}${fromReceipt ? ' from Receipts' : ''}` : `attached ${name}`, after: rec });
       });
       return { ok: true, id, rev: ctx.bump() };
     }],

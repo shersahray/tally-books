@@ -798,6 +798,10 @@ function validateEngagement(data, store, id) {
   const accountIds = new Set(store.list('accounts').map(a => a.id));
   const snap = isObj(data.snapshot) ? data.snapshot : null;
   if (!snap || !Array.isArray(snap.lines)) throw new ValidationError('Take the trial balance snapshot first.');
+  // Where the trial balance came from: the books (it must balance, as the books do), or an import or typing it in,
+  // where accounts can be the file's own (ids starting "x:") and a difference is allowed until the file is final.
+  const source = ['import', 'manual'].includes(snap.source) ? snap.source : 'books';
+  const own = id => source !== 'books' && /^x:[A-Za-z0-9_-]{1,60}$/.test(id);
   if (snap.lines.length > ENG_MAX_LINES) throw new ValidationError('That trial balance has too many lines.');
   let tc = 0, tp = 0;
   const seen = new Set();
@@ -806,21 +810,23 @@ function validateEngagement(data, store, id) {
     const account = str(l.account, 120);
     if (!account || seen.has(account)) throw new ValidationError(`Trial balance line ${i + 1} has no account, or the account is there twice.`);
     seen.add(account);
-    if (account !== ENGAGE.RE_OPEN && !accountIds.has(account)) throw new ValidationError(`Trial balance line ${i + 1} uses an account that doesn’t exist.`);
+    if (account !== ENGAGE.RE_OPEN && !accountIds.has(account) && !own(account)) throw new ValidationError(`Trial balance line ${i + 1} uses an account that doesn’t exist.`);
     const cur = cents(l.cur || 0), prior = cents(l.prior || 0);
     if (!Number.isFinite(cur) || !Number.isFinite(prior) || Math.abs(cur) > 1e14 || Math.abs(prior) > 1e14) throw new ValidationError(`Trial balance line ${i + 1} has an invalid amount.`);
     tc += cur; tp += prior;
     return { account, code: str(l.code, 30).trim(), name: str(l.name, 200).trim() || 'Account', type: TYPES.includes(l.type) ? l.type : 'Expense',
       detail: str(l.detail, 30), gifi: /^\d{4}$/.test(String(l.gifi || '')) ? String(l.gifi) : '', cur: cur / 100, prior: prior / 100 };
   });
-  if (tc !== 0) throw new ValidationError(`The trial balance doesn’t add up to zero (off by ${(tc / 100).toFixed(2)}). Check for unbalanced entries in the books.`);
-  if (tp !== 0) throw new ValidationError(`The prior year’s trial balance doesn’t add up to zero (off by ${(tp / 100).toFixed(2)}).`);
+  if (tc !== 0 && (source === 'books' || status === 'final')) throw new ValidationError(`The trial balance doesn’t add up to zero (off by ${(tc / 100).toFixed(2)}).${source === 'books' ? ' Check for unbalanced entries in the books.' : ''}`);
+  if (tp !== 0 && (source === 'books' || status === 'final')) throw new ValidationError(`The prior year’s trial balance doesn’t add up to zero (off by ${(tp / 100).toFixed(2)}).`);
+  const lineIds = new Set(lines.map(l => l.account));
+  const usable = id => accountIds.has(id) || (own(id) && lineIds.has(id));
   const map = {};
-  if (isObj(data.map)) for (const [k, v] of Object.entries(data.map).slice(0, ENG_MAX_LINES)) if (ENGAGE.BY_CODE[v] && (accountIds.has(k) || k === ENGAGE.RE_OPEN)) map[k] = v;
+  if (isObj(data.map)) for (const [k, v] of Object.entries(data.map).slice(0, ENG_MAX_LINES)) if (ENGAGE.BY_CODE[v] && (usable(k) || k === ENGAGE.RE_OPEN)) map[k] = v;
   const ajes = (Array.isArray(data.ajes) ? data.ajes : []).slice(0, 1000).map((j, i) => {
     if (!isObj(j)) throw new ValidationError(`Adjusting entry ${i + 1} is not valid.`);
     const jl = (Array.isArray(j.lines) ? j.lines : []).slice(0, 200).filter(l => isObj(l) && (Number(l.debit) || Number(l.credit))).map(l => {
-      if (!accountIds.has(l.account)) throw new ValidationError(`Adjusting entry ${i + 1} uses an account that doesn’t exist.`);
+      if (!usable(l.account)) throw new ValidationError(`Adjusting entry ${i + 1} uses an account that doesn’t exist.`);
       const d = cents(l.debit || 0), c = cents(l.credit || 0);
       if (!Number.isFinite(d) || !Number.isFinite(c) || d < 0 || c < 0 || (d && c)) throw new ValidationError(`Adjusting entry ${i + 1} has an invalid amount.`);
       return { account: String(l.account), debit: d / 100, credit: c / 100, memo: str(l.memo, 200).trim() };
@@ -859,12 +865,15 @@ function validateEngagement(data, store, id) {
   return {
     yearEnd: data.yearEnd, rolledFrom: data.rolledFrom ? str(data.rolledFrom, 120) : '', kind, status, framework: ENGAGE.FRAMEWORKS[data.framework] ? data.framework : 'ASPE',
     client, team: { preparer: person(team.preparer), reviewer: person(team.reviewer) },
-    snapshot: { takenAt: Number(snap.takenAt) || Date.now(), by: str(snap.by, 120).trim(), priorEnd: isDate(snap.priorEnd) ? snap.priorEnd : '', lines },
+    snapshot: { takenAt: Number(snap.takenAt) || Date.now(), by: str(snap.by, 120).trim(), priorEnd: isDate(snap.priorEnd) ? snap.priorEnd : '', lines, source,
+      // The prior year from last year's final file (roll forward) rather than the books.
+      priorSource: snap.priorSource === 'file' ? 'file' : 'books', fileName: str(snap.fileName, 120) },
     map, ajes, wps, reviewNotes, checklist, notes: str(data.notes, 5000),
     signoffs: { prepared: engStamp(s.prepared), reviewed: engStamp(s.reviewed) },
     unlocks: (Array.isArray(data.unlocks) ? data.unlocks : []).slice(-200).filter(isObj).map(u => ({ ...engStamp(u), reason: str(u.reason, 1000).trim() })).filter(u => u.at),
     // The financial statements' words: the compilation engagement report and the notes, written by the accountant.
-    report: isObj(data.report) ? { text: str(data.report.text, 8000), signer: str(data.report.signer, 120).trim(), city: str(data.report.city, 80).trim(), date: isDate(data.report.date) ? data.report.date : '' } : { text: '', signer: '', city: '', date: '' },
+    includeCashFlow: !!data.includeCashFlow,
+    report: isObj(data.report) ? { custom: !!data.report.custom, template: str(data.report.template, 60), text: str(data.report.text, 8000), signer: str(data.report.signer, 120).trim(), city: str(data.report.city, 80).trim(), date: isDate(data.report.date) ? data.report.date : '' } : { text: '', signer: '', city: '', date: '' },
     fsNotes: (Array.isArray(data.fsNotes) ? data.fsNotes : []).slice(0, 30).filter(isObj).map(n => ({ title: str(n.title, 150).trim(), text: str(n.text, 8000) })).filter(n => n.title || n.text.trim()),
     finalAt: status === 'final' ? Number(data.finalAt) || Date.now() : 0, finalBy: status === 'final' ? str(data.finalBy, 120).trim() : '',
     ...(data.created ? { created: Number(data.created) || 0 } : {}),

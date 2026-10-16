@@ -22,6 +22,11 @@ function yfOverview(f,edit,pg){
   const tick=ok=>ok?'<span class="pos">✓</span>':'<span class="neg">•</span>';
   const met=(lbl,val,ok)=>`<div class="chip"><div class="lbl">${esc(T(lbl))}</div><div class="val">${tick(ok)} ${val}</div></div>`;
   let h=`<div class="chips">${met('Checklist complete',pg.pct+'%',pg.pct===100)}${met('Working papers reviewed',`${pg.wps-pg.unreviewed} / ${pg.wps}`,!pg.unreviewed)}${met('Open review notes',pg.openNotes,!pg.openNotes)}${met('Draft adjusting entries',pg.draftAjes,!pg.draftAjes)}${met('Working papers without documents',pg.noDocs,!pg.noDocs)}${met('Financial statements',pg.fsOk?T('Balance'):T('Don’t balance'),pg.fsOk)}</div>`;
+  // Prior year against last year's final file.
+  const prev=f.rolledFrom?yfFile(f.rolledFrom):S.engagements.filter(x=>x.yearEnd<f.yearEnd&&yfFinal(x)).sort((a,b)=>b.yearEnd.localeCompare(a.yearEnd))[0];
+  if(prev){const diff=TallyEngage.priorCheck(f,prev,S.accounts);
+    h+=diff.length?`<div class="banner"><span><b>${esc(T('The prior year doesn’t agree with last year’s final file'))}</b> (${diff.length}): ${diff.slice(0,4).map(x=>`${esc(x.name)} ${money(x.prior)} vs ${money(x.last)}`).join(' · ')}${diff.length>4?'…':''}. ${esc(T('Usually an adjusting entry last year that never reached the books.'))}</span>${edit?`<button class="btn sm" data-yfprioruse="${esc(prev.id)}">${esc(T('Use last year’s final figures'))}</button>`:''}</div>`
+      :`<div class="banner" style="background:var(--info-soft)"><span><span class="pos">✓</span> ${esc(T('The prior year agrees with last year’s final file'))} (${esc(fmtDate(prev.yearEnd))}).</span></div>`}
   const c=f.client||{},tm=f.team||{},so=f.signoffs||{};
   const row=(l,v)=>`<tr><td class="muted" style="width:38%">${esc(T(l))}</td><td>${v||'<span class="muted">—</span>'}</td></tr>`;
   h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">`;
@@ -72,6 +77,7 @@ function yfWpPanel(f,w,edit){
     h+=`<div class="pad muted" style="font-size:12px">${Object.values(TallyEngage.TICKS).map(t=>`<b>${esc(t.mark)}</b> ${esc(T(t.label))}`).join(' · ')}</div>`;
   }
   h+=`</div>`;
+  if(w.code==='G')h+=yfContinuityPanel(f,edit);
   // Notes, comments and cross-references
   h+=`<div class="panel" style="margin-bottom:16px"><div class="pad" style="display:grid;gap:10px">
     <label style="display:grid;gap:4px"><span class="flabel">${esc(T('Work done and conclusion'))}</span><textarea data-yfwpf="notes" rows="5" maxlength="20000" ${edit?'':'disabled'} placeholder="${esc(T('What was checked, what it was agreed to, and the conclusion'))}">${esc(wp.notes||'')}</textarea></label>
@@ -80,7 +86,7 @@ function yfWpPanel(f,w,edit){
     ${edit?'<div><button class="btn primary sm" data-yfwpsave>Save notes</button></div>':''}</div></div>`;
   // Documents
   const docs=yfDocs(f,w.code);
-  h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T('Supporting documents'))}</b>${edit?`<label class="btn sm">${esc(T('Attach…'))}<input type="file" data-yfupload hidden multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.docx"></label>`:''}</div><div class="tbl-wrap"><table><tbody>${docs.map(a=>`<tr><td><a href="${esc(coUrl('/api/files/'+a.fileId))}" target="_blank" rel="noopener">${esc(a.name)}</a></td><td class="muted">${esc(a.uploadedByName||'')} · ${esc(fmtDate(iso(new Date(a.uploadedAt))))}</td><td class="n">${edit?`<button class="btn sm" data-yfdocdel="${esc(a.id)}">Remove</button>`:''}</td></tr>`).join('')||emptyRow(3,'No documents yet','Attach bank statements, listings, loan statements, invoices or minutes (PDF, photos, Excel or Word, up to 10 MB each).')}</tbody></table></div></div>`;
+  h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T('Supporting documents'))}</b>${edit?`<label class="btn sm">${esc(T('Attach…'))}<input type="file" data-yfupload hidden multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.docx"></label>${S.receipts.length?` <button class="btn sm" data-yfrcpick>${esc(T('From Receipts…'))}</button>`:''}`:''}</div><div class="tbl-wrap"><table><tbody>${docs.map(a=>`<tr><td><a href="${esc(coUrl('/api/files/'+a.fileId))}" target="_blank" rel="noopener">${esc(a.name)}</a></td><td class="muted">${esc(a.uploadedByName||'')} · ${esc(fmtDate(iso(new Date(a.uploadedAt))))}</td><td class="n">${edit?`<button class="btn sm" data-yfdocdel="${esc(a.id)}">Remove</button>`:''}</td></tr>`).join('')||emptyRow(3,'No documents yet','Attach bank statements, listings, loan statements, invoices or minutes (PDF, photos, Excel or Word, up to 10 MB each).')}</tbody></table></div></div>`;
   // Sign-offs and review notes on this working paper
   const sb=(k,l)=>wp[k]?`<span class="pill paid">${esc(T(l))}</span> <span class="muted">${yfStamp(wp[k])}</span>${edit?` <button class="btn sm" data-yfwpsign="${k}" data-off="1">Remove</button>`:''}`:edit?`<button class="btn sm" data-yfwpsign="${k}">${esc(T('Sign off as '+l.toLowerCase()))}</button>`:`<span class="muted">${esc(T('Not signed off'))}</span>`;
   h+=`<div class="panel" style="margin-bottom:16px"><div class="tbl-wrap"><table><tbody><tr><td style="width:38%">${esc(T('Prepared by'))}</td><td>${sb('prepared','Prepared')}</td></tr><tr><td>${esc(T('Reviewed by'))}</td><td>${sb('reviewed','Reviewed')}</td></tr></tbody></table></div></div>`;
@@ -144,12 +150,14 @@ function yfRecurringPanel(f,edit){
 /* ---------- actions ---------- */
 async function yfReviewClick(e,t,d,f){
   if(t.hasAttribute('data-yfdetails')){yfDetailsForm(f);return true}
+  if(t.hasAttribute('data-yfcontnote')){const n=yfContinuityNote(f);const notes=(yfNotes(f)).filter(x=>x.title!==n.title).concat(n);if(await yfSave(f,{fsNotes:notes}))toast('Capital assets note added; edit it in Financial statements → Edit the report and notes');return true}
   if(d.yfsign){const so={...(f.signoffs||{}),[d.yfsign]:d.off?null:YF_SIGN};await yfSave(f,{signoffs:so});return true}
   if(d.yfwp){YF.wp=d.yfwp;renderMain();return true}
   if(d.yfgowp){YF.tab='wp';YF.wp=d.yfgowp;renderMain();return true}
   const wpOf=()=>({...((f.wps||{})[YF.wp]||{})});
   if(t.hasAttribute('data-yfwpsave')){const w=wpOf();for(const x of $$('[data-yfwpf]'))w[x.dataset.yfwpf]=x.value;if(await yfSave(f,{wps:{...(f.wps||{}),[YF.wp]:w}}))toast('Saved');return true}
   if(d.yfwpsign){const w=wpOf();w[d.yfwpsign]=d.off?null:YF_SIGN;if(!d.off&&(!w.status||w.status==='notstarted'))w.status=d.yfwpsign==='reviewed'?'done':'progress';await yfSave(f,{wps:{...(f.wps||{}),[YF.wp]:w}});return true}
+  if(t.hasAttribute('data-yfrcpick')){yfReceiptPicker(f);return true}
   if(d.yfdocdel){const a=S.attachments.find(x=>x.id===d.yfdocdel);if(a&&await confirmBox(`Remove ${a.name}?`,'The document is deleted from this year-end file.','Remove'))await del('attachments',a.id);return true}
   if(d.yfnote){yfNoteForm(f,d.yfnote==='new'?null:(f.reviewNotes||[]).find(x=>x.id===d.yfnote),d.wp||'');return true}
   if(d.yfrecur){const prev=S.engagements.find(x=>(x.ajes||[]).some(j=>j.id===d.yfrecur));const j=prev&&prev.ajes.find(x=>x.id===d.yfrecur);if(!j)return true;
@@ -165,5 +173,82 @@ function yfReviewBind(m){
   const st=$('[data-yfwpstatus]',m);if(st)st.onchange=()=>wpSave({status:st.value});
   $$('[data-yftick]',m).forEach(s=>s.onchange=()=>{const ticks={...(((f.wps||{})[YF.wp]||{}).ticks||{})};if(s.value)ticks[s.dataset.yftick]=s.value;else delete ticks[s.dataset.yftick];wpSave({ticks})});
   $$('[data-yfcheck]',m).forEach(c=>c.onchange=()=>{const cl={...(f.checklist||{})};if(c.checked)cl[c.dataset.yfcheck]=YF_SIGN;else delete cl[c.dataset.yfcheck];yfSave(f,{checklist:cl})});
+  const cfb=$('[data-yfcf]',m);if(cfb)cfb.onchange=()=>yfSave(f,{includeCashFlow:cfb.checked});
   const up=$('[data-yfupload]',m);if(up)up.onchange=()=>{const files=[...up.files];up.value='';if(files.length)yfUpload(f,files)};
+}
+
+/* ---------- capital assets continuity ---------- */
+/** The year's debits and credits on each account from the books, without entries posted from this file (those are its AJEs). */
+function yfActivity(f){
+  if(f.snapshot.source&&f.snapshot.source!=='books')return null;
+  const from=fyStartOf(f.yearEnd),to=f.yearEnd,skip=new Set((f.ajes||[]).map(j=>j.entryId).filter(Boolean)),out={};
+  for(const p of postings()){if(p.date<from||p.date>to||skip.has(p.e.id))continue;const a=out[p.account]=out[p.account]||{debits:0,credits:0};a.debits=r2(a.debits+p.debit);a.credits=r2(a.credits+p.credit)}
+  return out;
+}
+function yfContinuityPanel(f,edit){
+  const c=TallyEngage.continuity(f,S.accounts,yfActivity(f));
+  if(!c.cost.length&&!c.accum.length)return'';
+  const cell=v=>Math.abs(v)>=0.005?money(v):'';
+  const rows=(list,upL,downL,tot,head)=>`<tr class="sec"><td colspan="6">${esc(T(head))}</td></tr>${list.map(r=>`<tr><td>${yfName(r)}</td><td class="n">${money(r.open)}</td><td class="n">${cell(r.up)}</td><td class="n">${cell(r.down)}</td><td class="n">${cell(r.other)}</td><td class="n">${money(r.close)}</td></tr>`).join('')}<tr class="tot"><td>${esc(T('Total'))}</td><td class="n">${money(tot.open)}</td><td class="n">${cell(tot.up)}</td><td class="n">${cell(tot.down)}</td><td class="n">${cell(tot.other)}</td><td class="n">${money(tot.close)}</td></tr>`;
+  return `<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T('Continuity schedule'))}</b>${edit?'<button class="btn sm" data-yfcontnote>'+esc(T('Add to the notes'))+'</button>':''}</div><div class="tbl-wrap"><table><thead><tr><th></th><th class="n">${esc(T('Opening'))}</th><th class="n">${esc(T('Additions / amortization'))}</th><th class="n">${esc(T('Disposals'))}</th><th class="n">${esc(T('Other'))}</th><th class="n">${esc(T('Closing'))}</th></tr></thead><tbody>
+    ${rows(c.cost,'Additions','Disposals',c.totals.cost,'Cost')}${c.accum.length?rows(c.accum,'Amortization','Disposals',c.totals.accum,'Accumulated amortization'):''}
+    <tr class="grand"><td>${esc(T('Net book value'))}</td><td class="n">${money(c.totals.nbv.open)}</td><td></td><td></td><td></td><td class="n">${money(c.totals.nbv.close)}</td></tr></tbody></table></div><div class="pad muted" style="font-size:12px">${esc(T(yfActivity(f)?'Additions and disposals are the year’s debits and credits in the books, plus this file’s adjusting entries.':'From an imported trial balance, each account’s change for the year is shown as an addition or disposal.'))}</div></div>`;
+}
+/** A capital assets note from the continuity schedule. */
+function yfContinuityNote(f){
+  const c=TallyEngage.continuity(f,S.accounts,yfActivity(f)),t=c.totals,ye=fmtDate(f.yearEnd),pe=fmtDate(yfPriorEnd(f));
+  const lines=c.cost.map(r=>{const a=c.accum.find(x=>x.name.toLowerCase().includes(r.name.toLowerCase().split(' ')[0]));return `${r.name}: cost ${money(r.close)}${a?`, accumulated amortization ${money(a.close)}, net ${money(r2(r.close-a.close))}`:''}`});
+  return{title:'Capital assets',text:`${lines.join('\n')}\n\nNet book value: ${money(t.nbv.close)} at ${ye} (${money(t.nbv.open)} at ${pe}). Additions in the year: ${money(t.cost.up)}. Amortization for the year: ${money(t.accum.up)}.`};
+}
+
+/* ---------- analysis and AI suggestions ---------- */
+const YF_AI={points:null,busy:false,for:''};
+/** Postings in the books for the unusual-transaction check. */
+function yfPostingsForAnalysis(){
+  return postings().map(p=>({entryId:p.e.id,date:p.date,account:p.account,name:(acct(p.account)||{}).name||'',amount:r2(p.debit-p.credit),memo:p.memo||p.e.memo||''}));
+}
+function yfAnalysis(f,edit){
+  const fromBooks=!f.snapshot.source||f.snapshot.source==='books';
+  const finds=TallyEngage.analyze(f,S.accounts,S.attachments,{activity:yfActivity(f)});
+  const odd=fromBooks?TallyEngage.unusual(yfPostingsForAnalysis(),fyStartOf(f.yearEnd),f.yearEnd):[];
+  const KIND={variance:'Changes from last year',sign:'Balances on the unusual side',mapping:'Possible classification problems',docs:'Missing supporting documents',aje:'Adjusting entries',checklist:'Not finished yet'};
+  const raise=(text,wp,pri)=>edit?`<button class="btn sm" data-yfraise="${esc(text)}" data-wp="${esc(wp||'')}" data-pri="${esc(pri||'normal')}">${esc(T('Raise a review note'))}</button>`:'';
+  let h=`<div class="banner" style="background:var(--info-soft)"><span>${esc(T('These are pointers for your review, worked out from the figures. They’re not conclusions; you decide what matters.'))}</span></div>`;
+  for(const [k,label] of Object.entries(KIND)){const list=finds.filter(x=>x.kind===k);if(!list.length)continue;
+    h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T(label))}</b><span class="muted">${list.length}</span></div><div class="tbl-wrap"><table><tbody>${list.map(x=>`<tr><td style="width:40px">${x.wp?`<button class="link" data-yfgowp="${esc(x.wp)}">${esc(x.wp)}</button>`:''}</td><td>${x.level==='high'?'<span class="pill overdue">'+esc(T('High'))+'</span> ':''}${esc(x.text)}</td><td class="n">${k==='checklist'?'':raise(x.text,x.wp,x.level)}</td></tr>`).join('')}</tbody></table></div></div>`}
+  if(fromBooks)h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T('Unusual transactions in the year'))}</b><span class="muted">${odd.length}</span></div><div class="tbl-wrap"><table><tbody>${odd.map(x=>`<tr><td>${esc(x.text)}</td><td class="n" style="white-space:nowrap"><button class="btn sm" data-entry="${esc(x.entryId)}">${esc(T('Open'))}</button>${raise(x.text,'','normal')}</td></tr>`).join('')||emptyRow(2,'Nothing unusual found','No possible duplicates, and no postings far bigger than usual for their account.')}</tbody></table></div></div>`;
+  // AI
+  const aiOk=feat('ai');
+  h+=`<div class="panel"><div class="toolbar"><b class="grow">${esc(T('AI review points'))}</b>${aiOk?`<button class="btn primary sm" data-yfai ${YF_AI.busy?'disabled':''}>${esc(T(YF_AI.busy?'Thinking…':'Ask AI'))}</button>`:inPlanPill('ai')}</div>`;
+  if(YF_AI.points&&YF_AI.for===f.id)h+=`<div class="pad muted" style="font-size:12.5px">${esc(T('AI suggestions – check each one before using it. Nothing has been changed in the file.'))}</div><div class="tbl-wrap"><table><tbody>${YF_AI.points.map(p=>`<tr><td style="width:40px">${p.wp?`<button class="link" data-yfgowp="${esc(p.wp)}">${esc(p.wp)}</button>`:''}</td><td>${p.priority==='high'?'<span class="pill overdue">'+esc(T('High'))+'</span> ':''}${esc(p.text)}</td><td class="n">${raise(p.text,p.wp,p.priority)}</td></tr>`).join('')||emptyRow(3,'No suggestions','The AI had nothing to add.')}</tbody></table></div>`;
+  else h+=`<div class="pad muted">${esc(T('AI reads the leadsheets, adjusting entries and the findings above, and suggests questions to ask and things to check. It only suggests; it never changes the file.'))}</div>`;
+  return h+`</div>`;
+}
+async function yfAiReview(f){
+  YF_AI.busy=true;renderMain();
+  try{const r=await api('POST',`/api/engagements/${encodeURIComponent(f.id)}/ai`,{task:'review'});YF_AI.points=r.points||[];YF_AI.for=f.id}
+  catch(err){toast(err.message,true)}
+  YF_AI.busy=false;renderMain();
+}
+/** An AI draft for one note, put into the notes form for the accountant to edit; nothing is saved until they save. */
+async function yfAiNote(f,title){
+  try{const r=await api('POST',`/api/engagements/${encodeURIComponent(f.id)}/ai`,{task:'note',title});return r.text||''}
+  catch(err){toast(err.message,true);return''}
+}
+async function yfAnalysisClick(e,t,d,f){
+  if(t.hasAttribute('data-yfai')){await yfAiReview(f);return true}
+  if(d.yfraise!==undefined){const num=Math.max(0,...(f.reviewNotes||[]).map(x=>x.num))+1,prep=f.team&&f.team.preparer;
+    const n={id:uid(),num,wp:d.wp||'',text:d.yfraise,assignee:prep?prep.id:'',assigneeName:prep?prep.name:'',priority:d.pri||'normal',status:'open',resolution:''};
+    if(await yfSave(f,{reviewNotes:(f.reviewNotes||[]).concat(n)}))toast(`Review note ${num} raised${prep?' for '+prep.name:''}`);return true}
+  return false;
+}
+
+/* ---------- receipts (phone photos, emailed receipts) on working papers ---------- */
+function yfReceiptPicker(f){
+  const list=S.receipts.slice().sort((a,b)=>(b.uploadedAt||0)-(a.uploadedAt||0)).slice(0,200);
+  const m=openModal('Attach from Receipts',`<div class="muted" style="font-size:13px;margin-bottom:8px">${esc(T('Receipts photographed in the Sumlora app, emailed in, or uploaded. A copy goes on this working paper; the receipt stays where it is.'))}</div><div class="tbl-wrap" style="max-height:420px;overflow:auto"><table><tbody>${list.map(r=>{const d=r.draft||{};return `<tr><td><input type="checkbox" data-rcp="${esc(r.id)}" aria-label="Choose"></td><td>${esc(r.fileName||'Receipt')}<div class="muted" style="font-size:12px">${esc([d.vendor,d.date&&fmtDate(d.date),d.total!=null&&d.total!==''?money(+d.total):'',r.uploadedByName].filter(Boolean).join(' · '))}</div></td><td class="muted">${esc(fmtDate(iso(new Date(r.uploadedAt||Date.now()))))}</td></tr>`}).join('')}</tbody></table></div>`,
+    '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Attach</button>','wide');
+  m.onsubmit=async e=>{e.preventDefault();const ids=$$('[data-rcp]',m).filter(x=>x.checked).map(x=>x.dataset.rcp);if(!ids.length)return m.err('Choose at least one receipt.');
+    let n=0;for(const id of ids){try{await api('POST','/api/attachments',{target:'engagements',targetId:f.id,wp:YF.wp,receiptId:id});n++}catch(err){m.err(err.message)}}
+    if(n){closeModal();await load();toast(n===1?'Receipt attached':`${n} receipts attached`)}};
 }
