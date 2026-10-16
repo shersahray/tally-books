@@ -432,9 +432,11 @@ function userForm(u){
 function firmPlanCell(f){
   const L=f.legacy&&TallyPlans.LEGACY[f.legacy];
   const sel=`<select data-firmplan="${f.id}" aria-label="Plan">${Object.entries(TallyPlans.PLANS).map(([k,p])=>`<option value="${k}" ${TallyPlans.planOf(f.plan)===k?'selected':''}>${esc(T(p.label))}</option>`).join('')}</select>`;
-  if(!L)return sel;
+  // Coming-soon features this firm can try early (the administrator's own firm, to test on real books).
+  const ea=TallyPlans.EARLY.filter(k=>TallyPlans.comingSoon(k)).map(k=>`<label class="check" style="font-size:12.5px;margin-top:4px"><input type="checkbox" data-firmearly="${f.id}" data-key="${k}" ${(f.early||[]).includes(k)?'checked':''}> <span>${esc(T('Try early'))}: ${esc(T(TallyPlans.FEATURES[k].label))}</span></label>`).join('');
+  if(!L)return sel+ea;
   return `${sel}<div style="margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="pill quiet" title="${esc(T('Keeps its old price until you change it'))}">${esc(T(`Old price: ${L.label}`))}</span><button class="btn sm ghost" data-firmlegacy="${f.id}">${esc(T('Use plan price'))}</button></div>
-    ${f.payrollCompanies?`<label class="check" style="font-size:12.5px;margin-top:4px"><input type="checkbox" data-firmbillpay="${f.id}" ${f.billPayroll?'checked':''}> <span>${esc(T('Bill payroll'))}</span> <span class="muted">(${f.payrollCompanies})</span></label>`:''}`;
+    ${f.payrollCompanies?`<label class="check" style="font-size:12.5px;margin-top:4px"><input type="checkbox" data-firmbillpay="${f.id}" ${f.billPayroll?'checked':''}> <span>${esc(T('Bill payroll'))}</span> <span class="muted">(${f.payrollCompanies})</span></label>`:''}${ea}`;
 }
 
 /* ---------- custom roles (owners, on a plan with custom roles) ----------
@@ -538,6 +540,8 @@ function bindFirms(m){
     if(t.dataset.firmplan){const f=FIRMS.firms.find(x=>x.id===t.dataset.firmplan);
       if(f.legacy&&!await confirmBox('Change this firm’s plan?',`${f.name} ${T('keeps its old price until its plan changes. On the new plan, it pays that plan’s price.')}`,'Change plan')){t.value=f.plan;return}
       try{await api('PUT','/api/firms/'+encodeURIComponent(f.id),{plan:t.value});f.plan=t.value;f.legacy='';if(f.id===ME.firmId){ME.firmPlan=t.value}toast(`${f.name}: ${T(TallyPlans.PLANS[t.value].label)}`);renderMain()}catch(ex){t.value=f.plan;toast(ex.message,true)}return}
+    if(t.dataset.firmearly){const f=FIRMS.firms.find(x=>x.id===t.dataset.firmearly),k=t.dataset.key,list=new Set(f.early||[]);t.checked?list.add(k):list.delete(k);
+      try{await api('PUT','/api/firms/'+encodeURIComponent(f.id),{early:[...list]});f.early=[...list];toast(`${f.name}: ${T(TallyPlans.FEATURES[k].label)} ${t.checked?T('on early'):T('off until launch')}`);if(f.id===ME.firmId){ME.firmEarly=[...list];if(typeof renderNav==='function')renderNav();renderMain()}}catch(ex){t.checked=!t.checked;toast(ex.message,true)}return}
     if(t.dataset.firmbillpay){const f=FIRMS.firms.find(x=>x.id===t.dataset.firmbillpay);try{await api('PUT','/api/firms/'+encodeURIComponent(f.id),{billPayroll:t.checked});f.billPayroll=t.checked;toast(t.checked?`${f.name}: ${T('payroll is billed')}`:`${f.name}: ${T('payroll isn’t billed')}`)}catch(ex){t.checked=!t.checked;toast(ex.message,true)}return}
     if(t.id==='fmSignups'){try{await api('PUT','/api/firms/settings',{signups:t.value});await showFirms();toast('Saved')}catch(ex){toast(ex.message,true)}return}
     if(t.dataset.firmcap){try{await api('PUT','/api/firms/'+encodeURIComponent(t.dataset.firmcap),{aiCapUsd:+t.value});toast('Monthly AI limit saved')}catch(ex){toast(ex.message,true)}return}

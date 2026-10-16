@@ -279,6 +279,12 @@ class Auth {
     }
     // Firms with an old price aren't billed for the Payroll add-on until the administrator says so.
     if (patch.billPayroll !== undefined) f.billPayroll = !!patch.billPayroll;
+    // Coming-soon features this firm can try early (plans.js EARLY).
+    if (patch.early !== undefined) {
+      if (!Array.isArray(patch.early) || patch.early.some(k => !PLANS.EARLY.includes(k))) throw new AuthError('That feature can’t be tried early.', 400);
+      f.early = [...new Set(patch.early)];
+      if (!f.early.length) delete f.early;
+    }
     if (patch.aiCapUsd !== undefined) {
       const c = Number(patch.aiCapUsd);
       if (!Number.isFinite(c) || c < 0 || c > 10000) throw new AuthError('The monthly AI limit must be between $0 and $10,000.', 400);
@@ -323,7 +329,7 @@ class Auth {
     const cr = this.customRoleOf(u);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
       customRole: cr ? cr.id : '', roleName: cr ? cr.name : '', perms: cr ? { ...cr.perms } : null, approveBills: !!(cr && cr.approveBills),
-      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: PLANS.planOf((this.planOverride && this.planOverride()) || (f ? f.plan : 'thrive')), platformAdmin: !!u.platformAdmin,
+      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: PLANS.planOf((this.planOverride && this.planOverride()) || (f ? f.plan : 'thrive')), firmEarly: (f && f.early) || [], platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '', terms: u.terms ? { v: u.terms.v, at: u.terms.at } : null,
       locked: this.isLocked(u.username) };

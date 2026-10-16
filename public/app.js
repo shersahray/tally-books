@@ -41,7 +41,7 @@ COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
 /** Is a plan feature on for the open company (in the firm's plan or an add-on such as Payroll, and not switched off in its settings)? See plans.js. */
-const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'thrive',S.company&&S.company.features,k,S.featureAddons);
+const feat=k=>TallyPlans.featureOn(typeof ME!=='undefined'&&ME?ME.firmPlan:'thrive',S.company&&S.company.features,k,S.featureAddons,typeof ME!=='undefined'&&ME?ME.firmEarly:[]);
 /** "In the Grow plan" for a feature the firm's plan doesn't have (translated as a whole). */
 const inPlanPill=k=>`<span class="pill quiet">${esc(T(`In the ${TallyPlans.PLANS[TallyPlans.planFor(k)].label} plan`))}</span>`;
 /* Custom roles (roles.js): can the signed-in person see (or, with 'edit', change) this area of the books?
@@ -467,7 +467,7 @@ const ORG_TYPES=[['business','Business'],['npo','Non-profit organization'],['cha
 function featuresPanel(){
   if(!ME||ME.role==='client')return '';
   const plan=TallyPlans.planOf(ME.firmPlan),P=TallyPlans.PLANS[plan],F=TallyPlans.FEATURES,off=(S.company.features)||{},add=S.featureAddons||{};
-  const rows=Object.entries(F).filter(([k,f])=>!f.firm).map(([k,f])=>{const has=TallyPlans.hasFeature(plan,k,add),viaAddon=has&&!P.features.includes(k);
+  const rows=Object.entries(F).filter(([k,f])=>!f.firm).map(([k,f])=>{const has=TallyPlans.hasFeature(plan,k,add,ME.firmEarly),viaAddon=has&&!P.features.includes(k)&&!(ME.firmEarly||[]).includes(k);
     return `<label class="check" style="align-items:flex-start"><input type="checkbox" data-feat="${k}" ${has&&off[k]!==false?'checked':''} ${has&&!ME.readOnly?'':'disabled'}> <span><b>${esc(T(f.label))}</b>${viaAddon?` <span class="pill paid">${esc(T('Add-on'))}</span>`:has?'':f.comingSoon?` <span class="pill quiet">${esc(T('Coming soon'))}</span>`:' '+inPlanPill(k)}<br><span class="muted" style="font-size:12.5px">${esc(T(f.desc))}</span></span></label>`}).join('');
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Features</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="muted" style="font-size:13px"><span>Your firm’s plan:</span> <b>${esc(T(P.label))}</b>. <span>Everyday bookkeeping, invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, the standard reports and the CaseWare export are always included. Untick what this client doesn’t use; it disappears from the menu and its records are kept.</span></div>

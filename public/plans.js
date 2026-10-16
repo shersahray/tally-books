@@ -50,7 +50,14 @@
     customRoles: { label: 'Custom roles', desc: 'Your own roles for staff, with None, View or Edit for sales, expenses, banking, payroll, reports, accounting, sales tax and settings', firm: true },
   };
   const GROW = ['bankFeeds', 'ai', 'advancedReports', 'projects', 'fixedAssets', 'specialTax', 'budgets'];
-  const THRIVE = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'workflows', 'payroll', 'yearEndFiles'].filter(k => !soon(k));
+  const THRIVE_ALL = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'workflows', 'payroll', 'yearEndFiles'];
+  const THRIVE = THRIVE_ALL.filter(k => !soon(k));
+  /*
+   * Early access: the server's administrator can let a firm try a coming-soon feature before it launches (its own firm,
+   * to test on real books). Only features listed here can be tried early; payroll can't.
+   */
+  const EARLY = ['yearEndFiles'];
+  const early = (key, list) => EARLY.includes(key) && Array.isArray(list) && list.includes(key);
   // cents: the default monthly price per company (the server's administrator can change it in Settings).
   const PLANS = {
     seed: { label: 'Seed', fr: 'Semis', cents: 1800, features: [], blurb: 'Everyday bookkeeping: invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, reports and CaseWare export.' },
@@ -91,9 +98,9 @@
   /** Does the firm's plan include this feature? */
   const inPlan = (plan, key) => PLANS[planOf(plan)].features.includes(key);
   /** Does the plan, or an add-on on this company ({ payroll: true }), give this feature? */
-  const hasFeature = (plan, key, addons) => !soon(key) && (inPlan(plan, key) || Object.entries(ADDONS).some(([k, a]) => a.feature === key && !!(addons && addons[k])));
+  const hasFeature = (plan, key, addons, earlyList) => (early(key, earlyList) ? THRIVE_ALL.includes(key) : !soon(key) && (inPlan(plan, key) || Object.entries(ADDONS).some(([k, a]) => a.feature === key && !!(addons && addons[k]))));
   /** Is the feature on for this company: in the plan (or an add-on), and not switched off in the company's settings? */
-  const featureOn = (plan, companyFeatures, key, addons) => hasFeature(plan, key, addons) && !(companyFeatures && companyFeatures[key] === false);
+  const featureOn = (plan, companyFeatures, key, addons, earlyList) => hasFeature(plan, key, addons, earlyList) && !(companyFeatures && companyFeatures[key] === false);
   /** Does the plan already include this add-on's base fee (payroll on Thrive)? */
   const addonIncluded = (plan, key) => !!(ADDONS[key] && (ADDONS[key].includedIn || []).includes(planOf(plan)));
   /**
@@ -123,5 +130,5 @@
   /** Is this feature built but not offered yet ("Coming soon")? */
   const comingSoon = soon;
 
-  return { COMING_SOON, comingSoon, FEATURES, PLANS, LEGACY, ADDONS, UNITS, ADDON_FOR_INDUSTRY, planOf, planFor, inPlan, hasFeature, featureOn, addonIncluded, employeesPaid, prevMonth, migratePlan, priceKey, planLabel };
+  return { EARLY, COMING_SOON, comingSoon, FEATURES, PLANS, LEGACY, ADDONS, UNITS, ADDON_FOR_INDUSTRY, planOf, planFor, inPlan, hasFeature, featureOn, addonIncluded, employeesPaid, prevMonth, migratePlan, priceKey, planLabel };
 });
