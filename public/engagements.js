@@ -76,6 +76,8 @@ function vYearFiles(){
 function yfDetail(f){
   const fin=yfFinal(f),edit=yfEdit()&&!fin,tb=TallyEngage.workingTb(f,S.accounts),st=TallyEngage.statusOf(f.status);
   yfAutoSync(f);
+  // A file started from the Year-ends screen gets Sumlora's reports the first time it's opened here.
+  if(f.snapshot.bulk&&!fin&&yfEdit()&&!YF_SYNC.has('rep:'+f.id)&&!S.attachments.some(a=>a.target==='engagements'&&a.targetId===f.id&&/\(Sumlora\)\.pdf$/.test(a.name))){YF_SYNC.add('rep:'+f.id);setTimeout(()=>yfAttachReports(f,true),0)}
   const ch=fin?yfChanged(f):[];
   const unposted=(f.ajes||[]).filter(j=>!j.entryId||!S.entries.some(e=>e.id===j.entryId)).length;
   const next={progress:['ready','Ready for review'],ready:['reviewing','Start the review'],reviewing:['progress','Back to the preparer']}[st];
@@ -89,9 +91,9 @@ function yfDetail(f){
   h+=`<div class="chips"><div class="chip"><div class="lbl">${esc(T('Net income before adjustments'))}</div><div class="val">${mcell(ni('cur'))}</div></div><div class="chip"><div class="lbl">${esc(T('Adjustments'))}</div><div class="val">${mcell(r2(ni('final')-ni('cur')))}</div></div><div class="chip"><div class="lbl">${esc(T('Net income, adjusted'))}</div><div class="val">${mcell(ni('final'))}</div></div><div class="chip"><div class="lbl">${esc(T('Prior year'))}</div><div class="val">${mcell(ni('prior'))}</div></div></div>`;
   const pg=TallyEngage.progress(f,S.accounts,S.attachments);
   // [key, label, a count shown beside it]
-  const tabs=[['ov','Overview',pg.pct+'%'],['tb','Trial balance'],['ls','Leadsheets'],['wp','Working papers',pg.unreviewed||''],['aje','Adjusting entries',unposted||''],['rn','Review notes',pg.openNotes||''],['an','Analysis'],['fs','Financial statements'],['gifi','GIFI'],['cl','Checklist']];
+  const tabs=[['ov','Overview',pg.pct+'%'],['tb','Trial balance'],['ls','Leadsheets'],['wp','Working papers',pg.unreviewed||''],['aje','Adjusting entries',unposted||''],['rn','Review notes',pg.openNotes||''],['rq','Client requests',S.requests.filter(r=>r.engagementId===f.id&&r.status==='sent').length||''],['an','Analysis'],['time','Time'],['fs','Financial statements'],['gifi','GIFI'],['cl','Checklist']];
   h+=`<div class="tabs" role="tablist">${tabs.map(([k,v,n])=>`<button role="tab" data-yftab="${k}" aria-selected="${YF.tab===k}"><span>${esc(T(v))}</span>${n!==undefined&&n!==''?` <span class="count${k==='ov'?' info':''}">${esc(String(n))}</span>`:''}</button>`).join('')}</div>`;
-  const V={ov:()=>yfOverview(f,edit,pg),ls:()=>yfLeadsheets(f),wp:()=>yfWorkpapers(f,edit),aje:()=>yfAjes(f,edit),rn:()=>yfReviewNotes(f,edit),an:()=>yfAnalysis(f,edit),fs:()=>yfStatements(f,edit),gifi:()=>yfGifi(f),cl:()=>yfChecklist(f,edit)}[YF.tab];
+  const V={ov:()=>yfOverview(f,edit,pg),ls:()=>yfLeadsheets(f),wp:()=>yfWorkpapers(f,edit),aje:()=>yfAjes(f,edit),rn:()=>yfReviewNotes(f,edit),rq:()=>yfRequests(f,edit),an:()=>yfAnalysis(f,edit),time:()=>yfTime(f,edit||(yfEdit()&&yfFinal(f))),fs:()=>yfStatements(f,edit),gifi:()=>yfGifi(f),cl:()=>yfChecklist(f,edit)}[YF.tab];
   return h+(V?V():yfTb(f,tb,edit));
 }
 
@@ -150,6 +152,8 @@ async function yfCreate(ye,kind='compilation',framework=yfDefaultFw(),from=null,
     client:yfClientDefaults(prev),team:{preparer:me,reviewer:prev&&prev.team?prev.team.reviewer:null},fsNotes:prev?prev.fsNotes||[]:[],report:prev&&prev.report?{...prev.report,date:''}:undefined,
     wps:{},reviewNotes:[],checklist:{},signoffs:{},rolledFrom:prev?prev.id:'',includeCashFlow:prev?!!prev.includeCashFlow:false};
   if(!await put('engagements',id,data))return'Couldn’t save the year-end file.';
+  // Sumlora's own reports (A/R and A/P listings, bank reconciliation, sales tax returns) go on their working papers.
+  if(snapshot.source==='books'){const nf=yfFile(id);if(nf)await yfAttachReports(nf,true)}
   YF.open=id;YF.tab=own&&own.source==='manual'?'tb':'wp';YF.wp='';renderMain();
   toast((own&&own.source==='manual'?'Type the trial balance in, then save it':`Trial balance brought in: ${snapshot.lines.length} accounts on their working papers`)+(prev&&(prev.ajes||[]).some(j=>j.recurring)?'. Last year’s recurring entries are on the Adjusting entries tab.':''));
   return'';
@@ -227,6 +231,7 @@ async function yfClick(e,t,d){
   if(d.yfxlsx){yfXlsx(f,d.yfxlsx);return true}
   if(t.hasAttribute('data-yfpdf')){const safe=String(S.company.name||'company').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();saveFile(`${safe}-financial-statements-${f.yearEnd}.pdf`,new Blob([yfPdf(f)],{type:'application/pdf'}));return true}
   if(t.hasAttribute('data-yfgificsv')){yfGifiCsv(f);return true}
+  if(t.hasAttribute('data-yft2125')){yfT2125Csv(f);return true}
   if(t.hasAttribute('data-yfgfi')){const g=TallyEngage.gfi(f,S.accounts);if(g.missing.length&&!await confirmBox('Some accounts have no GIFI code',`${g.missing.length} account(s) with a balance will be left out of the file. Download it anyway?`,'Download'))return true;
     const safe=String(S.company.name||'company').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();saveFile(`${safe}-${f.yearEnd}.gfi`,new Blob([g.text],{type:'text/plain'}));
     toast(`GIFI file saved: ${g.lines.length} codes in whole dollars${g.roundingDiff?`; rounding leaves a $${Math.abs(g.roundingDiff)} difference to fix in the tax return`:''}. Check the totals after importing.`);return true}
@@ -242,6 +247,9 @@ async function yfClick(e,t,d){
   if(d.yfajerev){await yfSave(f,{ajes:f.ajes.map(x=>x.id===d.yfajerev?{...x,reviewedBy:{at:1}}:x)});return true}
   if(await yfReviewClick(e,t,d,f))return true;
   if(await yfAnalysisClick(e,t,d,f))return true;
+  if(await yfRequestsClick(e,t,d,f))return true;
+  if(await yfChecksClick(e,t,d,f))return true;
+  if(await yfTimeClick(e,t,d,f))return true;
   if(d.yfact==='delete'){if(await confirmBox('Delete this year-end file?','The snapshot, leadsheets and adjusting entries in it are deleted. Entries already posted to the books stay in the books.')&&await del('engagements',f.id)){YF.open=null;renderMain()}return true}
   return false;
 }
@@ -401,7 +409,7 @@ function yfGifi(f){
   if(g.missing.length)h+=`<div class="banner"><span><b>${g.missing.length} account${g.missing.length===1?' has':'s have'} no GIFI code</b> and ${g.missing.length===1?'is':'are'} left out: ${g.missing.slice(0,4).map(x=>esc(x.name)).join(', ')}${g.missing.length>4?'…':''}.</span>${yfEdit()?'<button class="btn sm" data-yfgifiedit>Fill in GIFI codes</button>':''}</div>`;
   else if(!g.agrees)h+=`<div class="banner err"><span>The GIFI totals don’t agree with the financial statements. Check the GIFI codes of accounts on the balance sheet and income statement.</span></div>`;
   const rows=g.lines.map(l=>`<tr${l.total?' class="tot"':''}><td>${l.schedule}</td><td class="mono">${l.code}</td><td>${esc(TallyGIFI.describe(l.code,isFr()?'fr':'en'))}</td><td class="n">${mcell(l.cur)}</td><td class="n">${mcell(l.prior)}</td></tr>`).join('');
-  return h+`<div class="panel"><div class="toolbar"><span class="grow muted">T2 Schedule 100 (balance sheet) and Schedule 125 (income statement) from the adjusted figures. Amounts are positive in their normal direction.</span><button class="btn" data-yfgificsv>Download CSV</button><button class="btn primary" data-yfgfi title="${esc(T('For TaxPrep, TaxCycle and other tax software that import GIFI files'))}">${esc(T('GIFI file for tax software (.GFI)'))}</button></div><div class="tbl-wrap"><table><thead><tr><th>Schedule</th><th>GIFI</th><th>Description</th><th class="n">${esc(fmtDate(f.yearEnd))}</th><th class="n">${esc(fmtDate(yfPriorEnd(f)))}</th></tr></thead><tbody>${rows||emptyRow(5,'Nothing to show','The trial balance has no balances.')}</tbody></table></div></div>`;
+  return h+`<div class="panel"><div class="toolbar"><span class="grow muted">T2 Schedule 100 (balance sheet) and Schedule 125 (income statement) from the adjusted figures. Amounts are positive in their normal direction.</span>${['sole','partnership'].includes(yfEntity(f))?`<button class="btn" data-yft2125 title="${esc(T('Business income for the owner’s T1 return, by T2125 line'))}">${esc(T('T2125 summary'))}</button>`:''}<button class="btn" data-yfgificsv>Download CSV</button><button class="btn primary" data-yfgfi title="${esc(T('For TaxPrep, TaxCycle and other tax software that import GIFI files'))}">${esc(T('GIFI file for tax software (.GFI)'))}</button></div><div class="tbl-wrap"><table><thead><tr><th>Schedule</th><th>GIFI</th><th>Description</th><th class="n">${esc(fmtDate(f.yearEnd))}</th><th class="n">${esc(fmtDate(yfPriorEnd(f)))}</th></tr></thead><tbody>${rows||emptyRow(5,'Nothing to show','The trial balance has no balances.')}</tbody></table></div></div>`;
 }
 function yfGifiCsv(f){
   const g=TallyEngage.gifi(f,S.accounts);

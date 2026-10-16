@@ -513,5 +513,120 @@
     return out.slice(0, 50);
   }
 
-  return { gfi, ENTITIES, analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
+  /* ---------- Canadian checks (pointers for the accountant) ---------- */
+  /**
+   * Revenue in the file against the sales reported on the GST/HST returns filed for periods inside the year (line 101).
+   * filings: the company's filed returns. Returns { revenue, reported, diff, counted, partial }.
+   */
+  function gstCheck(file, accounts, filings, fyStart) {
+    const ye = file.yearEnd, rev = r2(-workingTb(file, accounts).filter(r => r.lead === 'R').reduce((t, r) => t + r.final, 0));
+    const gst = (filings || []).filter(x => x.tax === 'gst' && x.to >= fyStart && x.from <= ye);
+    const inside = gst.filter(x => x.from >= fyStart && x.to <= ye), partial = gst.filter(x => !(x.from >= fyStart && x.to <= ye));
+    const reported = r2(inside.reduce((t, x) => t + (Number(x.lines && x.lines['101']) || 0), 0));
+    return { revenue: rev, reported, diff: r2(rev - reported), counted: inside.length, partial: partial.length };
+  }
+  /**
+   * Shareholder and director loan accounts: opening, advances, repayments and closing, with subsection 15(2) pointers
+   * (a loan to a shareholder not repaid within one year after the end of the year it was made in may have to be included
+   * in their income, unless an exception applies). activity: { account: { debits, credits } } for the year.
+   */
+  function shareholderLoans(file, accounts, activity) {
+    const tb = workingTb(file, accounts).filter(r => /shareholder|director|officer|actionnaire|administrateur/i.test(r.name || '') && ['Asset', 'Liability'].includes(r.type));
+    const aje = ajeTotals(file);
+    const ye = file.yearEnd, next = `${+ye.slice(0, 4) + 1}${ye.slice(4)}`;
+    return tb.map(r => {
+      const act = (activity && activity[r.account]) || null;
+      let adv, rep;
+      if (act) { adv = r2(act.debits + Math.max(0, aje[r.account] || 0)); rep = r2(act.credits + Math.max(0, -(aje[r.account] || 0))); }
+      else { const ch = r2(r.final - r.prior); adv = ch > 0 ? ch : 0; rep = ch < 0 ? -ch : 0; }
+      // Debit balances are owed by the shareholder to the company.
+      const owedOpen = r2(Math.max(0, r.prior)), owedClose = r2(Math.max(0, r.final));
+      const notes = [];
+      if (owedClose >= 0.005) notes.push(`The shareholder owes the company $${owedClose.toFixed(2)} at the year-end. If the amount lent this year isn’t repaid by ${next}, it may have to be included in the shareholder’s income under subsection 15(2), unless an exception applies.`);
+      if (owedOpen >= 0.005 && rep < owedOpen - 0.005) notes.push(`Last year’s balance owed by the shareholder ($${owedOpen.toFixed(2)}) wasn’t fully repaid during this year ($${rep.toFixed(2)} repaid). Check whether part of it must be included in the shareholder’s income under subsection 15(2).`);
+      return { account: r.account, name: r.name, open: r.prior, advances: adv, repayments: rep, close: r.final, owedClose, notes };
+    });
+  }
+  /** Invoices and bills dated soon after the year-end that may belong to the year (cut-off). docs: the company's docs. */
+  function cutoff(docs, yearEnd, minAmount, days = 45) {
+    const end = new Date(yearEnd); end.setDate(end.getDate() + days); const until = end.toISOString().slice(0, 10);
+    return (docs || []).filter(d => ['invoice', 'bill'].includes(d.kind) && d.date > yearEnd && d.date <= until && Math.abs(Number(d.total) || 0) >= minAmount)
+      .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 50).map(d => ({ id: d.id, kind: d.kind, number: d.number || '', date: d.date, total: r2(d.total) }));
+  }
+  /** Large transactions after the year-end, for subsequent events. entries: the company's entries. */
+  function subsequent(entries, yearEnd, minAmount) {
+    const tot = e => (e.lines || []).reduce((t, l) => t + (Number(l.debit) || 0), 0);
+    return (entries || []).filter(e => e.date > yearEnd && !e.void && tot(e) >= minAmount).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 50)
+      .map(e => ({ id: e.id, date: e.date, type: e.type, memo: e.memo || '', amount: r2(tot(e)) }));
+  }
+
+  /* ---------- T2125 (business income of a proprietor or partner, for the T1) ---------- */
+  const T2125 = {
+    8000: 'Sales, commissions or fees', 8230: 'Other income', 8300: 'Opening inventory', 8320: 'Purchases during the year', 8340: 'Direct wage costs', 8360: 'Subcontracts',
+    8450: 'Other costs', 8500: 'Closing inventory', 8521: 'Advertising', 8523: 'Meals and entertainment', 8590: 'Bad debts', 8690: 'Insurance', 8710: 'Interest and bank charges',
+    8760: 'Business taxes, licences and memberships', 8810: 'Office expenses', 8811: 'Office stationery and supplies', 8860: 'Professional fees', 8871: 'Management and administration fees',
+    8910: 'Rent', 8960: 'Repairs and maintenance', 9060: 'Salaries, wages and benefits', 9180: 'Property taxes', 9200: 'Travel expenses', 9220: 'Telephone and utilities',
+    9224: 'Fuel costs (except for motor vehicles)', 9275: 'Delivery, freight and express', 9281: 'Motor vehicle expenses', 9936: 'Capital cost allowance', 9270: 'Other expenses',
+  };
+  // GIFI codes that go on a different T2125 line.
+  const T2125_FROM = { 8715: 8710, 8714: 8710, 8712: 8710, 9150: 8810, 8670: 9936, 9225: 9220, 8813: 8810, 8862: 8860, 8863: 8860, 9270: 9270 };
+  /**
+   * The T2125 lines from the adjusted figures, by each account's GIFI code: [{ line, label, amount }] (revenue and
+   * expenses positive). Accounts without a code that fits go to Other income or Other expenses.
+   */
+  function t2125(file, accounts) {
+    const out = {}, put = (line, v) => { out[line] = r2((out[line] || 0) + v); };
+    for (const r of workingTb(file, accounts)) {
+      if (!['Income', 'Expense', 'Cost of Goods Sold'].includes(r.type) || Math.abs(r.final) < 0.005) continue;
+      const acc = (accounts || []).find(a => a.id === r.account), g = parseInt((acc && acc.gifi) || r.gifi, 10) || 0;
+      if (r.type === 'Income') put(g >= 8000 && g <= 8089 ? 8000 : 8230, -r.final);
+      else if (r.type === 'Cost of Goods Sold') put(T2125[g] && g >= 8300 && g <= 8500 ? g : 8450, r.final);
+      else put(T2125[g] && g >= 8521 ? g : T2125_FROM[g] || 9270, r.final);
+    }
+    return Object.keys(out).map(Number).sort((a, b) => a - b).map(line => ({ line, label: T2125[line], amount: out[line] }));
+  }
+
+  /* ---------- the trial balance from the books (for the server's "start all year-ends") ---------- */
+  const pad2 = n => String(n).padStart(2, '0');
+  /** The first day of the fiscal year a date is in, for a fiscal year starting in month fyMonth (1–12). */
+  function fyStart(date, fyMonth) { const m = +fyMonth || 1, y = +date.slice(0, 4), mo = +date.slice(5, 7); return `${mo < m ? y - 1 : y}-${pad2(m)}-01`; }
+  /** The last day of the fiscal year a date is in. */
+  function fyEnd(date, fyMonth) { const s = fyStart(date, fyMonth); const d = new Date(+s.slice(0, 4) + 1, +s.slice(5, 7) - 1, 0); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+  const dayBefore = s => { const d = new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10) - 1); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+  /**
+   * Snapshot lines for a year-end straight from the books' entries (the same figures as the screen's snapshot): balance
+   * sheet accounts all-time, income and expenses for the year, the earlier years' earnings as the opening retained
+   * earnings, and the same for the prior year. Returns { lines, priorEnd, off } (off: how far it is from balancing).
+   */
+  function tbFromEntries(entries, accounts, yearEnd, fyMonth) {
+    const fy = fyStart(yearEnd, fyMonth), pe = dayBefore(fy), pfy = fyStart(pe, fyMonth);
+    const type = new Map(accounts.map(a => [a.id, a.type])), pl = id => ['Income', 'Expense', 'Cost of Goods Sold'].includes(type.get(id));
+    const cur = new Map(), pri = new Map(); let reCur = 0, rePri = 0;
+    const add = (m, id, v) => m.set(id, (m.get(id) || 0) + v);
+    for (const e of entries) {
+      if (!e || e.date > yearEnd) continue;
+      for (const l of e.lines || []) {
+        const v = (Number(l.debit) || 0) - (Number(l.credit) || 0), id = l.account;
+        if (pl(id)) { if (e.date >= fy) add(cur, id, v); else reCur += v; if (e.date >= pfy && e.date <= pe) add(pri, id, v); else if (e.date < pfy) rePri += v; }
+        else { add(cur, id, v); if (e.date <= pe) add(pri, id, v); }
+      }
+    }
+    const order = ['Asset', 'Liability', 'Equity', 'Income', 'Cost of Goods Sold', 'Expense'];
+    const sorted = accounts.slice().sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type) || String(a.code || '').localeCompare(String(b.code || ''), undefined, { numeric: true }) || a.name.localeCompare(b.name));
+    const lines = [];
+    for (const a of sorted) { const v = r2(cur.get(a.id) || 0), p = r2(pri.get(a.id) || 0); if (Math.abs(v) < 0.005 && Math.abs(p) < 0.005) continue; lines.push({ account: a.id, code: a.code || '', name: a.name, type: a.type, detail: a.detail || '', gifi: a.gifi || '', cur: v, prior: p }); }
+    reCur = r2(reCur); rePri = r2(rePri);
+    if (Math.abs(reCur) >= 0.005 || Math.abs(rePri) >= 0.005) lines.push({ account: RE_OPEN, code: '', name: 'Retained earnings, beginning of year', type: 'Equity', detail: '', gifi: '3600', cur: reCur, prior: rePri });
+    return { lines, priorEnd: pe, off: r2(lines.reduce((t, l) => t + l.cur, 0)), offPrior: r2(lines.reduce((t, l) => t + l.prior, 0)) };
+  }
+
+  /* ---------- deadlines ---------- */
+  const addMonths = (d, n) => { const x = new Date(d + 'T12:00:00'); const day = x.getDate(); x.setDate(1); x.setMonth(x.getMonth() + n); const last = new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate(); x.setDate(Math.min(day, last)); return x.toISOString().slice(0, 10); };
+  /**
+   * The usual corporate deadlines after a year-end: the T2 return 6 months after, and any balance of tax 2 months after
+   * (3 months for many Canadian-controlled private corporations). Non-profits file a T2 (or T1044) on the same 6 months.
+   */
+  function deadlines(yearEnd) { return { t2: addMonths(yearEnd, 6), balance: addMonths(yearEnd, 2), balanceCcpc: addMonths(yearEnd, 3) }; }
+
+  return { T2125, t2125, fyStart, fyEnd, tbFromEntries, gstCheck, shareholderLoans, cutoff, subsequent, deadlines, addMonths, gfi, ENTITIES, analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
 });

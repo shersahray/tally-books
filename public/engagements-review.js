@@ -79,6 +79,10 @@ function yfWpPanel(f,w,edit){
   h+=`</div>`;
   if(w.code==='G')h+=yfContinuityPanel(f,edit)+yfRegisterPanel(f);
   if(w.code==='GEN')h+=yfLettersPanel(f,edit);
+  if(w.code==='A')h+=yfBankPanel(f,edit);
+  if(w.code==='CC')h+=yfGstPanel(f);
+  if(w.code==='GG'||w.code==='F')h+=yfLoansPanel(f);
+  if(w.code==='SUB')h+=yfAfterPanel(f);
   // Notes, comments and cross-references
   h+=`<div class="panel" style="margin-bottom:16px"><div class="pad" style="display:grid;gap:10px">
     <label style="display:grid;gap:4px"><span class="flabel">${esc(T('Work done and conclusion'))}</span><textarea data-yfwpf="notes" rows="5" maxlength="20000" ${edit?'':'disabled'} placeholder="${esc(T('What was checked, what it was agreed to, and the conclusion'))}">${esc(wp.notes||'')}</textarea></label>
@@ -87,7 +91,7 @@ function yfWpPanel(f,w,edit){
     ${edit?'<div><button class="btn primary sm" data-yfwpsave>Save notes</button></div>':''}</div></div>`;
   // Documents
   const docs=yfDocs(f,w.code);
-  h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T('Supporting documents'))}</b>${edit?`<label class="btn sm">${esc(T('Attach…'))}<input type="file" data-yfupload hidden multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.docx"></label>${S.receipts.length?` <button class="btn sm" data-yfrcpick>${esc(T('From Receipts…'))}</button>`:''}`:''}</div><div class="tbl-wrap"><table><tbody>${docs.map(a=>`<tr><td><a href="${esc(coUrl('/api/files/'+a.fileId))}" target="_blank" rel="noopener">${esc(a.name)}</a></td><td class="muted">${esc(a.uploadedByName||'')} · ${esc(fmtDate(iso(new Date(a.uploadedAt))))}</td><td class="n">${edit?`<button class="btn sm" data-yfdocdel="${esc(a.id)}">Remove</button>`:''}</td></tr>`).join('')||emptyRow(3,'No documents yet','Attach bank statements, listings, loan statements, invoices or minutes (PDF, photos, Excel or Word, up to 10 MB each).')}</tbody></table></div></div>`;
+  h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T('Supporting documents'))}</b>${edit?`${w.code==='GEN'||!edit?'':`<button class="btn sm" data-yfreports title="${esc(T('A/R and A/P listings, bank reconciliation and sales tax returns from Sumlora'))}">${esc(T('Sumlora reports'))}</button> `}<label class="btn sm">${esc(T('Attach…'))}<input type="file" data-yfupload hidden multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.docx"></label>${S.receipts.length?` <button class="btn sm" data-yfrcpick>${esc(T('From Receipts…'))}</button>`:''}`:''}</div><div class="tbl-wrap"><table><tbody>${docs.map(a=>`<tr><td><a href="${esc(coUrl('/api/files/'+a.fileId))}" target="_blank" rel="noopener">${esc(a.name)}</a></td><td class="muted">${esc(a.uploadedByName||'')} · ${esc(fmtDate(iso(new Date(a.uploadedAt))))}</td><td class="n">${edit?`<button class="btn sm" data-yfdocdel="${esc(a.id)}">Remove</button>`:''}</td></tr>`).join('')||emptyRow(3,'No documents yet','Attach bank statements, listings, loan statements, invoices or minutes (PDF, photos, Excel or Word, up to 10 MB each).')}</tbody></table></div></div>`;
   // Sign-offs and review notes on this working paper
   const sb=(k,l)=>wp[k]?`<span class="pill paid">${esc(T(l))}</span> <span class="muted">${yfStamp(wp[k])}</span>${edit?` <button class="btn sm" data-yfwpsign="${k}" data-off="1">Remove</button>`:''}`:edit?`<button class="btn sm" data-yfwpsign="${k}">${esc(T('Sign off as '+l.toLowerCase()))}</button>`:`<span class="muted">${esc(T('Not signed off'))}</span>`;
   h+=`<div class="panel" style="margin-bottom:16px"><div class="tbl-wrap"><table><tbody><tr><td style="width:38%">${esc(T('Prepared by'))}</td><td>${sb('prepared','Prepared')}</td></tr><tr><td>${esc(T('Reviewed by'))}</td><td>${sb('reviewed','Reviewed')}</td></tr></tbody></table></div></div>`;
@@ -159,6 +163,7 @@ async function yfReviewClick(e,t,d,f){
   if(t.hasAttribute('data-yfwpsave')){const w=wpOf();for(const x of $$('[data-yfwpf]'))w[x.dataset.yfwpf]=x.value;if(await yfSave(f,{wps:{...(f.wps||{}),[YF.wp]:w}}))toast('Saved');return true}
   if(d.yfwpsign){const w=wpOf();w[d.yfwpsign]=d.off?null:YF_SIGN;if(!d.off&&(!w.status||w.status==='notstarted'))w.status=d.yfwpsign==='reviewed'?'done':'progress';await yfSave(f,{wps:{...(f.wps||{}),[YF.wp]:w}});return true}
   if(t.hasAttribute('data-yfrcpick')){yfReceiptPicker(f);return true}
+  if(t.hasAttribute('data-yfreports')){await yfAttachReports(f,false);return true}
   if(d.yfletter){yfLetterForm(f,d.yfletter);return true}
   if(d.yfletterpdf){await yfLetterPdf(f,d.yfletterpdf);return true}
   if(t.hasAttribute('data-yflogodel')){try{await api('PUT','/api/firm/logo',{data:''});ME.firmLogo=false;YF_LOGO=null;toast('Logo removed');renderMain()}catch(err){toast(err.message,true)}return true}
@@ -224,9 +229,12 @@ function yfAnalysis(f,edit){
   const raise=(text,wp,pri)=>edit?`<button class="btn sm" data-yfraise="${esc(text)}" data-wp="${esc(wp||'')}" data-pri="${esc(pri||'normal')}">${esc(T('Raise a review note'))}</button>`:'';
   let h=`<div class="banner" style="background:var(--info-soft)"><span>${esc(T('These are pointers for your review, worked out from the figures. They’re not conclusions; you decide what matters.'))}</span></div>`;
   h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar" style="flex-wrap:wrap"><b class="grow">${esc(T('Materiality for this file'))}</b><label>${esc(T('Flag changes over'))} $<input type="number" min="0" step="100" data-yfmat="amount" value="${minChange}" style="width:110px" ${edit?'':'disabled'}></label><label>${esc(T('and'))} <input type="number" min="0" max="100" step="1" data-yfmat="pct" value="${minPct}" style="width:70px" ${edit?'':'disabled'}> %</label>${edit?'<button class="btn sm" data-yfmatsave>'+esc(T('Save'))+'</button>':''}<span class="muted" style="font-size:12.5px;flex-basis:100%">${esc(T('Suggested starting point'))}: ${money(sugg)} (${esc(T(st.is.revenue.cur>st.bs.assets.cur/2?'1% of revenue':'0.5% of total assets'))}). ${esc(T('Use your firm’s own materiality method if it has one.'))}</span></div></div>`;
+  h+=yfChart(f);
   for(const [k,label] of Object.entries(KIND)){const list=finds.filter(x=>x.kind===k);if(!list.length)continue;
     h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T(label))}</b><span class="muted">${list.length}</span></div><div class="tbl-wrap"><table><tbody>${list.map(x=>`<tr><td style="width:40px">${x.wp?`<button class="link" data-yfgowp="${esc(x.wp)}">${esc(x.wp)}</button>`:''}</td><td>${x.level==='high'?'<span class="pill overdue">'+esc(T('High'))+'</span> ':''}${esc(x.text)}</td><td class="n">${k==='checklist'?'':raise(x.text,x.wp,x.level)}</td></tr>`).join('')}</tbody></table></div></div>`}
   if(fromBooks)h+=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><b class="grow">${esc(T('Unusual transactions in the year'))}</b><span class="muted">${odd.length}</span></div><div class="tbl-wrap"><table><tbody>${odd.map(x=>`<tr><td>${esc(x.text)}</td><td class="n" style="white-space:nowrap"><button class="btn sm" data-entry="${esc(x.entryId)}">${esc(T('Open'))}</button>${raise(x.text,'','normal')}</td></tr>`).join('')||emptyRow(2,'Nothing unusual found','No possible duplicates, and no postings far bigger than usual for their account.')}</tbody></table></div></div>`;
+  // Checks Sumlora can do with the books
+  h+=`<h3 style="margin:18px 0 8px">${esc(T('Canadian checks'))}</h3>`+yfGstPanel(f)+yfLoansPanel(f)+yfAfterPanel(f);
   // AI
   const aiOk=feat('ai');
   h+=`<div class="panel"><div class="toolbar"><b class="grow">${esc(T('AI review points'))}</b>${aiOk?`<button class="btn primary sm" data-yfai ${YF_AI.busy?'disabled':''}>${esc(T(YF_AI.busy?'Thinking…':'Ask AI'))}</button>`:inPlanPill('ai')}</div>`;

@@ -36,7 +36,7 @@ const S={more:{},accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Bu
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:'',tag:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','delayed','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions','engagements'];
+const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','delayed','bankTxns','rules','recons','filings','employees','payruns','receipts','attachments','questions','engagements','requests'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
@@ -59,7 +59,7 @@ const newOk=k=>k==='contact'?perm('sales','edit')||perm('expenses','edit'):k==='
 let MODAL_AREA=null; // the area of the form being opened (set around each form; see the end of auth.js)
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|inbound$|billing(?:\/|$)|invoicing$|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|inbound$|billing(?:\/|$)|invoicing$|yearends(?:\/|$)|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -171,7 +171,7 @@ function renderMain(){
   document.title=CO&&S.loaded?`${S.company.name} · Sumlora`:'Sumlora';
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
-  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences'||S.view==='overview';
+  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences'||S.view==='overview'||S.view==='yearends';
   if(typeof drawReminders==='function')drawReminders();
   if(!noCo&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
@@ -188,6 +188,9 @@ function renderMain(){
   for(const[v,k]of[['projects','projects'],['assets','fixedAssets']]){const b=$(`#nav [data-view=${v}]`);if(b)b.hidden=!feat(k)||(v==='assets'&&ME&&ME.role==='client');if(S.view===v&&!feat(k))S.view='dashboard'}
   // Year-end files: firm staff only, and only once the feature is on (coming soon for now).
   const yfb=$('#nav [data-view=yearfiles]');if(yfb)yfb.hidden=!(typeof yfOn==='function'&&yfOn());
+  // Requests from the accountant (year-end files): for the client, and for staff, while any exist.
+  const rqb=$('#nav [data-view=requests]');if(rqb){rqb.hidden=!(typeof yfReqOn==='function'&&yfReqOn());const n=S.requests.filter(r=>ME&&ME.role==='client'?['open','returned'].includes(r.status):r.status==='sent').length,c=$('#rqCount');if(c){c.hidden=!n;c.textContent=n}}
+  if(S.view==='requests'&&!(typeof yfReqOn==='function'&&yfReqOn()))S.view='dashboard';
   if(S.view==='yearfiles'&&!(typeof yfOn==='function'&&yfOn()))S.view='dashboard';
   const rvb=$('#nav [data-view=review]');if(rvb){const client=ME&&ME.role==='client';rvb.firstChild.textContent=client?'Questions ':'Review ';rvb.hidden=client&&!S.questions.length;
     const nq=questionsWaiting()+(client?0:reviewCount()),rv=$('#rvCount');rv.hidden=!nq;rv.textContent=nq}
@@ -196,7 +199,7 @@ function renderMain(){
   if(lim){$$('#nav button').forEach(b=>{if(!viewOk(b.dataset.view))b.hidden=true});if(!noCo&&!viewOk(S.view))S.view='dashboard'}
   document.body.classList.toggle('area-ro',lim&&!!VIEW_AREA[S.view]&&!perm(VIEW_AREA[S.view],'edit'));
   document.body.classList.toggle('perm-limited',lim&&!permAll('edit'));
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,yearfiles:typeof vYearFiles==='function'?vYearFiles:vDashboard,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,yearfiles:typeof vYearFiles==='function'?vYearFiles:vDashboard,requests:typeof vRequests==='function'?vRequests:vDashboard,yearends:typeof vYearEnds==='function'?vYearEnds:vDashboard,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
@@ -204,6 +207,7 @@ function renderMain(){
   $$('#newMenu .col').forEach(c=>{c.hidden=!$$('[data-new]',c).some(b=>!b.hidden)});$('#newBtn').hidden=!$$('#newMenu [data-new]').some(b=>!b.hidden);
   bindMain(main);
   if(S.view==='yearfiles'&&typeof yfBind==='function')yfBind(main);
+  if(S.view==='requests'&&typeof rqBind==='function')rqBind(main);
   if(typeof syncAssistant==='function')syncAssistant();
   if(keepFocus){const el=document.getElementById(keepFocus);if(el){el.focus();if(el.setSelectionRange&&el.type==='search'){const n=el.value.length;el.setSelectionRange(n,n)}}}
 }
@@ -577,6 +581,8 @@ function bindMain(m){
     if(S.view==='payroll'&&await payClick(e,t,d))return;
     if(S.view==='review'&&await reviewClick(e,t,d))return;
     if(S.view==='yearfiles'&&typeof yfClick==='function'&&await yfClick(e,t,d))return;
+    if(S.view==='requests'&&typeof rqClick==='function'&&await rqClick(e,t,d))return;
+    if(S.view==='yearends'&&typeof yeListClick==='function'&&await yeListClick(e,t,d))return;
     if(S.view==='activity'&&await actClick(e,t,d))return;
     if(S.view==='receipts'&&rcClick(e,t,d))return;
     if(S.view==='convert'&&cvClick(e,t,d))return;
