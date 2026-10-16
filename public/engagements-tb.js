@@ -12,7 +12,8 @@ const yfDrCr=v=>v>0?[mcell(v),'']:v<0?['',mcell(-v)]:['',''];
 
 function yfTb(f,tb,edit){
   const src=(f.snapshot&&f.snapshot.source)||'books',typing=edit&&src!=='books';
-  if(typing)return yfTbEdit(f,tb);
+  const bar=typeof yfLedgerBar==='function'?yfLedgerBar(f,edit):'';
+  if(typing)return bar+yfTbEdit(f,tb);
   const opts=sel=>TallyEngage.LEADSHEETS.map(l=>`<option value="${l.code}" ${l.code===sel?'selected':''}>${esc(l.code+' · '+T(l.label))}</option>`).join('');
   const tot={pd:0,pc:0,cd:0,cc:0,adj:0,fd:0,fc:0};
   const rows=tb.map(r=>{const p=yfDrCr(r.prior),c=yfDrCr(r.cur),fi=yfDrCr(r.final);
@@ -20,8 +21,8 @@ function yfTb(f,tb,edit){
     return `<tr><td>${yfName(r)}${r.gifi?` <span class="muted mono" style="font-size:12px">${esc(r.gifi)}</span>`:''}</td><td class="muted">${esc(T(r.type))}</td><td>${edit?`<select data-yfmap="${esc(r.account)}" aria-label="Leadsheet">${opts(r.lead)}</select>`:esc(r.lead+' · '+T(yfLead(r.lead)))}</td><td class="n">${p[0]}</td><td class="n">${p[1]}</td><td class="n">${c[0]}</td><td class="n">${c[1]}</td><td class="n">${r.adj?mcell(r.adj):''}</td><td class="n"><b>${fi[0]}</b></td><td class="n"><b>${fi[1]}</b></td></tr>`}).join('');
   for(const k in tot)tot[k]=r2(tot[k]);
   const diff=[['Prior year',r2(tot.pd-tot.pc)],['Unadjusted',r2(tot.cd-tot.cc)],['Adjusted',r2(tot.fd-tot.fc)]].filter(x=>Math.abs(x[1])>=0.005);
-  return `${diff.length?`<div class="banner err"><span><b>${esc(T('The trial balance doesn’t balance.'))}</b> ${diff.map(([l,v])=>`${esc(T(l))}: ${esc(T('debits are'))} ${money(Math.abs(v))} ${esc(T(v>0?'more than credits':'less than credits'))}`).join(' · ')}</span></div>`:`<div class="muted" style="margin-bottom:8px"><span class="pos">✓</span> ${esc(T('Debits equal credits'))} · ${esc(T('Source'))}: ${esc(T(yfSrcLabel[src]))}${src==='books'?' · '+esc(T('follows the books until the file is final')):''}</div>`}
-  <div class="panel"><div class="toolbar"><span class="grow muted">${esc(T('Debits and credits for each year. Each account’s leadsheet is suggested from its type, GIFI code and name; change it here.'))}</span><button class="btn sm" data-yfxlsx="tb">${esc(T('Excel'))}</button></div><div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Type</th><th>Leadsheet</th><th class="n">Prior Dr</th><th class="n">Prior Cr</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Adjustments</th><th class="n">Adjusted Dr</th><th class="n">Adjusted Cr</th></tr></thead><tbody>${rows}<tr class="tot"><td colspan="3">${esc(T('Totals'))}</td><td class="n">${money(tot.pd)}</td><td class="n">${money(tot.pc)}</td><td class="n">${money(tot.cd)}</td><td class="n">${money(tot.cc)}</td><td class="n">${mcell(tot.adj)}</td><td class="n">${money(tot.fd)}</td><td class="n">${money(tot.fc)}</td></tr></tbody></table></div></div>`;
+  return `${bar}${diff.length?`<div class="banner err"><span><b>${esc(T('The trial balance doesn’t balance.'))}</b> ${diff.map(([l,v])=>`${esc(T(l))}: ${esc(T('debits are'))} ${money(Math.abs(v))} ${esc(T(v>0?'more than credits':'less than credits'))}`).join(' · ')}</span></div>`:`<div class="muted" style="margin-bottom:8px"><span class="pos">✓</span> ${esc(T('Debits equal credits'))} · ${esc(T('Source'))}: ${esc(T(yfSrcLabel[src]))}${src==='books'?' · '+esc(T('follows the books until the file is final')):''}</div>`}
+  <div class="panel"><div class="toolbar"><span class="grow muted">${esc(T('Debits and credits for each year. Each account’s leadsheet is suggested from its type, GIFI code and name; change it here.'))}</span>${edit&&src==='books'?`<button class="btn sm" data-yfcw title="${esc(T('Use last year’s final trial balance exported from CaseWare as the prior year'))}">${esc(T('Prior year from CaseWare…'))}</button>`:''}${f.snapshot.priorSource==='caseware'?`<span class="pill quiet">${esc(T('Prior year from CaseWare'))}${f.snapshot.priorFile?': '+esc(f.snapshot.priorFile):''}</span>`:''}<button class="btn sm" data-yfxlsx="tb">${esc(T('Excel'))}</button></div><div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Type</th><th>Leadsheet</th><th class="n">Prior Dr</th><th class="n">Prior Cr</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Adjustments</th><th class="n">Adjusted Dr</th><th class="n">Adjusted Cr</th></tr></thead><tbody>${rows}<tr class="tot"><td colspan="3">${esc(T('Totals'))}</td><td class="n">${money(tot.pd)}</td><td class="n">${money(tot.pc)}</td><td class="n">${money(tot.cd)}</td><td class="n">${money(tot.cc)}</td><td class="n">${mcell(tot.adj)}</td><td class="n">${money(tot.fd)}</td><td class="n">${money(tot.fc)}</td></tr></tbody></table></div></div>`;
 }
 
 /* Typing in (and correcting) a trial balance that didn't come from the books. */
@@ -69,7 +70,16 @@ function yfTbBind(m,f){
  * one, and debit/credit or a balance. Prior-year columns ("Prior", "Previous", or a column for an earlier year) are read
  * too when the file has them. Retained earnings becomes the opening retained earnings line.
  */
-async function yfReadTbFile(file){
+async function yfReadTbFile(file,yearEnd){
+  // CaseWare and most other exports: number, description, GIFI, map number, and year or debit/credit columns.
+  try{const r=await yfReadCwFile(file,yearEnd);let reUsed=false;const seen=new Set();
+    return r.lines.map(l=>{let account=!reUsed&&l.type==='Equity'&&/retained earnings|bénéfices non répartis|deficit/i.test(l.name)?(reUsed=true,TallyEngage.RE_OPEN):yfOwnId(l.code||l.name);
+      while(seen.has(account))account=yfOwnId(l.code+'-'+l.name+'-'+uid());seen.add(account);
+      return{account,code:l.code,name:l.name,type:l.type,detail:l.detail||'',gifi:l.gifi||'',cur:l.cur,prior:l.prior}});
+  }catch(e){/* not that layout: the simpler reader below */}
+  return yfReadTbFileSimple(file);
+}
+async function yfReadTbFileSimple(file){
   const tables=await Convert.readFile(file.name,new Uint8Array(await file.arrayBuffer()),cvInflate);
   const table=tables.find(t=>t.rows&&t.rows.length)||{rows:[]};
   const h=Convert.findHeader(table.rows);

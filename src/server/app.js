@@ -14,6 +14,8 @@ const assistant = require('./assistant');
 const mail = require('./mail');
 const stripe = require('./stripe');
 const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
+const { Ledgers } = require('./ledgers');
+const escHtml = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const inbound = require('./inbound');
 const { TERMS_VERSION, TERMS_DRAFT } = require('./legal');
 const { Billing, paid: billingPaid, stale: billingStale, describe: billingDescribe } = require('./billing');
@@ -51,6 +53,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
  * @param {object} [opts.plaid]     Plaid keys for bank feeds: { clientId, secret, env } (otherwise the administrator enters them in Settings).
  * @param {Function} [opts.plaidFetch] Tests only: answers in place of Plaid's API.
+ * @param {Function} [opts.ledgerFetch] Tests only: answers in place of QuickBooks Online's and Xero's APIs (with opts.ledgerUrls).
  * @param {boolean} [opts.autoFeeds] Sync bank feeds every few hours (default true; tests turn it off).
  * @param {boolean} [opts.autoWorkflows] Check workflow reminders every hour (default true; tests turn it off).
  * @param {Function} [opts.billingFetch] Tests only: answers in place of Stripe's API for Sumlora subscriptions.
@@ -337,6 +340,8 @@ function createApp(opts) {
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
   // Plaid's keys and the banks' access tokens stay with this computer (the licence folder on desktop), never in a books folder that may be shared.
   const plaid = new Plaid(opts.licenceDir || opts.dataDir, { env: opts.plaid || {}, fetch: opts.plaidFetch });
+  // QuickBooks Online and Xero connections, for year-end files of clients whose books are kept there (ledgers.js).
+  const ledgers = new Ledgers(opts.licenceDir || opts.dataDir, { fetch: opts.ledgerFetch, urls: opts.ledgerUrls });
   // Receipts by email: the server's settings and each company's address (inbound.js), kept with the server like Plaid's keys.
   const inSet = new inbound.InboundSettings(opts.licenceDir || opts.dataDir);
   /** Bring one bank connection's new transactions into its company's "For review". */
@@ -1422,7 +1427,7 @@ function createApp(opts) {
       // A firm sees its own people's sign-ins; the server's administrators see everything.
       if (user.platformAdmin) return { log: auth.readLog(1000) };
       const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
-      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
+      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'ledger-settings', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
     }],
     // The administrator's overview: firms on this server, desktop licences sold, renewals due, AI use.
@@ -1766,6 +1771,7 @@ function createApp(opts) {
       if (used) throw new ValidationError('This company has transactions or documents, so it can’t be removed. Archive it instead to hide it from the list.', 409);
       if (c.billing && billingPaid(c.billing)) throw new ValidationError('This company’s client has a Sumlora subscription running. Cancel it first (Stripe → Subscriptions), then remove the company.', 409);
       await plaid.removeCompany(id).catch(() => {});
+      await ledgers.remove(id).catch(() => {});
       inSet.drop(id);
       reg.remove(id);
       auth.dropCompany(id);
@@ -1823,6 +1829,33 @@ function createApp(opts) {
       const st = plaid.update(body);
       auth.log('plaid-settings', { username: user.username, ip: clientIp(req), change: body.secret !== undefined || body.clientId !== undefined ? 'Plaid keys changed' : 'settings changed' });
       return st;
+    }],
+    // QuickBooks Online and Xero: the app keys are the server's, set by its administrator.
+    ['GET', /^\/api\/ledgers$/, (req, m, res, user) => {
+      if (user.role === 'owner' && user.platformAdmin) return { ...ledgers.status(), admin: true, redirectUri: appUrl() ? appUrl() + '/api/ledger/callback' : '' };
+      const st = ledgers.status();
+      return { qbo: { configured: st.qbo.configured }, xero: { configured: st.xero.configured } };
+    }],
+    ['PUT', /^\/api\/ledgers$/, async (req, m, res, user) => {
+      adminOnly(user);
+      const body = (await readJson(req)) || {};
+      const st = ledgers.update(body);
+      auth.log('ledger-settings', { username: user.username, ip: clientIp(req), change: ['qbo', 'xero'].filter(p => body[p]).map(p => p === 'qbo' ? 'QuickBooks Online keys changed' : 'Xero keys changed').join(', ') || 'settings changed' });
+      return { ...st, admin: true, redirectUri: appUrl() ? appUrl() + '/api/ledger/callback' : '' };
+    }],
+    // Intuit or Xero sends the person back here after they allow the connection (no session cookie comes along: see ledgers.finish).
+    ['GET', /^\/api\/ledger\/callback$/, async (req, m, res) => {
+      const q = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+      const page = (title, text) => send(res, 200, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escHtml(title)}</title><link rel="stylesheet" href="/styles.css"></head><body style="font-family:system-ui,sans-serif;max-width:520px;margin:60px auto;padding:0 16px;line-height:1.5"><h1 style="font-size:22px">${escHtml(title)}</h1><p>${escHtml(text)}</p><p><a href="/">Back to Sumlora</a></p></body></html>`, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      try {
+        const r = await ledgers.finish(q);
+        const c = reg.get(r.companyId);
+        auth.log('ledger-connected', { by: r.by, company: c ? c.name : r.companyId, provider: r.provider === 'qbo' ? 'QuickBooks Online' : 'Xero' });
+        page(`Connected to ${r.provider === 'qbo' ? 'QuickBooks Online' : 'Xero'}`, `${r.name ? r.name + ' is' : 'The books are'} now connected to ${c ? c.name : 'the company'} in Sumlora. You can close this tab and go back to Sumlora.`);
+      } catch (err) {
+        if (!err.status) console.error(err);
+        page('The connection wasn’t made', err.status ? err.message : 'Something went wrong on the server. Try connecting again.');
+      }
     }],
     // Receipts by email: the administrator turns it on, names the domain and gets the webhook address for the mail provider.
     ['GET', /^\/api\/inbound$/, (req, m, res, user) => {
@@ -2703,6 +2736,29 @@ function createApp(opts) {
       }
       return { accounts: out };
     }],
+    // The company's QuickBooks Online or Xero connection (for year-end files of clients whose books are kept there).
+    ['GET', /^\/ledger$/, ctx => { notClient(ctx.user); needArea(ctx.user, 'accounting', 'view'); needFeature(ctx.id, 'yearEndFiles', ctx.store); return ledgers.connection(ctx.id); }],
+    ['POST', /^\/ledger\/connect$/, async (ctx, req) => {
+      notClient(ctx.user); needArea(ctx.user, 'accounting'); needFeature(ctx.id, 'yearEndFiles', ctx.store);
+      const body = (await readJson(req)) || {};
+      return { url: ledgers.authorizeUrl(String(body.provider || ''), ctx.id, ctx.user, appUrl() ? appUrl() + '/api/ledger/callback' : '') };
+    }],
+    ['DELETE', /^\/ledger$/, async ctx => {
+      notClient(ctx.user); needArea(ctx.user, 'accounting'); needFeature(ctx.id, 'yearEndFiles', ctx.store);
+      const was = ledgers.connection(ctx.id);
+      await ledgers.remove(ctx.id);
+      if (was.connected) auth.log('ledger-disconnected', { by: ctx.user.username, company: (reg.get(ctx.id) || {}).name, provider: was.providerName });
+      return ledgers.connection(ctx.id);
+    }],
+    // The trial balance there at a date: ?start=fiscal year start&end=the date. Read-only.
+    ['GET', /^\/ledger\/tb$/, async (ctx, req) => {
+      notClient(ctx.user); needArea(ctx.user, 'accounting', 'view'); needFeature(ctx.id, 'yearEndFiles', ctx.store);
+      const q = new URL(req.url, 'http://x').searchParams, iso = /^\d{4}-\d{2}-\d{2}$/;
+      const start = String(q.get('start') || ''), end = String(q.get('end') || '');
+      if (!iso.test(start) || !iso.test(end) || start > end) throw new ValidationError('Give the fiscal year’s start and the date, as YYYY-MM-DD.');
+      const c = ledgers.connection(ctx.id);
+      return { provider: c.provider, providerName: c.providerName, name: c.name, start, end, lines: await ledgers.trialBalance(ctx.id, start, end) };
+    }],
     // Email the company's client users that there are requests waiting (from the server's mailbox).
     ['POST', /^\/engagements\/([A-Za-z0-9_-]+)\/notify$/, async (ctx, req, m) => {
       notClient(ctx.user); needArea(ctx.user, 'accounting', 'edit'); needFeature(ctx.id, 'yearEndFiles', ctx.store);
@@ -3053,7 +3109,7 @@ function createApp(opts) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
         // Everything except signing in needs a signed-in user.
         let user = null;
-        if (!/^\/api\/(health|auth\/(me|setup|signup|login|login\/code|logout|link|link\/accept|forgot))$/.test(url.pathname)) {
+        if (!/^\/api\/(health|ledger\/callback|auth\/(me|setup|signup|login|login\/code|logout|link|link\/accept|forgot))$/.test(url.pathname)) {
           user = auth.userFor(req);
           if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup(), forgot: !auth.needsSetup() && forgotReady() });
           if (user.mustChange && !['/api/auth/password', '/api/auth/prefs', '/api/events'].includes(url.pathname)) throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });

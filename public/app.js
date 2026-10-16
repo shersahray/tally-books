@@ -59,7 +59,7 @@ const newOk=k=>k==='contact'?perm('sales','edit')||perm('expenses','edit'):k==='
 let MODAL_AREA=null; // the area of the form being opened (set around each form; see the end of auth.js)
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|inbound$|billing(?:\/|$)|invoicing$|yearends(?:\/|$)|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|ledgers$|inbound$|billing(?:\/|$)|invoicing$|yearends(?:\/|$)|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -560,6 +560,7 @@ function vSettings(){
   ${typeof yardPanel==='function'?yardPanel():''}
   ${typeof rcMailPanel==='function'?rcMailPanel():''}
   ${typeof plaidPanel==='function'?plaidPanel():''}
+  ${typeof ledgerPanel==='function'?ledgerPanel():''}
   ${typeof inboundPanel==='function'?inboundPanel():''}
   ${feat('payroll')?payrollSettingsPanel():''}
   ${backupPanel()}
@@ -598,6 +599,7 @@ function bindMain(m){
     if(d.bkact||d.bkfolder)return bkAction(d.bkact,d);
     if(d.aiact)return aiAction(d.aiact);
     if(d.plact)return plaidAction(d.plact);
+    if(d.ldact)return ledgerAction(d.ldact);
     if(d.feed)return feedAction(d.feed);
     if(d.clact)return closingAction(d.clact);
     if(d.ccact)return codeAction(d.ccact);
