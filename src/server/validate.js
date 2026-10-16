@@ -799,8 +799,13 @@ function validateEngagement(data, store, id) {
   if (!snap || !Array.isArray(snap.lines)) throw new ValidationError('Take the trial balance snapshot first.');
   // Where the trial balance came from: the books (it must balance, as the books do), or an import or typing it in,
   // where accounts can be the file's own (ids starting "x:") and a difference is allowed until the file is final.
-  const source = ['import', 'manual'].includes(snap.source) ? snap.source : 'books';
-  const own = id => source !== 'books' && /^x:[A-Za-z0-9_-]{1,60}$/.test(id);
+  // 'qbo' and 'xero': brought in from the client's QuickBooks Online or Xero books (ledgers.js), like an import.
+  const source = ['import', 'manual', 'qbo', 'xero'].includes(snap.source) ? snap.source : 'books';
+  // The file's own accounts ("x:"): any line of an imported or typed-in trial balance, or a prior-year-only line brought
+  // over from CaseWare (or another program) into a file that otherwise follows the books.
+  const ownId = id => /^x:[A-Za-z0-9_-]{1,60}$/.test(id);
+  const priorFromCw = snap.priorSource === 'caseware';
+  const own = (id, line) => ownId(id) && (source !== 'books' || (priorFromCw && line && !Number(line.cur)));
   if (snap.lines.length > ENG_MAX_LINES) throw new ValidationError('That trial balance has too many lines.');
   let tc = 0, tp = 0;
   const seen = new Set();
@@ -809,7 +814,7 @@ function validateEngagement(data, store, id) {
     const account = str(l.account, 120);
     if (!account || seen.has(account)) throw new ValidationError(`Trial balance line ${i + 1} has no account, or the account is there twice.`);
     seen.add(account);
-    if (account !== ENGAGE.RE_OPEN && !accountIds.has(account) && !own(account)) throw new ValidationError(`Trial balance line ${i + 1} uses an account that doesn’t exist.`);
+    if (account !== ENGAGE.RE_OPEN && !accountIds.has(account) && !own(account, l)) throw new ValidationError(`Trial balance line ${i + 1} uses an account that doesn’t exist.`);
     const cur = cents(l.cur || 0), prior = cents(l.prior || 0);
     if (!Number.isFinite(cur) || !Number.isFinite(prior) || Math.abs(cur) > 1e14 || Math.abs(prior) > 1e14) throw new ValidationError(`Trial balance line ${i + 1} has an invalid amount.`);
     tc += cur; tp += prior;
@@ -819,7 +824,7 @@ function validateEngagement(data, store, id) {
   if (tc !== 0 && (source === 'books' || status === 'final')) throw new ValidationError(`The trial balance doesn’t add up to zero (off by ${(tc / 100).toFixed(2)}).${source === 'books' ? ' Check for unbalanced entries in the books.' : ''}`);
   if (tp !== 0 && (source === 'books' || status === 'final')) throw new ValidationError(`The prior year’s trial balance doesn’t add up to zero (off by ${(tp / 100).toFixed(2)}).`);
   const lineIds = new Set(lines.map(l => l.account));
-  const usable = id => accountIds.has(id) || (own(id) && lineIds.has(id));
+  const usable = id => accountIds.has(id) || (ownId(id) && (source !== 'books' || priorFromCw) && lineIds.has(id));
   const map = {};
   if (isObj(data.map)) for (const [k, v] of Object.entries(data.map).slice(0, ENG_MAX_LINES)) if (ENGAGE.BY_CODE[v] && (usable(k) || k === ENGAGE.RE_OPEN)) map[k] = v;
   const ajes = (Array.isArray(data.ajes) ? data.ajes : []).slice(0, 1000).map((j, i) => {
@@ -869,7 +874,9 @@ function validateEngagement(data, store, id) {
     client, team: { preparer: person(team.preparer), reviewer: person(team.reviewer) },
     snapshot: { takenAt: Number(snap.takenAt) || Date.now(), by: str(snap.by, 120).trim(), priorEnd: isDate(snap.priorEnd) ? snap.priorEnd : '', lines, source,
       // The prior year from last year's final file (roll forward) rather than the books.
-      priorSource: snap.priorSource === 'file' ? 'file' : 'books', fileName: str(snap.fileName, 120), ...(snap.bulk ? { bulk: true } : {}) },
+      priorSource: ['file', 'caseware'].includes(snap.priorSource) ? snap.priorSource : 'books', fileName: str(snap.fileName, 120), ...(snap.bulk ? { bulk: true } : {}), ...(['qbo', 'xero'].includes(source) ? { pulledAt: Number(snap.pulledAt) || 0, ledgerName: str(snap.ledgerName, 120) } : {}),
+      // The prior year brought over from a CaseWare export: kept when the current year follows the books again.
+      ...(priorFromCw && isObj(snap.priorImport) ? { priorImport: Object.fromEntries(Object.entries(snap.priorImport).slice(0, ENG_MAX_LINES).filter(([k, v]) => (accountIds.has(k) || ownId(k) || k === ENGAGE.RE_OPEN) && Number.isFinite(Number(v))).map(([k, v]) => [k, Math.round(Number(v) * 100) / 100])), priorFile: str(snap.priorFile, 120) } : {}) },
     map, ajes, wps, reviewNotes, checklist, notes: str(data.notes, 5000),
     signoffs: { prepared: engStamp(s.prepared), reviewed: engStamp(s.reviewed) },
     unlocks: (Array.isArray(data.unlocks) ? data.unlocks : []).slice(-200).filter(isObj).map(u => ({ ...engStamp(u), reason: str(u.reason, 1000).trim() })).filter(u => u.at),

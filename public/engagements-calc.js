@@ -628,5 +628,45 @@
    */
   function deadlines(yearEnd) { return { t2: addMonths(yearEnd, 6), balance: addMonths(yearEnd, 2), balanceCcpc: addMonths(yearEnd, 3) }; }
 
-  return { T2125, t2125, fyStart, fyEnd, tbFromEntries, gstCheck, shareholderLoans, cutoff, subsequent, deadlines, addMonths, gfi, ENTITIES, analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
+  /* ---------- suggested adjusting entries ---------- */
+  /**
+   * Adjusting entries Sumlora can draft because it has the books. Each is a suggestion for the accountant to add as a
+   * draft or ignore; nothing is added on its own. ctx:
+   *   amort: [{ id, name, amount, expense, accum }] — the year's amortization for assets in the register not yet booked
+   *   bills: [{ id, number, vendor, date, lines: [{ account, amount }] }] — bills dated just after the year-end
+   *   accrualAccount: the liability to accrue to (accrued liabilities, else accounts payable)
+   *   types: { accountId: type }
+   * Returns [{ key, kind, memo, explanation, wp, lines }]; entries already added (their fromId) are left out.
+   */
+  function suggestAjes(file, accounts, ctx) {
+    const have = new Set(((file && file.ajes) || []).map(j => j.fromId).filter(Boolean)), out = [];
+    const add = x => { if (!have.has(x.key) && x.lines.length >= 2) out.push(x); };
+    const ye = file.yearEnd;
+    for (const a of (ctx && ctx.amort) || []) {
+      if (!(a.amount >= 0.01) || !a.expense || !a.accum) continue;
+      add({ key: `amort:${a.id}:${ye}`, kind: 'amortization', wp: 'G', memo: `Amortization for the year: ${a.name}`, explanation: `From the fixed asset register: ${a.name}, amortization for the year ended ${ye}. It hasn’t been recorded in the books.`,
+        lines: [{ account: a.expense, debit: r2(a.amount), credit: 0 }, { account: a.accum, debit: 0, credit: r2(a.amount) }] });
+    }
+    const types = (ctx && ctx.types) || {};
+    for (const b of (ctx && ctx.bills) || []) {
+      if (!ctx.accrualAccount) break;
+      const ls = (b.lines || []).filter(l => ['Expense', 'Cost of Goods Sold'].includes(types[l.account]) && l.amount >= 0.01);
+      const tot = r2(ls.reduce((t, l) => t + l.amount, 0));
+      if (!tot) continue;
+      add({ key: `accrue:${b.id}`, kind: 'accrual', wp: 'BB', memo: `Possible accrual: ${b.vendor || 'bill'}${b.number ? ' #' + b.number : ''} dated ${b.date}`,
+        explanation: `This bill is dated after the year-end. If it is for goods or services received by ${ye}, accrue it (before sales tax). Ignore it if it belongs to the next year.`,
+        lines: [...ls.map(l => ({ account: l.account, debit: r2(l.amount), credit: 0 })), { account: ctx.accrualAccount, debit: 0, credit: tot }] });
+    }
+    // A shareholder account on the wrong side: owed to the company but sitting in liabilities (or the reverse).
+    const tb = workingTb(file, accounts), sh = r => /shareholder|director|actionnaire/i.test(r.name || '');
+    const assetSh = tb.find(r => sh(r) && r.type === 'Asset') || (accounts || []).map(a => ({ account: a.id, ...a })).find(a => sh(a) && a.type === 'Asset');
+    const liabSh = tb.find(r => sh(r) && r.type === 'Liability') || (accounts || []).map(a => ({ account: a.id, ...a })).find(a => sh(a) && a.type === 'Liability');
+    for (const r of tb.filter(sh)) {
+      if (r.type === 'Liability' && r.final > 0.005 && assetSh) add({ key: `reclass:${r.account}:${ye}`, kind: 'reclass', wp: 'F', memo: `Reclassify ${r.name}: the shareholder owes the company`, explanation: `${r.name} has a debit balance, so the shareholder owes the company. Show it as an asset.`, lines: [{ account: assetSh.account, debit: r2(r.final), credit: 0 }, { account: r.account, debit: 0, credit: r2(r.final) }] });
+      if (r.type === 'Asset' && r.final < -0.005 && liabSh) add({ key: `reclass:${r.account}:${ye}`, kind: 'reclass', wp: 'GG', memo: `Reclassify ${r.name}: the company owes the shareholder`, explanation: `${r.name} has a credit balance, so the company owes the shareholder. Show it as a liability.`, lines: [{ account: r.account, debit: r2(-r.final), credit: 0 }, { account: liabSh.account, debit: 0, credit: r2(-r.final) }] });
+    }
+    return out;
+  }
+
+  return { suggestAjes, T2125, t2125, fyStart, fyEnd, tbFromEntries, gstCheck, shareholderLoans, cutoff, subsequent, deadlines, addMonths, gfi, ENTITIES, analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
 });
