@@ -144,16 +144,16 @@ function createApp(opts) {
   const featureOn = (cid, key, store) => {
     const c = reg.get(cid), f = c && auth.firm(c.firmId);
     const settings = (store || reg.store(cid)).getSetting('company') || {};
-    return PLANS.featureOn(licencePlan() || (f ? f.plan : 'thrive'), settings.features, key, featureAddons(c));
+    return PLANS.featureOn(licencePlan() || (f ? f.plan : 'thrive'), settings.features, key, featureAddons(c), f && f.early);
   };
   /** In the plan or an add-on, whatever the company's own switches say (for "can it be used at all?"). */
-  const companyHas = (cid, key) => { const c = reg.get(cid), f = c && auth.firm(c.firmId); return PLANS.hasFeature(licencePlan() || (f ? f.plan : 'thrive'), key, featureAddons(c)); };
+  const companyHas = (cid, key) => { const c = reg.get(cid), f = c && auth.firm(c.firmId); return PLANS.hasFeature(licencePlan() || (f ? f.plan : 'thrive'), key, featureAddons(c), f && f.early); };
   const needAddon = (cid, key) => {
     if (!(reg.get(cid) || {})[key]) throw new ValidationError(`The ${PLANS.ADDONS[key].label} add-on isn’t on for this company. An owner can add it in Settings.`, 403);
   };
   const needFeature = (cid, key, store) => {
     if (featureOn(cid, key, store)) return;
-    if (PLANS.comingSoon(key)) throw new ValidationError(`${PLANS.FEATURES[key].label} is coming soon to Sumlora. It isn’t available yet.`, 403);
+    if (PLANS.comingSoon(key) && !companyHas(cid, key)) throw new ValidationError(`${PLANS.FEATURES[key].label} is coming soon to Sumlora. It isn’t available yet.`, 403);
     // Payroll on Seed or Grow: say how to get it (the add-on), not just that it's missing.
     if (key === 'payroll' && !licence.on && !companyHas(cid, key)) throw new ValidationError('Payroll isn’t part of this company’s plan. An owner can add the Payroll add-on in Settings → Features.', 403);
     throw new ValidationError(`${PLANS.FEATURES[key].label} isn’t part of this company’s plan.`, 403);
@@ -1520,7 +1520,7 @@ function createApp(opts) {
       const firms = auth.data.firms.map(f => {
         const people = auth.firmUsers(f.id), owner = people.find(u => u.role === 'owner');
         return { ...f, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
-          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan), legacy: f.legacy || '', billPayroll: !!f.billPayroll,
+          aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan), legacy: f.legacy || '', billPayroll: !!f.billPayroll, early: f.early || [],
           payrollCompanies: reg.list(f.id).filter(c => !c.archived && c.payroll).length, billing: undefined, subscription: billingDescribe(f.billing) };
       });
       return { firms, signups: auth.signups, defaultPlan: auth.defaultPlan, myFirm: user.firmId, plans: PLANS.PLANS, legacy: PLANS.LEGACY, features: PLANS.FEATURES, addons: PLANS.ADDONS };
@@ -1544,7 +1544,7 @@ function createApp(opts) {
       adminOnly(user);
       const b = await readJson(req);
       const patch = {};
-      for (const k of ['status', 'name', 'ai', 'aiCapUsd', 'plan', 'legacy', 'billPayroll']) if (b[k] !== undefined) patch[k] = b[k];
+      for (const k of ['status', 'name', 'ai', 'aiCapUsd', 'plan', 'legacy', 'billPayroll', 'early']) if (b[k] !== undefined) patch[k] = b[k];
       const f = auth.updateFirm(decodeURIComponent(m[1]), patch, user);
       // A new plan or price reaches the firm's subscription; payroll billing changes its add-on line.
       if (patch.plan !== undefined || patch.legacy !== undefined) await syncFirmPlan(f.id);
