@@ -24,6 +24,7 @@ const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./
 const DEP = require('../../public/deposits-calc.js');
 const DELAYED = require('../../public/delayed-calc.js');
 const ENGAGE = require('../../public/engagements-calc.js');
+const dayBeforeIso = s => { const d = new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10) - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 const MIME = {
@@ -777,7 +778,7 @@ function createApp(opts) {
       out[c] = (out[c] || []).filter(r => (c === 'items' ? see('sales') || see('expenses') : see(ROLES.recordArea(c, r))));
     }
     // Files and questions go with the transaction they're on.
-    const ids = { entries: new Set(out.entries.map(r => r.id)), docs: new Set(out.docs.map(r => r.id)), bankTxns: new Set(out.bankTxns.map(r => r.id)), engagements: new Set((out.engagements || []).map(r => r.id)) };
+    const ids = { entries: new Set(out.entries.map(r => r.id)), docs: new Set(out.docs.map(r => r.id)), bankTxns: new Set(out.bankTxns.map(r => r.id)), engagements: new Set((out.engagements || []).map(r => r.id)), requests: new Set((out.requests || []).map(r => r.id)) };
     const onSeen = x => !!(ids[x.target] && ids[x.target].has(x.targetId));
     out.attachments = out.attachments.filter(onSeen);
     out.questions = out.questions.filter(onSeen);
@@ -822,7 +823,10 @@ function createApp(opts) {
     if (ctx.user && (ctx.user.role === 'client' || ctx.user.readOnly) && out.employees) out.employees = out.employees.map(maskPrivate);
     if (ctx.user && ctx.user.perms) roleView(ctx.user, out);
     // Year-end files are the accountant's: clients never get them, and nobody does while the feature is off.
-    if (!ctx.user || ctx.user.role === 'client' || !featureOn(ctx.id, 'yearEndFiles', ctx.store)) {
+    const yfOn = featureOn(ctx.id, 'yearEndFiles', ctx.store);
+    // Requests to the client: the client and staff see them while the feature is on.
+    if (!ctx.user || !yfOn) { out.requests = []; out.attachments = out.attachments.filter(a => a.target !== 'requests'); }
+    if (!ctx.user || ctx.user.role === 'client' || !yfOn) {
       out.engagements = [];
       out.attachments = out.attachments.filter(a => a.target !== 'engagements');
     } else {
@@ -992,6 +996,25 @@ function createApp(opts) {
       if (ctx) needFeature(ctx.id, 'yearEndFiles', store);
       if (op === 'set') w.data = stampEngagement(store.get('engagements', id), w.data || {}, user);
     }
+    // Requests to the client: staff make and decide them; a client can only answer one (a note, "sent", or approving
+    // the draft statements), and the server stamps who did it and when.
+    if (collection === 'requests') {
+      if (ctx) needFeature(ctx.id, 'yearEndFiles', store);
+      const prev = store.get('requests', id), now = opts.now ? +opts.now() : Date.now();
+      const me = user ? { by: user.name || user.username, id: user.id, at: now } : null;
+      if (user && user.role === 'client') {
+        if (op !== 'set' || !prev) throw new ValidationError('Your accountant sends the requests.', 403);
+        const d = w.data || {}, next = { ...prev, clientNote: String(d.clientNote ?? prev.clientNote ?? '') };
+        if (d.status === 'sent' && ['open', 'returned'].includes(prev.status)) { next.status = 'sent'; next.sent = me; }
+        if (prev.kind === 'approval' && d.approval && typeof d.approval.approved === 'boolean' && prev.status !== 'accepted') { next.approval = { ...me, approved: d.approval.approved }; next.status = 'sent'; next.sent = me; }
+        w.data = next;
+      } else if (op === 'set') {
+        const d = { ...(w.data || {}) };
+        d.created = prev ? prev.created : me; d.sent = prev ? prev.sent : null; d.approval = prev ? prev.approval : null;
+        d.decided = prev && prev.status === d.status ? prev.decided : ['accepted', 'returned'].includes(d.status) ? me : null;
+        w.data = d;
+      }
+    }
     // A year-end file's documents can't be removed once the file is final.
     if (collection === 'attachments' && op === 'delete') {
       const at = store.get('attachments', id), e = at && at.target === 'engagements' && store.get('engagements', at.targetId);
@@ -1069,6 +1092,12 @@ function createApp(opts) {
       store.delete(collection, id);
       if ((collection === 'receipts' || collection === 'attachments') && before && before.fileId) store.deleteFile(before.fileId);
       // A deleted transaction, invoice or bill takes its attached files and questions with it.
+      // A deleted year-end file takes its requests to the client (and their files) with it.
+      if (collection === 'engagements') for (const r of store.list('requests').filter(r => r.engagementId === id)) {
+        for (const x of store.list('attachments').filter(x => x.target === 'requests' && x.targetId === r.id)) { store.delete('attachments', x.id); store.deleteFile(x.fileId); }
+        store.delete('requests', r.id);
+      }
+      if (collection === 'requests') for (const x of store.list('attachments').filter(x => x.target === 'requests' && x.targetId === id)) { store.delete('attachments', x.id); store.deleteFile(x.fileId); }
       if (collection === 'entries' || collection === 'docs' || collection === 'engagements') {
         for (const x of store.list('attachments').filter(x => x.target === collection && x.targetId === id)) { store.delete('attachments', x.id); store.deleteFile(x.fileId); }
         for (const q of store.list('questions').filter(q => q.target === collection && q.targetId === id)) store.delete('questions', q.id);
@@ -1515,11 +1544,29 @@ function createApp(opts) {
       return { ok: true, firm: auth.updateFirm(user.firmId, { name: b.name }, user) };
     }],
     // Firms on this server (administrators): approve sign-ups, suspend, allow AI, and whether new firms can sign up.
+    // The firm's logo, for the compilation report and letters in year-end files (a small JPEG, made in the browser).
+    ['GET', /^\/api\/firm\/logo$/, (req, m, res, user) => {
+      if (!user || user.role === 'client') throw new ValidationError('Not found.', 404);
+      const f = auth.firm(user.firmId);
+      if (!f || !f.logo) throw new ValidationError('No logo yet.', 404);
+      const buf = Buffer.from(f.logo, 'base64');
+      send(res, 200, buf, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff' });
+    }],
+    ['PUT', /^\/api\/firm\/logo$/, async (req, m, res, user) => {
+      if (!user || user.role !== 'owner') throw new ValidationError('Only an owner can change the firm’s logo.', 403);
+      const body = (await readJson(req, 1024 * 1024)) || {};
+      const data = body.data ? Buffer.from(String(body.data), 'base64') : null;
+      if (data && !(data.length > 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)) throw new ValidationError('The logo must be a JPEG picture.');
+      if (data && data.length > 300 * 1024) throw new ValidationError('That logo is over 300 KB. Try a smaller picture.', 413);
+      auth.setFirmLogo(user.firmId, data ? data.toString('base64') : '', user);
+      return { ok: true, logo: !!data };
+    }],
     ['GET', /^\/api\/firms$/, (req, m, res, user) => {
       adminOnly(user);
       const firms = auth.data.firms.map(f => {
         const people = auth.firmUsers(f.id), owner = people.find(u => u.role === 'owner');
-        return { ...f, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
+        const { logo, ...fNoLogo } = f;
+        return { ...fNoLogo, hasLogo: !!logo, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
           aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan), legacy: f.legacy || '', billPayroll: !!f.billPayroll, early: f.early || [],
           payrollCompanies: reg.list(f.id).filter(c => !c.archived && c.payroll).length, billing: undefined, subscription: billingDescribe(f.billing) };
       });
@@ -1550,7 +1597,8 @@ function createApp(opts) {
       if (patch.plan !== undefined || patch.legacy !== undefined) await syncFirmPlan(f.id);
       else if (patch.billPayroll !== undefined) await syncFirmCount(f.id);
       broadcast({ companies: true, firmId: f.id });
-      return { ok: true, firm: f };
+      const { logo, ...fNoLogo } = f;
+      return { ok: true, firm: fNoLogo };
     }],
     // Sign-in help for another firm's owners (the administrator): their own owners look after everyone else in the firm.
     ['GET', /^\/api\/firms\/([^/]+)\/owners$/, (req, m, res, user) => {
@@ -1574,6 +1622,75 @@ function createApp(opts) {
       const id = decodeURIComponent(m[1]);
       auth.deleteFirm(id, user, reg.list(id).length);
       return { ok: true };
+    }],
+    /*
+     * The firm's year-ends on one screen: for each company the person can open, its last fiscal year-end, the year-end
+     * file for it (status, progress, review notes, client requests, team) and the usual deadlines. Companies with a
+     * 4-digit code not opened in this session show only their name and dates.
+     */
+    ['GET', /^\/api\/yearends$/, (req, m, res, user) => {
+      if (!user || user.role === 'client') throw new ValidationError('Not found.', 404);
+      const today = localDay(opts.now ? opts.now() : new Date()), out = [];
+      for (const c of reg.list(user.firmId).filter(c => canSeeCo(user, c.id) && !c.archived)) {
+        let ctx; try { ctx = ctxFor(c.id); } catch { continue; }
+        if (!featureOn(c.id, 'yearEndFiles', ctx.store)) continue;
+        const s = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+        const lastEnd = ENGAGE.fyEnd(dayBeforeIso(ENGAGE.fyStart(today, s.fyStart)), s.fyStart);
+        const row = { id: c.id, name: s.name, orgType: s.orgType || 'business', lastEnd, deadlines: ENGAGE.deadlines(lastEnd) };
+        try { codeGate(user, c.id, ctx.store); } catch { out.push({ ...row, locked: true }); continue; }
+        const files = ctx.store.list('engagements').sort((a, b) => b.yearEnd.localeCompare(a.yearEnd));
+        const f = files.find(x => x.yearEnd === lastEnd) || null, accounts = ctx.store.list('accounts'), atts = ctx.store.list('attachments'), reqs = ctx.store.list('requests');
+        const sum = x => { const p = ENGAGE.progress(x, accounts, atts); return { id: x.id, yearEnd: x.yearEnd, status: ENGAGE.statusOf(x.status), pct: p.pct, openNotes: p.openNotes, preparer: (x.team && x.team.preparer && x.team.preparer.name) || '', reviewer: (x.team && x.team.reviewer && x.team.reviewer.name) || '',
+          waiting: reqs.filter(r => r.engagementId === x.id && ['open', 'returned'].includes(r.status)).length, answered: reqs.filter(r => r.engagementId === x.id && r.status === 'sent').length, deadlines: ENGAGE.deadlines(x.yearEnd) }; };
+        const prev = files.find(x => x.yearEnd < lastEnd);
+        out.push({ ...row, file: f ? sum(f) : null, previous: prev ? { id: prev.id, yearEnd: prev.yearEnd, status: ENGAGE.statusOf(prev.status) } : null });
+      }
+      return { today, companies: out.sort((a, b) => a.deadlines.t2.localeCompare(b.deadlines.t2) || a.name.localeCompare(b.name)) };
+    }],
+    /*
+     * Start the last fiscal year-end's file for several companies at once, straight from their books. A company whose
+     * previous file is final rolls forward from it (its final figures become the prior year). Companies with a file
+     * already, a locked code, or books that don't balance are skipped and say why.
+     */
+    ['POST', /^\/api\/yearends\/start$/, async (req, m, res, user) => {
+      if (!user || user.role === 'client' || user.readOnly) throw new ValidationError('Only the firm’s staff can start year-end files.', 403);
+      const body = (await readJson(req)) || {}, ids = Array.isArray(body.companies) ? body.companies.slice(0, 500).map(String) : [];
+      const today = localDay(opts.now ? opts.now() : new Date()), results = [];
+      for (const cid of ids) {
+        const res1 = { id: cid };
+        try {
+          if (!canSeeCo(user, cid)) throw new ValidationError('You can’t open that company.', 403);
+          const ctx = ctxFor(cid); ctx.user = user;
+          codeGate(user, cid, ctx.store);
+          if (user.perms) needArea(user, 'accounting', 'edit');
+          needFeature(cid, 'yearEndFiles', ctx.store);
+          const s = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+          const ye = ENGAGE.fyEnd(dayBeforeIso(ENGAGE.fyStart(today, s.fyStart)), s.fyStart);
+          res1.name = s.name; res1.yearEnd = ye;
+          const files = ctx.store.list('engagements');
+          if (files.some(x => x.yearEnd === ye)) throw new ValidationError('There’s already a file for that year-end.', 409);
+          const accounts = ctx.store.list('accounts'), tb = ENGAGE.tbFromEntries(ctx.store.list('entries'), accounts, ye, s.fyStart);
+          if (Math.abs(tb.off) >= 0.01 || Math.abs(tb.offPrior) >= 0.01) throw new ValidationError('The books’ trial balance doesn’t add up to zero. Check for unbalanced entries.');
+          const prev = files.filter(x => x.yearEnd < ye).sort((a, b) => b.yearEnd.localeCompare(a.yearEnd))[0];
+          const roll = prev && ENGAGE.statusOf(prev.status) === 'final' && (!prev.snapshot || !prev.snapshot.source || prev.snapshot.source === 'books');
+          const lines = roll ? ENGAGE.withPriorFrom(tb.lines, prev, accounts) : tb.lines;
+          const me = { id: user.id, name: user.name || user.username };
+          const data = {
+            yearEnd: ye, kind: prev ? prev.kind : 'compilation', framework: prev ? prev.framework : (['npo', 'charity'].includes(s.orgType) ? 'ASNPO' : 'ASPE'), entity: prev ? prev.entity || '' : '', status: 'progress',
+            snapshot: { takenAt: Date.now(), by: me.name, priorEnd: tb.priorEnd, lines, source: 'books', priorSource: roll ? 'file' : 'books', bulk: true },
+            map: prev ? { ...(prev.map || {}) } : {}, ajes: [], wps: {}, reviewNotes: [], checklist: {}, signoffs: {}, notes: '', created: Date.now(),
+            client: prev && prev.client && prev.client.legalName ? { ...prev.client } : { legalName: s.name, operatingName: '', address: s.address || '', province: s.province || '', corpNumber: '', bn: s.bn || '', contact: [s.email, s.phone].filter(Boolean).join(' · '), industry: s.industry || '', owners: '' },
+            team: { preparer: me, reviewer: prev && prev.team ? prev.team.reviewer : null }, fsNotes: prev ? prev.fsNotes || [] : [], report: prev && prev.report ? { ...prev.report, date: '' } : undefined,
+            rolledFrom: prev ? prev.id : '', includeCashFlow: prev ? !!prev.includeCashFlow : false, layout: prev ? prev.layout : undefined, materiality: prev ? prev.materiality : undefined,
+          };
+          const id = crypto.randomUUID();
+          ctx.store.transaction(() => applyWrite(ctx.store, { op: 'set', collection: 'engagements', id, data }, user, ctx));
+          ctx.bump();
+          Object.assign(res1, { ok: true, fileId: id, rolled: !!roll, accounts: lines.length });
+        } catch (e) { Object.assign(res1, { ok: false, error: e.message }); }
+        results.push(res1);
+      }
+      return { results };
     }],
     ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list(user.firmId).filter(c => canSeeCo(user, c.id)).map(summary).map(c => roleSummary(user, c)), provinces: PROVINCES,
       ...(user.platformAdmin ? { pendingFirms: auth.data.firms.filter(f => f.status === 'pending').length } : {}) })],
@@ -2525,6 +2642,93 @@ function createApp(opts) {
       if (q) ctx.store.transaction(() => { ctx.store.delete('questions', q.id); ctx.store.audit(ctx.user, 'delete', { collection: 'questions', id: q.id, summary: `question on ${q.label}`, before: q }); });
       return { ok: true, rev: ctx.bump() };
     }],
+    /*
+     * Files for a request (the client's bank statement, or the draft statements staff send for approval). A file the
+     * client sends also goes on the request's working paper in the year-end file, where staff see it.
+     */
+    ['POST', /^\/requests\/([A-Za-z0-9_-]+)\/files$/, async (ctx, req, m) => {
+      needFeature(ctx.id, 'yearEndFiles', ctx.store);
+      const r = ctx.store.get('requests', m[1]);
+      if (!r) throw new ValidationError('That request doesn’t exist.', 404);
+      const client = ctx.user.role === 'client';
+      if (!client) needArea(ctx.user, 'accounting', 'edit');
+      if (ctx.user.readOnly) throw new ValidationError('View-only users can’t send files.', 403);
+      if (client && r.status === 'accepted') throw new ValidationError('Your accountant has already accepted this. Ask them before sending more.', 409);
+      if (ctx.store.list('attachments').filter(x => x.target === 'requests' && x.targetId === r.id).length >= 30) throw new ValidationError('That’s 30 files on this request already.', 409);
+      const body = (await readJson(req, 15 * 1024 * 1024)) || {};
+      const data = Buffer.from(String(body.data || ''), 'base64');
+      if (!data.length) throw new ValidationError('That file is empty.');
+      if (data.length > 10 * 1024 * 1024) throw new ValidationError('That file is over 10 MB.', 413);
+      const mediaType = sniffType(data, body.fileName);
+      if (!mediaType) throw new ValidationError('Send a PDF, a photo, or an Excel (.xlsx) or Word (.docx) document.');
+      const name = String(body.fileName || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').slice(0, 120);
+      const e = ctx.store.get('engagements', r.engagementId);
+      const by = { uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now() };
+      ctx.store.transaction(() => {
+        const id = crypto.randomUUID(), fileId = crypto.randomUUID();
+        ctx.store.putFile(fileId, { mediaType, name, data });
+        ctx.store.put('attachments', id, validateRecord('attachments', id, { target: 'requests', targetId: r.id, fileId, name, mediaType, size: data.length, ...by }, ctx.store));
+        // From the client: a copy on the working paper (kept even if the request is later deleted).
+        if (client && e) {
+          const id2 = crypto.randomUUID(), fileId2 = crypto.randomUUID();
+          ctx.store.putFile(fileId2, { mediaType, name, data });
+          ctx.store.put('attachments', id2, validateRecord('attachments', id2, { target: 'engagements', targetId: e.id, wp: r.wp, fileId: fileId2, name, mediaType, size: data.length, ...by }, ctx.store));
+        }
+        ctx.store.audit(ctx.user, 'add', { collection: 'requests', id: r.id, summary: `year-end file ${r.yearEnd}: ${client ? 'client sent' : 'attached'} ${name} for request “${r.text.slice(0, 60)}”` });
+      });
+      return { ok: true, rev: ctx.bump() };
+    }],
+    /*
+     * The year-end bank balance as the bank sees it, for accounts with a bank feed: the bank's balance now, less the bank
+     * lines it sent dated after the year-end. Compared with the file's figure on the Cash working paper.
+     */
+    ['GET', /^\/engagements\/([A-Za-z0-9_-]+)\/bankcheck$/, async (ctx, req, m) => {
+      notClient(ctx.user); needArea(ctx.user, 'accounting', 'view'); needFeature(ctx.id, 'yearEndFiles', ctx.store);
+      const e = ctx.store.get('engagements', m[1]);
+      if (!e) throw new ValidationError('That year-end file doesn’t exist.', 404);
+      const out = [], now = new Date().toISOString().slice(0, 10);
+      for (const it of plaid.list(ctx.id)) {
+        let bal;
+        try { bal = await plaid.balances(it.id, ctx.id); } catch (err) { out.push({ institution: it.institution, error: err.message }); continue; }
+        for (const [pid, acct] of Object.entries(it.links || {})) {
+          const b = bal.find(x => x.id === pid), a = ctx.store.get('accounts', acct);
+          if (!b || !a || !Number.isFinite(b.current)) continue;
+          const lines = ctx.store.list('bankTxns').filter(t => t.account === acct && t.feed && t.date > e.yearEnd);
+          const after = Math.round(lines.reduce((t, x) => t + (Number(x.amount) || 0), 0) * 100) / 100;
+          const credit = b.type === 'credit' || b.type === 'loan';
+          // A card or loan: the bank's balance is what's owed (a credit in the books).
+          const nowBooks = credit ? -b.current : b.current;
+          out.push({ institution: it.institution, account: acct, name: a.name, type: b.type, bankNow: b.current, asOf: now, afterYearEnd: after, linesAfter: lines.length, bankAtYearEnd: Math.round((nowBooks - after) * 100) / 100, since: (it.starts || {})[pid] || '' });
+        }
+      }
+      return { accounts: out };
+    }],
+    // Email the company's client users that there are requests waiting (from the server's mailbox).
+    ['POST', /^\/engagements\/([A-Za-z0-9_-]+)\/notify$/, async (ctx, req, m) => {
+      notClient(ctx.user); needArea(ctx.user, 'accounting', 'edit'); needFeature(ctx.id, 'yearEndFiles', ctx.store);
+      const e = ctx.store.get('engagements', m[1]);
+      if (!e) throw new ValidationError('That year-end file doesn’t exist.', 404);
+      const open = ctx.store.list('requests').filter(r => r.engagementId === e.id && ['open', 'returned'].includes(r.status));
+      if (!open.length) throw new ValidationError('There are no open requests to tell the client about.');
+      const sys = sysMail.get(), base = appUrl();
+      if (!sys || !sys.host) throw new ValidationError('Email isn’t set up on this server yet. The administrator sets it up under Settings.', 409);
+      const c = reg.get(ctx.id), settings = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      const people = auth.firmUsers(c.firmId).filter(u => u.role === 'client' && !u.disabled && auth.canSee(auth.publicUser(u), ctx.id) && mail.EMAIL_RE.test(u.username));
+      if (!people.length) throw new ValidationError('No client user with an email address can open these books. Invite the client first, under Users & security.', 409);
+      const firm = auth.firm(c.firmId) || {};
+      let sent = 0;
+      for (const p of people) {
+        const fr = (p.lang || settings.lang) === 'fr';
+        const lines = open.slice(0, 30).map(r => `• ${r.text}${r.due ? (fr ? ` (d’ici le ${r.due})` : ` (by ${r.due})`) : ''}`).join('\n');
+        const subject = fr ? `${firm.name || 'Votre comptable'} : ${open.length} demande(s) pour la fin d’exercice de ${settings.name}` : `${firm.name || 'Your accountant'}: ${open.length} request(s) for ${settings.name}’s year-end`;
+        const text = fr ? `Bonjour ${p.name},\n\nPour la fin d’exercice du ${e.yearEnd}, nous avons besoin de :\n\n${lines}\n\nOuvrez Sumlora${base ? ' (' + base + ')' : ''}, puis Demandes, pour envoyer les documents. Vous pouvez prendre des photos avec l’application Sumlora.\n\n${firm.name || ''}`
+          : `Hello ${p.name},\n\nFor the year-end of ${e.yearEnd}, we need:\n\n${lines}\n\nOpen Sumlora${base ? ' (' + base + ')' : ''} and go to Requests to send them. You can take photos with the Sumlora app.\n\n${firm.name || ''}`;
+        try { await mail.send(sys, { to: [p.username], subject, text }, wfMailOpts()); sent++; } catch (err) { console.error('Request email couldn’t be sent:', err.message); }
+      }
+      ctx.store.audit(ctx.user, 'email', { collection: 'engagements', id: e.id, summary: `year-end file ${e.yearEnd}: emailed ${sent} client user(s) about ${open.length} request(s)` });
+      if (!sent) throw new ValidationError('The email couldn’t be sent. Check the server’s email settings.', 502);
+      return { ok: true, sent };
+    }],
     // Attach a PDF or photo to a transaction, invoice or bill.
     ['POST', /^\/attachments$/, async (ctx, req) => {
       notClient(ctx.user);
@@ -2564,8 +2768,8 @@ function createApp(opts) {
     ['GET', /^\/files\/([A-Za-z0-9-]+)$/, (ctx, req, m, res) => {
       const f = ctx.store.getFile(m[1]);
       if (!f) throw new ValidationError('That file isn’t here any more.', 404);
-      const engDoc = ctx.store.list('attachments').find(x => x.fileId === m[1] && x.target === 'engagements');
-      if (engDoc && (ctx.user.role === 'client' || !featureOn(ctx.id, 'yearEndFiles', ctx.store))) throw new ValidationError('That file isn’t here any more.', 404);
+      const engDoc = ctx.store.list('attachments').find(x => x.fileId === m[1] && (x.target === 'engagements' || x.target === 'requests'));
+      if (engDoc && ((engDoc.target === 'engagements' && ctx.user.role === 'client') || !featureOn(ctx.id, 'yearEndFiles', ctx.store))) throw new ValidationError('That file isn’t here any more.', 404);
       if (ctx.user.perms) { // a receipt is in Expenses; an attachment goes with its transaction (the logo is for everyone)
         const at = ctx.store.list('attachments').find(x => x.fileId === m[1]);
         if (at) needArea(ctx.user, ROLES.recordArea(at.target, ctx.store.get(at.target, at.targetId)), 'view');

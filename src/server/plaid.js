@@ -144,6 +144,13 @@ class Plaid {
     return (j.accounts || []).filter(a => /^[A-Za-z0-9_-]{1,100}$/.test(String(a.account_id || ''))).map(a => ({ id: String(a.account_id), name: String(a.name || a.official_name || 'Account').slice(0, 100), mask: String(a.mask || '').slice(0, 8), type: String(a.type || ''), subtype: String(a.subtype || ''), currency: String((a.balances && a.balances.iso_currency_code) || '') }));
   }
 
+  /** Each bank account's balance now, as the bank reports it: [{ id, type, current, available, currency }]. */
+  async balances(id, companyId) {
+    const it = this.item(id, companyId);
+    const j = await this.call('/accounts/get', { access_token: it.accessToken });
+    return (j.accounts || []).map(a => ({ id: String(a.account_id), type: String(a.type || ''), current: Number(a.balances && a.balances.current), available: a.balances && a.balances.available != null ? Number(a.balances.available) : null, currency: String((a.balances && a.balances.iso_currency_code) || '') }));
+  }
+
   item(id, companyId) {
     const it = this.data.items[id];
     if (!it || it.companyId !== companyId) throw new ValidationError('That bank connection doesn’t exist.', 404);

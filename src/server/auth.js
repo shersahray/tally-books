@@ -254,6 +254,14 @@ class Auth {
     }
   }
   /** An administrator changes a firm: approve or suspend it, rename it, allow AI. */
+  /** The firm's logo for reports: a base64 JPEG, or '' to remove it. */
+  setFirmLogo(id, b64, actor) {
+    const f = this.firm(id);
+    if (!f) throw new AuthError('That firm doesn’t exist.', 404);
+    if (b64) f.logo = b64; else delete f.logo;
+    this.save();
+    this.log('firm-changed', { by: actor.username, firm: f.name, changes: [b64 ? 'logo' : 'logo removed'] });
+  }
   updateFirm(id, patch, actor) {
     const f = this.firm(id);
     if (!f) throw new AuthError('That firm doesn’t exist.', 404);
@@ -329,7 +337,7 @@ class Auth {
     const cr = this.customRoleOf(u);
     return { id: u.id, name: u.name, username: u.username, role: u.role, companies: u.companies || [], readOnly: !!u.readOnly, disabled: !!u.disabled, created: u.created, lastLogin: u.lastLogin || 0,
       customRole: cr ? cr.id : '', roleName: cr ? cr.name : '', perms: cr ? { ...cr.perms } : null, approveBills: !!(cr && cr.approveBills),
-      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: PLANS.planOf((this.planOverride && this.planOverride()) || (f ? f.plan : 'thrive')), firmEarly: (f && f.early) || [], platformAdmin: !!u.platformAdmin,
+      firmId: u.firmId || '', firmName: f ? f.name : '', firmPlan: PLANS.planOf((this.planOverride && this.planOverride()) || (f ? f.plan : 'thrive')), firmEarly: (f && f.early) || [], firmLogo: !!(f && f.logo), platformAdmin: !!u.platformAdmin,
       lang: u.lang || '', theme: u.theme || '', mustChange: !!u.mustChange, twoStep, mustEnroll: !twoStep && this.needs2fa(u), invited: !u.hash, recoveryLeft: twoStep ? (u.totp.recovery || []).length : 0,
       linkPending: u.invite && u.invite.expires > Date.now() ? u.invite.kind : '', terms: u.terms ? { v: u.terms.v, at: u.terms.at } : null,
       locked: this.isLocked(u.username) };

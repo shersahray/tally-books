@@ -794,7 +794,6 @@ function validateEngagement(data, store, id) {
   const kind = ENGAGE.KINDS[data.kind] ? data.kind : 'compilation';
   const status = ENGAGE.statusOf(data.status);
   const prev = id && store.get('engagements', id);
-  if (prev && ENGAGE.statusOf(prev.status) === 'final' && status === 'final') throw new ValidationError('This year-end file is final. Reopen it to make changes.', 409);
   const accountIds = new Set(store.list('accounts').map(a => a.id));
   const snap = isObj(data.snapshot) ? data.snapshot : null;
   if (!snap || !Array.isArray(snap.lines)) throw new ValidationError('Take the trial balance snapshot first.');
@@ -862,27 +861,66 @@ function validateEngagement(data, store, id) {
   const person = p => (isObj(p) && p.id ? { id: str(p.id, 80), name: str(p.name, 120).trim() } : null);
   const ci = isObj(data.client) ? data.client : {};
   const client = Object.fromEntries(['legalName', 'operatingName', 'address', 'province', 'corpNumber', 'bn', 'contact', 'industry', 'owners'].map(k => [k, str(ci[k], k === 'address' || k === 'owners' ? 1000 : 200).trim()]));
-  return {
+  const out = {
+    entity: ENGAGE.ENTITIES[data.entity] ? data.entity : '',
+    layout: { expenses: isObj(data.layout) && data.layout.expenses === 'summary' ? 'summary' : 'detail' },
+    materiality: isObj(data.materiality) ? { amount: Math.max(0, Math.min(1e9, Math.round(Number(data.materiality.amount) || 0))), pct: Math.max(0, Math.min(100, Number(data.materiality.pct) || 0)) } : null,
     yearEnd: data.yearEnd, rolledFrom: data.rolledFrom ? str(data.rolledFrom, 120) : '', kind, status, framework: ENGAGE.FRAMEWORKS[data.framework] ? data.framework : 'ASPE',
     client, team: { preparer: person(team.preparer), reviewer: person(team.reviewer) },
     snapshot: { takenAt: Number(snap.takenAt) || Date.now(), by: str(snap.by, 120).trim(), priorEnd: isDate(snap.priorEnd) ? snap.priorEnd : '', lines, source,
       // The prior year from last year's final file (roll forward) rather than the books.
-      priorSource: snap.priorSource === 'file' ? 'file' : 'books', fileName: str(snap.fileName, 120) },
+      priorSource: snap.priorSource === 'file' ? 'file' : 'books', fileName: str(snap.fileName, 120), ...(snap.bulk ? { bulk: true } : {}) },
     map, ajes, wps, reviewNotes, checklist, notes: str(data.notes, 5000),
     signoffs: { prepared: engStamp(s.prepared), reviewed: engStamp(s.reviewed) },
     unlocks: (Array.isArray(data.unlocks) ? data.unlocks : []).slice(-200).filter(isObj).map(u => ({ ...engStamp(u), reason: str(u.reason, 1000).trim() })).filter(u => u.at),
     // The financial statements' words: the compilation engagement report and the notes, written by the accountant.
     includeCashFlow: !!data.includeCashFlow,
+    // Time spent on the engagement, the budget, and what was invoiced.
+    time: (Array.isArray(data.time) ? data.time : []).slice(0, 2000).filter(isObj).map((t, i) => {
+      const hours = Math.round((Number(t.hours) || 0) * 100) / 100;
+      if (!(hours > 0) || hours > 24) throw new ValidationError(`Time entry ${i + 1}: enter between 0 and 24 hours.`);
+      return { id: str(t.id, 40) || `t${i + 1}`, date: isDate(t.date) ? t.date : data.yearEnd, userId: str(t.userId, 80), name: str(t.name, 120).trim(), hours,
+        rate: Math.max(0, Math.min(10000, Math.round((Number(t.rate) || 0) * 100) / 100)), note: str(t.note, 500).trim(), billed: isDate(t.billed) ? t.billed : '' };
+    }),
+    budget: isObj(data.budget) ? { hours: Math.max(0, Math.min(100000, Number(data.budget.hours) || 0)), fee: Math.max(0, Math.min(1e9, Math.round((Number(data.budget.fee) || 0) * 100) / 100)), rate: Math.max(0, Math.min(10000, Number(data.budget.rate) || 0)) } : null,
+    letters: Object.fromEntries(['engagement', 'representation'].filter(k => isObj(data.letters) && isObj(data.letters[k])).map(k => { const l = data.letters[k]; return [k, { custom: !!l.custom, template: str(l.template, 60), date: isDate(l.date) ? l.date : '', text: str(l.text, 12000) }]; })),
     report: isObj(data.report) ? { custom: !!data.report.custom, template: str(data.report.template, 60), text: str(data.report.text, 8000), signer: str(data.report.signer, 120).trim(), city: str(data.report.city, 80).trim(), date: isDate(data.report.date) ? data.report.date : '' } : { text: '', signer: '', city: '', date: '' },
     fsNotes: (Array.isArray(data.fsNotes) ? data.fsNotes : []).slice(0, 30).filter(isObj).map(n => ({ title: str(n.title, 150).trim(), text: str(n.text, 8000) })).filter(n => n.title || n.text.trim()),
     finalAt: status === 'final' ? Number(data.finalAt) || Date.now() : 0, finalBy: status === 'final' ? str(data.finalBy, 120).trim() : '',
     ...(data.created ? { created: Number(data.created) || 0 } : {}),
   };
+  // A final file is locked, except for the time spent on it and its budget (often recorded and invoiced afterwards).
+  if (prev && ENGAGE.statusOf(prev.status) === 'final' && status === 'final') {
+    const strip = x => { const { time, budget, finalAt, finalBy, ...rest } = x; return JSON.stringify(sortDeep(rest)); };
+    if (strip(out) !== strip(validateEngagement({ ...prev, status: 'progress' }, store, null)).replace('"status":"progress"', '"status":"final"')) throw new ValidationError('This year-end file is final. Reopen it to make changes.', 409);
+  }
+  return out;
 }
+const sortDeep = v => (Array.isArray(v) ? v.map(sortDeep) : v && typeof v === 'object' ? Object.keys(v).sort().reduce((o, k) => { o[k] = sortDeep(v[k]); return o; }, {}) : v);
 /** A sign-off or date stamp on a year-end file: { by (name), id (user), at (ms) }, or null. The server sets them (see app.js). */
 function engStamp(x) { return isObj(x) && Number(x.at) > 0 ? { by: str(x.by, 120).trim(), id: str(x.id, 80), at: Number(x.at) } : null; }
 /** A working paper's code (a leadsheet or one of the extra sections), or ''. */
 function ENG_WP(code) { const c = String(code || ''); return ENGAGE.BY_CODE[c] || ENGAGE.EXTRA_WPS.some(x => x.code === c) ? c : ''; }
+
+/*
+ * A request to the client from a year-end file: a document to send (bank statement, loan statement…) or the draft
+ * statements to approve. The client sees it, answers it and uploads files; the server stamps who did what (app.js).
+ */
+const REQ_STATUS = ['open', 'sent', 'accepted', 'returned'];
+function validateRequest(data, store) {
+  const engagementId = str(data.engagementId, 120);
+  const e = store.get('engagements', engagementId);
+  if (!e) throw new ValidationError('That year-end file doesn’t exist.');
+  const text = str(data.text, 2000).trim();
+  if (!text) throw new ValidationError('Say what you need from the client.');
+  return {
+    engagementId, yearEnd: e.yearEnd, kind: data.kind === 'approval' ? 'approval' : 'document', wp: ENG_WP(data.wp), text,
+    due: isDate(data.due) ? data.due : '', status: REQ_STATUS.includes(data.status) ? data.status : 'open',
+    clientNote: str(data.clientNote, 2000), staffNote: str(data.staffNote, 2000),
+    created: engStamp(data.created), sent: engStamp(data.sent), decided: engStamp(data.decided),
+    approval: isObj(data.approval) && engStamp(data.approval) ? { ...engStamp(data.approval), approved: !!data.approval.approved } : null,
+  };
+}
 
 function validateRecord(collection, id, data, store) {
   checkId(id);
@@ -913,6 +951,7 @@ function validateRecord(collection, id, data, store) {
     case 'recurring': return validateRecurring(data, store, id);
     case 'delayed': return validateDelayed(data, store, id);
     case 'engagements': return validateEngagement(data, store, id);
+    case 'requests': return validateRequest(data, store);
     default: throw new ValidationError(`Unknown collection "${collection}".`, 404);
   }
 }
@@ -1233,9 +1272,9 @@ const ATTACH_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'
 const OFFICE_TYPES = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
 function validateAttachment(data, store) {
   if (!isObj(data)) throw new ValidationError('An attachment must be an object.');
-  if (!['entries', 'docs', 'engagements'].includes(data.target) || !store.get(data.target, String(data.targetId || ''))) throw new ValidationError('That attachment isn’t on a transaction that exists.');
-  // Year-end files also take Excel and Word documents (A/R listings, loan schedules, minutes).
-  const types = data.target === 'engagements' ? [...ATTACH_TYPES, ...OFFICE_TYPES] : ATTACH_TYPES;
+  if (!['entries', 'docs', 'engagements', 'requests'].includes(data.target) || !store.get(data.target, String(data.targetId || ''))) throw new ValidationError('That attachment isn’t on a transaction that exists.');
+  // Year-end files (and the client's answers to their requests) also take Excel and Word documents.
+  const types = ['engagements', 'requests'].includes(data.target) ? [...ATTACH_TYPES, ...OFFICE_TYPES] : ATTACH_TYPES;
   if (!types.includes(data.mediaType)) throw new ValidationError(data.target === 'engagements' ? 'Attach a PDF, a photo, or an Excel or Word document.' : 'Attachments are PDFs or photos.');
   return { target: data.target, targetId: String(data.targetId), ...(data.target === 'engagements' ? { wp: ENG_WP(data.wp) } : {}), fileId: str(data.fileId, 60), name: str(data.name, 120), mediaType: data.mediaType, size: Number(data.size) || 0,
     uploadedBy: str(data.uploadedBy, 120), uploadedByName: str(data.uploadedByName, 120), uploadedAt: Number(data.uploadedAt) || 0 };

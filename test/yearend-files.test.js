@@ -330,3 +330,140 @@ test('server: an imported trial balance can use the file’s own accounts and be
   // From the books, the file's own accounts aren't allowed.
   assert.equal((await req(owner, 'PUT', c('/records/engagements/i2'), file({ yearEnd: '2021-12-31', snapshot: { lines } }))).status, 400);
 });
+
+/* ---------- entity wording, letters, GIFI file, materiality, logo ---------- */
+test('entities: wording for corporations, proprietors, partnerships and non-profits; drawings come off equity', () => {
+  assert.deepEqual(Object.keys(E.ENTITIES), ['corporation', 'sole', 'partnership', 'npo']);
+  assert.equal(E.ENTITIES.npo.bs, 'Statement of financial position'); assert.equal(E.ENTITIES.npo.equity, 'Net assets');
+  assert.equal(E.ENTITIES.sole.out, 'Drawings');
+  const f = { snapshot: { lines: [{ account: 'bank', name: 'Bank', type: 'Asset', cur: 900, prior: 0 }, { account: 'dr', name: 'Owner drawings', type: 'Equity', cur: 100, prior: 0 }, { account: 'sales', name: 'Sales', type: 'Income', cur: -1000, prior: 0 }] } };
+  const st = E.statements(f, []);
+  assert.equal(st.re.dividends.cur, 100, 'drawings are taken out like dividends'); assert.deepEqual(st.bs.off, { cur: 0, prior: 0 });
+});
+
+test('letters come from the central templates and fill in the file', () => {
+  const R = require('../public/report-templates.js');
+  const t = R.render(R.current('engagement-letter'), { entity: 'Maple Dental', yearEnd: 'Dec 31, 2025', statements: 'the balance sheet', firm: 'Sher Bookkeeping', date: 'Jan 5, 2026' });
+  assert.match(t, /^Jan 5, 2026/); assert.match(t, /CSRS\) 4200/); assert.match(t, /\[fee\]/); assert.match(t, /Sher Bookkeeping/);
+  assert.match(R.render(R.current('representation-letter'), { entity: 'X', firm: 'F' }), /^\s*\n\nTo F/);
+});
+
+test('GIFI file: code,amount lines in whole dollars, without the totals tax software works out', () => {
+  const f = { snapshot: { lines: [{ account: 'bank', name: 'Chequing', type: 'Asset', gifi: '1001', cur: 5000.4, prior: 3000 }, { account: 'ap', name: 'AP', type: 'Liability', gifi: '2620', cur: -1000, prior: -500 }, { account: 'sh', name: 'Shares', type: 'Equity', gifi: '3500', cur: -100, prior: -100 }, { account: E.RE_OPEN, name: 'RE', type: 'Equity', gifi: '3600', cur: -2400, prior: 0 }, { account: 'div', name: 'Dividends', type: 'Equity', gifi: '3700', cur: 500, prior: 0 }, { account: 'sales', name: 'Sales', type: 'Income', gifi: '8000', cur: -10000.4, prior: -8000 }, { account: 'rent', name: 'Rent', type: 'Expense', gifi: '8910', cur: 8000, prior: 5600 }] } };
+  const g = E.gfi(f, []);
+  assert.equal(g.text, '1001,5000\r\n2620,1000\r\n3500,100\r\n3600,3900\r\n3660,2400\r\n3700,500\r\n8000,10000\r\n8910,8000\r\n');
+  assert.ok(!/^(2599|3640|9999|8299),/m.test(g.text));
+});
+
+test('materiality: the threshold decides which changes are flagged', () => {
+  const f = { id: 'f', snapshot: { lines: [{ account: 'bank', name: 'Chequing', type: 'Asset', detail: 'bank', cur: 5000, prior: 3000 }, { account: 'sales', name: 'Sales', type: 'Income', cur: -5000, prior: -3000 }] } };
+  assert.ok(E.analyze(f, [], [], { minChange: 1000, minPct: 20 }).some(x => x.kind === 'variance'));
+  assert.ok(!E.analyze(f, [], [], { minChange: 5000, minPct: 20 }).some(x => x.kind === 'variance'));
+});
+
+test('server: entity, layout, materiality and letters are kept; the firm logo is a JPEG only owners change', async () => {
+  let r = await req(owner, 'PUT', c('/records/engagements/m1'), file({ yearEnd: '2020-12-31', entity: 'npo', layout: { expenses: 'summary' }, materiality: { amount: 2500, pct: 15 }, letters: { engagement: { custom: true, text: 'Our letter', date: '2021-01-05' }, junk: {} } }));
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const y = await getY('m1');
+  assert.deepEqual([y.entity, y.layout.expenses, y.materiality.amount, y.letters.engagement.text, y.letters.junk], ['npo', 'summary', 2500, 'Our letter', undefined]);
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100)]).toString('base64');
+  assert.equal((await req(owner, 'PUT', '/api/firm/logo', { data: Buffer.from('GIF89a').toString('base64') })).status, 400);
+  assert.equal((await req(owner, 'PUT', '/api/firm/logo', { data: jpeg })).status, 200);
+  assert.equal((await fetch(base + '/api/firm/logo', { headers: { cookie: owner } })).headers.get('content-type'), 'image/jpeg');
+  assert.equal((await fetch(base + '/api/firm/logo', { headers: { cookie: client } })).status, 404, 'not for clients');
+  assert.equal((await req(owner, 'GET', '/api/auth/me')).json.user.firmLogo, true);
+});
+
+/* ---------- client requests, firm year-ends, checks, time ---------- */
+test('checks: GST/HST against revenue, shareholder loans and 15(2), cut-off, subsequent events, deadlines, T2125', () => {
+  const f = { yearEnd: '2025-12-31', snapshot: { lines: [
+    { account: 'sales', name: 'Sales', type: 'Income', gifi: '8000', cur: -50000, prior: 0 }, { account: 'sh', name: 'Due from shareholder', type: 'Asset', cur: 3000, prior: 2000 },
+    { account: 'bank', name: 'Bank', type: 'Asset', cur: 44000, prior: -2000 }, { account: 'rent', name: 'Rent', type: 'Expense', gifi: '8910', cur: 3000, prior: 0 }] } };
+  const g = E.gstCheck(f, [], [{ tax: 'gst', from: '2025-01-01', to: '2025-06-30', lines: { 101: 24000 } }, { tax: 'gst', from: '2025-07-01', to: '2025-12-31', lines: { 101: 25000 } }, { tax: 'gst', from: '2025-12-01', to: '2026-02-28', lines: { 101: 1 } }], '2025-01-01');
+  assert.deepEqual([g.revenue, g.reported, g.diff, g.counted, g.partial], [50000, 49000, 1000, 2, 1]);
+  const l = E.shareholderLoans(f, [], { sh: { debits: 1500, credits: 500 } })[0];
+  assert.deepEqual([l.open, l.advances, l.repayments, l.close], [2000, 1500, 500, 3000]);
+  assert.match(l.notes[0], /repaid by 2026-12-31.*subsection 15\(2\)/); assert.match(l.notes[1], /wasn’t fully repaid/);
+  assert.deepEqual(E.cutoff([{ id: 'a', kind: 'bill', date: '2026-01-10', total: 5000 }, { id: 'b', kind: 'bill', date: '2026-03-10', total: 5000 }, { id: 'c', kind: 'invoice', date: '2026-01-05', total: 10 }], '2025-12-31', 1000).map(d => d.id), ['a']);
+  assert.deepEqual(E.subsequent([{ id: 'x', date: '2026-02-01', lines: [{ debit: 20000 }, { credit: 20000 }] }, { id: 'y', date: '2025-12-01', lines: [{ debit: 20000 }] }], '2025-12-31', 1000).map(e => e.id), ['x']);
+  assert.deepEqual(E.deadlines('2025-12-31'), { t2: '2026-06-30', balance: '2026-02-28', balanceCcpc: '2026-03-31' });
+  assert.deepEqual(E.t2125(f, []).map(x => [x.line, x.amount]), [[8000, 50000], [8910, 3000]]);
+  // The server's trial balance from entries matches the rules of the screen's one.
+  const tb = E.tbFromEntries([{ date: '2024-06-01', lines: [{ account: 'bank', debit: 100 }, { account: 'sales', credit: 100 }] }, { date: '2025-03-01', lines: [{ account: 'bank', debit: 40 }, { account: 'sales', credit: 40 }] }],
+    [{ id: 'bank', name: 'Bank', type: 'Asset' }, { id: 'sales', name: 'Sales', type: 'Income' }], '2025-12-31', 1);
+  assert.deepEqual(tb.lines.map(l => [l.account, l.cur, l.prior]), [['bank', 140, 100], ['sales', -40, -100], [E.RE_OPEN, -100, 0]]);
+  assert.deepEqual([tb.off, tb.offPrior, tb.priorEnd], [0, 0, '2024-12-31']);
+});
+
+test('server: requests to the client: staff make them; the client only answers, stamped; files land on the working paper', async () => {
+  const y = file({ yearEnd: '2019-12-31' });
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/q1'), y)).status, 200);
+  let r = await req(owner, 'PUT', c('/records/requests/r1'), { engagementId: 'q1', wp: 'A', text: 'December bank statement', status: 'open', created: { by: 'Fake', at: 5 } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  let st = (await req(client, 'GET', c('/state'))).json;
+  const rq = st.requests.find(x => x.id === 'r1');
+  assert.equal(rq.created.by, 'Sher', 'stamped by the server'); assert.deepEqual(st.engagements, [], 'the client still never sees the file');
+  assert.equal((await req(client, 'PUT', c('/records/requests/r2'), { engagementId: 'q1', text: 'x' })).status, 403, 'clients don’t make requests');
+  assert.equal((await req(client, 'DELETE', c('/records/requests/r1'))).status, 403);
+  // The client answers: only the note and "sent" are taken, with their name.
+  r = await req(client, 'PUT', c('/records/requests/r1'), { ...rq, text: 'changed by client', status: 'accepted', clientNote: 'Here it is' });
+  assert.equal(r.status, 200);
+  const pdf = Buffer.from('%PDF-1.4\n% stmt\n').toString('base64');
+  assert.equal((await req(client, 'POST', c('/requests/r1/files'), { fileName: 'dec.pdf', data: pdf })).status, 200);
+  await req(client, 'PUT', c('/records/requests/r1'), { ...rq, clientNote: 'Here it is', status: 'sent' });
+  st = (await req(owner, 'GET', c('/state'))).json;
+  const r1 = st.requests.find(x => x.id === 'r1');
+  assert.deepEqual([r1.text, r1.status, r1.clientNote, r1.sent.by], ['December bank statement', 'sent', 'Here it is', 'Client']);
+  assert.ok(st.attachments.some(a => a.target === 'engagements' && a.targetId === 'q1' && a.wp === 'A' && a.name === 'dec.pdf'), 'the file is on the Cash working paper');
+  assert.ok(!(await req(client, 'GET', c('/state'))).json.attachments.some(a => a.target === 'engagements'));
+  // Staff accept: stamped; the client can't change an accepted request's files.
+  await req(owner, 'PUT', c('/records/requests/r1'), { ...r1, status: 'accepted' });
+  assert.equal((await getY('q1')) && (await req(owner, 'GET', c('/state'))).json.requests.find(x => x.id === 'r1').decided.by, 'Sher');
+  assert.equal((await req(client, 'POST', c('/requests/r1/files'), { fileName: 'more.pdf', data: pdf })).status, 409);
+  // Approval of the draft statements, recorded with the client's name.
+  await req(owner, 'PUT', c('/records/requests/ap1'), { engagementId: 'q1', kind: 'approval', text: 'Approve the drafts', status: 'open' });
+  const ap = (await req(client, 'GET', c('/state'))).json.requests.find(x => x.id === 'ap1');
+  await req(client, 'PUT', c('/records/requests/ap1'), { ...ap, approval: { approved: true, by: 'Someone else' } });
+  const ap2 = (await req(owner, 'GET', c('/state'))).json.requests.find(x => x.id === 'ap1');
+  assert.deepEqual([ap2.approval.approved, ap2.approval.by, ap2.status], [true, 'Client', 'sent']);
+  // Deleting the file takes its requests.
+  assert.equal((await req(owner, 'DELETE', c('/records/engagements/q1'))).status, 200);
+  assert.equal((await req(owner, 'GET', c('/state'))).json.requests.filter(x => x.engagementId === 'q1').length, 0);
+});
+
+test('server: a final file still takes time and a budget, but nothing else', async () => {
+  await req(owner, 'PUT', c('/records/engagements/t1'), file({ yearEnd: '2018-12-31' }));
+  let y = await getY('t1');
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/t1'), { ...y, status: 'final' })).status, 200);
+  y = await getY('t1');
+  let r = await req(owner, 'PUT', c('/records/engagements/t1'), { ...y, time: [{ id: 'a', date: '2019-02-01', hours: 3.5, rate: 120, name: 'Sher' }], budget: { hours: 10, fee: 1500 } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  y = await getY('t1'); assert.equal(y.time[0].hours, 3.5);
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/t1'), { ...y, notes: 'changed' })).status, 409);
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/t1'), { ...y, time: [{ hours: 30 }] })).status, 400);
+});
+
+test('server: the firm’s year-ends, and starting them in bulk (rolling forward a final file)', async () => {
+  const list = (await req(owner, 'GET', '/api/yearends')).json;
+  const row = list.companies.find(x => x.id === co);
+  assert.ok(row && row.lastEnd && row.deadlines.t2, JSON.stringify(list));
+  assert.equal((await req(client, 'GET', '/api/yearends')).status, 404);
+  const files0 = (await req(owner, 'GET', c('/state'))).json.engagements.filter(x => x.yearEnd === row.lastEnd);
+  for (const x of files0) { if (x.status === 'final') await req(owner, 'PUT', c(`/records/engagements/${x.id}`), { ...x, status: 'progress', unlockReason: 'test' }); await req(owner, 'DELETE', c(`/records/engagements/${x.id}`)); }
+  let r = await req(owner, 'POST', '/api/yearends/start', { companies: [co, 'nope'] });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.results.find(x => x.id === co).ok, true, JSON.stringify(r.json));
+  assert.equal(r.json.results.find(x => x.id === 'nope').ok, false);
+  r = await req(owner, 'POST', '/api/yearends/start', { companies: [co] });
+  assert.match(r.json.results[0].error, /already a file/);
+  const f = (await req(owner, 'GET', c('/state'))).json.engagements.find(x => x.yearEnd === row.lastEnd);
+  assert.equal(f.snapshot.bulk, true); assert.equal(f.team.preparer.name, 'Sher');
+  assert.equal((await req(owner, 'GET', '/api/yearends')).json.companies.find(x => x.id === co).file.id, f.id);
+});
+
+test('server: the bank check works without bank feeds (nothing to compare)', async () => {
+  const f = (await req(owner, 'GET', c('/state'))).json.engagements[0];
+  const r = await req(owner, 'GET', c(`/engagements/${f.id}/bankcheck`));
+  assert.equal(r.status, 200); assert.deepEqual(r.json.accounts, []);
+  assert.equal((await req(client, 'GET', c(`/engagements/${f.id}/bankcheck`))).status, 403);
+});
