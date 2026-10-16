@@ -863,6 +863,9 @@ function validateEngagement(data, store, id) {
   const ci = isObj(data.client) ? data.client : {};
   const client = Object.fromEntries(['legalName', 'operatingName', 'address', 'province', 'corpNumber', 'bn', 'contact', 'industry', 'owners'].map(k => [k, str(ci[k], k === 'address' || k === 'owners' ? 1000 : 200).trim()]));
   return {
+    entity: ENGAGE.ENTITIES[data.entity] ? data.entity : '',
+    layout: { expenses: isObj(data.layout) && data.layout.expenses === 'summary' ? 'summary' : 'detail' },
+    materiality: isObj(data.materiality) ? { amount: Math.max(0, Math.min(1e9, Math.round(Number(data.materiality.amount) || 0))), pct: Math.max(0, Math.min(100, Number(data.materiality.pct) || 0)) } : null,
     yearEnd: data.yearEnd, rolledFrom: data.rolledFrom ? str(data.rolledFrom, 120) : '', kind, status, framework: ENGAGE.FRAMEWORKS[data.framework] ? data.framework : 'ASPE',
     client, team: { preparer: person(team.preparer), reviewer: person(team.reviewer) },
     snapshot: { takenAt: Number(snap.takenAt) || Date.now(), by: str(snap.by, 120).trim(), priorEnd: isDate(snap.priorEnd) ? snap.priorEnd : '', lines, source,
@@ -873,6 +876,7 @@ function validateEngagement(data, store, id) {
     unlocks: (Array.isArray(data.unlocks) ? data.unlocks : []).slice(-200).filter(isObj).map(u => ({ ...engStamp(u), reason: str(u.reason, 1000).trim() })).filter(u => u.at),
     // The financial statements' words: the compilation engagement report and the notes, written by the accountant.
     includeCashFlow: !!data.includeCashFlow,
+    letters: Object.fromEntries(['engagement', 'representation'].filter(k => isObj(data.letters) && isObj(data.letters[k])).map(k => { const l = data.letters[k]; return [k, { custom: !!l.custom, template: str(l.template, 60), date: isDate(l.date) ? l.date : '', text: str(l.text, 12000) }]; })),
     report: isObj(data.report) ? { custom: !!data.report.custom, template: str(data.report.template, 60), text: str(data.report.text, 8000), signer: str(data.report.signer, 120).trim(), city: str(data.report.city, 80).trim(), date: isDate(data.report.date) ? data.report.date : '' } : { text: '', signer: '', city: '', date: '' },
     fsNotes: (Array.isArray(data.fsNotes) ? data.fsNotes : []).slice(0, 30).filter(isObj).map(n => ({ title: str(n.title, 150).trim(), text: str(n.text, 8000) })).filter(n => n.title || n.text.trim()),
     finalAt: status === 'final' ? Number(data.finalAt) || Date.now() : 0, finalBy: status === 'final' ? str(data.finalBy, 120).trim() : '',

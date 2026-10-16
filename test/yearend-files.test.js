@@ -330,3 +330,46 @@ test('server: an imported trial balance can use the file’s own accounts and be
   // From the books, the file's own accounts aren't allowed.
   assert.equal((await req(owner, 'PUT', c('/records/engagements/i2'), file({ yearEnd: '2021-12-31', snapshot: { lines } }))).status, 400);
 });
+
+/* ---------- entity wording, letters, GIFI file, materiality, logo ---------- */
+test('entities: wording for corporations, proprietors, partnerships and non-profits; drawings come off equity', () => {
+  assert.deepEqual(Object.keys(E.ENTITIES), ['corporation', 'sole', 'partnership', 'npo']);
+  assert.equal(E.ENTITIES.npo.bs, 'Statement of financial position'); assert.equal(E.ENTITIES.npo.equity, 'Net assets');
+  assert.equal(E.ENTITIES.sole.out, 'Drawings');
+  const f = { snapshot: { lines: [{ account: 'bank', name: 'Bank', type: 'Asset', cur: 900, prior: 0 }, { account: 'dr', name: 'Owner drawings', type: 'Equity', cur: 100, prior: 0 }, { account: 'sales', name: 'Sales', type: 'Income', cur: -1000, prior: 0 }] } };
+  const st = E.statements(f, []);
+  assert.equal(st.re.dividends.cur, 100, 'drawings are taken out like dividends'); assert.deepEqual(st.bs.off, { cur: 0, prior: 0 });
+});
+
+test('letters come from the central templates and fill in the file', () => {
+  const R = require('../public/report-templates.js');
+  const t = R.render(R.current('engagement-letter'), { entity: 'Maple Dental', yearEnd: 'Dec 31, 2025', statements: 'the balance sheet', firm: 'Sher Bookkeeping', date: 'Jan 5, 2026' });
+  assert.match(t, /^Jan 5, 2026/); assert.match(t, /CSRS\) 4200/); assert.match(t, /\[fee\]/); assert.match(t, /Sher Bookkeeping/);
+  assert.match(R.render(R.current('representation-letter'), { entity: 'X', firm: 'F' }), /^\s*\n\nTo F/);
+});
+
+test('GIFI file: code,amount lines in whole dollars, without the totals tax software works out', () => {
+  const f = { snapshot: { lines: [{ account: 'bank', name: 'Chequing', type: 'Asset', gifi: '1001', cur: 5000.4, prior: 3000 }, { account: 'ap', name: 'AP', type: 'Liability', gifi: '2620', cur: -1000, prior: -500 }, { account: 'sh', name: 'Shares', type: 'Equity', gifi: '3500', cur: -100, prior: -100 }, { account: E.RE_OPEN, name: 'RE', type: 'Equity', gifi: '3600', cur: -2400, prior: 0 }, { account: 'div', name: 'Dividends', type: 'Equity', gifi: '3700', cur: 500, prior: 0 }, { account: 'sales', name: 'Sales', type: 'Income', gifi: '8000', cur: -10000.4, prior: -8000 }, { account: 'rent', name: 'Rent', type: 'Expense', gifi: '8910', cur: 8000, prior: 5600 }] } };
+  const g = E.gfi(f, []);
+  assert.equal(g.text, '1001,5000\r\n2620,1000\r\n3500,100\r\n3600,3900\r\n3660,2400\r\n3700,500\r\n8000,10000\r\n8910,8000\r\n');
+  assert.ok(!/^(2599|3640|9999|8299),/m.test(g.text));
+});
+
+test('materiality: the threshold decides which changes are flagged', () => {
+  const f = { id: 'f', snapshot: { lines: [{ account: 'bank', name: 'Chequing', type: 'Asset', detail: 'bank', cur: 5000, prior: 3000 }, { account: 'sales', name: 'Sales', type: 'Income', cur: -5000, prior: -3000 }] } };
+  assert.ok(E.analyze(f, [], [], { minChange: 1000, minPct: 20 }).some(x => x.kind === 'variance'));
+  assert.ok(!E.analyze(f, [], [], { minChange: 5000, minPct: 20 }).some(x => x.kind === 'variance'));
+});
+
+test('server: entity, layout, materiality and letters are kept; the firm logo is a JPEG only owners change', async () => {
+  let r = await req(owner, 'PUT', c('/records/engagements/m1'), file({ yearEnd: '2020-12-31', entity: 'npo', layout: { expenses: 'summary' }, materiality: { amount: 2500, pct: 15 }, letters: { engagement: { custom: true, text: 'Our letter', date: '2021-01-05' }, junk: {} } }));
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const y = await getY('m1');
+  assert.deepEqual([y.entity, y.layout.expenses, y.materiality.amount, y.letters.engagement.text, y.letters.junk], ['npo', 'summary', 2500, 'Our letter', undefined]);
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100)]).toString('base64');
+  assert.equal((await req(owner, 'PUT', '/api/firm/logo', { data: Buffer.from('GIF89a').toString('base64') })).status, 400);
+  assert.equal((await req(owner, 'PUT', '/api/firm/logo', { data: jpeg })).status, 200);
+  assert.equal((await fetch(base + '/api/firm/logo', { headers: { cookie: owner } })).headers.get('content-type'), 'image/jpeg');
+  assert.equal((await fetch(base + '/api/firm/logo', { headers: { cookie: client } })).status, 404, 'not for clients');
+  assert.equal((await req(owner, 'GET', '/api/auth/me')).json.user.firmLogo, true);
+});

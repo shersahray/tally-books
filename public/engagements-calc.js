@@ -176,7 +176,17 @@
     { key: 'cl', label: 'Current liabilities', codes: ['AA', 'BB', 'CC', 'DD', 'EE'], sign: -1 },
     { key: 'll', label: 'Long-term liabilities', codes: ['FF', 'GG'], sign: -1 },
   ];
-  const isDividend = r => /dividend/i.test(r.name || '');
+  const isDividend = r => /dividend|drawing|withdrawal|prélèvement/i.test(r.name || '');
+  /*
+   * The kind of entity decides the statements' titles and the equity wording. Figures are the same for all of them:
+   * equity is the share capital (or contributions) plus the retained earnings (or accumulated surplus).
+   */
+  const ENTITIES = {
+    corporation: { label: 'Corporation', bs: 'Balance sheet', is: 'Statement of income and retained earnings', equity: 'Shareholders’ equity', capital: 'Share capital', re: 'Retained earnings', net: 'Net income', open: 'Retained earnings, beginning of year', close: 'Retained earnings, end of year', out: 'Dividends', expenses: 'Operating expenses', split: true },
+    sole: { label: 'Sole proprietorship', bs: 'Balance sheet', is: 'Statement of income and owner’s equity', equity: 'Owner’s equity', capital: 'Contributions', re: 'Owner’s equity', net: 'Net income', open: 'Owner’s equity, beginning of year', close: 'Owner’s equity, end of year', out: 'Drawings', expenses: 'Operating expenses', split: false },
+    partnership: { label: 'Partnership', bs: 'Balance sheet', is: 'Statement of income and partners’ capital', equity: 'Partners’ capital', capital: 'Contributions', re: 'Partners’ capital', net: 'Net income', open: 'Partners’ capital, beginning of year', close: 'Partners’ capital, end of year', out: 'Partner drawings', expenses: 'Operating expenses', split: false },
+    npo: { label: 'Not-for-profit organization', bs: 'Statement of financial position', is: 'Statement of operations and changes in net assets', equity: 'Net assets', capital: 'Contributed net assets', re: 'Unrestricted net assets', net: 'Excess of revenue over expenses', netNeg: 'Deficiency of revenue over expenses', open: 'Net assets, beginning of year', close: 'Net assets, end of year', out: 'Transfers out', expenses: 'Expenses', split: false },
+  };
 
   /**
    * The financial statements from a year-end file, in presentation signs (assets, liabilities, equity, revenue and
@@ -335,6 +345,19 @@
     };
   }
 
+  /**
+   * A GIFI file for tax software (.GFI): one "code,amount" line per GIFI code, current year, whole dollars, in GIFI's
+   * signs. Totals the tax software works out itself are left out; the retained earnings start (3660) and dividends (3700)
+   * are included because the software can't work them out. Returns { text, lines, roundingDiff }.
+   */
+  function gfi(file, accounts) {
+    const g = gifi(file, accounts), keep = new Set(['3600', '3660', '3700', '3740']);
+    const lines = g.lines.filter(l => (!l.total || keep.has(l.code)) && Math.abs(l.cur) >= 0.5).map(l => ({ code: l.code, amount: Math.round(l.cur) }));
+    const at = c => (g.lines.find(l => l.code === c) || { cur: 0 }).cur;
+    const roundingDiff = Math.round(at('2599')) - lines.filter(l => +l.code >= 1000 && +l.code <= 2589).reduce((t, l) => t + l.amount, 0);
+    return { text: lines.map(l => `${l.code},${l.amount}`).join('\r\n') + '\r\n', lines, roundingDiff, missing: g.missing };
+  }
+
   /* ---------- roll forward ---------- */
   /**
    * Does this file's prior year agree with last year's final figures? [{ account, name, prior, last }] for each account
@@ -471,22 +494,24 @@
     const seen = new Map();
     for (const p of list) {
       const k = `${p.account}|${Math.round(p.amount * 100)}`;
-      for (const q of seen.get(k) || []) {
+      for (const q of (seen.get(k) || []).slice(-20)) {
         const days = Math.abs((new Date(p.date) - new Date(q.date)) / 864e5);
         if (q.entryId !== p.entryId && (days === 0 || (days <= 7 && p.memo && p.memo === q.memo))) { out.push({ kind: 'duplicate', entryId: p.entryId, other: q.entryId, text: `Possible duplicate: ${p.name} ${p.amount.toFixed(2)} on ${p.date} and ${q.date}${p.memo ? ` (${p.memo})` : ''}.` }); break; }
       }
-      seen.set(k, [...(seen.get(k) || []), p]);
+      let arr = seen.get(k); if (!arr) seen.set(k, arr = []); arr.push(p);
     }
     const byAcct = new Map();
-    for (const p of list) byAcct.set(p.account, [...(byAcct.get(p.account) || []), Math.abs(p.amount)]);
+    for (const p of list) { let a = byAcct.get(p.account); if (!a) byAcct.set(p.account, a = []); a.push(Math.abs(p.amount)); }
+    // Each account's usual (median) posting, worked out once.
+    const median = new Map();
+    for (const [id, a] of byAcct) if (a.length >= 6) { a.sort((x, y) => x - y); median.set(id, a[Math.floor(a.length / 2)]); }
     for (const p of list) {
-      const a = byAcct.get(p.account).slice().sort((x, y) => x - y);
-      if (a.length < 6) continue;
-      const med = a[Math.floor(a.length / 2)];
+      const med = median.get(p.account);
+      if (med === undefined) continue;
       if (Math.abs(p.amount) >= 5 * med && Math.abs(p.amount) >= 1000) out.push({ kind: 'large', entryId: p.entryId, text: `${p.name}: ${Math.abs(p.amount).toFixed(2)} on ${p.date} is much larger than this account’s usual postings (about ${med.toFixed(2)}).${p.memo ? ` ${p.memo}` : ''}` });
     }
     return out.slice(0, 50);
   }
 
-  return { analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
+  return { gfi, ENTITIES, analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
 });

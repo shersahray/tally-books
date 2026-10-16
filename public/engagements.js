@@ -16,17 +16,36 @@ const yfLeadMe=f=>!!(ME&&(ME.role==='owner'||(f.team&&f.team.reviewer&&f.team.re
 const yfStatusPill=f=>{const st=TallyEngage.statusOf(f.status);return `<span class="pill ${st==='final'?'paid':st==='progress'?'open':'partial'}">${esc(T(TallyEngage.STATUS_LABEL[st]))}</span>`};
 const yfStamp=x=>x?`${esc(x.by)} · ${esc(fmtDate(iso(new Date(x.at))))}`:'';
 
-/** The books' trial balance at a year-end, as snapshot lines (with the prior year's), or an error. */
+/**
+ * The books' trial balance at a year-end, as snapshot lines (with the prior year's), or an error.
+ * One pass over the ledger, kept until the books change (big clients have tens of thousands of postings, and this is
+ * asked for every time a year-end file is shown). Gives the same figures as the CaseWare export (casewareRows).
+ */
+const YF_TBC=new Map();
 function yfSnapshotLines(yearEnd){
-  const pe=addDays(fyStartOf(yearEnd),-1);
-  const cur=casewareRows(yearEnd),pri=casewareRows(pe);
-  const pv=id=>{const x=pri.rows.find(y=>y.a.id===id);return x?x.v:0};
+  const key=`${CO}|${yearEnd}|${S.rev}|${S.entries.length}|${S.company.fyStart}|${S.accounts.length}`;
+  if(YF_TBC.has(key)){const c=YF_TBC.get(key);if(c.err)throw new Error(c.err);return{lines:c.lines.map(l=>({...l})),priorEnd:c.priorEnd}}
+  if(YF_TBC.size>20)YF_TBC.clear();
+  const fy=fyStartOf(yearEnd),pe=addDays(fy,-1),pfy=fyStartOf(pe);
+  const types=new Map(S.accounts.map(a=>[a.id,a.type])),pl=id=>isPL(types.get(id));
+  const cur=new Map(),pri=new Map();let reCur=0,rePri=0;
+  const add=(m,id,v)=>m.set(id,(m.get(id)||0)+v);
+  for(const p of postings()){
+    if(p.date>yearEnd)continue;const v=p.debit-p.credit,isPl=pl(p.account);
+    if(isPl){
+      if(p.date>=fy)add(cur,p.account,v);else reCur+=v;
+      if(p.date>=pfy&&p.date<=pe)add(pri,p.account,v);else if(p.date<pfy)rePri+=v;
+    }else{add(cur,p.account,v);if(p.date<=pe)add(pri,p.account,v)}
+  }
   const lines=[];
-  for(const{a,v}of cur.rows){const p=pv(a.id);if(Math.abs(v)<0.005&&Math.abs(p)<0.005)continue;lines.push({account:a.id,code:a.code||'',name:a.name,type:a.type,detail:a.detail||'',gifi:a.gifi||'',cur:r2(v),prior:r2(p)})}
-  if(Math.abs(cur.re)>=0.005||Math.abs(pri.re)>=0.005)lines.push({account:TallyEngage.RE_OPEN,code:'',name:'Retained earnings, beginning of year',type:'Equity',detail:'',gifi:'3600',cur:r2(cur.re),prior:r2(pri.re)});
+  for(const a of sortAccts(S.accounts)){const v=r2(cur.get(a.id)||0),pv=r2(pri.get(a.id)||0);if(Math.abs(v)<0.005&&Math.abs(pv)<0.005)continue;lines.push({account:a.id,code:a.code||'',name:a.name,type:a.type,detail:a.detail||'',gifi:a.gifi||'',cur:v,prior:pv})}
+  reCur=r2(reCur);rePri=r2(rePri);
+  if(Math.abs(reCur)>=0.005||Math.abs(rePri)>=0.005)lines.push({account:TallyEngage.RE_OPEN,code:'',name:'Retained earnings, beginning of year',type:'Equity',detail:'',gifi:'3600',cur:reCur,prior:rePri});
   const tc=r2(lines.reduce((s,l)=>s+l.cur,0)),tp=r2(lines.reduce((s,l)=>s+l.prior,0));
-  if(Math.abs(tc)>=0.01||Math.abs(tp)>=0.01)throw new Error('The trial balance doesn’t add up to zero. Check for unbalanced entries before taking the snapshot.');
-  return{lines,priorEnd:pe};
+  const err=Math.abs(tc)>=0.01||Math.abs(tp)>=0.01?'The trial balance doesn’t add up to zero. Check for unbalanced entries before taking the snapshot.':'';
+  YF_TBC.set(key,{lines,priorEnd:pe,err});
+  if(err)throw new Error(err);
+  return{lines:lines.map(l=>({...l})),priorEnd:pe};
 }
 /** A snapshot from the books. A file rolled forward keeps last year's final figures as its prior year. */
 const yfSnapshot=(yearEnd,f)=>{const{lines,priorEnd}=yfSnapshotLines(yearEnd);const prev=f&&f.snapshot&&f.snapshot.priorSource==='file'&&f.rolledFrom&&yfFile(f.rolledFrom);
@@ -203,10 +222,14 @@ async function yfClick(e,t,d){
   if(d.yftab){YF.tab=d.yftab;renderMain();return true}
   const f=YF.open&&yfFile(YF.open);if(!f)return false;
   if(t.hasAttribute('data-yfwords')){yfWordsForm(f);return true}
+  if(t.hasAttribute('data-yfpackage')||t.hasAttribute('data-yfpdf'))await yfLoadLogo();
   if(t.hasAttribute('data-yfpackage')){const safe=String(S.company.name||'company').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();saveFile(`${safe}-engagement-package-${f.yearEnd}.pdf`,new Blob([yfPdf(f,true)],{type:'application/pdf'}));return true}
   if(d.yfxlsx){yfXlsx(f,d.yfxlsx);return true}
   if(t.hasAttribute('data-yfpdf')){const safe=String(S.company.name||'company').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();saveFile(`${safe}-financial-statements-${f.yearEnd}.pdf`,new Blob([yfPdf(f)],{type:'application/pdf'}));return true}
   if(t.hasAttribute('data-yfgificsv')){yfGifiCsv(f);return true}
+  if(t.hasAttribute('data-yfgfi')){const g=TallyEngage.gfi(f,S.accounts);if(g.missing.length&&!await confirmBox('Some accounts have no GIFI code',`${g.missing.length} account(s) with a balance will be left out of the file. Download it anyway?`,'Download'))return true;
+    const safe=String(S.company.name||'company').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();saveFile(`${safe}-${f.yearEnd}.gfi`,new Blob([g.text],{type:'text/plain'}));
+    toast(`GIFI file saved: ${g.lines.length} codes in whole dollars${g.roundingDiff?`; rounding leaves a $${Math.abs(g.roundingDiff)} difference to fix in the tax return`:''}. Check the totals after importing.`);return true}
   if(t.hasAttribute('data-yfgifiedit')){gifiForm();return true}
   if(d.yfaje){yfAjeForm(f,d.yfaje==='new'?null:f.ajes.find(x=>x.id===d.yfaje));return true}
   if(d.yfajedel){const j=f.ajes.find(x=>x.id===d.yfajedel);if(j&&await confirmBox(`Delete AJE ${j.num}?`,'It comes off this file’s leadsheets.'))await yfSave(f,{ajes:f.ajes.filter(x=>x.id!==j.id)});return true}
@@ -234,8 +257,9 @@ function yfBind(m){
 /** The statements the report covers, in words. */
 function yfStatementWords(f){
   const co=(f.client&&f.client.legalName)||S.company.name||'the company',ye=fmtDate(f.yearEnd);
-  const others=['the statement of income and retained earnings',...(f.includeCashFlow?['the statement of cash flows']:[])];
-  return `the balance sheet of ${co} as at ${ye}, ${others.join(' and ')} for the year then ended`;
+  const W=yfWords(f),low=s=>s.replace(/^[A-Z]/,c=>c.toLowerCase());
+  const others=[`the ${low(W.is)}`,...(f.includeCashFlow?['the statement of cash flows']:[])];
+  return `the ${low(W.bs)} of ${co} as at ${ye}, ${others.join(' and ')} for the year then ended`;
 }
 /** The report's template: the one the file was finalized with, else the newest for its engagement type. */
 const yfTemplate=f=>(f.report&&f.report.template&&yfFinal(f)&&TallyReportTemplates.BY_ID[f.report.template])||TallyReportTemplates.current(f.kind||'compilation',f.yearEnd);
@@ -252,36 +276,47 @@ const yfNotes=f=>f.fsNotes&&f.fsNotes.length?f.fsNotes:yfDefaultNotes();
 /** The statement of cash flows as rows (this year only; a prior-year column would need the year before it). */
 function yfCfRows(f){
   const cf=TallyEngage.cashFlow(f,S.accounts),row=(cls,label,v)=>({cls,label,cur:v===undefined?null:v,prior:null});
-  const R=[row('sec','Operating activities'),row('item','Net income',cf.net)];
+  const W=yfWords(f),R=[row('sec','Operating activities'),row('item',W.net,cf.net)];
   if(Math.abs(cf.amort)>=0.005)R.push(row('item','Amortization (not a cash expense)',cf.amort));
   if(cf.wc.length){R.push(row('sub','Changes in non-cash working capital'));cf.wc.forEach(([l,v])=>R.push(row('item',l,v)))}
   R.push(row('tot','Cash from operating activities',cf.operating));
   if(cf.investing.length){R.push(row('sec','Investing activities'));cf.investing.forEach(([l,v])=>R.push(row('item',l,v)));R.push(row('tot','Cash from investing activities',cf.inv))}
-  if(cf.financing.length){R.push(row('sec','Financing activities'));cf.financing.forEach(([l,v])=>R.push(row('item',l,v)));R.push(row('tot','Cash from financing activities',cf.fin))}
+  if(cf.financing.length){R.push(row('sec','Financing activities'));cf.financing.forEach(([l,v])=>R.push(row('item',l==='Dividends paid'?W.out+(yfEntity(f)==='corporation'?' paid':''):l==='Share capital'&&!W.split?W.capital:l,v)));R.push(row('tot','Cash from financing activities',cf.fin))}
   R.push(row('spacer',''),row('item','Change in cash',cf.change),row('item','Cash, beginning of year',cf.begin));
   if(Math.abs(cf.gap)>=0.01)R.push(row('item','Not explained by the changes above',cf.gap));
   R.push(row('grand','Cash, end of year',cf.end));
   return R;
 }
+/** The entity kind for a file: chosen on the file, else from the company (a non-profit or charity, or a corporation). */
+const yfEntity=f=>TallyEngage.ENTITIES[f.entity]?f.entity:(S.company.orgType==='npo'||S.company.orgType==='charity'?'npo':'corporation');
+const yfWords=f=>TallyEngage.ENTITIES[yfEntity(f)];
 function yfRows(f){
-  const st=TallyEngage.statements(f,S.accounts),bs=st.bs,is=st.is,re=st.re,nz=x=>Math.abs(x.cur)>=0.005||Math.abs(x.prior)>=0.005;
+  const st=TallyEngage.statements(f,S.accounts),bs=st.bs,is=st.is,re=st.re,nz=x=>Math.abs(x.cur)>=0.005||Math.abs(x.prior)>=0.005,E=yfWords(f);
+  const netL=x=>E.netNeg&&x.cur<0?`${E.net.replace(/^Excess/,'Excess (deficiency)')}`:E.net;
+  const add=(a,b)=>({cur:r2(a.cur+b.cur),prior:r2(a.prior+b.prior)});
   const row=(cls,label,x)=>({cls,label,cur:x?x.cur:null,prior:x?x.prior:null});
   const B=[row('sec','Assets')];
   for(const g of bs.groups.filter(g=>g.key==='ca'||g.key==='la')){if(!g.lines.length)continue;B.push(row('sub',g.label));g.lines.forEach(l=>B.push(row('item',l.label,l)));B.push(row('tot','Total '+g.label.toLowerCase(),g.total))}
   B.push(row('grand','Total assets',bs.assets),row('spacer',''),row('sec','Liabilities'));
   for(const g of bs.groups.filter(g=>g.key==='cl'||g.key==='ll')){if(!g.lines.length)continue;B.push(row('sub',g.label));g.lines.forEach(l=>B.push(row('item',l.label,l)));B.push(row('tot','Total '+g.label.toLowerCase(),g.total))}
-  B.push(row('tot','Total liabilities',bs.liabilities),row('spacer',''),row('sec','Shareholders’ equity'));
-  if(nz(bs.shareCapital))B.push(row('item','Share capital',bs.shareCapital));
-  B.push(row('item','Retained earnings',bs.retained),row('tot','Total shareholders’ equity',bs.equity),row('spacer',''),row('grand','Total liabilities and shareholders’ equity',bs.totalLE));
+  B.push(row('tot','Total liabilities',bs.liabilities),row('spacer',''),row('sec',E.equity));
+  if(E.split){if(nz(bs.shareCapital))B.push(row('item',E.capital,bs.shareCapital));B.push(row('item',E.re,bs.retained))}
+  else if(yfEntity(f)==='npo'){if(nz(bs.shareCapital))B.push(row('item',E.capital,bs.shareCapital));B.push(row('item',E.re,bs.retained))}
+  B.push(row('tot',E.split||yfEntity(f)==='npo'?'Total '+E.equity.replace(/^[A-Z]/,c=>c.toLowerCase()):E.equity,bs.equity),row('spacer',''),row('grand',`Total liabilities and ${E.equity.replace(/^[A-Z]/,c=>c.toLowerCase())}`,bs.totalLE));
   const I=[row('item','Revenue',is.revenue)];
   if(nz(is.cos))I.push(row('item','Cost of sales',is.cos),row('tot','Gross profit',is.gross));
-  if(is.opex.length){I.push(row('sec','Operating expenses'));is.opex.forEach(x=>I.push(row('item',x.label,x)));I.push(row('tot','Total operating expenses',is.opexTotal))}
+  if(is.opex.length){if(f.layout&&f.layout.expenses==='summary')I.push(row('item',E.expenses,is.opexTotal));else{I.push(row('sec',E.expenses));is.opex.forEach(x=>I.push(row('item',x.label,x)));I.push(row('tot','Total '+E.expenses.toLowerCase(),is.opexTotal))}}
   if(nz(is.other))I.push(row('item','Other income (expenses)',is.other));
   if(nz(is.taxes))I.push(row('tot','Income before income taxes',is.beforeTax),row('item','Income taxes',is.taxes));
-  I.push(row('grand','Net income',is.net),row('spacer',''),row('item','Retained earnings, beginning of year',re.opening),row('item','Net income',re.net));
-  if(nz(re.dividends))I.push(row('item','Dividends',{cur:-re.dividends.cur,prior:-re.dividends.prior}));
+  I.push(row('grand',netL(is.net),is.net),row('spacer',''));
+  // The equity statement. Without separate share capital (proprietors, partners), contributions are part of the equity.
+  const cap=E.split||yfEntity(f)==='npo'?{cur:0,prior:0}:bs.shareCapital,capPrior={cur:bs.shareCapital.prior,prior:bs.shareCapital.prior};
+  const capIn=E.split||yfEntity(f)==='npo'?null:{cur:r2(cap.cur-cap.prior),prior:0};
+  I.push(row('item',E.open,E.split||yfEntity(f)==='npo'?re.opening:add(re.opening,capPrior)),row('item',netL(re.net),re.net));
+  if(capIn&&nz(capIn))I.push(row('item',E.capital,capIn));
+  if(nz(re.dividends))I.push(row('item',E.out,{cur:-re.dividends.cur,prior:-re.dividends.prior}));
   if(nz(re.other))I.push(row('item','Other changes',re.other));
-  I.push(row('grand','Retained earnings, end of year',re.closing));
+  I.push(row('grand',E.close,E.split||yfEntity(f)==='npo'?re.closing:add(re.closing,bs.shareCapital)));
   return{st,bs:B,is:I};
 }
 const yfPriorEnd=f=>f.snapshot.priorEnd||addDays(fyStartOf(f.yearEnd),-1);
@@ -295,8 +330,8 @@ function yfStatements(f,edit){
   let h=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><span class="grow muted">Built from the adjusted leadsheets, with the prior year beside each figure.</span><label class="check"><input type="checkbox" data-yfcf ${f.includeCashFlow?'checked':''} ${edit?'':'disabled'}> ${esc(T('Statement of cash flows'))}</label>${edit?'<button class="btn" data-yfwords>Edit the report and notes</button>':''}<button class="btn" data-yfxlsx="ls">Leadsheets (Excel)</button><button class="btn" data-yfpackage>Engagement package (PDF)</button><button class="btn primary" data-yfpdf>Statements (PDF)</button></div></div>`;
   if(Math.abs(off.cur)>=0.01||Math.abs(off.prior)>=0.01)h+=`<div class="banner err"><span><b>The balance sheet doesn’t balance</b> (off by ${money(off.cur)} this year, ${money(off.prior)} last year). Check the leadsheets of equity accounts.</span></div>`;
   h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${esc(T(rp.title))}</b><span>${esc(rp.custom?T('Your firm’s wording'):yfTemplate(f).label)}</span></div><div class="pad" style="white-space:pre-wrap;line-height:1.55">${esc(rp.text)}</div><div class="pad muted">${esc(rp.signer||'')}${rp.city?'<br>'+esc(rp.city):''}${rp.date?'<br>'+esc(fmtDate(rp.date)):''}</div></div>`;
-  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T('Balance sheet'))} · ${esc(T('As at'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(bs,f)}</div></div>`;
-  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T('Statement of income and retained earnings'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(is,f)}</div></div>`;
+  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T(yfWords(f).bs))} · ${esc(T('As at'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(bs,f)}</div></div>`;
+  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T(yfWords(f).is))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(is,f)}</div></div>`;
   if(f.includeCashFlow)h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T('Statement of cash flows'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(yfCfRows(f),f)}</div></div>`;
   h+=`<div class="panel report"><div class="rh"><b>${co}</b><span>${esc(T('Notes to the financial information'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="pad">${notes.map((n,i)=>`<p><b>${i+1}. ${esc(n.title)}</b></p><p style="white-space:pre-wrap;line-height:1.55">${esc(n.text)}</p>`).join('')}</div></div>`;
   return h;
@@ -304,7 +339,7 @@ function yfStatements(f,edit){
 function yfWordsForm(f){
   const rp=yfReport(f),notes=yfNotes(f);
   const noteHTML=(n,i)=>`<div class="field" style="grid-column:1/-1" data-ynote><label>Note ${i+1}${feat('ai')?` <button type="button" class="btn sm" data-ynai>${esc(T('Draft with AI'))}</button> <span class="muted" data-ynaimsg style="font-size:12px"></span>`:''}</label><input type="text" data-ntitle value="${esc(n.title)}" placeholder="Title, e.g. Capital assets" maxlength="150"><textarea data-ntext rows="4" maxlength="8000" style="margin-top:6px">${esc(n.text)}</textarea></div>`;
-  const m=openModal('Report and notes',`<div class="fields"><label class="check" style="grid-column:1/-1"><input type="checkbox" id="yrCustom" ${rp.custom?'checked':''}> ${esc(T('Use my own wording for this file'))}</label>${fld('yrText',rp.title,`<textarea id="yrText" rows="12" maxlength="8000" ${rp.custom?'':'readonly'}>${esc(rp.text)}</textarea><span class="hint" data-yrhint>${esc(rp.custom?T('Your wording is kept as you write it.'):T('Standard wording')+': '+yfTemplate(f).label+'. '+T('It updates by itself when Sumlora’s wording is updated for new standards, until the file is final.'))}</span>`,true)}${fld('yrSigner','Signed by (firm)',`<input type="text" id="yrSigner" value="${esc(rp.signer)}" maxlength="120">`)}${fld('yrCity','City',`<input type="text" id="yrCity" value="${esc(rp.city)}" maxlength="80" placeholder="e.g. Ottawa, Ontario">`)}${fld('yrDate','Report date',`<input type="date" id="yrDate" value="${esc(rp.date)}">`)}</div><div class="fields" data-ynotes>${notes.map(noteHTML).join('')}</div><button type="button" class="btn sm" data-ynadd>+ Note</button>`,
+  const m=openModal('Report and notes',`<div class="fields"><label class="check" style="grid-column:1/-1"><input type="checkbox" id="yrCustom" ${rp.custom?'checked':''}> ${esc(T('Use my own wording for this file'))}</label>${fld('yrText',rp.title,`<textarea id="yrText" rows="12" maxlength="8000" ${rp.custom?'':'readonly'}>${esc(rp.text)}</textarea><span class="hint" data-yrhint>${esc(rp.custom?T('Your wording is kept as you write it.'):T('Standard wording')+': '+yfTemplate(f).label+'. '+T('It updates by itself when Sumlora’s wording is updated for new standards, until the file is final.'))}</span>`,true)}${fld('yrSigner','Signed by (firm)',`<input type="text" id="yrSigner" value="${esc(rp.signer)}" maxlength="120">`)}${fld('yrCity','City',`<input type="text" id="yrCity" value="${esc(rp.city)}" maxlength="80" placeholder="e.g. Ottawa, Ontario">`)}${fld('yrDate','Report date',`<input type="date" id="yrDate" value="${esc(rp.date)}">`)}</div><div class="fields">${fld('ydLayout','Expenses on the income statement',`<select id="ydLayout"><option value="detail" ${(f.layout||{}).expenses!=='summary'?'selected':''}>${esc(T('Each expense account on its own line'))}</option><option value="summary" ${(f.layout||{}).expenses==='summary'?'selected':''}>${esc(T('One line for all expenses'))}</option></select>`)}${ME&&ME.role==='owner'?fld('ydLogo','Firm logo (on the report and letters)',`<input type="file" id="ydLogo" accept="image/*">${ME.firmLogo?` <button type="button" class="btn sm" data-yflogodel>${esc(T('Remove the logo'))}</button>`:''}`):''}</div><div class="fields" data-ynotes>${notes.map(noteHTML).join('')}</div><button type="button" class="btn sm" data-ynadd>+ Note</button>`,
     '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>','wide');
   m.addEventListener('click',async e=>{const b=e.target.closest('[data-ynai]');if(!b)return;const box=b.closest('[data-ynote]'),ti=$('[data-ntitle]',box),ta=$('[data-ntext]',box),msg=$('[data-ynaimsg]',box);
     if(!ti.value.trim())return m.err('Give the note a title first, e.g. Capital assets.');
@@ -316,7 +351,8 @@ function yfWordsForm(f){
     const fsNotes=$$('[data-ynote]',m).map(x=>({title:$('[data-ntitle]',x).value.trim(),text:$('[data-ntext]',x).value})).filter(n=>n.title||n.text.trim());
     const custom=$('#yrCustom',m).checked;
     const report={custom,template:yfTemplate(f).id,text:custom?$('#yrText',m).value:'',signer:$('#yrSigner',m).value.trim(),city:$('#yrCity',m).value.trim(),date:$('#yrDate',m).value};
-    if(await yfSave(f,{report,fsNotes}))closeModal()};
+    const lg=$('#ydLogo',m);if(lg&&lg.files[0])await yfLogoUpload(lg.files[0]);
+    if(await yfSave(f,{report,fsNotes,layout:{expenses:$('#ydLayout',m).value}}))closeModal()};
 }
 
 /** The statements package as a PDF: cover, compilation engagement report, balance sheet, income and retained earnings, notes. */
@@ -330,7 +366,7 @@ function yfPdf(f,full=false){
   // Cover
   page();y=250;doc.text(W0/2,y,co,{size:22,bold:true,align:'center'});y+=34;doc.text(W0/2,y,tl('Financial statements'),{size:15,align:'center'});y+=22;doc.text(W0/2,y,`${tl('Year ended')} ${fmtDate(f.yearEnd)}`,{size:11,align:'center',color:'#555555'});
   // Report
-  title(rp.title);para(rp.text);y+=18;
+  title(rp.title);if(YF_LOGO){const sz=doc.image(YF_LOGO,M,M-14,120,40);void sz}para(rp.text);y+=18;
   for(const l of [rp.signer,rp.city,rp.date?fmtDate(rp.date):''].filter(Boolean)){doc.text(M,y,l,{size:10});y+=14}
   // Statements
   const table=(rows,t,sub)=>{
@@ -347,8 +383,8 @@ function yfPdf(f,full=false){
       y+=r.cls==='sec'?16:14;
     }
   };
-  table(bs,'Balance sheet',`${tl('As at')} ${fmtDate(f.yearEnd)}`);
-  table(is,'Statement of income and retained earnings',`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
+  table(bs,yfWords(f).bs,`${tl('As at')} ${fmtDate(f.yearEnd)}`);
+  table(is,yfWords(f).is,`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
   if(f.includeCashFlow)table(yfCfRows(f),'Statement of cash flows',`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
   // Notes
   title('Notes to the financial information',`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
@@ -365,7 +401,7 @@ function yfGifi(f){
   if(g.missing.length)h+=`<div class="banner"><span><b>${g.missing.length} account${g.missing.length===1?' has':'s have'} no GIFI code</b> and ${g.missing.length===1?'is':'are'} left out: ${g.missing.slice(0,4).map(x=>esc(x.name)).join(', ')}${g.missing.length>4?'…':''}.</span>${yfEdit()?'<button class="btn sm" data-yfgifiedit>Fill in GIFI codes</button>':''}</div>`;
   else if(!g.agrees)h+=`<div class="banner err"><span>The GIFI totals don’t agree with the financial statements. Check the GIFI codes of accounts on the balance sheet and income statement.</span></div>`;
   const rows=g.lines.map(l=>`<tr${l.total?' class="tot"':''}><td>${l.schedule}</td><td class="mono">${l.code}</td><td>${esc(TallyGIFI.describe(l.code,isFr()?'fr':'en'))}</td><td class="n">${mcell(l.cur)}</td><td class="n">${mcell(l.prior)}</td></tr>`).join('');
-  return h+`<div class="panel"><div class="toolbar"><span class="grow muted">T2 Schedule 100 (balance sheet) and Schedule 125 (income statement) from the adjusted figures. Amounts are positive in their normal direction.</span><button class="btn primary" data-yfgificsv>Download CSV</button></div><div class="tbl-wrap"><table><thead><tr><th>Schedule</th><th>GIFI</th><th>Description</th><th class="n">${esc(fmtDate(f.yearEnd))}</th><th class="n">${esc(fmtDate(yfPriorEnd(f)))}</th></tr></thead><tbody>${rows||emptyRow(5,'Nothing to show','The trial balance has no balances.')}</tbody></table></div></div>`;
+  return h+`<div class="panel"><div class="toolbar"><span class="grow muted">T2 Schedule 100 (balance sheet) and Schedule 125 (income statement) from the adjusted figures. Amounts are positive in their normal direction.</span><button class="btn" data-yfgificsv>Download CSV</button><button class="btn primary" data-yfgfi title="${esc(T('For TaxPrep, TaxCycle and other tax software that import GIFI files'))}">${esc(T('GIFI file for tax software (.GFI)'))}</button></div><div class="tbl-wrap"><table><thead><tr><th>Schedule</th><th>GIFI</th><th>Description</th><th class="n">${esc(fmtDate(f.yearEnd))}</th><th class="n">${esc(fmtDate(yfPriorEnd(f)))}</th></tr></thead><tbody>${rows||emptyRow(5,'Nothing to show','The trial balance has no balances.')}</tbody></table></div></div>`;
 }
 function yfGifiCsv(f){
   const g=TallyEngage.gifi(f,S.accounts);

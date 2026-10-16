@@ -3572,3 +3572,26 @@ addFr({
   "Thinking…":"Réflexion…","Nothing unusual found":"Rien d’inhabituel trouvé",
   "Typed in":"Saisie","Net income (adjusted)":"Bénéfice net (ajusté)",
 });
+
+/* ---------- year-end files: entities, letters, register, materiality ---------- */
+addFr({
+  "Added this year":"Acquis cet exercice","Capital cost allowance (Schedule 8)":"Déduction pour amortissement (annexe 8)","Closing UCC":"FNACC de clôture",
+  "Each expense account on its own line":"Chaque compte de charges sur sa propre ligne","Engagement letter":"Lettre de mission","Entity":"Entité",
+  "Expenses on the income statement":"Charges à l’état des résultats","Filled in from this file. Have the client sign them, then attach the signed copies below.":"Remplies à partir de ce dossier. Faites-les signer par le client, puis joignez les copies signées ci-dessous.","Firm logo (on the report and letters)":"Logo du cabinet (sur le rapport et les lettres)",
+  "Fixed asset register":"Registre des immobilisations","Flag changes over":"Signaler les variations de plus de","For TaxPrep, TaxCycle and other tax software that import GIFI files":"Pour TaxPrep, TaxCycle et les autres logiciels d’impôt qui importent les fichiers IGRF",
+  "GIFI file for tax software (.GFI)":"Fichier IGRF pour logiciel d’impôt (.GFI)","Letters":"Lettres","Management representation letter":"Lettre de déclaration de la direction",
+  "Materiality for this file":"Seuil de signification pour ce dossier","Materiality saved":"Seuil de signification enregistré","One line for all expenses":"Une seule ligne pour toutes les charges",
+  "Open Fixed assets":"Ouvrir Immobilisations","Remove the logo":"Retirer le logo","Some accounts have no GIFI code":"Certains comptes n’ont pas de code IGRF",
+  "Suggested starting point":"Point de départ suggéré","The register agrees with the cost accounts":"Le registre concorde avec les comptes de coût","The register’s cost":"Le coût selon le registre",
+  "Use your firm’s own materiality method if it has one.":"Utilisez la méthode de votre cabinet pour le seuil de signification, s’il en a une.","doesn’t agree with the cost accounts":"ne concorde pas avec les comptes de coût","difference":"écart",
+  "1% of revenue":"1 % des produits","0.5% of total assets":"0,5 % du total de l’actif","Corporation":"Société par actions",
+  "Sole proprietorship":"Entreprise individuelle","Partnership":"Société de personnes","Not-for-profit organization":"Organisme sans but lucratif",
+  "Statement of income and owner’s equity":"État des résultats et des capitaux propres du propriétaire","Statement of income and partners’ capital":"État des résultats et du capital des associés","Statement of operations and changes in net assets":"État des résultats et de l’évolution de l’actif net",
+  "Owner’s equity":"Capitaux propres du propriétaire","Partners’ capital":"Capital des associés","Contributions":"Apports",
+  "Contributed net assets":"Actif net d’apport","Unrestricted net assets":"Actif net non affecté","Excess (deficiency) of revenue over expenses":"Excédent (insuffisance) des produits sur les charges",
+  "Owner’s equity, beginning of year":"Capitaux propres du propriétaire au début de l’exercice","Owner’s equity, end of year":"Capitaux propres du propriétaire à la fin de l’exercice","Partners’ capital, beginning of year":"Capital des associés au début de l’exercice",
+  "Partners’ capital, end of year":"Capital des associés à la fin de l’exercice","Net assets, beginning of year":"Actif net au début de l’exercice","Net assets, end of year":"Actif net à la fin de l’exercice",
+  "Drawings":"Prélèvements","Partner drawings":"Prélèvements des associés","Transfers out":"Virements",
+  "Total liabilities and owner’s equity":"Total du passif et des capitaux propres du propriétaire","Total liabilities and partners’ capital":"Total du passif et du capital des associés","Engagement letter, Sumlora wording v1":"Lettre de mission, formulation Sumlora v1",
+  "Try early":"Essayer en avance","on early":"activé en avance","off until launch":"désactivé jusqu’au lancement",
+});

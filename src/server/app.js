@@ -1515,11 +1515,29 @@ function createApp(opts) {
       return { ok: true, firm: auth.updateFirm(user.firmId, { name: b.name }, user) };
     }],
     // Firms on this server (administrators): approve sign-ups, suspend, allow AI, and whether new firms can sign up.
+    // The firm's logo, for the compilation report and letters in year-end files (a small JPEG, made in the browser).
+    ['GET', /^\/api\/firm\/logo$/, (req, m, res, user) => {
+      if (!user || user.role === 'client') throw new ValidationError('Not found.', 404);
+      const f = auth.firm(user.firmId);
+      if (!f || !f.logo) throw new ValidationError('No logo yet.', 404);
+      const buf = Buffer.from(f.logo, 'base64');
+      send(res, 200, buf, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff' });
+    }],
+    ['PUT', /^\/api\/firm\/logo$/, async (req, m, res, user) => {
+      if (!user || user.role !== 'owner') throw new ValidationError('Only an owner can change the firm’s logo.', 403);
+      const body = (await readJson(req, 1024 * 1024)) || {};
+      const data = body.data ? Buffer.from(String(body.data), 'base64') : null;
+      if (data && !(data.length > 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)) throw new ValidationError('The logo must be a JPEG picture.');
+      if (data && data.length > 300 * 1024) throw new ValidationError('That logo is over 300 KB. Try a smaller picture.', 413);
+      auth.setFirmLogo(user.firmId, data ? data.toString('base64') : '', user);
+      return { ok: true, logo: !!data };
+    }],
     ['GET', /^\/api\/firms$/, (req, m, res, user) => {
       adminOnly(user);
       const firms = auth.data.firms.map(f => {
         const people = auth.firmUsers(f.id), owner = people.find(u => u.role === 'owner');
-        return { ...f, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
+        const { logo, ...fNoLogo } = f;
+        return { ...fNoLogo, hasLogo: !!logo, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
           aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan), legacy: f.legacy || '', billPayroll: !!f.billPayroll, early: f.early || [],
           payrollCompanies: reg.list(f.id).filter(c => !c.archived && c.payroll).length, billing: undefined, subscription: billingDescribe(f.billing) };
       });
@@ -1550,7 +1568,8 @@ function createApp(opts) {
       if (patch.plan !== undefined || patch.legacy !== undefined) await syncFirmPlan(f.id);
       else if (patch.billPayroll !== undefined) await syncFirmCount(f.id);
       broadcast({ companies: true, firmId: f.id });
-      return { ok: true, firm: f };
+      const { logo, ...fNoLogo } = f;
+      return { ok: true, firm: fNoLogo };
     }],
     // Sign-in help for another firm's owners (the administrator): their own owners look after everyone else in the firm.
     ['GET', /^\/api\/firms\/([^/]+)\/owners$/, (req, m, res, user) => {
