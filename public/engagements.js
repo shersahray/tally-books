@@ -4,12 +4,17 @@
  * leadsheet, and the accountant's adjusting entries. The math is in engagements-calc.js (shared with the server).
  * Firm staff only; clients never see this screen or its records. "Coming soon" for now (plans.js).
  */
-const YF={open:null,tab:'tb'};
+const YF={open:null,tab:'ov',wp:'',rn:{show:'open',who:'',pri:'',wp:''}};
 const yfOn=()=>feat('yearEndFiles')&&!!(ME&&ME.role!=='client');
 const yfEdit=()=>yfOn()&&!(ME&&ME.readOnly)&&perm('accounting','edit');
 const yfFile=id=>S.engagements.find(x=>x.id===id);
 const yfLead=c=>TallyEngage.BY_CODE[c]?TallyEngage.BY_CODE[c].label:c;
 const yfKind=k=>TallyEngage.KINDS[k]||'Compilation';
+const yfFinal=f=>TallyEngage.statusOf(f.status)==='final';
+/** Can the signed-in person make this file final or reopen it (an owner, or the file's reviewer)? */
+const yfLeadMe=f=>!!(ME&&(ME.role==='owner'||(f.team&&f.team.reviewer&&f.team.reviewer.id===ME.id)));
+const yfStatusPill=f=>{const st=TallyEngage.statusOf(f.status);return `<span class="pill ${st==='final'?'paid':st==='progress'?'open':'partial'}">${esc(T(TallyEngage.STATUS_LABEL[st]))}</span>`};
+const yfStamp=x=>x?`${esc(x.by)} · ${esc(fmtDate(iso(new Date(x.at))))}`:'';
 
 /** The books' trial balance at a year-end, as snapshot lines (with the prior year's), or an error. */
 function yfSnapshotLines(yearEnd){
@@ -39,24 +44,32 @@ function vYearFiles(){
   if(f)return yfDetail(f);
   YF.open=null;
   const list=S.engagements.slice().sort((a,b)=>b.yearEnd.localeCompare(a.yearEnd));
-  const rows=list.map(f=>{const tb=TallyEngage.workingTb(f,S.accounts);return `<tr class="click" data-yfopen="${esc(f.id)}"><td>${esc(fmtDate(f.yearEnd))}</td><td>${esc(T(yfKind(f.kind)))}</td><td>${f.status==='final'?`<span class="pill paid">${esc(T('Final'))}</span>`:`<span class="pill open">${esc(T('In progress'))}</span>`}</td><td class="n">${(f.ajes||[]).length}</td><td class="n">${mcell(TallyEngage.netIncome(tb,'final'))}</td><td class="muted">${esc(fmtDate(iso(new Date(f.snapshot.takenAt))))}</td></tr>`}).join('');
+  list.forEach(yfAutoSync);
+  const due=yfEdit()&&yfDue();
+  const rows=list.map(f=>{const tb=TallyEngage.workingTb(f,S.accounts),pg=TallyEngage.progress(f,S.accounts,S.attachments);return `<tr class="click" data-yfopen="${esc(f.id)}"><td>${esc(fmtDate(f.yearEnd))}</td><td>${esc(T(yfKind(f.kind)))}</td><td>${yfStatusPill(f)}</td><td class="n">${pg.pct}%</td><td class="n">${pg.openNotes||''}</td><td class="n">${mcell(TallyEngage.netIncome(tb,'final'))}</td><td class="muted">${esc([f.team&&f.team.preparer&&f.team.preparer.name,f.team&&f.team.reviewer&&f.team.reviewer.name].filter(Boolean).join(' / '))}</td></tr>`}).join('');
   return head('Year-end files','The accountant’s working file for each year-end. Clients don’t see these.',yfEdit()?'<button class="btn primary" data-yfnew>+ New year-end file</button>':'')+
-    `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Year-end</th><th>Engagement</th><th>Status</th><th class="n">Adjusting entries</th><th class="n">Net income (adjusted)</th><th>Snapshot taken</th></tr></thead><tbody>${rows||emptyRow(6,'No year-end files yet','Start one for a year-end: Sumlora takes the trial balance from the books, puts each account on a leadsheet, and you make your adjusting entries.')}</tbody></table></div></div>`;
+    (due?`<div class="banner"><span><b>${esc(T('Year-end'))} ${esc(fmtDate(due))}</b> ${esc(T('has no file yet. Sumlora brings in the trial balance and puts every account on its working paper.'))}</span><button class="btn primary sm" data-yfstart="${due}">${esc(T('Start this year-end'))}</button></div>`:'')+
+    `<div class="panel"><div class="tbl-wrap"><table><thead><tr><th>Year-end</th><th>Engagement</th><th>Status</th><th class="n">Complete</th><th class="n">Open review notes</th><th class="n">Net income (adjusted)</th><th>Preparer / reviewer</th></tr></thead><tbody>${rows||emptyRow(7,'No year-end files yet','Start one for a year-end: Sumlora takes the trial balance from the books, puts each account on a leadsheet, and you make your adjusting entries.')}</tbody></table></div></div>`;
 }
 
 function yfDetail(f){
-  const edit=yfEdit()&&f.status!=='final',tb=TallyEngage.workingTb(f,S.accounts);
-  const ch=f.status==='final'?[]:yfChanged(f);
+  const fin=yfFinal(f),edit=yfEdit()&&!fin,tb=TallyEngage.workingTb(f,S.accounts),st=TallyEngage.statusOf(f.status);
+  yfAutoSync(f);
+  const ch=fin?yfChanged(f):[];
   const unposted=(f.ajes||[]).filter(j=>!j.entryId||!S.entries.some(e=>e.id===j.entryId)).length;
-  const acts=yfEdit()?(f.status==='final'?'<button class="btn" data-yfact="reopen">Reopen</button>':`<button class="btn" data-yfact="retake">Take the snapshot again</button><button class="btn" data-yfact="final">Mark final</button>`)+(f.status!=='final'?'<button class="btn danger" data-yfact="delete">Delete</button>':''):'';
-  let h=head(`Year-end ${fmtDate(f.yearEnd)}`,`${esc(T(yfKind(f.kind)))} · ${f.status==='final'?esc(T('Final'))+(f.finalBy?' · '+esc(f.finalBy):''):esc(T('In progress'))} · ${esc(T('Snapshot taken'))} ${esc(fmtDate(iso(new Date(f.snapshot.takenAt))))}${f.snapshot.by?' · '+esc(f.snapshot.by):''}`,`<button class="btn" data-yfback>All year-end files</button>${acts}`);
-  if(ch===null)h+=`<div class="banner err"><span>The books’ trial balance doesn’t add up to zero right now, so it can’t be compared with the snapshot.</span></div>`;
-  else if(ch.length)h+=`<div class="banner"><span><b>The books changed since the snapshot.</b> ${ch.length} account${ch.length===1?'':'s'} no longer match${ch.length===1?'es':''} (${ch.slice(0,3).map(x=>esc(x.name||acct(x.account)?.name||'')).join(', ')}${ch.length>3?'…':''}). Take the snapshot again to bring the changes in; your leadsheets and adjusting entries are kept.</span>${edit?'<button class="btn sm" data-yfact="retake">Take the snapshot again</button>':''}</div>`;
+  const next={progress:['ready','Ready for review'],ready:['reviewing','Start the review'],reviewing:['progress','Back to the preparer']}[st];
+  const acts=yfEdit()?(fin?(yfLeadMe(f)?'<button class="btn" data-yfact="reopen">Reopen…</button>':''):`${next?`<button class="btn" data-yfstatus="${next[0]}">${esc(T(next[1]))}</button>`:''}${yfLeadMe(f)?'<button class="btn primary" data-yfact="final">Make final</button>':''}<button class="btn danger" data-yfact="delete">Delete</button>`):'';
+  let h=head(`Year-end ${fmtDate(f.yearEnd)}`,`${yfStatusPill(f)} ${esc(T(yfKind(f.kind)))} · ${esc(f.framework||'ASPE')}${fin&&f.finalBy?' · '+esc(T('Final'))+' '+esc(f.finalBy)+' '+esc(fmtDate(iso(new Date(f.finalAt)))):''} · ${esc(T('Snapshot taken'))} ${esc(fmtDate(iso(new Date(f.snapshot.takenAt))))}`,`<button class="btn" data-yfback>All year-end files</button>${acts}`);
+  if(fin)h+=`<div class="banner"><span><b>This file is final and locked.</b> ${yfLeadMe(f)?'Reopen it, with a reason, to make changes.':'An owner or the file’s reviewer can reopen it.'}</span></div>`;
+  if(ch===null||(!fin&&yfChanged(f)===null))h+=`<div class="banner err"><span>The books’ trial balance doesn’t add up to zero right now, so it can’t be brought in. Check for unbalanced entries.</span></div>`;
+  else if(ch.length)h+=`<div class="banner"><span><b>The books changed after this file was made final.</b> ${ch.length} account${ch.length===1?'':'s'} no longer match${ch.length===1?'es':''} (${ch.slice(0,3).map(x=>esc(x.name||acct(x.account)?.name||'')).join(', ')}${ch.length>3?'…':''}). The file keeps its final figures; reopen it to bring the changes in.</span></div>`;
   const ni=c=>TallyEngage.netIncome(tb,c);
   h+=`<div class="chips"><div class="chip"><div class="lbl">${esc(T('Net income before adjustments'))}</div><div class="val">${mcell(ni('cur'))}</div></div><div class="chip"><div class="lbl">${esc(T('Adjustments'))}</div><div class="val">${mcell(r2(ni('final')-ni('cur')))}</div></div><div class="chip"><div class="lbl">${esc(T('Net income, adjusted'))}</div><div class="val">${mcell(ni('final'))}</div></div><div class="chip"><div class="lbl">${esc(T('Prior year'))}</div><div class="val">${mcell(ni('prior'))}</div></div></div>`;
-  const tabs=[['tb','Trial balance'],['ls','Leadsheets'],['aje',`Adjusting entries${unposted?` (${unposted} not posted)`:''}`],['fs','Financial statements'],['gifi','GIFI']];
+  const pg=TallyEngage.progress(f,S.accounts,S.attachments);
+  const tabs=[['ov',`Overview · ${pg.pct}%`],['tb','Trial balance'],['ls','Leadsheets'],['wp',`Working papers${pg.unreviewed?` (${pg.unreviewed} to review)`:''}`],['aje',`Adjusting entries${unposted?` (${unposted} not posted)`:''}`],['rn',`Review notes${pg.openNotes?` (${pg.openNotes})`:''}`],['fs','Financial statements'],['gifi','GIFI'],['cl','Checklist']];
   h+=`<div class="tabs" role="tablist">${tabs.map(([k,v])=>`<button role="tab" data-yftab="${k}" aria-selected="${YF.tab===k}">${esc(v)}</button>`).join('')}</div>`;
-  return h+(YF.tab==='ls'?yfLeadsheets(f):YF.tab==='aje'?yfAjes(f,edit):YF.tab==='fs'?yfStatements(f,edit):YF.tab==='gifi'?yfGifi(f):yfTb(f,tb,edit));
+  const V={ov:()=>yfOverview(f,edit,pg),ls:()=>yfLeadsheets(f),wp:()=>yfWorkpapers(f,edit),aje:()=>yfAjes(f,edit),rn:()=>yfReviewNotes(f,edit),fs:()=>yfStatements(f,edit),gifi:()=>yfGifi(f),cl:()=>yfChecklist(f,edit)}[YF.tab];
+  return h+(V?V():yfTb(f,tb,edit));
 }
 
 const yfName=r=>`<span translate="no">${esc((r.code?r.code+' ':'')+r.name)}</span>`;
@@ -80,21 +93,63 @@ function yfAjes(f,edit){
   const list=(f.ajes||[]).slice().sort((a,b)=>a.num-b.num);
   const posted=j=>j.entryId&&S.entries.some(e=>e.id===j.entryId);
   const rows=list.map(j=>{const amt=r2(j.lines.reduce((s,l)=>s+l.debit,0));
-    return `<tr><td class="mono">AJE ${j.num}</td><td>${esc(fmtDate(j.date))}</td><td>${esc(j.memo)}<div class="muted" style="font-size:12.5px">${j.lines.map(l=>`${esc(acct(l.account)?.name||'')} ${l.debit?money(l.debit):'('+money(l.credit)+')'}`).join(' · ')}</div></td><td class="n">${money(amt)}</td><td>${posted(j)?`<span class="pill paid">${esc(T('Posted to the books'))}</span>`:`<span class="pill quiet">${esc(T('In this file only'))}</span>`}</td><td class="n" style="white-space:nowrap">${edit&&!posted(j)?`<button class="btn sm" data-yfpost="${esc(j.id)}">Post to the books</button><button class="btn sm" data-yfaje="${esc(j.id)}">Edit</button><button class="btn sm" data-yfajedel="${esc(j.id)}">Delete</button>`:''}</td></tr>`}).join('');
-  return `<div class="panel"><div class="toolbar"><span class="grow muted">Adjusting entries change this file’s leadsheets right away. Post one to the books when the client’s ledger should have it too.</span>${edit?'<button class="btn primary" data-yfaje="new">+ Adjusting entry</button>':''}</div><div class="tbl-wrap"><table><thead><tr><th>No.</th><th>Date</th><th>Description</th><th class="n">Amount</th><th>Status</th><th></th></tr></thead><tbody>${rows||emptyRow(6,'No adjusting entries yet','Add amortization, accruals, prepaid expenses, shareholder loan or income tax entries here.')}</tbody></table></div></div>`;
+    return `<tr><td class="mono">AJE ${j.num}</td><td>${esc(fmtDate(j.date))}</td><td>${esc(j.memo)}${j.wp?` <span class="pill quiet">${esc(j.wp)}</span>`:''}${j.explanation?`<div style="font-size:12.5px">${esc(j.explanation)}</div>`:''}<div class="muted" style="font-size:12.5px">${j.lines.map(l=>`${esc(acct(l.account)?.name||'')} ${l.debit?money(l.debit):'('+money(l.credit)+')'}`).join(' · ')}</div></td><td class="n">${money(amt)}</td><td>${j.reviewedBy?`<span class="pill paid" title="${esc(T('Reviewed'))} ${yfStamp(j.reviewedBy)}">${esc(T('Reviewed'))}</span>`:`<span class="pill partial">${esc(T('Draft'))}</span>`} ${posted(j)?`<span class="pill paid">${esc(T('Posted'))}</span>`:''}${j.recurring?` <span class="pill quiet">${esc(T('Recurring'))}</span>`:''}<div class="muted" style="font-size:12px">${j.preparedBy?esc(T('Prepared'))+' '+yfStamp(j.preparedBy):''}${j.reviewedBy?'<br>'+esc(T('Reviewed'))+' '+yfStamp(j.reviewedBy):''}</div></td><td class="n" style="white-space:nowrap">${edit?`${j.reviewedBy?'':`<button class="btn sm" data-yfajerev="${esc(j.id)}">Mark reviewed</button>`}${posted(j)?'':`<button class="btn sm" data-yfpost="${esc(j.id)}">Post to the books</button><button class="btn sm" data-yfaje="${esc(j.id)}">Edit</button><button class="btn sm" data-yfajedel="${esc(j.id)}">Delete</button>`}`:''}</td></tr>`}).join('');
+  return yfRecurringPanel(f,edit)+`<div class="panel"><div class="toolbar"><span class="grow muted">Adjusting entries change this file’s leadsheets right away. Post one to the books when the client’s ledger should have it too.</span>${edit?'<button class="btn primary" data-yfaje="new">+ Adjusting entry</button>':''}</div><div class="tbl-wrap"><table><thead><tr><th>No.</th><th>Date</th><th>Description</th><th class="n">Amount</th><th>Status</th><th></th></tr></thead><tbody>${rows||emptyRow(6,'No adjusting entries yet','Add amortization, accruals, prepaid expenses, shareholder loan or income tax entries here.')}</tbody></table></div></div>`;
 }
 
 /* ---------- forms and actions ---------- */
 function yfNewForm(){
   const t=today(),lastEnd=fyEndOf(addDays(fyStartOf(t),-1));
   const taken=new Set(S.engagements.map(x=>x.yearEnd));
-  const f=openModal('New year-end file',`<div class="fields">${fld('yfEnd','Year-end',`<input type="date" id="yfEnd" value="${taken.has(lastEnd)?'':lastEnd}" required>`)}${fld('yfKind','Engagement',`<select id="yfKind">${Object.entries(TallyEngage.KINDS).map(([k,v])=>`<option value="${k}">${esc(T(v))}</option>`).join('')}</select>`)}</div><div class="muted" style="font-size:13px">Sumlora takes the trial balance at this date, with the prior year for comparatives, and keeps it as it is now. If the books change later, you can take the snapshot again.</div>`,
+  const f=openModal('New year-end file',`<div class="fields">${fld('yfEnd','Year-end',`<input type="date" id="yfEnd" value="${taken.has(lastEnd)?'':lastEnd}" required>`)}${fld('yfKind','Engagement',`<select id="yfKind">${Object.entries(TallyEngage.KINDS).map(([k,v])=>`<option value="${k}">${esc(T(v))}</option>`).join('')}</select>`)}${fld('yfFw','Accounting framework',`<select id="yfFw">${Object.entries(TallyEngage.FRAMEWORKS).map(([k,v])=>`<option value="${k}" ${k===(S.company.orgType==='npo'||S.company.orgType==='charity'?'ASNPO':'ASPE')?'selected':''}>${esc(T(v))}</option>`).join('')}</select>`)}</div><div class="muted" style="font-size:13px">Sumlora brings in the trial balance at this date, with the prior year for comparatives, and puts every account on its working paper. Until the file is final, changes in the books come in by themselves.</div>`,
     '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Start</button>');
   f.onsubmit=async e=>{e.preventDefault();const ye=$('#yfEnd',f).value;if(!ye)return f.err('Choose the year-end date.');
     if(taken.has(ye))return f.err('There’s already a year-end file for that date.');
-    let snapshot;try{snapshot=yfSnapshot(ye)}catch(err){return f.err(err.message)}
-    const id=uid();
-    if(await put('engagements',id,{yearEnd:ye,kind:$('#yfKind',f).value,status:'open',snapshot,map:{},ajes:[],notes:'',created:Date.now()})){closeModal();YF.open=id;YF.tab='tb';renderMain()}};
+    const err=await yfCreate(ye,$('#yfKind',f).value,$('#yfFw',f).value);if(err)return f.err(err);closeModal()};
+}
+const yfDefaultFw=()=>S.company.orgType==='npo'||S.company.orgType==='charity'?'ASNPO':'ASPE';
+/**
+ * Make a year-end file straight from the books: the trial balance (and prior year) at the year-end, each account on its
+ * working paper, and last year's file's mapping, notes, report wording, client details and reviewer. Returns an error, or ''.
+ */
+async function yfCreate(ye,kind='compilation',framework=yfDefaultFw()){
+  let snapshot;try{snapshot=yfSnapshot(ye)}catch(err){return err.message}
+  const id=uid();
+  // Last year's file (if there is one) gives this one its mapping, notes and report wording; recurring entries are suggested, not copied.
+  const prev=S.engagements.filter(x=>x.yearEnd<ye).sort((a,b)=>b.yearEnd.localeCompare(a.yearEnd))[0];
+  const me=ME?{id:ME.id,name:ME.name}:null;
+  const data={yearEnd:ye,kind,framework,status:'progress',snapshot,map:prev?{...prev.map}:{},ajes:[],notes:'',created:Date.now(),
+    client:yfClientDefaults(prev),team:{preparer:me,reviewer:prev&&prev.team?prev.team.reviewer:null},fsNotes:prev?prev.fsNotes||[]:[],report:prev&&prev.report?{...prev.report,date:''}:undefined,
+    wps:{},reviewNotes:[],checklist:{},signoffs:{},rolledFrom:prev?prev.id:''};
+  if(!await put('engagements',id,data))return'Couldn’t save the year-end file.';
+  YF.open=id;YF.tab='wp';YF.wp='';renderMain();
+  toast(`Trial balance brought in: ${snapshot.lines.length} accounts on their working papers`+(prev&&(prev.ajes||[]).some(j=>j.recurring)?'. Last year’s recurring entries are on the Adjusting entries tab.':''));
+  return'';
+}
+/** The last fiscal year-end that has passed, when it has no year-end file yet (offered as a one-click start). */
+function yfDue(){const t=today(),ye=fyEndOf(addDays(fyStartOf(t),-1));return S.engagements.some(x=>x.yearEnd===ye)?'':ye}
+
+/*
+ * The trial balance follows the books by itself: while a file isn't final, any change in the books since the last
+ * update is brought in when the file is looked at (entries already posted from the file aren't counted twice).
+ * A working paper whose figures changed after it was reviewed goes back for review.
+ */
+const YF_SYNC=new Set();
+function yfAutoSync(f){
+  if(!yfEdit()||yfFinal(f)||YF_SYNC.has(f.id))return;
+  const ch=yfChanged(f);if(!ch||!ch.length)return;
+  let snapshot;try{snapshot=yfSnapshot(f.yearEnd)}catch(err){return}
+  const posted={};for(const j of f.ajes||[])if(j.entryId&&S.entries.some(x=>x.id===j.entryId))for(const l of j.lines)posted[l.account]=r2((posted[l.account]||0)+l.debit-l.credit);
+  snapshot.lines=snapshot.lines.map(l=>({...l,cur:r2(l.cur-(posted[l.account]||0))}));
+  const leads=new Set(ch.flatMap(x=>{const line=(f.snapshot.lines.find(l=>l.account===x.account)||snapshot.lines.find(l=>l.account===x.account)||{account:x.account});return [TallyEngage.leadOf(f,line),TallyEngage.leadOf(f,{...line,...(acct(x.account)||{}),account:x.account})]}));
+  const wps={...(f.wps||{})};let undone=0;
+  for(const k of leads)if(wps[k]&&wps[k].reviewed){wps[k]={...wps[k],reviewed:null,status:'progress'};undone++}
+  YF_SYNC.add(f.id);
+  setTimeout(async()=>{
+    // A failed update isn't tried again in a loop; it's tried again the next time Sumlora is opened.
+    const ok=await yfSave(f,{snapshot,wps});if(ok)YF_SYNC.delete(f.id);
+    if(ok)toast(`Trial balance updated from the books (${ch.length} account${ch.length===1?'':'s'})`+(undone?`. ${undone} working paper${undone===1?'':'s'} back for review.`:''));
+  },0);
 }
 const yfSave=(f,patch)=>put('engagements',f.id,{...f,...patch});
 
@@ -102,7 +157,7 @@ function yfAjeForm(f,j){
   const accts=acctOptions;
   const line=l=>`<tr><td><select data-ajacct aria-label="Account"><option value="">Choose…</option>${accts(l&&l.account)}</select></td><td><input type="number" step="0.01" min="0" data-ajdr value="${l&&l.debit?l.debit:''}" aria-label="Debit"></td><td><input type="number" step="0.01" min="0" data-ajcr value="${l&&l.credit?l.credit:''}" aria-label="Credit"></td><td><input type="text" data-ajmemo value="${esc(l&&l.memo||'')}" aria-label="Memo"></td></tr>`;
   const ls=j?j.lines:[null,null];
-  const m=openModal(j?`Edit AJE ${j.num}`:'New adjusting entry',`<div class="fields">${fld('ajDate','Date',`<input type="date" id="ajDate" value="${esc(j?j.date:f.yearEnd)}">`)}${fld('ajMemo','Description',`<input type="text" id="ajMemo" value="${esc(j?j.memo:'')}" placeholder="e.g. Amortization for the year" maxlength="300">`,true)}</div>
+  const m=openModal(j?`Edit AJE ${j.num}`:'New adjusting entry',`<div class="fields">${fld('ajDate','Date',`<input type="date" id="ajDate" value="${esc(j?j.date:f.yearEnd)}">`)}${fld('ajWp','Working paper',`<select id="ajWp"><option value="">None</option>${TallyEngage.LEADSHEETS.map(l=>`<option value="${l.code}" ${j&&j.wp===l.code?'selected':''}>${esc(l.code+' · '+T(l.label))}</option>`).join('')}</select>`)}${fld('ajMemo','Description',`<input type="text" id="ajMemo" value="${esc(j?j.memo:'')}" placeholder="e.g. Amortization for the year" maxlength="300">`,true)}${fld('ajExp','Explanation',`<textarea id="ajExp" rows="2" maxlength="2000" placeholder="Why the entry is needed, and where the figure comes from">${esc(j&&j.explanation||'')}</textarea>`,true)}<label class="check" style="grid-column:1/-1"><input type="checkbox" id="ajRec" ${j&&j.recurring?'checked':''}> Recurring: suggest it again in next year’s file</label></div>
     <div class="tbl-wrap"><table><thead><tr><th>Account</th><th class="n">Debit</th><th class="n">Credit</th><th>Memo</th></tr></thead><tbody data-ajlines>${ls.map(line).join('')}</tbody><tfoot><tr class="tot"><td><button type="button" class="btn sm" data-ajadd>+ Line</button></td><td class="n" data-ajtdr></td><td class="n" data-ajtcr></td><td></td></tr></tfoot></table></div>`,
     '<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>','wide');
   const read=()=>$$('[data-ajlines] tr',m).map(tr=>({account:$('[data-ajacct]',tr).value,debit:r2($('[data-ajdr]',tr).value),credit:r2($('[data-ajcr]',tr).value),memo:$('[data-ajmemo]',tr).value.trim()})).filter(l=>l.account&&(l.debit||l.credit));
@@ -111,7 +166,7 @@ function yfAjeForm(f,j){
   $('[data-ajadd]',m).onclick=()=>{$('[data-ajlines]',m).insertAdjacentHTML('beforeend',line(null))};
   m.onsubmit=async e=>{e.preventDefault();const lines=read();
     if(lines.some(l=>l.debit&&l.credit))return m.err('A line can have a debit or a credit, not both.');
-    const out={id:j?j.id:uid(),num:j?j.num:Math.max(0,...(f.ajes||[]).map(x=>x.num))+1,date:$('#ajDate',m).value||f.yearEnd,memo:$('#ajMemo',m).value.trim(),lines,entryId:''};
+    const out={...(j||{}),id:j?j.id:uid(),num:j?j.num:Math.max(0,...(f.ajes||[]).map(x=>x.num))+1,date:$('#ajDate',m).value||f.yearEnd,memo:$('#ajMemo',m).value.trim(),explanation:$('#ajExp',m).value,wp:$('#ajWp',m).value,recurring:$('#ajRec',m).checked,lines,entryId:j?j.entryId||'':''};
     const bad=TallyEngage.ajeProblem(out);if(bad)return m.err(bad);
     const ajes=(f.ajes||[]).filter(x=>x.id!==out.id).concat(out);
     if(await yfSave(f,{ajes}))closeModal()};
@@ -128,6 +183,7 @@ async function yfPost(f,j){
 
 async function yfClick(e,t,d){
   if(t.hasAttribute('data-yfnew')){yfNewForm();return true}
+  if(d.yfstart){const err=await yfCreate(d.yfstart);if(err)toast(err,true);return true}
   if(d.yfopen){YF.open=d.yfopen;YF.tab='tb';renderMain();return true}
   if(t.hasAttribute('data-yfback')){YF.open=null;renderMain();return true}
   if(d.yftab){YF.tab=d.yftab;renderMain();return true}
@@ -139,20 +195,19 @@ async function yfClick(e,t,d){
   if(d.yfaje){yfAjeForm(f,d.yfaje==='new'?null:f.ajes.find(x=>x.id===d.yfaje));return true}
   if(d.yfajedel){const j=f.ajes.find(x=>x.id===d.yfajedel);if(j&&await confirmBox(`Delete AJE ${j.num}?`,'It comes off this file’s leadsheets.'))await yfSave(f,{ajes:f.ajes.filter(x=>x.id!==j.id)});return true}
   if(d.yfpost){const j=f.ajes.find(x=>x.id===d.yfpost);if(j)await yfPost(f,j);return true}
-  if(d.yfact==='retake'){
-    let snapshot;try{snapshot=yfSnapshot(f.yearEnd)}catch(err){toast(err.message,true);return true}
-    // Adjustments already posted to the books are in the new snapshot, so take them out to keep them from counting twice.
-    const posted={};for(const j of f.ajes||[])if(j.entryId&&S.entries.some(x=>x.id===j.entryId))for(const l of j.lines)posted[l.account]=r2((posted[l.account]||0)+l.debit-l.credit);
-    snapshot.lines=snapshot.lines.map(l=>({...l,cur:r2(l.cur-(posted[l.account]||0))}));
-    if(await confirmBox('Take the snapshot again?','The trial balance is taken from the books again. Leadsheets and adjusting entries are kept.','Take snapshot')&&await yfSave(f,{snapshot}))toast('Snapshot taken');
-    return true}
-  if(d.yfact==='final'){if(await confirmBox('Mark this year-end file final?','It can’t be changed until it’s reopened.','Mark final'))await yfSave(f,{status:'final',finalAt:Date.now(),finalBy:ME?ME.name:''});return true}
-  if(d.yfact==='reopen'){await yfSave(f,{status:'open'});return true}
+  if(d.yfact==='final'){const pg=TallyEngage.progress(f,S.accounts,S.attachments);
+    if(pg.openNotes){toast(`Resolve or close the ${pg.openNotes} open review note${pg.openNotes===1?'':'s'} first`,true);return true}
+    if(await confirmBox('Make this year-end file final?',`The checklist is ${pg.pct}% complete. Everything in the file is locked until it’s reopened with a reason.`,'Make final'))await yfSave(f,{status:'final'});return true}
+  if(d.yfact==='reopen'){yfReopenForm(f);return true}
+  if(d.yfstatus){await yfSave(f,{status:d.yfstatus});return true}
+  if(d.yfajerev){await yfSave(f,{ajes:f.ajes.map(x=>x.id===d.yfajerev?{...x,reviewedBy:{at:1}}:x)});return true}
+  if(await yfReviewClick(e,t,d,f))return true;
   if(d.yfact==='delete'){if(await confirmBox('Delete this year-end file?','The snapshot, leadsheets and adjusting entries in it are deleted. Entries already posted to the books stay in the books.')&&await del('engagements',f.id)){YF.open=null;renderMain()}return true}
   return false;
 }
 /** Leadsheet changes on the trial balance tab. */
 function yfBind(m){
+  if(typeof yfReviewBind==='function')yfReviewBind(m);
   $$('[data-yfmap]',m).forEach(s=>s.onchange=async()=>{const f=yfFile(YF.open);if(!f)return;await yfSave(f,{map:{...(f.map||{}),[s.dataset.yfmap]:s.value}})});
 }
 

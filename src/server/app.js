@@ -23,6 +23,7 @@ const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, Valid
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 const DEP = require('../../public/deposits-calc.js');
 const DELAYED = require('../../public/delayed-calc.js');
+const ENGAGE = require('../../public/engagements-calc.js');
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public');
 const MIME = {
@@ -776,7 +777,7 @@ function createApp(opts) {
       out[c] = (out[c] || []).filter(r => (c === 'items' ? see('sales') || see('expenses') : see(ROLES.recordArea(c, r))));
     }
     // Files and questions go with the transaction they're on.
-    const ids = { entries: new Set(out.entries.map(r => r.id)), docs: new Set(out.docs.map(r => r.id)), bankTxns: new Set(out.bankTxns.map(r => r.id)) };
+    const ids = { entries: new Set(out.entries.map(r => r.id)), docs: new Set(out.docs.map(r => r.id)), bankTxns: new Set(out.bankTxns.map(r => r.id)), engagements: new Set((out.engagements || []).map(r => r.id)) };
     const onSeen = x => !!(ids[x.target] && ids[x.target].has(x.targetId));
     out.attachments = out.attachments.filter(onSeen);
     out.questions = out.questions.filter(onSeen);
@@ -821,7 +822,13 @@ function createApp(opts) {
     if (ctx.user && (ctx.user.role === 'client' || ctx.user.readOnly) && out.employees) out.employees = out.employees.map(maskPrivate);
     if (ctx.user && ctx.user.perms) roleView(ctx.user, out);
     // Year-end files are the accountant's: clients never get them, and nobody does while the feature is off.
-    if (!ctx.user || ctx.user.role === 'client' || !featureOn(ctx.id, 'yearEndFiles', ctx.store)) out.engagements = [];
+    if (!ctx.user || ctx.user.role === 'client' || !featureOn(ctx.id, 'yearEndFiles', ctx.store)) {
+      out.engagements = [];
+      out.attachments = out.attachments.filter(a => a.target !== 'engagements');
+    } else {
+      // The firm's people who can open these books, to assign as preparer or reviewer.
+      out.team = wfPeople(ctx.id, ctx.store.getSetting('company') || {}).map(u => ({ id: u.id, name: u.name || u.username, role: u.role }));
+    }
     out.assistant = assistantInfo(ctx.id, ctx.store);
     // Bill approvals: how many owners the firm has (one owner may approve their own bills).
     const cf = reg.get(ctx.id);
@@ -878,6 +885,98 @@ function createApp(opts) {
     for (const u of DELAYED.sync(list, docId, doc)) store.put('delayed', u.id, u.data);
   }
 
+  /*
+   * Year-end files: the server signs every sign-off, review and tick with who did it and when, so they can't be
+   * made up in someone else's name. Only an owner or the file's reviewer can make a file final or reopen it,
+   * a final file needs no open review notes, and reopening one needs a reason, which is kept with who and when.
+   */
+  const isLead = (user, f) => user.role === 'owner' || !!(f && f.team && f.team.reviewer && f.team.reviewer.id === user.id);
+  function stampEngagement(prev, data, user) {
+    const now = opts.now ? +opts.now() : Date.now(), me = { by: user.name || user.username, id: user.id, at: now };
+    const same = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+    const sign = (before, after) => (same(before, after) ? before || null : after ? me : null);
+    const d = { ...data }, p = prev || {};
+    d.wps = Object.fromEntries(Object.entries(d.wps && typeof d.wps === 'object' ? d.wps : {}).map(([k, w]) => {
+      const pw = (p.wps || {})[k] || {};
+      return [k, { ...w, prepared: sign(pw.prepared, w && w.prepared), reviewed: sign(pw.reviewed, w && w.reviewed) }];
+    }));
+    const pAje = new Map((p.ajes || []).map(j => [j.id, j]));
+    d.ajes = (Array.isArray(d.ajes) ? d.ajes : []).map(j => {
+      const pj = pAje.get(j && j.id);
+      if (!pj) return { ...j, preparedBy: me, reviewedBy: null };
+      // A change to the entry itself undoes its review.
+      const changed = !same([pj.date, pj.memo, pj.lines], [j.date, j.memo, j.lines]);
+      return { ...j, preparedBy: pj.preparedBy || me, reviewedBy: changed ? null : sign(pj.reviewedBy, j.reviewedBy) };
+    });
+    const pNote = new Map((p.reviewNotes || []).map(n => [n.id, n]));
+    d.reviewNotes = (Array.isArray(d.reviewNotes) ? d.reviewNotes : []).map(n => {
+      const pn = pNote.get(n && n.id), done = n && (n.status === 'resolved' || n.status === 'closed');
+      const wasDone = pn && (pn.status === 'resolved' || pn.status === 'closed');
+      return { ...n, created: pn ? pn.created : me, resolved: done ? (wasDone ? pn.resolved : me) : null };
+    });
+    d.checklist = Object.fromEntries(Object.entries(d.checklist && typeof d.checklist === 'object' ? d.checklist : {}).map(([k, v]) => [k, sign((p.checklist || {})[k], v)]).filter(([, v]) => v));
+    const ps = p.signoffs || {}, ds = d.signoffs || {};
+    d.signoffs = { prepared: sign(ps.prepared, ds.prepared), reviewed: sign(ps.reviewed, ds.reviewed) };
+    if (!same(ps.reviewed, d.signoffs.reviewed) && d.signoffs.reviewed && !isLead(user, d)) throw new ValidationError('Only an owner or this file’s reviewer can sign it off as reviewed.', 403);
+    // Final and reopened.
+    const was = ENGAGE.statusOf(p.status), now2 = ENGAGE.statusOf(d.status);
+    d.unlocks = p.unlocks || [];
+    if (was !== 'final' && now2 === 'final') {
+      if (!isLead(user, d)) throw new ValidationError('Only an owner or this file’s reviewer can make it final.', 403);
+      if ((d.reviewNotes || []).some(ENGAGE.openNote)) throw new ValidationError('Resolve or close the open review notes before making the file final.', 409);
+      d.finalAt = now; d.finalBy = me.by;
+    } else if (was === 'final' && now2 !== 'final') {
+      if (!isLead(user, p)) throw new ValidationError('Only an owner or this file’s reviewer can reopen it.', 403);
+      const reason = String(d.unlockReason || '').trim();
+      if (!reason) throw new ValidationError('Say why the file is being reopened.');
+      d.unlocks = [...d.unlocks, { ...me, reason: reason.slice(0, 1000) }];
+    } else if (was === 'final') { d.finalAt = p.finalAt; d.finalBy = p.finalBy; }
+    delete d.unlockReason;
+    return d;
+  }
+  /** What changed on a year-end file, in words, for the activity log ("AJE 4 created; working paper C reviewed"). */
+  function engagementChanges(b, a) {
+    if (!a) return ['deleted'];
+    // A new file: "created", plus whatever it starts with (adjusting entries, sign-offs…).
+    if (!b) { const rest = engagementChanges({ status: a.status, snapshot: a.snapshot, map: a.map, report: a.report, fsNotes: a.fsNotes, client: a.client, team: a.team, framework: a.framework, kind: a.kind, checklist: a.checklist }, a); return ['created', ...rest.filter(x => x !== 'changed')]; }
+    const out = [], same = (x, y) => JSON.stringify(x || null) === JSON.stringify(y || null);
+    const was = ENGAGE.statusOf(b.status), now = ENGAGE.statusOf(a.status);
+    if (was !== now) out.push(now === 'final' ? 'made final' : was === 'final' ? `reopened: ${((a.unlocks || []).slice(-1)[0] || {}).reason || ''}` : `status ${ENGAGE.STATUS_LABEL[now].toLowerCase()}`);
+    if (!same(b.snapshot && b.snapshot.lines, a.snapshot && a.snapshot.lines)) {
+      const pb = new Map(((b.snapshot || {}).lines || []).map(l => [l.account, l]));
+      const ch = ((a.snapshot || {}).lines || []).filter(l => !pb.has(l.account) || pb.get(l.account).cur !== l.cur).slice(0, 3).map(l => `${l.code ? l.code + ' ' : ''}${l.name} ${pb.has(l.account) ? '$' + pb.get(l.account).cur.toFixed(2) : '$0.00'} → $${l.cur.toFixed(2)}`);
+      out.push('trial balance updated from the books' + (ch.length ? ` (${ch.join(', ')})` : ''));
+    }
+    const ba = new Map((b.ajes || []).map(j => [j.id, j])), aa = new Map((a.ajes || []).map(j => [j.id, j]));
+    for (const j of a.ajes || []) {
+      const pj = ba.get(j.id);
+      if (!pj) out.push(`AJE ${j.num} created`);
+      else {
+        if (!same([pj.date, pj.memo, pj.lines], [j.date, j.memo, j.lines])) out.push(`AJE ${j.num} changed`);
+        if (!pj.reviewedBy && j.reviewedBy) out.push(`AJE ${j.num} reviewed`);
+        if (!pj.entryId && j.entryId) out.push(`AJE ${j.num} posted to the books`);
+      }
+    }
+    for (const j of b.ajes || []) if (!aa.has(j.id)) out.push(`AJE ${j.num} deleted`);
+    const label = c => (ENGAGE.BY_CODE[c] || ENGAGE.EXTRA_WPS.find(x => x.code === c) || { label: c }).label;
+    for (const [k, w] of Object.entries(a.wps || {})) {
+      const pw = (b.wps || {})[k] || {};
+      if (!pw.prepared && w.prepared) out.push(`working paper ${label(k)} prepared`);
+      if (!pw.reviewed && w.reviewed) out.push(`working paper ${label(k)} reviewed`);
+      if (pw.reviewed && !w.reviewed) out.push(`working paper ${label(k)} review removed`);
+      const txt = x => [x.notes || '', x.comment || '', x.refs || '', x.ticks || {}];
+      if (!same(txt(pw), txt(w))) out.push(`working paper ${label(k)} notes changed`);
+    }
+    const bn = new Map((b.reviewNotes || []).map(n => [n.id, n]));
+    for (const n of a.reviewNotes || []) { const pn = bn.get(n.id); if (!pn) out.push(`review note ${n.num} added`); else if (pn.status !== n.status) out.push(`review note ${n.num} ${ENGAGE.NOTE_STATUS[n.status].toLowerCase()}`); }
+    for (const k of ['prepared', 'reviewed']) { const x = (b.signoffs || {})[k], y = (a.signoffs || {})[k]; if (!x && y) out.push(`file signed off as ${k}`); if (x && !y) out.push(`${k} sign-off removed`); }
+    if (!same(b.map, a.map)) out.push('account mapping changed');
+    if (!same([b.report, b.fsNotes], [a.report, a.fsNotes])) out.push('report or notes changed');
+    if (!same([b.client, b.team, b.framework, b.kind], [a.client, a.team, a.framework, a.kind])) out.push('engagement details changed');
+    if (!same(b.checklist, a.checklist)) out.push('checklist ticked');
+    return out.length ? out : ['changed'];
+  }
+
   function applyWrite(store, w, user, ctx) {
     const { op, collection, id } = w;
     if (!COLLECTIONS.includes(collection)) throw new ValidationError(`Unknown collection "${collection}".`, 404);
@@ -891,6 +990,12 @@ function createApp(opts) {
     if (collection === 'engagements') {
       if (!user || user.role === 'client') throw new ValidationError('Year-end files are for the firm’s accountants.', 403);
       if (ctx) needFeature(ctx.id, 'yearEndFiles', store);
+      if (op === 'set') w.data = stampEngagement(store.get('engagements', id), w.data || {}, user);
+    }
+    // A year-end file's documents can't be removed once the file is final.
+    if (collection === 'attachments' && op === 'delete') {
+      const at = store.get('attachments', id), e = at && at.target === 'engagements' && store.get('engagements', at.targetId);
+      if (e && ENGAGE.statusOf(e.status) === 'final') throw new ValidationError('This year-end file is final. Reopen it to remove documents.', 409);
     }
     // Plan features: payroll records, and the special sales tax methods on returns.
     if (ctx && op === 'set') {
@@ -957,14 +1062,14 @@ function createApp(opts) {
       store.put(collection, id, data);
       if (collection === 'docs') syncDelayed(store, id, data);
       const after = masked ? hideSin(store.get(collection, id)) : store.get(collection, id);
-      if (JSON.stringify(before) !== JSON.stringify(after)) store.audit(user, before ? 'change' : 'add', { collection, id, summary: auditSummary(collection, after), before, after });
+      if (JSON.stringify(before) !== JSON.stringify(after)) store.audit(user, before ? 'change' : 'add', { collection, id, summary: collection === 'engagements' ? `year-end file ${after.yearEnd}: ${engagementChanges(before, after).join('; ')}`.slice(0, 500) : auditSummary(collection, after), before, after });
     } else if (op === 'delete') {
       checkDelete(collection, id, store);
       closedCheck(store, w, null, user);
       store.delete(collection, id);
       if ((collection === 'receipts' || collection === 'attachments') && before && before.fileId) store.deleteFile(before.fileId);
       // A deleted transaction, invoice or bill takes its attached files and questions with it.
-      if (collection === 'entries' || collection === 'docs') {
+      if (collection === 'entries' || collection === 'docs' || collection === 'engagements') {
         for (const x of store.list('attachments').filter(x => x.target === collection && x.targetId === id)) { store.delete('attachments', x.id); store.deleteFile(x.fileId); }
         for (const q of store.list('questions').filter(q => q.target === collection && q.targetId === id)) store.delete('questions', q.id);
       }
@@ -1005,6 +1110,7 @@ function createApp(opts) {
       case 'recons': return `statement ${d.statementDate} ending ${amt(d.endingBalance)}`;
       case 'filings': return `${d.tax === 'qst' ? 'QST' : d.tax === 'pst' ? 'PST' : 'GST/HST'} ${d.from} to ${d.to}`;
       case 'payruns': return `pay date ${d.payDate}, ${(d.lines || []).length} employee(s)`;
+      case 'engagements': return `year-end file ${d.yearEnd}`;
       default: return '';
     }
   }
@@ -2385,19 +2491,21 @@ function createApp(opts) {
     ['POST', /^\/attachments$/, async (ctx, req) => {
       notClient(ctx.user);
       const body = (await readJson(req, 15 * 1024 * 1024)) || {};
-      const target = body.target === 'docs' ? 'docs' : 'entries', targetId = String(body.targetId || '');
-      const rec0 = ctx.store.get(target, targetId);
-      if (!rec0) throw new ValidationError('Save the transaction first, then attach files to it.', 404);
-      needArea(ctx.user, ROLES.recordArea(target, rec0));
-      if (ctx.store.list('attachments').filter(x => x.target === target && x.targetId === targetId).length >= 20) throw new ValidationError('That’s 20 files on this transaction already.', 409);
+      const target = body.target === 'docs' ? 'docs' : body.target === 'engagements' ? 'engagements' : 'entries', targetId = String(body.targetId || '');
+      const rec0 = ctx.store.get(target, targetId), eng = target === 'engagements';
+      if (!rec0) throw new ValidationError(eng ? 'That year-end file doesn’t exist.' : 'Save the transaction first, then attach files to it.', 404);
+      needArea(ctx.user, ROLES.recordArea(target, rec0), eng ? 'edit' : 'view');
+      if (eng) { needFeature(ctx.id, 'yearEndFiles', ctx.store); if (ENGAGE.statusOf(rec0.status) === 'final') throw new ValidationError('This year-end file is final. Reopen it to add documents.', 409); }
+      const max = eng ? 300 : 20;
+      if (ctx.store.list('attachments').filter(x => x.target === target && x.targetId === targetId).length >= max) throw new ValidationError(`That’s ${max} files on this ${eng ? 'year-end file' : 'transaction'} already.`, 409);
       const data = Buffer.from(String(body.data || ''), 'base64');
       if (!data.length) throw new ValidationError('That file is empty.');
       if (data.length > 10 * 1024 * 1024) throw new ValidationError('That file is over 10 MB.', 413);
-      const mediaType = sniffType(data);
-      if (!mediaType) throw new ValidationError('Attach a PDF or a photo (JPEG, PNG or WebP).');
+      const mediaType = sniffType(data, eng ? body.fileName : '');
+      if (!mediaType) throw new ValidationError(eng ? 'Attach a PDF, a photo, or an Excel (.xlsx) or Word (.docx) document.' : 'Attach a PDF or a photo (JPEG, PNG or WebP).');
       const id = crypto.randomUUID(), fileId = crypto.randomUUID();
       const name = String(body.fileName || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').slice(0, 120);
-      const rec = validateRecord('attachments', id, { target, targetId, fileId, name, mediaType, size: data.length, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now() }, ctx.store);
+      const rec = validateRecord('attachments', id, { target, targetId, wp: body.wp, fileId, name, mediaType, size: data.length, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now() }, ctx.store);
       ctx.store.transaction(() => {
         ctx.store.putFile(fileId, { mediaType, name, data });
         ctx.store.put('attachments', id, rec);
@@ -2408,14 +2516,16 @@ function createApp(opts) {
     ['GET', /^\/files\/([A-Za-z0-9-]+)$/, (ctx, req, m, res) => {
       const f = ctx.store.getFile(m[1]);
       if (!f) throw new ValidationError('That file isn’t here any more.', 404);
+      const engDoc = ctx.store.list('attachments').find(x => x.fileId === m[1] && x.target === 'engagements');
+      if (engDoc && (ctx.user.role === 'client' || !featureOn(ctx.id, 'yearEndFiles', ctx.store))) throw new ValidationError('That file isn’t here any more.', 404);
       if (ctx.user.perms) { // a receipt is in Expenses; an attachment goes with its transaction (the logo is for everyone)
         const at = ctx.store.list('attachments').find(x => x.fileId === m[1]);
         if (at) needArea(ctx.user, ROLES.recordArea(at.target, ctx.store.get(at.target, at.targetId)), 'view');
         else if (ctx.store.list('receipts').some(x => x.fileId === m[1])) needArea(ctx.user, 'expenses', 'view');
       }
-      const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' }[f.mediaType] || 'bin';
+      const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic', [OFFICE.xlsx]: 'xlsx', [OFFICE.docx]: 'docx' }[f.mediaType] || 'bin';
       const safe = (f.name || 'receipt').replace(/[^A-Za-z0-9 ._-]+/g, '').replace(/\.[A-Za-z0-9]+$/, '').slice(0, 60) || 'receipt';
-      res.writeHead(200, { 'Content-Type': f.mediaType, 'Content-Length': f.data.length, 'Content-Disposition': `inline; filename="${safe}.${ext}"`,
+      res.writeHead(200, { 'Content-Type': f.mediaType, 'Content-Length': f.data.length, 'Content-Disposition': `${ext === 'xlsx' || ext === 'docx' ? 'attachment' : 'inline'}; filename="${safe}.${ext}"`,
         'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin',
         // Photos open with nothing allowed to run. (A sandbox would stop the browser's PDF viewer, so PDFs get only the type check.)
         'Content-Security-Policy': f.mediaType === 'application/pdf' ? "frame-ancestors 'none'" : "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'" });
@@ -2897,10 +3007,18 @@ function serveStatic(dir, pathname, req, res) {
 module.exports = { createApp };
 
 /** What a file really is, from its first bytes (not what the browser claims). Only receipt types. */
-function sniffType(b) {
+const OFFICE = { xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+/** A file's type from its first bytes. With a file name, an Excel or Word document (a zip with the right parts) too. */
+function sniffType(b, name) {
   if (b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'application/pdf'; // %PDF
   if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
   if (b.length > 8 && b.readUInt32BE(0) === 0x89504e47 && b.readUInt32BE(4) === 0x0d0a1a0a) return 'image/png';
   if (b.length > 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  if (name && b.length > 30 && b.readUInt32BE(0) === 0x504b0304) {
+    const ext = String(name).toLowerCase().split('.').pop(), head = b.toString('latin1', 0, Math.min(b.length, 64 * 1024));
+    if (ext === 'xlsx' && head.includes('xl/')) return OFFICE.xlsx;
+    if (ext === 'docx' && head.includes('word/')) return OFFICE.docx;
+    if ((ext === 'xlsx' || ext === 'docx') && head.includes('[Content_Types].xml')) return OFFICE[ext];
+  }
   return '';
 }
