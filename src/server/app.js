@@ -945,7 +945,7 @@ function createApp(opts) {
     if (!same(b.snapshot && b.snapshot.lines, a.snapshot && a.snapshot.lines)) {
       const pb = new Map(((b.snapshot || {}).lines || []).map(l => [l.account, l]));
       const ch = ((a.snapshot || {}).lines || []).filter(l => !pb.has(l.account) || pb.get(l.account).cur !== l.cur).slice(0, 3).map(l => `${l.code ? l.code + ' ' : ''}${l.name} ${pb.has(l.account) ? '$' + pb.get(l.account).cur.toFixed(2) : '$0.00'} → $${l.cur.toFixed(2)}`);
-      out.push('trial balance snapshot taken again' + (ch.length ? ` (${ch.join(', ')})` : ''));
+      out.push('trial balance updated from the books' + (ch.length ? ` (${ch.join(', ')})` : ''));
     }
     const ba = new Map((b.ajes || []).map(j => [j.id, j])), aa = new Map((a.ajes || []).map(j => [j.id, j]));
     for (const j of a.ajes || []) {
@@ -964,7 +964,8 @@ function createApp(opts) {
       if (!pw.prepared && w.prepared) out.push(`working paper ${label(k)} prepared`);
       if (!pw.reviewed && w.reviewed) out.push(`working paper ${label(k)} reviewed`);
       if (pw.reviewed && !w.reviewed) out.push(`working paper ${label(k)} review removed`);
-      if (!same([pw.notes, pw.comment, pw.refs, pw.ticks], [w.notes, w.comment, w.refs, w.ticks])) out.push(`working paper ${label(k)} notes changed`);
+      const txt = x => [x.notes || '', x.comment || '', x.refs || '', x.ticks || {}];
+      if (!same(txt(pw), txt(w))) out.push(`working paper ${label(k)} notes changed`);
     }
     const bn = new Map((b.reviewNotes || []).map(n => [n.id, n]));
     for (const n of a.reviewNotes || []) { const pn = bn.get(n.id); if (!pn) out.push(`review note ${n.num} added`); else if (pn.status !== n.status) out.push(`review note ${n.num} ${ENGAGE.NOTE_STATUS[n.status].toLowerCase()}`); }

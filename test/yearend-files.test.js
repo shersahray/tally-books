@@ -254,3 +254,16 @@ test('review: the checklist and progress follow the file', () => {
   f.reviewNotes = [{ status: 'open' }];
   assert.equal(E.progress(f, [], []).openNotes, 1);
 });
+
+test('review: bringing in a changed trial balance takes back the review of the working papers it touches, in the log', async () => {
+  let y = await getY('r1');
+  await req(owner, 'PUT', c('/records/engagements/r1'), { ...y, status: 'progress', unlockReason: 'Books changed' });
+  y = await getY('r1');
+  await req(owner, 'PUT', c('/records/engagements/r1'), { ...y, wps: { ...y.wps, A: { ...y.wps.A, reviewed: { at: 1 } } } });
+  y = await getY('r1'); assert.equal(y.wps.A.reviewed.by, 'Sher');
+  const lines = y.snapshot.lines.map(l => (l.account === bank ? { ...l, cur: 1200 } : l.account === sales ? { ...l, cur: -1200 } : l));
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/r1'), { ...y, snapshot: { ...y.snapshot, lines }, wps: { ...y.wps, A: { ...y.wps.A, reviewed: null, status: 'progress' } } })).status, 200);
+  y = await getY('r1'); assert.equal(y.wps.A.reviewed, null);
+  const log = (await req(owner, 'GET', c('/audit?collection=engagements'))).json.rows[0].summary;
+  assert.match(log, /trial balance updated from the books \(.*\$1000\.00 → \$1200\.00/); assert.match(log, /working paper Cash review removed/);
+});
