@@ -47,7 +47,7 @@
   function recordArea(col, r) {
     r = r || {};
     switch (col) {
-      case 'accounts': case 'assets': return 'accounting';
+      case 'accounts': case 'assets': case 'engagements': return 'accounting';
       case 'contacts': return r.kind === 'vendor' ? 'expenses' : 'sales';
       case 'items': return r.sold === false && r.bought ? 'expenses' : 'sales';
       case 'docs': return SALES_DOCS.includes(r.kind) ? 'sales' : 'expenses';

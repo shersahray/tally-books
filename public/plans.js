@@ -15,9 +15,10 @@
    * Features built but not offered yet. They stay out of every plan, add-on, price and menu, and the server refuses
    * them, while their code and any records already made are kept. To launch payroll, empty this list.
    * A test (or a server started with SUMLORA_PAYROLL=on) can turn payroll back on.
+   * Year-end files (engagements-calc.js) are coming soon too; SUMLORA_YEAREND=on turns them on for tests.
    */
-  const payrollOn = typeof process !== 'undefined' && process.env && process.env.SUMLORA_PAYROLL === 'on';
-  const COMING_SOON = payrollOn ? [] : ['payroll'];
+  const envOn = k => typeof process !== 'undefined' && process.env && process.env[k] === 'on';
+  const COMING_SOON = [...(envOn('SUMLORA_PAYROLL') ? [] : ['payroll']), ...(envOn('SUMLORA_YEAREND') ? [] : ['yearEndFiles'])];
   const soon = key => COMING_SOON.includes(key);
 
   // Features beyond everyday bookkeeping. Bookkeeping itself (accounts, transactions, invoices, estimates and bills,
@@ -43,16 +44,18 @@
     // In Thrive; on Seed and Grow it comes with the Payroll add-on (ADDONS.payroll).
     payroll: { label: 'Payroll', desc: 'Pay runs, source deductions and remittances, vacation and holiday pay, ROE, T4 and RL-1', comingSoon: soon('payroll') },
     workflows: { label: 'Workflow reminders', desc: 'Rules that remind the right people about overdue invoices, bills coming due, bills waiting for approval, bank lines and receipts waiting, estimates to follow up, remittances and sales tax returns, and can email customers a payment reminder' },
+    // The accountant's year-end working file: trial balance snapshot, leadsheets and adjusting entries. Firm staff only.
+    yearEndFiles: { label: 'Year-end files', desc: 'The accountant’s year-end working file: the trial balance at the year-end, leadsheets, adjusting entries and comparatives. Clients never see it', comingSoon: soon('yearEndFiles') },
     // For the whole firm, not each company: owners define roles under Users & security (see roles.js).
     customRoles: { label: 'Custom roles', desc: 'Your own roles for staff, with None, View or Edit for sales, expenses, banking, payroll, reports, accounting, sales tax and settings', firm: true },
   };
   const GROW = ['bankFeeds', 'ai', 'advancedReports', 'projects', 'fixedAssets', 'specialTax', 'budgets'];
-  const THRIVE = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'workflows', 'payroll'].filter(k => !soon(k));
+  const THRIVE = [...GROW, 'inventory', 'multiCurrency', 'classes', 'customRoles', 'billApprovals', 'emailReceipts', 'cashForecast', 'workflows', 'payroll', 'yearEndFiles'].filter(k => !soon(k));
   // cents: the default monthly price per company (the server's administrator can change it in Settings).
   const PLANS = {
     seed: { label: 'Seed', fr: 'Semis', cents: 1800, features: [], blurb: 'Everyday bookkeeping: invoices and bills, GST/HST and QST returns, bank statement import and reconciliation, receipts, reports and CaseWare export.' },
     grow: { label: 'Grow', fr: 'Croissance', cents: 4000, features: GROW, blurb: 'Everything in Seed, plus automatic bank feeds, AI suggestions, advanced reports, projects and time, fixed assets and CCA, special sales tax methods and budgets.' },
-    thrive: { label: 'Thrive', fr: 'Prospérité', cents: 5500, features: THRIVE, blurb: 'Everything in Grow, plus ' + (soon('payroll') ? '' : 'payroll, ') + 'inventory, multi-currency, classes, custom roles, bill approvals, receipts by email, the cash flow forecast and workflow reminders.' },
+    thrive: { label: 'Thrive', fr: 'Prospérité', cents: 5500, features: THRIVE, blurb: 'Everything in Grow, plus ' + (soon('payroll') ? '' : 'payroll, ') + 'inventory, multi-currency, classes, custom roles, bill approvals, receipts by email, the cash flow forecast' + (soon('yearEndFiles') ? ' and workflow reminders.' : ', workflow reminders and year-end files.') },
   };
   /*
    * The plans before Seed, Grow and Thrive. A firm (or a company whose client pays) still on one of them moves to the
