@@ -34,7 +34,7 @@ const P = require(${JSON.stringify(path.join(__dirname, '..', 'public', 'plans.j
   out.payroll = (await req('PUT', '/api/c/' + co + '/records/employees/e1', { name: 'Ann', province: 'ON' })).status;
   out.planCheck = [P.featureOn('seed', {}, 'yearEndFiles', {}, ['yearEndFiles']), P.featureOn('thrive', {}, 'yearEndFiles', {}, []), P.featureOn('thrive', {}, 'payroll', {}, ['payroll'])];
   console.log(JSON.stringify(out));
-  server.close(); fs.rmSync(dir, { recursive: true, force: true }); process.exit(0);
+  await server.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });`;
 
 test('a firm can try year-end files early; everyone else (and payroll) stays coming soon', () => {
@@ -49,3 +49,4 @@ test('a firm can try year-end files early; everyone else (and payroll) stays com
   assert.equal(r.payroll, 403, 'payroll still coming soon');
   assert.deepEqual(r.planCheck, [true, false, false], 'early access works on any plan, only for the firm that has it, and never for payroll');
 });
+

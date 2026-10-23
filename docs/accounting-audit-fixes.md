@@ -16,6 +16,8 @@ This change corrects the reproduced high-priority calculation errors and adds re
 
 The delayed-charge test now updates an invoice and its posting together, as the normal form does. It also verifies that a rejected inconsistent edit rolls back its delayed-credit links. Existing conversion tests verify that QuickBooks opening trial balances are not double counted.
 
+Year-end test cleanup now awaits `server.shutdown()` before removing temporary databases, avoiding Windows SQLite file-lock failures without skipping tests.
+
 Run `npm test` (Node.js 22.13 or newer). The change uses no new dependencies.
 
 ## Existing books and remaining audit work
