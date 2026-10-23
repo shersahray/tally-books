@@ -124,10 +124,10 @@ function keepReceipt(col,id,data){
 }
 async function put(col,id,data){if(!await filedOk([{op:'set',collection:col,id,data}]))return false;return write(()=>api('PUT',`/api/records/${col}/${encodeURIComponent(id)}`,strip(keepReceipt(col,id,keepClear(col,id,data)))))}
 async function del(col,id){if(!await filedOk([{op:'delete',collection:col,id}]))return false;return write(()=>api('DELETE',`/api/records/${col}/${encodeURIComponent(id)}`))}
-async function batch(writes){
+async function batch(writes,expectedRev){
   if(!await filedOk(writes))return false;
   const all=writes.map(w=>({...w,data:w.data&&strip(keepReceipt(w.collection,w.id,keepClear(w.collection,w.id,w.data)))}));
-  return write(async()=>{for(let i=0;i<all.length;i+=400)await api('POST','/api/batch',{writes:all.slice(i,i+400)})});
+  return write(async()=>{for(let i=0;i<all.length;i+=400){const result=await api('POST','/api/batch',{writes:all.slice(i,i+400),...(expectedRev!==undefined?{expectedRev}:{})});if(expectedRev!==undefined)expectedRev=result.rev}});
 }
 const putCompany=data=>write(()=>api('PUT','/api/settings',data));
 const strip=o=>{const c={...o};delete c.id;return c};
@@ -1187,16 +1187,26 @@ function docForm(kind,doc,preset){
 // Paying out (to a customer) or receiving back (from a vendor) what's left on a credit.
 function refundForm(cr,entry){
   const sale=cr.kind==='credit',left=r2(docStatus(cr).bal+(entry?+entry.amount||0:0));
-  const defBank=entry?.bank||(sortAccts(S.accounts.filter(a=>a.detail==='bank'))[0]||{}).id;
-  const f=openModal(sale?'Refund to customer':'Refund from vendor',`<div class="muted"><span>${sale?'Paid back to':'Received back from'}</span> <b translate="no">${esc(contactName(cr.contactId))}</b>. <span>${money(left)} of this credit is available.</span></div>
-    <div class="fields">${fld('rfDate','Date',`<input type="date" id="rfDate" value="${entry?.date||today()}">`)}${fld('rfAmt','Amount',`<input type="number" id="rfAmt" step="0.01" min="0" value="${entry?entry.amount:left}">`)}${fld('rfBank',sale?'Paid from':'Deposited to',`<select id="rfBank">${acctOptions(defBank,a=>a.detail==='bank'||a.detail==='card')}</select>`)}${fld('rfRef','Reference',`<input type="text" id="rfRef" value="${esc(entry?.ref||'')}">`)}</div>`,saveFoot(!!entry));
+  const banks=a=>(a.detail==='bank'||a.detail==='card')&&(!a.currency||a.currency===cr.currency);
+  const defBank=entry?.bank||(sortAccts(S.accounts.filter(banks))[0]||{}).id;
+  const f=openModal(sale?'Refund to customer':'Refund from vendor',`<div class="muted"><span>${sale?'Paid back to':'Received back from'}</span> <b translate="no">${esc(contactName(cr.contactId))}</b>. <span>${typeof moneyC==='function'?moneyC(left,cr.currency):money(left)} of this credit is available.</span></div>
+    <div class="fields">${fld('rfDate','Date',`<input type="date" id="rfDate" value="${entry?.date||today()}">`)}${fld('rfAmt',cr.currency?`Amount (${cr.currency})`:'Amount',`<input type="number" id="rfAmt" step="0.01" min="0" value="${entry?entry.amount:left}">`)}${fld('rfBank',sale?'Paid from':'Deposited to',`<select id="rfBank">${acctOptions(defBank,banks)}</select>`)}${fld('rfRef','Reference',`<input type="text" id="rfRef" value="${esc(entry?.ref||'')}">`)}</div>
+    ${cr.currency?fxRowHTML('rfFx','',entry?.fx,'Exchange rate on the refund date')+`<div data-rfcad>${fld('rfCad',sale?'Canadian dollars paid':'Canadian dollars received',`<input type="number" id="rfCad" step="0.01" min="0" value="${esc(entry?.cad||'')}">`)}</div><div class="muted" data-rfhome></div>`:''}`,saveFoot(!!entry));
+  const sameCurrency=()=>cr.currency&&acct($('#rfBank',f).value)?.currency===cr.currency;
+  let RFX=null;
+  const showRefundHome=()=>{if(!cr.currency)return;const same=sameCurrency();$('[data-rfcad]',f).hidden=!!same;const amt=r2($('#rfAmt',f).value),cash=same?r2(amt*(RFX?RFX.rate():0)):r2($('#rfCad',f).value);$('[data-rfhome]',f).textContent=cash>0?`${T('Recorded at')} ${money(r2(amt*cr.fx))} · CAD ${money(cash)}`:''};
+  if(cr.currency){RFX=wireFx(f,'rfFx',()=>sameCurrency()?cr.currency:'','#rfDate',showRefundHome);$('#rfBank',f).addEventListener('change',()=>{RFX.refresh(false);showRefundHome()});f.addEventListener('input',showRefundHome);showRefundHome()}
   const db=$('[data-del]',f);if(db)db.onclick=async()=>{if(!await confirmBox('Delete this refund?','The credit will show the amount as available again.'))return;await del('entries',entry.id);closeModal();toast('Refund deleted')};
   f.onsubmit=async e=>{e.preventDefault();f.err('');
     const amt=r2($('#rfAmt',f).value),bank=$('#rfBank',f).value;
     if(!(amt>0))return f.err('Enter an amount above zero.');if(amt>left+0.004)return f.err(`Only ${money(left)} is available.`);if(!bank)return f.err('Choose a bank account.');
     const ctl=needAcct(sale?'ar':'ap',sale?'Accounts receivable':'Accounts payable');if(!ctl)return;
-    const lines=sale?[{account:ctl.id,debit:amt,credit:0},{account:bank,debit:0,credit:amt}]:[{account:bank,debit:amt,credit:0},{account:ctl.id,debit:0,credit:amt}];
-    if(await put('entries',entry?.id||uid(),{type:sale?'refund':'vrefund',date:$('#rfDate',f).value||today(),ref:$('#rfRef',f).value.trim(),memo:`Refund of credit ${cr.number||''}`.trim(),contactId:cr.contactId,applyTo:cr.id,amount:amt,bank,lines,created:entry?.created||Date.now()})){closeModal();toast('Refund saved')}
+    let lines=sale?[{account:ctl.id,debit:amt,credit:0},{account:bank,debit:0,credit:amt}]:[{account:bank,debit:amt,credit:0},{account:ctl.id,debit:0,credit:amt}];
+    const w=[],extra={};
+    if(cr.currency){const same=sameCurrency(),cad=same?r2(amt*(RFX?RFX.rate():0)):r2($('#rfCad',f).value);if(!(cad>0))return f.err(same?'Enter the exchange rate for this refund.':'Enter the actual Canadian dollars paid or received.');
+      const book=r2(amt*cr.fx),gain=r2(sale?book-cad:cad-book),fxa=gain?fxAccount(w):'';lines=foreignRefundLines(cr,amt,bank,cad,fxa);Object.assign(extra,{currency:cr.currency,fx:Math.round(cad/amt*1e6)/1e6,cad})}
+    w.push({op:'set',collection:'entries',id:entry?.id||uid(),data:{...extra,type:sale?'refund':'vrefund',date:$('#rfDate',f).value||today(),ref:$('#rfRef',f).value.trim(),memo:`Refund of credit ${cr.number||''}`.trim(),contactId:cr.contactId,applyTo:cr.id,amount:amt,bank,lines,created:entry?.created||Date.now()}});
+    if(await batch(w)){closeModal();toast('Refund saved')}
   };
 }
 
@@ -1511,3 +1521,4 @@ function bindClasses(m){
     else if(b.dataset.clsact){await saveCls(cs.map(x=>x.id===b.dataset.clsact?{...x,active:x.active===false}:x),'Saved')}
     else if(b.dataset.clsdel){await saveCls(cs.filter(x=>x.id!==b.dataset.clsdel),'Class removed')}},{capture:true});
 }
+

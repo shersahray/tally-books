@@ -109,7 +109,7 @@ before(async () => {
   const acc = await fetch(base + '/api/auth/link/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: link, password: 'client long phrase here', acceptTerms: true }) });
   client = acc.headers.get('set-cookie').split(';')[0];
 });
-after(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+after(async () => { await server.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 test('server: CaseWare prior year on a books file: own lines only for the prior year', async () => {
   const accts = (await req(owner, 'GET', `/api/c/${co}/state`)).json.accounts;
@@ -219,3 +219,4 @@ test('ledgers: Xero: the organisation is picked up, and the year-to-date columns
   assert.equal((await req(owner, 'DELETE', `/api/companies/${co2}`)).status, 200);
   assert.ok(!JSON.parse(fs.readFileSync(path.join(dir, 'ledgers.json'), 'utf8')).connections[co2]);
 });
+

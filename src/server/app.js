@@ -22,7 +22,7 @@ const { TERMS_VERSION, TERMS_DRAFT } = require('./legal');
 const { Billing, paid: billingPaid, stale: billingStale, describe: billingDescribe } = require('./billing');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { Licence, Issuer, localDay, addDays } = require('./licence');
-const { validateRecord, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
+const { validateRecord, checkDocumentPostings, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 const DEP = require('../../public/deposits-calc.js');
 const DELAYED = require('../../public/delayed-calc.js');
@@ -1103,6 +1103,13 @@ function createApp(opts) {
     const masked = collection === 'employees' || collection === 'vehicles';
     const before = masked ? hideSin(store.get(collection, id)) : store.get(collection, id);
     if (op === 'set') {
+      if (collection === 'docs') {
+        if (w.data && w.data.carried && !(before && before.carried) && !(ctx && ctx.importing)) throw new ValidationError('Opening-balance documents can only be created through the migration import.');
+        if (before && before.carried && !(ctx && ctx.importing)) {
+          if (Number(w.data.total) !== Number(before.total) || (w.data.currency || '') !== (before.currency || '') || Number(w.data.fx || 1) !== Number(before.fx || 1)) throw new ValidationError('A carried opening balance can’t be changed. Correct it through the migration workflow.', 409);
+          w.data = { ...w.data, carried: true };
+        }
+      }
       const data = validateRecord(collection, id, w.data, store);
       closedCheck(store, w, data, user);
       store.put(collection, id, data);
@@ -1456,7 +1463,7 @@ function createApp(opts) {
     // The administrator's overview: firms on this server, desktop licences sold, renewals due, AI use.
     ['GET', /^\/api\/overview$/, (req, m, res, user) => {
       adminOnly(user);
-      const now = Date.now(), monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+      const now = opts.now ? +opts.now() : Date.now(), day = new Date(now), monthStart = new Date(day.getFullYear(), day.getMonth(), 1).getTime();
       const firms = auth.data.firms.map(f => {
         const people = auth.firmUsers(f.id);
         return { id: f.id, name: f.name, status: f.status, plan: PLANS.planOf(f.plan), created: f.created || 0, people: people.length, companies: reg.list(f.id).length,
@@ -2036,7 +2043,8 @@ function createApp(opts) {
     ['GET', /^\/state$/, ctx => state(ctx)],
     ['PUT', /^\/records\/([A-Za-z]+)\/([^/]+)$/, async (ctx, req, m) => {
       const data = await readJson(req);
-      ctx.store.transaction(() => applyWrite(ctx.store, { op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data }, ctx.user, ctx));
+      const w = { op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data };
+      ctx.store.transaction(() => { applyWrite(ctx.store, w, ctx.user, ctx); checkDocumentPostings(ctx.store, [w]); });
       return { ok: true, rev: ctx.bump() };
     }],
     ['DELETE', /^\/records\/([A-Za-z]+)\/([^/]+)$/, (ctx, req, m) => {
@@ -2047,7 +2055,11 @@ function createApp(opts) {
       const body = await readJson(req);
       if (!Array.isArray(body.writes) || !body.writes.length) throw new ValidationError('Send a non-empty "writes" list.');
       if (body.writes.length > 500) throw new ValidationError('At most 500 writes per batch.');
-      ctx.store.transaction(() => body.writes.forEach(w => applyWrite(ctx.store, w, ctx.user, ctx)));
+      ctx.store.transaction(() => {
+        if (body.expectedRev !== undefined && (!Number.isSafeInteger(body.expectedRev) || body.expectedRev !== ctx.rev)) throw new ValidationError('The books changed while this calculation was open. Reload and calculate it again.', 409);
+        body.writes.forEach(w => applyWrite(ctx.store, w, ctx.user, ctx));
+        checkDocumentPostings(ctx.store, body.writes);
+      });
       return { ok: true, rev: ctx.bump() };
     }],
     ['PUT', /^\/settings$/, async (ctx, req) => {
@@ -2946,6 +2958,7 @@ function createApp(opts) {
           }
           if (w.op === 'set') counts[w.collection] = (counts[w.collection] || 0) + 1;
         });
+        checkDocumentPostings(ctx.store, body.writes);
         ctx.store.audit(ctx.user, 'import', { summary: `imported from ${String(body.source || 'another program').slice(0, 60)}: ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')}` });
       });
       broadcast({ companies: true, firmId: (reg.get(ctx.id) || {}).firmId });
@@ -3371,3 +3384,4 @@ function sniffType(b, name) {
   }
   return '';
 }
+

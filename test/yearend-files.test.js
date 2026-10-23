@@ -122,7 +122,7 @@ before(async () => {
   const acc = await fetch(base + '/api/auth/link/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: link, password: 'client long phrase here' }) });
   client = acc.headers.get('set-cookie').split(';')[0];
 });
-after(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+after(async () => { await server.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 test('server: staff make a year-end file; it must add up, and a final one is locked until reopened', async () => {
   let r = await req(owner, 'PUT', c('/records/engagements/y1'), file({ map: { [sales]: 'OI', nope: 'A', [bank]: 'ZZ' } }));
@@ -467,3 +467,4 @@ test('server: the bank check works without bank feeds (nothing to compare)', asy
   assert.equal(r.status, 200); assert.deepEqual(r.json.accounts, []);
   assert.equal((await req(client, 'GET', c(`/engagements/${f.id}/bankcheck`))).status, 403);
 });
+

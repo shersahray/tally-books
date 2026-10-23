@@ -36,8 +36,14 @@ class ValidationError extends Error {
 }
 
 const cents = n => Math.round(Number(n) * 100);
+// Match the forms' r2() for computed products such as 1.005 and foreign-currency amounts.
+const computedCents = n => Math.round(Number(n) * 100 + Number.EPSILON * 100);
 const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
-const isDate = s => typeof s === 'string' && DATE_RE.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z'));
+const isDate = s => {
+  if (typeof s !== 'string' || !DATE_RE.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !Number.isNaN(+d) && d.toISOString().slice(0, 10) === s;
+};
 const str = (v, max = 500) => (v === undefined || v === null ? '' : String(v).slice(0, max));
 
 /** Tags on a transaction, invoice, bill or bank rule: known tag ids of the company, at most 20. Sets or removes out.tags. */
@@ -164,6 +170,27 @@ function validateDoc(data, store, id) {
   } else { delete data.currency; delete data.fx; }
   if (!Number.isFinite(Number(data.total))) throw new ValidationError('Document total must be a number.');
   if (!Array.isArray(data.lines)) throw new ValidationError('Document lines must be a list.');
+  // Full line-based documents, including carried balances with a summary line, must agree with their totals.
+  if (data.lines.length) {
+    let sub = 0;
+    for (const l of data.lines) {
+      if (!isObj(l) || !Number.isFinite(Number(l.qty)) || !Number.isFinite(Number(l.rate))) throw new ValidationError('Each document line needs a valid quantity and rate.');
+      const n = computedCents(Number(l.qty) * Number(l.rate));
+      if (!Number.isSafeInteger(n)) throw new ValidationError('Document line amount is too large.');
+      sub += n;
+    }
+    const tax = cents(data.tax || 0);
+    if (!Number.isSafeInteger(sub) || !Number.isSafeInteger(tax) || cents(data.total) !== sub + tax) throw new ValidationError('Document total must equal its line subtotal plus tax.');
+    if (data.sub !== undefined && (!Number.isFinite(Number(data.sub)) || cents(data.sub) !== sub)) throw new ValidationError('Document subtotal doesn’t match its lines.');
+    if (data.taxParts !== undefined) {
+      if (!Array.isArray(data.taxParts) || data.taxParts.some(p => !isObj(p) || !Number.isFinite(Number(p.amount)) || !Number.isFinite(Number(p.rate)) || Number(p.rate) < 0 || Number(p.rate) > 100) || data.taxParts.reduce((s, p) => s + cents(p.amount), 0) !== tax) throw new ValidationError('Document tax parts don’t match its tax total.');
+    }
+    data.sub = sub / 100;
+  }
+  const settled = settledOn(store, id);
+  if (!CREDIT_FOR[data.kind] && Number(data.total) < settled - 0.004) throw new ValidationError('The total can’t be less than the amount already settled.');
+  const previous = id && store.get('docs', id);
+  if (settled > 0 && previous && ((previous.currency || '') !== (data.currency || '') || Number(previous.fx || 1) !== Number(data.fx || 1))) throw new ValidationError('Remove the settlements before changing the document’s currency or exchange rate.', 409);
   checkLineClasses(data.lines, store, id && store.get('docs', id));
   checkDelayedLines(data, store, id);
   // Bill approvals (approvals.js): only on bills. The server decides it on every save (see applyWrite); this checks its shape.
@@ -205,6 +232,7 @@ function validateEntry(data, store, id) {
   if (data.applyTo) {
     const doc = store.get('docs', data.applyTo);
     const wants = { payment: 'invoice', billpayment: 'bill', refund: 'credit', vrefund: 'vcredit', depapply: 'invoice' }[data.type];
+    if (!wants) throw new ValidationError('Only payments, refunds and applied deposits can settle a document.');
     if (doc && wants && doc.kind !== wants) throw new ValidationError(data.type === 'refund' || data.type === 'vrefund' ? 'A refund has to come from a credit.' : `A payment has to go to ${wants === 'invoice' ? 'an invoice' : 'a bill'}.`);
     // Never more than what's left on it (after other payments, refunds and credits).
     if (doc && wants) {
@@ -212,7 +240,30 @@ function validateEntry(data, store, id) {
       if (Number(data.amount) > left + 0.004) throw new ValidationError(`That’s more than the ${left.toFixed(2)} ${doc.kind === 'credit' || doc.kind === 'vcredit' ? 'left on the credit' : 'still owing'}.`);
     }
     if (!doc) throw new ValidationError('The invoice or bill this payment applies to doesn’t exist.');
-    if (!(Number(data.amount) > 0)) throw new ValidationError('Payment amount must be above zero.');
+    if (!Number.isFinite(Number(data.amount)) || !(cents(data.amount) > 0)) throw new ValidationError('Payment amount must be above zero.');
+    data.amount = cents(data.amount) / 100;
+    if (doc.currency && data.type !== 'depapply' && data.currency !== doc.currency) throw new ValidationError('The payment must use the document’s currency and exchange information.');
+    if (data.contactId && doc.contactId && data.contactId !== doc.contactId) throw new ValidationError('The payment must use the document’s customer or vendor.');
+    const receive = data.type === 'payment' || data.type === 'vrefund';
+    const detail = wants === 'invoice' || wants === 'credit' ? 'ar' : 'ap';
+    const control = store.list('accounts').filter(a => a.detail === detail).map(a => a.id);
+    const net = lines.filter(l => control.includes(l.account)).reduce((s, l) => s + cents(l.debit) - cents(l.credit), 0);
+    const home = computedCents(Number(data.amount) * (doc.currency ? Number(doc.fx) : 1));
+    const controlDebit = data.type === 'billpayment' || data.type === 'refund';
+    if (!Number.isSafeInteger(home) || net !== (controlDebit ? home : -home)) throw new ValidationError('The payment amount doesn’t match its receivable or payable posting.');
+    if (data.type !== 'depapply') {
+      const banks = lines.filter(l => { const a = store.get('accounts', l.account); return a && (a.detail === 'bank' || a.detail === 'card'); });
+      const bank = data.bank || (banks.length === 1 ? banks[0].account : '');
+      if (!bank || !banks.some(l => l.account === bank) || banks.some(l => l.account !== bank)) throw new ValidationError('Choose the payment’s bank or credit card account.');
+      const bankRecord = store.get('accounts', bank);
+      if (bankRecord.currency) {
+        if (bankRecord.currency !== doc.currency || banks.some(l => !l.fx || l.fx.cur !== bankRecord.currency || !Number.isFinite(Number(l.fx.amt)))) throw new ValidationError('A foreign bank payment needs matching foreign-currency amounts.');
+        if (banks.reduce((s, l) => s + cents(l.fx.amt) * (cents(l.debit) > 0 ? 1 : -1), 0) !== (receive ? cents(data.amount) : -cents(data.amount))) throw new ValidationError('The payment doesn’t match its foreign bank amount.');
+      }
+      const bankNet = banks.reduce((s, l) => s + cents(l.debit) - cents(l.credit), 0);
+      const cash = doc.currency ? (data.cad !== undefined ? cents(data.cad) : computedCents(Number(data.amount) * Number(data.fx))) : cents(data.amount);
+      if (!(cash > 0) || !Number.isSafeInteger(cash) || bankNet !== (receive ? cash : -cash)) throw new ValidationError('The payment amount doesn’t match its bank posting.');
+    }
   }
   // A remittance payment is for one agency and one remitting period (payroll-calc.js period keys). The key stays on the
   // payment, so a change of remitting frequency later doesn't unmatch it.
@@ -229,6 +280,39 @@ function validateEntry(data, store, id) {
   }
   if (data.reversalOf !== undefined) out.reversalOf = str(data.reversalOf, 60);
   return withTags(out, data, store);
+}
+
+/** Check documents and their posting together after a batch, so an edit may replace both atomically.
+    Standalone opening documents remain possible, but an existing posting cannot disagree or be duplicated. */
+function checkDocumentPostings(store, writes) {
+  const ids = new Set();
+  for (const w of writes) {
+    if (w.collection === 'docs' && w.op === 'set') ids.add(w.id);
+    if (w.collection === 'entries' && w.op === 'set' && w.data && w.data.docId) ids.add(w.data.docId);
+  }
+  if (!ids.size) return;
+  const linkedByDoc = new Map(), accounts = store.list('accounts');
+  for (const e of store.list('entries')) if (ids.has(e.docId)) {
+    if (!linkedByDoc.has(e.docId)) linkedByDoc.set(e.docId, []);
+    linkedByDoc.get(e.docId).push(e);
+  }
+  for (const id of ids) {
+    const doc = store.get('docs', id); if (!doc) continue;
+    const linked = linkedByDoc.get(id) || [];
+    if (!linked.length) continue;
+    const kind = doc.kind === 'sreceipt' ? 'salesreceipt' : doc.kind;
+    if (linked.length !== 1 || linked[0].type !== kind || linked[0].date !== doc.date) throw new ValidationError('A document must have one matching posting on its date.');
+    const control = doc.kind === 'sreceipt' ? [doc.depositTo] : accounts.filter(a => a.detail === (['invoice', 'credit'].includes(doc.kind) ? 'ar' : 'ap')).map(a => a.id);
+    const net = linked[0].lines.filter(l => control.includes(l.account)).reduce((s, l) => s + cents(l.debit) - cents(l.credit), 0);
+    const expected = computedCents(Number(doc.total) * (doc.currency ? Number(doc.fx) : 1)) * (['invoice', 'sreceipt', 'vcredit'].includes(doc.kind) ? 1 : -1);
+    // Migration with a trial balance already includes A/R or A/P. Its carried document has an
+    // equal debit and credit to the same control, creating the subledger item without double counting.
+    const neutralOpening = doc.carried && net === 0 && linked[0].lines.length === 2 && linked[0].lines.every(l => control.includes(l.account))
+      && linked[0].lines.reduce((s, l) => s + cents(l.debit), 0) === Math.abs(expected)
+      && linked[0].lines.reduce((s, l) => s + cents(l.credit), 0) === Math.abs(expected);
+    if (neutralOpening) continue;
+    if (!Number.isSafeInteger(expected) || net !== expected) throw new ValidationError('The document total doesn’t match its ledger posting. Save both together.');
+  }
 }
 
 /* Deposits on estimates (deposits-calc.js): received (Dr bank, Cr Customer deposits), used on an invoice made for the
@@ -1464,4 +1548,5 @@ function validateQuestion(data, store) {
     label: str(data.label, 200), created: Number(data.created) || 0 };
 }
 
-module.exports = { validateRecord, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, ENTRY_TYPES, isDate, str, sanitizeDraft, settledOn };
+module.exports = { validateRecord, checkDocumentPostings, checkDelete, validateCompany, bankAccount, ValidationError, TYPES, ENTRY_TYPES, isDate, str, sanitizeDraft, settledOn };
+

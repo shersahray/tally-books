@@ -115,6 +115,9 @@ test('API: delayed charges are checked, kept off the ledger, and closed by the i
   assert.equal((await state()).delayed.find(d => d.id === 'dc1').invoiceId, 'i1');
   // Taking the credit off the invoice opens it again.
   r = await call('PUT', '/api/c/records/docs/i1', invoice([lines[0]], 150));
+  assert.equal(r.status, 400, 'an amount change must update the invoice posting too');
+  assert.equal((await state()).delayed.find(d => d.id === 'dc2').invoiceId, 'i1', 'a rejected edit must not reopen the delayed credit');
+  r = await call('POST', '/api/c/batch', { writes: [{ op: 'set', collection: 'docs', id: 'i1', data: invoice([lines[0]], 150) }, { op: 'set', collection: 'entries', id: 'd_i1', data: posting('i1', 150) }] });
   assert.equal(r.status, 200, JSON.stringify(r.json));
   st = await state();
   assert.deepEqual(st.delayed.map(d => [d.id, d.status, d.invoiceId]).sort(), [['dc1', 'closed', 'i1'], ['dc2', 'open', '']]);
@@ -181,3 +184,4 @@ test('custom roles: delayed charges need Sales', async () => {
     body: JSON.stringify({ kind: 'charge', date: '2026-09-02', contactId: 'c1', lines: [{ desc: 'x', account: 'a4000', qty: 1, rate: 5, taxCode: 'none' }] }) });
   assert.equal(res.status, 403);
 });
+

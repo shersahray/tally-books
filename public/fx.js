@@ -66,16 +66,42 @@ function wireFx(f,id,getCur,dateInput,onChange){
 /* ---------- revaluation (Settings → Currencies) ---------- */
 /** What each open foreign balance would change by at the given rates: [{account, amount (CAD, + = up), what}] */
 function revalLines(date,rates){
-  const out=[];
+  const out=[],controls=new Set();
   for(const d of S.docs){if(!d.currency||d.date>date||d.kind==='sreceipt')continue;const r=rates[d.currency];if(!(r>0))continue;
-    const bal=r2((+d.total||0)-paidOnAt(d.id,date));if(Math.abs(bal)<0.005)continue;
     const sale=d.kind==='invoice'||d.kind==='credit',sign=isCreditKind(d.kind)?-1:1,ctl=byDetail(sale?'ar':'ap');if(!ctl)continue;
+    controls.add(ctl.id);
+    const bal=r2((+d.total||0)-paidOnAt(d.id,date));if(Math.abs(bal)<0.005)continue;
     const ch=r2(sign*bal*(r-(+d.fx||1)));if(Math.abs(ch)<0.005)continue;
     out.push({account:ctl.id,amount:sale?ch:-ch,what:`${d.number||''} ${contactName(d.contactId)}`.trim(),gain:ch*(sale?1:-1)})}
+  // A/R and A/P changes use signed debits, just like bank changes. Deduct all effective revaluation
+  // postings (including reversals) so repeating a date proposes only the remaining difference.
+  for(const e of S.entries)if(e.fxReval&&e.date<=date)for(const l of e.lines||[])if(['ar','ap'].includes(acct(l.account)?.detail))controls.add(l.account);
+  const docs=out.splice(0);
+  for(const id of controls){
+    const own=docs.filter(l=>l.account===id),want=r2(own.reduce((s,l)=>s+l.amount,0));
+    const already=r2(S.entries.filter(e=>e.fxReval&&e.date<=date).reduce((s,e)=>s+(e.lines||[]).filter(l=>l.account===id).reduce((t,l)=>t+(+l.debit||0)-(+l.credit||0),0),0));
+    const amount=r2(want-already);if(Math.abs(amount)>=0.005)out.push({account:id,amount,gain:amount,what:own.length===1?own[0].what:acctName(id)});
+  }
   for(const a of S.accounts){if(!a.currency||!(a.detail==='bank'||a.detail==='card'))continue;const r=rates[a.currency];if(!(r>0))continue;
     const fb=acctFxBal(a.id,date),cad=bal(a.id,null,date)*(debitNormal(a.type)?1:-1),want=r2(fb*r),ch=r2(want-cad);
     if(Math.abs(ch)>=0.005)out.push({account:a.id,amount:ch,what:a.name,gain:ch})}
   return out;
+}
+/** Convert signed debit changes to a balanced journal, independent of account normal balance. */
+function revalPostLines(changes,fxa){
+  const g={};for(const l of changes)g[l.account]=r2((g[l.account]||0)+l.amount);
+  const lines=Object.entries(g).filter(([,v])=>Math.abs(v)>=0.005).map(([id,v])=>{const a=acct(id),fx=a.currency?{fx:{cur:a.currency,amt:0}}:{};return{account:id,debit:v>0?v:0,credit:v<0?-v:0,...fx}});
+  const off=r2(lines.reduce((s,l)=>s+l.debit-l.credit,0));
+  if(off)lines.push({account:fxa,debit:off<0?-off:0,credit:off>0?off:0,memo:off>0?'Unrealized exchange gain':'Unrealized exchange loss'});
+  return lines;
+}
+/** A foreign customer-credit refund (out) or vendor-credit refund (in), with realized FX. */
+function foreignRefundLines(cr,amount,bank,cad,fxa){
+  const sale=cr.kind==='credit',ctl=byDetail(sale?'ar':'ap'),book=r2(amount*cr.fx),gain=r2(sale?book-cad:cad-book);
+  const b={account:bank,...(acct(bank).currency===cr.currency?{fx:{cur:cr.currency,amt:amount}}:{})};
+  const lines=sale?[{account:ctl.id,debit:book,credit:0},{...b,debit:0,credit:cad}]:[{...b,debit:cad,credit:0},{account:ctl.id,debit:0,credit:book}];
+  if(gain)lines.push({account:fxa,debit:gain<0?-gain:0,credit:gain>0?gain:0,memo:gain>0?'Exchange gain':'Exchange loss'});
+  return lines;
 }
 const paidOnAt=(docId,date)=>{let s=S.entries.filter(e=>e.applyTo===docId&&e.date<=date).reduce((t,e)=>t+(+e.amount||0),0);for(const c of S.docs){if(!c.applied||c.date>date)continue;for(const a of c.applied)if(c.id===docId||a.docId===docId)s+=+a.amount||0}return r2(s)};
 function currenciesPanel(){
@@ -96,12 +122,14 @@ async function revalueForm(){
     $('[data-rvlist]',f).innerHTML=`<div class="tbl-wrap"><table><thead><tr><th>${T('Balance')}</th><th>${T('Account')}</th><th class="n">${T('Change')}</th></tr></thead><tbody>${ls.map(l=>`<tr><td translate="no">${esc(l.what)}</td><td translate="no">${esc(acctName(l.account))}</td><td class="n">${mcell(l.gain)}</td></tr>`).join('')||`<tr><td colspan="3" class="muted">${T('Nothing to revalue.')}</td></tr>`}</tbody>${ls.length?`<tfoot><tr class="grand"><td colspan="2">${g>=0?T('Unrealized gain'):T('Unrealized loss')}</td><td class="n">${money(Math.abs(g))}</td></tr></tfoot>`:''}</table></div>`};
   const fill=async()=>{const d=$('#rvDate',f).value||today();for(const c of used){const r=await getRate(c,d);if(r&&r.rate)$('#rv_'+c,f).value=r.rate}draw()};
   f.addEventListener('input',draw);$('#rvDate',f).onchange=fill;fill();
-  f.onsubmit=async e=>{e.preventDefault();f.err('');const date=$('#rvDate',f).value,ls=revalLines(date,rates());if(!ls.length)return f.err('Nothing to revalue at those rates.');
-    const w=[],fxa=fxAccount(w),g={};for(const l of ls)g[l.account]=r2((g[l.account]||0)+l.amount);
-    const lines=Object.entries(g).filter(([,v])=>Math.abs(v)>=0.005).map(([a,v])=>{const ac=acct(a),up=debitNormal(ac.type)?v>0:v<0,fx=ac.currency?{fx:{cur:ac.currency,amt:0}}:{};return up?{account:a,debit:Math.abs(v),credit:0,...fx}:{account:a,debit:0,credit:Math.abs(v),...fx}});
-    const off=r2(lines.reduce((s,l)=>s+l.debit-l.credit,0));if(off)lines.push(off>0?{account:fxa,debit:0,credit:off,memo:'Unrealized exchange gain'}:{account:fxa,debit:-off,credit:0,memo:'Unrealized exchange loss'});
+  f.onsubmit=async e=>{e.preventDefault();f.err('');const date=$('#rvDate',f).value,rs=rates();
+    const missing=used.find(c=>!Number.isFinite(rs[c])||!(rs[c]>0)||rs[c]>100000);if(missing)return f.err(`Enter a valid exchange rate for ${missing} before recording the revaluation.`);
+    const ls=revalLines(date,rs);if(!ls.length)return f.err('Nothing to revalue at those rates.');
+    const revision=S.rev,w=[],fxa=fxAccount(w),lines=revalPostLines(ls,fxa);
+    if(!lines.length)return f.err('Nothing to revalue at those rates.');
     const id=uid(),rev=addDays(date,1);
     w.push({op:'set',collection:'entries',id,data:{type:'journal',date,ref:'',memo:`${S.company.lang==='fr'?'Réévaluation des devises':'Foreign currency revaluation'} (${used.map(c=>`${c} ${rates()[c]}`).join(', ')})`,adjusting:true,reverseOn:rev,fxReval:true,lines,created:Date.now()}},
       {op:'set',collection:'entries',id:'rv_'+id,data:{type:'journal',date:rev,ref:'',memo:`${S.company.lang==='fr'?'Contrepassation : réévaluation des devises':'Reversal: foreign currency revaluation'}`,reversalOf:id,fxReval:true,lines:lines.map(l=>({...l,debit:l.credit,credit:l.debit})),created:Date.now()}});
-    if(await batch(w)){closeModal();toast('Revaluation recorded, reversing on '+fmtDate(rev))}};
+    if(await batch(w,revision)){closeModal();toast('Revaluation recorded, reversing on '+fmtDate(rev))}};
 }
+
