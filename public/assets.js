@@ -42,12 +42,15 @@ function ccaSchedule(fy){
     const rate=(as.find(a=>+a.ccaRate>0)||{}).ccaRate||(CCA_CLASSES[k]||[0])[0];
     const starts=[o&&o.fy,...as.map(a=>fyStartOf(a.acquired))].filter(Boolean).sort();
     if(!starts.length||starts[0]>fy)return null;
+    // Class 10.1 needs separate vehicle pools and special disposition/cost-limit rules which this
+    // aggregate opening-UCC model cannot represent. Never present a generic pooled claim as reliable.
+    if(k==='10.1')return{k,rate,manual:true,open:null,add:null,dis:null,adj:null,base:null,cca:null,close:null,recapture:null,terminal:null,desc:CCA_CLASSES[k][1]};
     let ucc=0,row=null;
     for(const y of fyStartsBetween(starts[0],fy)){
       const open=o&&y===o.fy?+o.ucc||0:ucc;
       const counted=a=>!(o&&a.acquired<o.fy); // bought before the opening UCC: already in it
       const adds=as.filter(a=>counted(a)&&fyStartOf(a.acquired)===y);
-      const disp=as.filter(a=>a.disposed&&fyStartOf(a.disposed)===y&&(counted(a)||true));
+      const disp=as.filter(a=>a.disposed&&fyStartOf(a.disposed)===y);
       const add=r2(adds.reduce((s,a)=>s+(+a.cost||0),0)),dis=r2(disp.reduce((s,a)=>s+Math.min(+a.proceeds||0,+a.cost||0),0));
       const before=r2(open+add-dis),net=r2(add-dis);
       // First-year rule on the net additions, each addition at its own factor.
@@ -57,8 +60,8 @@ function ccaSchedule(fy){
       let cca=before>0?r2(Math.min(base*rate/100,before)):0;
       let close=r2(before-cca),recapture=0,terminal=0;
       if(before<0){recapture=r2(-before);cca=0;close=0}
-      const left=as.filter(a=>!a.disposed||a.disposed>fyEndOf(y));
-      if(as.length&&!left.length&&close>0&&y===fy){terminal=close;cca=0;close=0}
+      const held=as.filter(a=>a.acquired<=fyEndOf(y)),left=held.filter(a=>!a.disposed||a.disposed>fyEndOf(y));
+      if(held.length&&!left.length&&before>0){terminal=before;cca=0;close=0}
       ucc=close;
       if(y===fy)row={k,rate,open,add,dis,adj,base,cca,close,recapture,terminal,desc:(CCA_CLASSES[k]||[0,''])[1]};
     }
@@ -96,7 +99,7 @@ function vAmort(fy,yearSel,staff){
 function vCca(fy,yearSel,staff){
   const rows=ccaSchedule(fy),t=k=>r2(rows.reduce((s,r)=>s+r[k],0));
   return `<div class="panel"><div class="toolbar">${yearSel}<span class="grow"></span>${staff?'<button class="btn sm" data-faact="opening">Opening UCC…</button>':''}<button class="btn sm" data-faact="ccacsv">Export CSV</button></div>
-  <div class="tbl-wrap"><table><thead><tr><th>Class</th><th class="n">Rate</th><th class="n">UCC at start</th><th class="n">Additions</th><th class="n">Disposals</th><th class="n">First-year adjustment</th><th class="n">CCA</th><th class="n">UCC at end</th><th></th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td><b>${esc(r.k)}</b><div class="muted" style="font-size:12px">${esc(T(r.desc||''))}</div></td><td class="n">${r.rate}%</td><td class="n">${money(r.open)}</td><td class="n">${r.add?money(r.add):'<span class="muted">—</span>'}</td><td class="n">${r.dis?money(r.dis):'<span class="muted">—</span>'}</td><td class="n">${r.adj?mcell(r.adj):'<span class="muted">—</span>'}</td><td class="n"><b>${money(r.cca)}</b></td><td class="n">${money(r.close)}</td><td>${r.recapture?`<span class="pill overdue">${T('Recapture')} ${money(r.recapture)}</span>`:''}${r.terminal?`<span class="pill partial">${T('Terminal loss')} ${money(r.terminal)}</span>`:''}</td></tr>`).join(''):emptyRow(9,'No CCA classes yet','Give assets a CCA class, or enter the opening UCC from last year’s Schedule 8.')}</tbody>${rows.length?`<tfoot><tr class="grand"><td colspan="2">Total</td><td class="n">${money(t('open'))}</td><td class="n">${money(t('add'))}</td><td class="n">${money(t('dis'))}</td><td class="n">${mcell(t('adj'))}</td><td class="n">${money(t('cca'))}</td><td class="n">${money(t('close'))}</td><td></td></tr></tfoot>`:''}</table></div>
+  <div class="tbl-wrap"><table><thead><tr><th>Class</th><th class="n">Rate</th><th class="n">UCC at start</th><th class="n">Additions</th><th class="n">Disposals</th><th class="n">First-year adjustment</th><th class="n">CCA</th><th class="n">UCC at end</th><th></th></tr></thead><tbody>${rows.length?rows.map(r=>r.manual?`<tr><td><b>${esc(r.k)}</b></td><td colspan="8"><span class="pill partial">Manual review required</span> Class 10.1: calculate each vehicle separately, including cost limits and disposition rules. Excluded from totals.</td></tr>`:`<tr><td><b>${esc(r.k)}</b><div class="muted" style="font-size:12px">${esc(T(r.desc||''))}</div></td><td class="n">${r.rate}%</td><td class="n">${money(r.open)}</td><td class="n">${r.add?money(r.add):'<span class="muted">—</span>'}</td><td class="n">${r.dis?money(r.dis):'<span class="muted">—</span>'}</td><td class="n">${r.adj?mcell(r.adj):'<span class="muted">—</span>'}</td><td class="n"><b>${money(r.cca)}</b></td><td class="n">${money(r.close)}</td><td>${r.recapture?`<span class="pill overdue">${T('Recapture')} ${money(r.recapture)}</span>`:''}${r.terminal?`<span class="pill partial">${T('Terminal loss')} ${money(r.terminal)}</span>`:''}</td></tr>`).join(''):emptyRow(9,'No CCA classes yet','Give assets a CCA class, or enter the opening UCC from last year’s Schedule 8.')}</tbody>${rows.length?`<tfoot><tr class="grand"><td colspan="2">${rows.some(r=>r.manual)?'Total (automatic classes only)':'Total'}</td><td class="n">${money(t('open'))}</td><td class="n">${money(t('add'))}</td><td class="n">${money(t('dis'))}</td><td class="n">${mcell(t('adj'))}</td><td class="n">${money(t('cca'))}</td><td class="n">${money(t('close'))}</td><td></td></tr></tfoot>`:''}</table></div>
   <div class="muted" style="font-size:12.5px;padding:10px 12px">${T('A worksheet for T2 Schedule 8. The claim shown is the maximum; you can claim less. First-year rules change often (half-year rule, accelerated investment incentive, immediate expensing), so check each addition’s rule on the asset. Disposals use the lesser of proceeds and cost.')}</div></div>`;
 }
 
@@ -196,8 +199,8 @@ function openingUccForm(){
     if(await putCompany({...strip(S.company),ccaOpening:o})){closeModal();toast('Opening UCC saved')}};
 }
 function ccaCsv(fy){
-  const rows=ccaSchedule(fy),csv=[['Class','Rate %','UCC at start','Additions','Disposals','First-year adjustment','CCA','UCC at end','Recapture','Terminal loss']];
-  rows.forEach(r=>csv.push([r.k,r.rate,r.open,r.add,r.dis,r.adj,r.cca,r.close,r.recapture,r.terminal]));
+  const rows=ccaSchedule(fy),csv=[['Class','Rate %','UCC at start','Additions','Disposals','First-year adjustment','CCA','UCC at end','Recapture','Terminal loss','Calculation status']];
+  rows.forEach(r=>csv.push([r.k,r.rate,r.open,r.add,r.dis,r.adj,r.cca,r.close,r.recapture,r.terminal,r.manual?'Manual review required: Class 10.1 excluded from automatic totals':'Calculated maximum']));
   const text=csv.map(r=>r.map(v=>/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:v).join(',')).join('\n');
   saveFile(`cca-schedule_${fy}.csv`,new Blob([text],{type:'text/csv'}));
 }
@@ -212,3 +215,4 @@ async function assetsClick(e,t,d){
   return false;
 }
 function bindAssets(m){if(S.view!=='assets')return;const y=$('#faYear',m);if(y)y.onchange=()=>{S.fa.fy=y.value;renderMain()}}
+

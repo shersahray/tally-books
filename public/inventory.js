@@ -6,15 +6,28 @@
    inventory asset account (credit). Adjustments (counts, damage) change the quantity, and the value at average cost. */
 
 const invItem=id=>{const i=S.items.find(x=>x.id===id);return i&&i.type==='inventory'?i:null};
+/** Rebuild each purchase line's posted cost from the saved tax snapshot, including nonrecoverable PST/RST.
+    Use the same allocation and rounding as calcLines, across every taxed line, not only inventory lines. */
+function stockPurchaseCosts(doc){
+  const ls=doc.lines||[],costs=ls.map(l=>r2((+l.qty||0)*(+l.rate||0)));
+  const pst=r2((doc.taxParts||[]).filter(p=>/^(PST|RST)$/i.test(p.name||'')).reduce((s,p)=>s+(+p.amount||0),0));
+  if(pst){
+    const taxed=ls.map((l,i)=>({l,i,net:costs[i]})).filter(x=>(x.l.taxCode||(x.l.tax?'std':'none'))==='std');
+    const same=taxed.filter(x=>Math.sign(x.net)===Math.sign(pst)),share=same.length?same:taxed,total=share.reduce((s,x)=>s+x.net,0)||1;
+    let left=pst;share.forEach((x,i)=>{const part=i===share.length-1?left:r2(pst*x.net/total);left=r2(left-part);costs[x.i]=r2(costs[x.i]+part)});
+  }
+  return costs.map(c=>r2(c*(+doc.fx||1)));
+}
 /** Every movement of an item, in date order: { date, qty (signed), cost (total, for purchases), sale (true when it goes out at average cost) } */
 function stockMoves(itemId,except){
   const it=invItem(itemId);if(!it)return [];
   const out=[];
   if(+it.qtyStart||+it.valueStart)out.push({date:it.startDate||'0000-00-00',qty:+it.qtyStart||0,cost:+it.valueStart||0,ord:0,what:'start'});
   for(const d of S.docs){if(d.id===except)continue;
-    for(const l of d.lines||[]){if(l.item!==itemId)continue;const q=+l.qty||0;
-      if(d.kind==='bill')out.push({date:d.date,qty:q,cost:r2(q*(+l.rate||0)*(+d.fx||1)),ord:1,doc:d}); // in Canadian dollars
-      else if(d.kind==='vcredit')out.push({date:d.date,qty:-q,cost:-r2(q*(+l.rate||0)*(+d.fx||1)),ord:1,doc:d});
+    const purchase=d.kind==='bill'||d.kind==='vcredit'?stockPurchaseCosts(d):[];
+    for(const [index,l]of (d.lines||[]).entries()){if(l.item!==itemId)continue;const q=+l.qty||0;
+      if(d.kind==='bill')out.push({date:d.date,qty:q,cost:purchase[index],ord:1,doc:d}); // in Canadian dollars
+      else if(d.kind==='vcredit')out.push({date:d.date,qty:-q,cost:-purchase[index],ord:1,doc:d});
       else if(d.kind==='invoice'||d.kind==='sreceipt')out.push({date:d.date,qty:-q,sale:true,ord:3,doc:d,posted:l.cost});
       else if(d.kind==='credit')out.push({date:d.date,qty:q,sale:true,ord:2,doc:d,posted:l.cost})}}
   for(const e of S.entries)if(e.type==='invadjust'&&e.inv&&e.inv.item===itemId)out.push({date:e.date,qty:+e.inv.qty||0,cost:+e.inv.value||0,ord:1,entry:e});
@@ -85,3 +98,4 @@ function rInventoryValuation(){
     <div class="muted" style="font-size:12.5px;padding:10px 12px"><span>${T('Inventory asset account balance on that date:')}</span> <b>${money(ledger)}</b>${Math.abs(ledger-tot)>=0.01?` · <span class="neg">${T('differs by')} ${money(r2(ledger-tot))}</span> <span>${T('(an opening value not in the books, or an entry to the account outside bills, sales and adjustments).')}</span>`:''}</div></div>`,
     csv,name:`inventory-valuation_${to}`};
 }
+
