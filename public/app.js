@@ -36,7 +36,7 @@ const S={more:{},accounts:[],entries:[],docs:[],contacts:[],company:{name:'My Bu
   loaded:false,connErr:false,rev:-1,view:'dashboard',param:null,
   sales:{tab:'docs',status:'all'},exp:{tab:'docs',status:'all'},tx:{q:'',type:'',from:'',to:'',tag:''},
   rep:{tab:'pl',period:'fy',from:'',to:''},reg:{from:'',to:''}};
-const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','delayed','bankTxns','rules','recons','filings','employees','payruns','workshifts','receipts','attachments','questions','engagements','requests'];
+const COLS=['accounts','entries','docs','contacts','items','budgets','trips','pos','projects','times','assets','vehicles','estimates','recurring','delayed','bankTxns','rules','recons','filings','employees','payruns','shiftworkers','workshifts','receipts','attachments','questions','engagements','requests'];
 COLS.forEach(c=>{if(!S[c])S[c]=[]});
 
 let CO=null; // id of the company whose books are open
@@ -50,7 +50,7 @@ const perm=(a,l='view')=>TallyRoles.can(typeof ME!=='undefined'&&ME?ME.perms:nul
 const permAll=l=>Object.keys(TallyRoles.AREAS).every(a=>perm(a,l));
 // Every transaction comes with Reports, Accounting, Banking or Sales tax (their totals need the whole ledger).
 const ledgerOn=()=>perm('reports')||perm('accounting')||perm('banking')||perm('salestax');
-const VIEW_AREA={sales:'sales',projects:'sales',expenses:'expenses',receipts:'expenses',yard:'expenses',banking:'banking',salestax:'salestax',payroll:'payroll',review:'accounting',accounts:'accounting',yearfiles:'accounting',assets:'accounting',reports:'reports',settings:'settings',activity:'settings'};
+const VIEW_AREA={sales:'sales',projects:'sales',expenses:'expenses',receipts:'expenses',yard:'expenses',banking:'banking',salestax:'salestax',payroll:'payroll',timesheets:'timesheets',review:'accounting',accounts:'accounting',yearfiles:'accounting',assets:'accounting',reports:'reports',settings:'settings',activity:'settings'};
 // Import data: open when the role can change at least one of the things it imports (TallyRoles.IMPORT_AREA).
 const importOk=k=>k==='items'?perm('sales','edit')||perm('expenses','edit'):perm(TallyRoles.IMPORT_AREA[k]||'accounting','edit');
 const viewOk=v=>v==='transactions'||v==='register'?ledgerOn():v==='convert'?permAll('edit'):v==='dataimport'?Object.keys(TallyRoles.IMPORT_AREA).some(importOk):!VIEW_AREA[v]||perm(VIEW_AREA[v]);
@@ -181,6 +181,8 @@ function renderMain(){
   const np=overdueRemits();const pc=$('#payCount');pc.hidden=!np;pc.textContent=np;
   const na=typeof apCount==='function'?apCount():0;const ac=$('#apCount');if(ac){ac.hidden=!na;ac.textContent=na}
   const nr=S.receipts.filter(r=>r.status==='inbox').length;const rc=$('#rcCount');if(rc){rc.hidden=!nr;rc.textContent=nr}
+  const tsb=$('#nav [data-view=timesheets]');if(tsb)tsb.hidden=!(S.company.features&&S.company.features.timesheets===true)||!perm('timesheets');
+  if(S.view==='timesheets'&&(!(S.company.features&&S.company.features.timesheets===true)||!perm('timesheets')))S.view='dashboard';
   const pnb=$('#nav [data-view=payroll]');if(pnb)pnb.hidden=!feat('payroll');
   if(S.view==='payroll'&&!feat('payroll'))S.view='dashboard';
   const yb=$('#nav [data-view=yard]');if(yb)yb.hidden=!(typeof yardOn==='function'&&yardOn())||!!(ME&&ME.role==='client');
@@ -199,7 +201,7 @@ function renderMain(){
   if(lim){$$('#nav button').forEach(b=>{if(!viewOk(b.dataset.view))b.hidden=true});if(!noCo&&!viewOk(S.view))S.view='dashboard'}
   document.body.classList.toggle('area-ro',lim&&!!VIEW_AREA[S.view]&&!perm(VIEW_AREA[S.view],'edit'));
   document.body.classList.toggle('perm-limited',lim&&!permAll('edit'));
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,yearfiles:typeof vYearFiles==='function'?vYearFiles:vDashboard,requests:typeof vRequests==='function'?vRequests:vDashboard,yearends:typeof vYearEnds==='function'?vYearEnds:vDashboard,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,timesheets:shiftPage,yearfiles:typeof vYearFiles==='function'?vYearFiles:vDashboard,requests:typeof vRequests==='function'?vRequests:vDashboard,yearends:typeof vYearEnds==='function'?vYearEnds:vDashboard,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
@@ -580,6 +582,7 @@ function bindMain(m){
     if(S.view==='companies'&&await coClick(e,t,d))return;
     if(S.view==='salestax'&&await stClick(e,t,d))return;
     if(S.view==='payroll'&&await payClick(e,t,d))return;
+    if(S.view==='timesheets'&&await shiftClick(e,t,d))return;
     if(S.view==='review'&&await reviewClick(e,t,d))return;
     if(S.view==='yearfiles'&&typeof yfClick==='function'&&await yfClick(e,t,d))return;
     if(S.view==='requests'&&typeof rqClick==='function'&&await rqClick(e,t,d))return;
@@ -688,6 +691,7 @@ function bindMain(m){
   if(S.view==='salestax')bindSalesTax(m);
   bindPayrollSettings(m);
   if(S.view==='payroll')bindPayroll(m);
+  if(S.view==='timesheets')bindShiftWeek(m);
   const so=$('#sOrg',m);if(so){const sync=()=>{const t=so.value,npo=t!=='business';$('[data-npo]',m).style.display=npo?'flex':'none';
     $$('[data-charity]',m).forEach(x=>x.style.display=t==='charity'?'':'none');$$('[data-npoonly]',m).forEach(x=>x.style.display=t==='npo'?'':'none');
     const charityMethod=t==='charity'&&$('#sNetTax',m).value!=='regular';$$('[data-itc]',m).forEach(x=>x.style.display=npo&&!charityMethod?'':'none');
