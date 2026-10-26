@@ -1281,7 +1281,7 @@ function validateCompany(data) {
     industry: IND.INDUSTRIES[data.industry] && !['npo', 'charity'].includes(data.orgType) ? data.industry : '',
     nonprofit: validateNonprofit(data.nonprofit),
     // Features switched off for this company (only "false" is stored: everything in the plan is on by default).
-    features: Object.fromEntries(Object.keys(PLANS.FEATURES).filter(k => !PLANS.FEATURES[k].firm && isObj(data.features) && data.features[k] === false).map(k => [k, false])),
+    features: {...Object.fromEntries(Object.keys(PLANS.FEATURES).filter(k => !PLANS.FEATURES[k].firm && isObj(data.features) && data.features[k] === false).map(k => [k, false])), timesheets: isObj(data.features) && data.features.timesheets === true},
     notDuplicates: (Array.isArray(data.notDuplicates) ? data.notDuplicates : []).slice(-500).map(x => str(x, 130)).filter(Boolean),
     // How invoices, estimates, sales receipts and purchase orders look, and up to three fields of the company's own.
     docStyle: { color: /^#[0-9a-fA-F]{6}$/.test(isObj(data.docStyle) ? data.docStyle.color : '') ? data.docStyle.color : '#0a7369', layout: ['classic', 'bold', 'minimal'].includes(isObj(data.docStyle) && data.docStyle.layout) ? data.docStyle.layout : 'classic' },
