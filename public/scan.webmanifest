@@ -1,0 +1,16 @@
+{
+  "name": "Sumlora Receipt Scanner",
+  "short_name": "Sumlora Scan",
+  "start_url": "/scan.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f8f6",
+  "theme_color": "#0a7369",
+  "icons": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
