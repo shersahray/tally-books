@@ -57,7 +57,7 @@
       case 'estimates': case 'projects': case 'times': case 'delayed': return 'sales';
       case 'pos': case 'trips': case 'receipts': case 'vehicles': return 'expenses';
       case 'bankTxns': case 'rules': case 'recons': return 'banking';
-      case 'employees': case 'payruns': return 'payroll';
+      case 'employees': case 'payruns': case 'workshifts': return 'payroll';
       case 'filings': return 'salestax';
       case 'budgets': return 'reports';
       default: return 'accounting';
