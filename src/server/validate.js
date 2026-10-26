@@ -1014,11 +1014,18 @@ function validateRequest(data, store) {
 }
 
 
+function validateShiftworker(data) {
+ const name=String(data.name||'').trim();
+ if(!name||name.length>160)throw new ValidationError('Enter a team member name (up to 160 characters).');
+ const rate=Number(data.rate||0);
+ if(!Number.isFinite(rate)||rate<0||rate>10000)throw new ValidationError('Enter a valid hourly rate.');
+ return {name,rate,active:data.active!==false};
+}
 /** Daily employee time and tip entry (independent of posted payroll). */
 function validateWorkshift(data, store) {
   if (!isDate(data.date)) throw new ValidationError('Enter a valid work date.');
   const employeeId = String(data.employeeId || '');
-  if (!store.get('employees', employeeId)) throw new ValidationError('Choose an existing employee.');
+  if (!store.get('shiftworkers', employeeId)) throw new ValidationError('Choose an existing team member.');
   const start = String(data.start || ''), end = String(data.end || '');
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(start) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(end)) throw new ValidationError('Enter start and end times as HH:MM.');
   const minutes = t => Number(t.slice(0,2))*60 + Number(t.slice(3,5));
@@ -1056,6 +1063,7 @@ function validateRecord(collection, id, data, store) {
     case 'filings': return validateFiling({ ...data, id }, store);
     case 'employees': return validateEmployee(data);
     case 'payruns': return validatePayrun(data, store, id);
+    case 'shiftworkers': return validateShiftworker(data);
     case 'workshifts': return validateWorkshift(data, store);
     case 'receipts': return validateReceipt(data, store, id);
     case 'attachments': return validateAttachment(data, store);
