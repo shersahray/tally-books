@@ -81,7 +81,7 @@ test('owners define roles; only owners, and names are unique', async () => {
   assert.equal((await req(login.cookie, 'POST', '/api/auth/password', { current: 'temporary pass 123', password: 'cleo picks her own phrase' })).status, 200);
   staff = login.cookie;
   const me = await req(staff, 'GET', '/api/auth/me');
-  assert.deepEqual(me.json.user.perms, perms);
+  assert.deepEqual(me.json.user.perms, { ...perms, timesheets: 'none' });
   assert.equal((await req(staff, 'GET', '/api/roles')).status, 403, 'staff can’t see or change roles');
   assert.equal((await req(staff, 'POST', '/api/roles', { name: 'Mine', perms })).status, 403);
 });

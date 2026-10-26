@@ -1046,7 +1046,11 @@ function createApp(opts) {
     // Plan features: payroll records, and the special sales tax methods on returns.
     if (ctx && op === 'set') {
       const d = w.data || {};
-      if (collection === 'employees' || collection === 'payruns' || (collection === 'entries' && ['payrun', 'payremit'].includes(d.type))) needFeature(ctx.id, 'payroll', store);
+      if (collection === 'shiftworkers' || collection === 'workshifts') {
+         const cfg=store.getSetting('company') || {};
+         if (!cfg.features || cfg.features.timesheets !== true) throw new ValidationError('Timesheets & Tips is not enabled for this company.',403);
+       }
+       if (collection === 'employees' || collection === 'payruns' || (collection === 'entries' && ['payrun', 'payremit'].includes(d.type))) needFeature(ctx.id, 'payroll', store);
       if (collection === 'projects' || collection === 'times') needFeature(ctx.id, 'projects', store);
       if (collection === 'assets') needFeature(ctx.id, 'fixedAssets', store);
       if (collection === 'budgets') needFeature(ctx.id, 'budgets', store);

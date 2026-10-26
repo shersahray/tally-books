@@ -153,7 +153,7 @@ test('plans: Seed leaves out payroll, AI, advanced reports and special tax metho
   // A client who doesn't need payroll: switched off for this company only.
   r = await req(bOwner, 'PUT', `/api/c/${bCo}/settings`, { ...st, features: { payroll: false, ai: true, nonsense: false } });
   assert.equal(r.status, 200);
-  assert.deepEqual((await req(bOwner, 'GET', `/api/c/${bCo}/state`)).json.company.features, { payroll: false }, 'only switches that are off are kept');
+  assert.deepEqual((await req(bOwner, 'GET', `/api/c/${bCo}/state`)).json.company.features, { payroll: false, timesheets: false }, 'only switches that are off are kept; timesheets is opt-in');
   assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/records/employees/e2`, { ...emp, name: 'Sam' })).status, 403);
   assert.ok((await req(bOwner, 'GET', `/api/c/${bCo}/state`)).json.employees.some(e => e.id === 'e1'), 'switching off keeps the records');
   assert.equal((await req(bOwner, 'PUT', `/api/c/${bCo}/settings`, { ...st, features: {} })).status, 200);
