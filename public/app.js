@@ -564,6 +564,7 @@ function vSettings(){
   ${typeof plaidPanel==='function'?plaidPanel():''}
   ${typeof ledgerPanel==='function'?ledgerPanel():''}
   ${typeof inboundPanel==='function'?inboundPanel():''}
+  ${ME&&ME.role==='owner'?'<div class="panel" style="max-width:640px;margin-top:16px"><h3>Timesheets & Tips</h3><div class="pad"><label><input type="checkbox" id="tsEnable" '+(S.company.features?.timesheets===true?'checked':'')+'> Enable standalone time and tip tracking for this company</label><p class="muted">Independent of Payroll. Enable only for clients who need it.</p></div></div>':''}
   ${feat('payroll')?payrollSettingsPanel():''}
   ${backupPanel()}
   <div class="panel" style="max-width:640px;margin-top:16px"><h3>Backup and restore</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">
@@ -692,6 +693,7 @@ function bindMain(m){
   bindPayrollSettings(m);
   if(S.view==='payroll')bindPayroll(m);
   if(S.view==='timesheets')bindShiftWeek(m);
+  const tse=$('#tsEnable',m);if(tse)tse.onchange=async()=>{tse.disabled=true;const features={...(S.company.features||{}),timesheets:tse.checked};if(await putCompany({...strip(S.company),features})){toast('Timesheets & Tips setting saved');await load();renderMain()}else{tse.checked=!tse.checked;tse.disabled=false}};
   const so=$('#sOrg',m);if(so){const sync=()=>{const t=so.value,npo=t!=='business';$('[data-npo]',m).style.display=npo?'flex':'none';
     $$('[data-charity]',m).forEach(x=>x.style.display=t==='charity'?'':'none');$$('[data-npoonly]',m).forEach(x=>x.style.display=t==='npo'?'':'none');
     const charityMethod=t==='charity'&&$('#sNetTax',m).value!=='regular';$$('[data-itc]',m).forEach(x=>x.style.display=npo&&!charityMethod?'':'none');
