@@ -1020,7 +1020,7 @@ function validateWorkshift(data, store) {
   const employeeId = String(data.employeeId || '');
   if (!store.get('employees', employeeId)) throw new ValidationError('Choose an existing employee.');
   const start = String(data.start || ''), end = String(data.end || '');
-  if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(start) || !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(end)) throw new ValidationError('Enter start and end times as HH:MM.');
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(start) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(end)) throw new ValidationError('Enter start and end times as HH:MM.');
   const minutes = t => Number(t.slice(0,2))*60 + Number(t.slice(3,5));
   let duration = minutes(end) - minutes(start);
   if (duration <= 0) duration += 1440; // overnight work
