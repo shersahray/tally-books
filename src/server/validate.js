@@ -1013,6 +1013,27 @@ function validateRequest(data, store) {
   };
 }
 
+
+/** Daily employee time and tip entry (independent of posted payroll). */
+function validateWorkshift(data, store) {
+  if (!isDate(data.date)) throw new ValidationError('Enter a valid work date.');
+  const employeeId = String(data.employeeId || '');
+  if (!store.get('employees', employeeId)) throw new ValidationError('Choose an existing employee.');
+  const start = String(data.start || ''), end = String(data.end || '');
+  if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(start) || !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(end)) throw new ValidationError('Enter start and end times as HH:MM.');
+  const minutes = t => Number(t.slice(0,2))*60 + Number(t.slice(3,5));
+  let duration = minutes(end) - minutes(start);
+  if (duration <= 0) duration += 1440; // overnight work
+  const breakMinutes = Number(data.breakMinutes || 0);
+  if (!Number.isInteger(breakMinutes) || breakMinutes < 0 || breakMinutes >= duration) throw new ValidationError('Break minutes must be shorter than the shift.');
+  const workedMinutes = duration - breakMinutes;
+  if (workedMinutes > 1440) throw new ValidationError('A shift cannot exceed 24 hours.');
+  const tips = Number(data.tips || 0);
+  if (!Number.isFinite(tips) || tips < 0 || tips > 1000000 || Math.round(tips*100)/100 !== tips) throw new ValidationError('Enter a non-negative tip amount with at most two decimals.');
+  const tipType = data.tipType === 'direct' ? 'direct' : 'controlled';
+  return {date:data.date, employeeId, start, end, breakMinutes, workedMinutes, tips, tipType, notes:String(data.notes||'').slice(0,300)};
+}
+
 function validateRecord(collection, id, data, store) {
   checkId(id);
   if (!isObj(data)) throw new ValidationError('Record body must be a JSON object.');
@@ -1035,6 +1056,7 @@ function validateRecord(collection, id, data, store) {
     case 'filings': return validateFiling({ ...data, id }, store);
     case 'employees': return validateEmployee(data);
     case 'payruns': return validatePayrun(data, store, id);
+    case 'workshifts': return validateWorkshift(data, store);
     case 'receipts': return validateReceipt(data, store, id);
     case 'attachments': return validateAttachment(data, store);
     case 'questions': return validateQuestion(data, store);
