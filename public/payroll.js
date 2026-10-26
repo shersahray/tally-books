@@ -240,7 +240,7 @@ async function payClick(e,t,d){
   if(d.ehtAccrue){ehtAccrue(+d.ehtAccrue);return true}
   return false;
 }
-function bindPayroll(m){bindYearEnd(m)}
+function bindPayroll(m){bindYearEnd(m);if(S.pay.tab==='shifts')bindShiftWeek(m)}
 
 /* ---------- employee address ----------
    The T4 and ROE files need the address in parts (street, city, province, postal code). Employees saved before
