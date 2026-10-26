@@ -206,8 +206,7 @@ function vPayroll(){
   const act=S.employees.filter(e=>e.active!==false);
   const h=head('Payroll','Pay employees, print pay stubs and track what you owe CRA and Revenu Québec',
     `<button class="btn" data-pay-emp="new">+ Add employee</button><button class="btn primary" data-pay-run="new" ${act.length?'':'disabled'}>Run payroll</button>`)+
-    `<div class="tabs" role="tablist">${[['runs','Pay runs'],['shifts','Hours & tips'],['employees','Employees'],['remit','Remittances'],['yearend','Year-end (T4, RL-1)']].map(([k,v])=>`<button role="tab" data-ptab="${k}" aria-selected="${P.tab===k}">${v}</button>`).join('')}</div>`;
-  if(P.tab==='shifts')return h+shiftView();
+    `<div class="tabs" role="tablist">${[['runs','Pay runs'],['employees','Employees'],['remit','Remittances'],['yearend','Year-end (T4, RL-1)']].map(([k,v])=>`<button role="tab" data-ptab="${k}" aria-selected="${P.tab===k}">${v}</button>`).join('')}</div>`;
   if(P.tab==='yearend')return h+vYearEnd()+vEht();
   if(P.tab==='employees'){
     const list=S.employees.slice().sort((a,b)=>(a.active===false)-(b.active===false)||a.name.localeCompare(b.name));
@@ -230,7 +229,6 @@ function vPayroll(){
 async function payClick(e,t,d){
   if(await yeClick(e,t,d))return true;
   if(d.ptab){S.pay.tab=d.ptab;renderMain();return true}
-  if(await shiftClick(e,t,d))return true;
   if(t.hasAttribute&&t.hasAttribute('data-roelist')){roeListModal();return true}
   if(d.payEmp){employeeForm(d.payEmp==='new'?null:employee(d.payEmp));return true}
   if(d.payRun){if(d.payRun==='new')payRunForm();else payRunView(S.payruns.find(r=>r.id===d.payRun));return true}
@@ -240,7 +238,7 @@ async function payClick(e,t,d){
   if(d.ehtAccrue){ehtAccrue(+d.ehtAccrue);return true}
   return false;
 }
-function bindPayroll(m){bindYearEnd(m);if(S.pay.tab==='shifts')bindShiftWeek(m)}
+function bindPayroll(m){bindYearEnd(m)}
 
 /* ---------- employee address ----------
    The T4 and ROE files need the address in parts (street, city, province, postal code). Employees saved before
