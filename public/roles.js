@@ -14,6 +14,7 @@
     sales: { label: 'Sales', desc: 'Customers, invoices, sales receipts, credit notes, estimates, delayed charges, projects and payments received' },
     expenses: { label: 'Expenses', desc: 'Vendors, bills, expenses, vendor credits, purchase orders, mileage and receipts' },
     banking: { label: 'Banking', desc: 'Bank lines for review, bank rules, bank feeds, reconciliation, deposits and transfers' },
+    timesheets: { label: 'Timesheets & Tips', desc: 'Employee shifts, hours and tips without payroll' },
     payroll: { label: 'Payroll', desc: 'Employees and pay runs. With View, social insurance numbers and bank account numbers stay hidden.' },
     reports: { label: 'Reports', desc: 'Reports, budgets, saved reports and the AI assistant' },
     accounting: { label: 'Accounting', desc: 'Chart of accounts, journal entries, fixed assets, classes and the review tools' },
@@ -57,7 +58,8 @@
       case 'estimates': case 'projects': case 'times': case 'delayed': return 'sales';
       case 'pos': case 'trips': case 'receipts': case 'vehicles': return 'expenses';
       case 'bankTxns': case 'rules': case 'recons': return 'banking';
-      case 'employees': case 'payruns': case 'workshifts': return 'payroll';
+      case 'shiftworkers': case 'workshifts': return 'timesheets';
+      case 'employees': case 'payruns': return 'payroll';
       case 'filings': return 'salestax';
       case 'budgets': return 'reports';
       default: return 'accounting';
