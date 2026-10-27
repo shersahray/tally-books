@@ -1,6 +1,6 @@
 'use strict';
 const el=id=>document.getElementById(id);
-let sent=0,busy=false,loginTicket=null;
+let sent=0,busy=false,loginTicket=null,signingIn=false;
 const scriptStatus=el('scriptStatus');if(scriptStatus){scriptStatus.textContent='Scanner controls ready';scriptStatus.hidden=false;}
 function showStatus(message,error=false){const x=el('status');x.hidden=false;x.textContent=message;x.className='notice'+(error?' error':'')}
 async function request(url,options={}){const r=await fetch(url,{credentials:'same-origin',...options});const body=await r.json().catch(()=>({}));if(!r.ok)throw new Error(body.error||('Request failed ('+r.status+')'));return body}
@@ -27,9 +27,12 @@ async function upload(files){if(busy)return;const company=el('company').value;if
  }finally{busy=false;el('camera').value='';el('files').value=''}}
 el('camera').addEventListener('change',e=>upload([...e.target.files]));
 el('files').addEventListener('change',e=>upload([...e.target.files]));
-el('loginForm').addEventListener('submit',async e=>{
- e.preventDefault();
+async function submitScannerLogin(){
+ if(signingIn)return;
  const status=el('loginStatus'),btn=el('loginButton');
+ if(!loginTicket&&(!el('username').value.trim()||!el('password').value)){status.textContent='Enter your email and password.';status.className='notice error';status.hidden=false;return;}
+ if(loginTicket&&!el('loginCode').value.trim()){status.textContent='Enter your verification code.';status.className='notice error';status.hidden=false;return;}
+ signingIn=true;
  status.textContent='Signing in…';status.hidden=false;status.className='notice';btn.disabled=true;btn.textContent='Signing in…';
  try{
   const result=loginTicket
@@ -38,7 +41,9 @@ el('loginForm').addEventListener('submit',async e=>{
   if(result.needCode){loginTicket=result.ticket;el('codeWrap').hidden=false;el('loginCode').required=true;el('loginCode').focus();status.textContent='Enter your verification code.';btn.textContent='Verify & sign in';return}
   loginTicket=null;el('password').value='';status.textContent='Signed in. Loading your companies…';await init();if(!el('scanner').hidden)status.hidden=true;
  }catch(err){status.textContent=err.message||'Sign-in failed. Try again.';status.className='notice error';status.hidden=false}
- finally{btn.disabled=false;btn.textContent=loginTicket?'Verify & sign in':'Sign in'}
-});
+ finally{signingIn=false;btn.disabled=false;btn.textContent=loginTicket?'Verify & sign in':'Sign in'}
+}
+el('loginButton').addEventListener('click',submitScannerLogin);
+el('loginForm').addEventListener('submit',e=>{e.preventDefault();submitScannerLogin()});
 el('logout').addEventListener('click',async()=>{try{await request('/api/auth/logout',{method:'POST'})}catch{}loginTicket=null;el('loginForm').reset();el('codeWrap').hidden=true;el('loginButton').textContent='Sign in';await init()});
 init();
