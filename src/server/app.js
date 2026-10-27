@@ -1046,6 +1046,11 @@ function createApp(opts) {
     // Plan features: payroll records, and the special sales tax methods on returns.
     if (ctx && op === 'set') {
       const d = w.data || {};
+      if (collection === 'shiftworkers' && ctx) {
+        const rawPhone=String(d.phone||'').replace(/[^0-9]/g,'');
+        const phone=rawPhone.length===10?'+1'+rawPhone:rawPhone.length===11&&rawPhone.startsWith('1')?'+'+rawPhone:'';
+        if(phone && store.list('shiftworkers').some(existing=>existing.id!==id&&existing.active!==false&&existing.phone===phone)) throw new ValidationError('This phone number is already assigned to an active team member.',409);
+      }
       if (collection === 'shiftworkers' || collection === 'workshifts') {
          const cfg=store.getSetting('company') || {};
          if (!cfg.features || cfg.features.timesheets !== true) throw new ValidationError('Timesheets & Tips is not enabled for this company.',403);
