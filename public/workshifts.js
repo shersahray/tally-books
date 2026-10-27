@@ -52,6 +52,6 @@ function bindShiftWeek(m){const el=$('#shiftWeek',m);if(el)el.onchange=()=>{if(e
 
 function workerForm(){
  if(!perm('timesheets','edit'))return;
- const f=openModal('Add team member','<label class="field">Name<input id="twName" maxlength="160" required></label><label class="field">Hourly rate ($, optional)<input id="twRate" type="number" min="0" step="0.01" value="0"></label>','<button class="btn primary" type="submit">Save</button>');
- f.onsubmit=async e=>{e.preventDefault();const name=$('#twName',f).value.trim(),rate=Number($('#twRate',f).value);if(!name||!Number.isFinite(rate)||rate<0)return f.err('Enter a valid name and hourly rate.');if(await put('shiftworkers',uid(),{name,rate,active:true})){closeModal();renderMain()}};
+ const f=openModal('Add team member','<label class="field">Name<input id="twName" maxlength="160" required></label><label class="field">Employee phone (Canada/US)<input id="twPhone" type="tel" autocomplete="tel" placeholder="613-555-0100"></label><label class="field">Hourly rate ($, optional)<input id="twRate" type="number" min="0" step="0.01" value="0"></label>','<button class="btn primary" type="submit">Save</button>');
+ f.onsubmit=async e=>{e.preventDefault();const name=$('#twName',f).value.trim(),rate=Number($('#twRate',f).value);if(!name||!Number.isFinite(rate)||rate<0)return f.err('Enter a valid name and hourly rate.');if(await put('shiftworkers',uid(),{name,phone:$('#twPhone',f).value.trim(),rate,active:true})){closeModal();renderMain()}};
 }
