@@ -1038,7 +1038,10 @@ function validateWorkshift(data, store) {
   const tips = Number(data.tips || 0);
   if (!Number.isFinite(tips) || tips < 0 || tips > 1000000 || Math.round(tips*100)/100 !== tips) throw new ValidationError('Enter a non-negative tip amount with at most two decimals.');
   const tipType = data.tipType === 'direct' ? 'direct' : 'controlled';
-  return {date:data.date, employeeId, start, end, breakMinutes, workedMinutes, tips, tipType, notes:String(data.notes||'').slice(0,300)};
+  const directTips = data.directTips === undefined ? (tipType === 'direct' ? tips : 0) : Number(data.directTips);
+  const controlledTips = data.controlledTips === undefined ? (tipType === 'controlled' ? tips : 0) : Number(data.controlledTips);
+  if (![directTips,controlledTips].every(x => Number.isFinite(x) && x >= 0 && x <= 1000000 && Math.round(x*100)/100 === x) || Math.abs(directTips + controlledTips - tips) > 0.001) throw new ValidationError('Direct and employer-controlled tips must add up to total tips.');
+  return {date:data.date, employeeId, start, end, breakMinutes, workedMinutes, tips, directTips, controlledTips, tipType, notes:String(data.notes||'').slice(0,300)};
 }
 
 function validateRecord(collection, id, data, store) {
