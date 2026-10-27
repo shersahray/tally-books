@@ -1,0 +1,15 @@
+{
+  "name": "Sumlora Timesheets & Tips",
+  "short_name": "Sumlora Time",
+  "start_url": "/time.html",
+  "display": "standalone",
+  "theme_color": "#0a7369",
+  "background_color": "#f3f8f6",
+  "icons": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
