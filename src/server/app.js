@@ -21,6 +21,7 @@ const inbound = require('./inbound');
 const { TERMS_VERSION, TERMS_DRAFT } = require('./legal');
 const { Billing, paid: billingPaid, stale: billingStale, describe: billingDescribe } = require('./billing');
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
+const employeeAuth = require('./employee-auth');
 const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDocumentPostings, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
@@ -3217,6 +3218,75 @@ function createApp(opts) {
       if (im) { const [st, out] = await inboundEmail(req, im[1]); return sendJson(res, st, out); }
       if (opts.password && !authorized(req, opts.password)) {
         return send(res, 401, 'Sign in required', { 'WWW-Authenticate': 'Basic realm="Sumlora", charset="UTF-8"', 'Content-Type': 'text/plain' });
+      }
+      if (url.pathname.startsWith('/api/employee/')) {
+        if(req.method!=='GET'&&!sameOrigin(req))throw new ValidationError('Cross-site request blocked.',403);
+        // Employee sessions are separate and scoped to this route family only.
+        // Refuse employee authentication on the main accounting host.
+        const host=String(req.headers.host||'').split(':')[0].toLowerCase();
+        if(host!=='time.sumlora.ca')throw new ValidationError('Employee portal only.',403);
+        const api=url.pathname.slice('/api/employee/'.length);
+        const findEmployee=(companyId,phone)=>{
+          const c=reg.get(companyId),store=c&&reg.store(companyId);
+          if(!store||(store.getSetting('company')||{}).features?.timesheets!==true)return null;
+          const workers=store.list('shiftworkers').filter(w=>w.active!==false&&w.phone===phone);
+          return workers.length===1?{worker:workers[0],store}:null;
+        };
+        if(req.method==='POST'&&api==='request-code'){
+          const body=await readJson(req),phone=employeeAuth.normalizePhone(body.phone),companyId=String(body.companyId||'');
+          if(!phone||!reg.get(companyId))throw new ValidationError('Enter a valid phone number and company.',400);
+          employeeAuth.checkRate(clientIp(req),phone);
+          const match=findEmployee(companyId,phone);
+          // Do not reveal phone registration; send codes only to registered, active workers.
+          if(match)await employeeAuth.verifyRequest('Verifications',{To:phone,Channel:'sms'});
+          return sendJson(res,200,{ok:true,message:'If the phone is registered, a verification code has been sent.'});
+        }
+        if(req.method==='POST'&&api==='verify-code'){
+          const body=await readJson(req),phone=employeeAuth.normalizePhone(body.phone),companyId=String(body.companyId||''),code=String(body.code||'');
+          employeeAuth.checkRate(clientIp(req),phone);
+          const match=findEmployee(companyId,phone);
+          if(!match||!/^\\d{4,10}$/.test(code))throw new AuthError('Verification failed.',401);
+          const result=await employeeAuth.verifyRequest('VerificationCheck',{To:phone,Code:code});
+          if(result.status!=='approved')throw new AuthError('Verification failed.',401);
+          return sendJson(res,200,employeeAuth.setSession(res,companyId,match.worker.id));
+        }
+        if(req.method==='POST'&&api==='logout')return sendJson(res,200,employeeAuth.logout(req,res));
+        const sess=employeeAuth.session(req);
+        if(!sess)throw new AuthError('Please verify your phone to sign in.',401);
+        const current=reg.get(sess.companyId),store=current&&reg.store(sess.companyId);
+        const worker=store&&store.get('shiftworkers',sess.employeeId);
+        if(!worker||worker.active===false||(store.getSetting('company')||{}).features?.timesheets!==true)throw new AuthError('Employee access is disabled.',403);
+        if(req.method==='GET'&&api==='me')return sendJson(res,200,{employee:{id:worker.id,name:worker.name},companyId:sess.companyId});
+        if(req.method==='GET'&&api==='shifts'){
+          return sendJson(res,200,{active:store.get('clockins',worker.id)||null,shifts:store.list('workshifts').filter(x=>x.employeeId===worker.id).slice(-50)});
+        }
+        if(req.method==='POST'&&(api==='clock-in'||api==='clock-out')){
+          const bodyForEmployee=api==='clock-out'?await readJson(req):{};
+          let result;
+          store.transaction(()=>{
+            if(api==='clock-in'){
+              if(store.get('clockins',worker.id))throw new ValidationError('Already clocked in.',409);
+              result={employeeId:worker.id,startedAt:new Date().toISOString()};
+              store.put('clockins',worker.id,result);
+            }else{
+              const open=store.get('clockins',worker.id);
+              if(!open)throw new ValidationError('No active shift.',409);
+              const input=bodyForEmployee;
+              const elapsed=Math.floor((Date.now()-Date.parse(open.startedAt))/60000);
+              if(elapsed<1||elapsed>1440)throw new ValidationError('Shift duration requires manager review.',409);
+              const breaks=Number(input.breakMinutes||0),direct=Number(input.directTips||0),controlled=Number(input.controlledTips||0);
+              if(!Number.isInteger(breaks)||breaks<0||breaks>=elapsed||![direct,controlled].every(x=>Number.isFinite(x)&&x>=0&&x<=1000000&&Math.abs(x*100-Math.round(x*100))<1e-6))throw new ValidationError('Invalid breaks or tips.',400);
+              const dt=new Date(open.startedAt),ended=new Date();
+              const fmt=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+              const parts=d=>Object.fromEntries(fmt.formatToParts(d).map(p=>[p.type,p.value]));
+              const a=parts(dt),b=parts(ended);
+              const row={employeeId:worker.id,date:a.year+'-'+a.month+'-'+a.day,start:a.hour+':'+a.minute,end:b.hour+':'+b.minute,breakMinutes:breaks,workedMinutes:elapsed-breaks,tips:direct+controlled,directTips:direct,controlledTips:controlled,tipType:controlled?'controlled':'direct',startedAt:open.startedAt,endedAt:ended.toISOString(),notes:'Employee mobile clock'};
+              const id=crypto.randomUUID();store.put('workshifts',id,row);store.delete('clockins',worker.id);result={id,...row};
+            }
+          });
+          return sendJson(res,200,{ok:true,result});
+        }
+        return sendJson(res,404,{error:'Not found'});
       }
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
