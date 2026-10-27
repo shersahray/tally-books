@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
-let workers=[],shifts=[],active=[];
+let workers=[],shifts=[],active=[],loginTicket=null;
 const stamp=()=>{const d=new Date(),z=n=>String(n).padStart(2,'0');return {date:d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate()),time:z(d.getHours())+':'+z(d.getMinutes())}};
 function status(s,error=false){const x=$('status');x.hidden=false;x.className='note'+(error?' error':'');x.textContent=s}
 async function api(path,options){const r=await fetch(path,{credentials:'same-origin',...options});const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'Request failed: '+r.status);return data}
@@ -13,4 +13,12 @@ $('clockin').onclick=async()=>{if(!wid())return status('Select a team member fir
 $('clockout').onclick=async()=>{if(!active.find(x=>x.employeeId===wid()))return;const br=Number($('breaks').value),direct=Number($('cash').value),controlled=Number($('card').value);
 if(!Number.isInteger(br)||br<0||![direct,controlled].every(n=>Number.isFinite(n)&&n>=0&&Math.abs(n*100-Math.round(n*100))<1e-6))return status('Check break minutes and tip amounts.',true);
 $('clockout').disabled=true;try{await api('/api/c/'+cid()+'/time/clock-out',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({employeeId:wid(),breakMinutes:br,directTips:direct,controlledTips:controlled})});status('Clock-out saved to Sumlora.');await loadCompany()}catch(e){status(e.message,true)}finally{$('clockout').disabled=false;render()}};
-$('again').onclick=load;load();
+$('loginForm').addEventListener('submit',async e=>{
+e.preventDefault();const msg=$('loginMessage'),btn=$('loginSubmit');msg.hidden=false;msg.textContent='Signing in…';btn.disabled=true;
+try{const payload=loginTicket?{ticket:loginTicket,code:$('code').value.trim()}:{username:$('username').value.trim(),password:$('password').value};const r=await api(loginTicket?'/api/auth/login/code':'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+if(r.needCode){loginTicket=r.ticket;$('codeBox').hidden=false;msg.textContent='Enter the verification code.';return}
+loginTicket=null;$('password').value='';await load();if(!$('area').hidden)msg.hidden=true;
+}catch(err){msg.textContent=err.message||'Sign in failed';msg.className='note error'}finally{btn.disabled=false}
+});
+$('logout').onclick=async()=>{try{await api('/api/auth/logout',{method:'POST'})}catch{}loginTicket=null;$('loginForm').reset();$('codeBox').hidden=true;await load()};
+load();
