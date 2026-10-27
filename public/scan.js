@@ -1,6 +1,7 @@
 'use strict';
 const el=id=>document.getElementById(id);
 let sent=0,busy=false,loginTicket=null;
+const scriptStatus=el('scriptStatus');if(scriptStatus){scriptStatus.textContent='Scanner controls ready';scriptStatus.hidden=false;}
 function showStatus(message,error=false){const x=el('status');x.hidden=false;x.textContent=message;x.className='notice'+(error?' error':'')}
 async function request(url,options={}){const r=await fetch(url,{credentials:'same-origin',...options});const body=await r.json().catch(()=>({}));if(!r.ok)throw new Error(body.error||('Request failed ('+r.status+')'));return body}
 async function init(){
