@@ -2044,6 +2044,56 @@ function createApp(opts) {
 
   // Routes inside one company: /api/c/<companyId>/...
   const companyRoutes = [
+    // Live clock sessions: server timestamps, committed atomically and recovered after refresh.
+    ['POST', /^\/time\/clock-in$/, async (ctx, req) => {
+      const cfg=ctx.store.getSetting('company')||{};
+      if(cfg.features?.timesheets!==true)throw new ValidationError('Timesheets & Tips is disabled.',403);
+      if(ctx.user.role==='client')throw new ValidationError('Manager or staff sign-in required.',403);
+      needArea(ctx.user,'timesheets','edit');
+      const {employeeId}=await readJson(req);
+      if(typeof employeeId!=='string'||!ctx.store.get('shiftworkers',employeeId)||ctx.store.get('shiftworkers',employeeId).active===false)throw new ValidationError('Select an active team member.');
+      let session;
+      ctx.store.transaction(()=>{
+        if(ctx.store.get('clockins',employeeId))throw new ValidationError('This team member is already clocked in.',409);
+        session={employeeId,startedAt:new Date().toISOString(),startedBy:ctx.user.id||ctx.user.username};
+        ctx.store.put('clockins',employeeId,session);
+        ctx.store.audit(ctx.user,'set',{collection:'clockins',id:employeeId,summary:'Clocked in team member'});
+      });
+      ctx.bump();return {session};
+    }],
+    ['POST', /^\/time\/clock-out$/, async (ctx, req) => {
+      const cfg=ctx.store.getSetting('company')||{};
+      if(cfg.features?.timesheets!==true)throw new ValidationError('Timesheets & Tips is disabled.',403);
+      if(ctx.user.role==='client')throw new ValidationError('Manager or staff sign-in required.',403);
+      needArea(ctx.user,'timesheets','edit');
+      const input=await readJson(req);const employeeId=String(input.employeeId||'');
+      const breakMinutes=Number(input.breakMinutes||0),direct=Number(input.directTips||0),controlled=Number(input.controlledTips||0);
+      if(!Number.isInteger(breakMinutes)||breakMinutes<0||![direct,controlled].every(v=>Number.isFinite(v)&&v>=0&&v<=1000000&&Math.abs(v*100-Math.round(v*100))<1e-6))throw new ValidationError('Invalid breaks or tips.');
+      let saved;
+      ctx.store.transaction(()=>{
+        const open=ctx.store.get('clockins',employeeId);if(!open)throw new ValidationError('No active clock-in for this team member.',409);
+        const startMs=Date.parse(open.startedAt),endMs=Date.now(),elapsed=Math.floor((endMs-startMs)/60000);
+        if(!Number.isFinite(startMs)||elapsed<1||elapsed>1440)throw new ValidationError('Shift duration requires manager review (maximum 24 hours).',409);
+        if(breakMinutes>=elapsed)throw new ValidationError('Break must be shorter than the shift.');
+        const clock=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+        const parts=ms=>Object.fromEntries(clock.formatToParts(new Date(ms)).map(p=>[p.type,p.value]));
+        const a=parts(startMs),b=parts(endMs);
+        const data={date:a.year+'-'+a.month+'-'+a.day,employeeId,start:a.hour+':'+a.minute,end:b.hour+':'+b.minute,breakMinutes,workedMinutes:elapsed-breakMinutes,tips:direct+controlled,directTips:direct,controlledTips:controlled,tipType:controlled?'controlled':'direct',notes:'Server clock-in/out',startedAt:open.startedAt,endedAt:new Date(endMs).toISOString()};
+        const id=crypto.randomUUID();
+        saved={id,...data};
+        ctx.store.put('workshifts',id,data);
+        ctx.store.delete('clockins',employeeId);
+        ctx.store.audit(ctx.user,'set',{collection:'workshifts',id,summary:'Clocked out team member'});
+      });
+      ctx.bump();return {shift:saved};
+    }],
+    ['GET', /^\/time\/summary$/, ctx => {
+      const cfg = ctx.store.getSetting('company') || {};
+      if (!cfg.features || cfg.features.timesheets !== true) throw new ValidationError('Timesheets & Tips is not enabled for this company.', 403);
+      if (ctx.user.role === 'client') throw new ValidationError('Time clock requires an authorized staff account.', 403);
+      needArea(ctx.user, 'timesheets', 'view');
+      return { workers: ctx.store.list('shiftworkers').filter(w => w.active !== false).map(w => ({ id:w.id, name:w.name })), shifts: ctx.store.list('workshifts'), active: ctx.store.list('clockins').map(s=>({employeeId:s.employeeId,startedAt:s.startedAt})) };
+    }],
     ['GET', /^\/state$/, ctx => state(ctx)],
     ['PUT', /^\/records\/([A-Za-z]+)\/([^/]+)$/, async (ctx, req, m) => {
       const data = await readJson(req);
