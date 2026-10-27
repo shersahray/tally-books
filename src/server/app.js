@@ -3245,7 +3245,7 @@ function createApp(opts) {
           const body=await readJson(req),phone=employeeAuth.normalizePhone(body.phone),companyId=String(body.companyId||''),code=String(body.code||'');
           employeeAuth.checkRate(clientIp(req),phone);
           const match=findEmployee(companyId,phone);
-          if(!match||!/^\\d{4,10}$/.test(code))throw new AuthError('Verification failed.',401);
+          if(!match||!/^\d{4,10}$/.test(code))throw new AuthError('Verification failed.',401);
           const result=await employeeAuth.verifyRequest('VerificationCheck',{To:phone,Code:code});
           if(result.status!=='approved')throw new AuthError('Verification failed.',401);
           return sendJson(res,200,employeeAuth.setSession(res,companyId,match.worker.id));
