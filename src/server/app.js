@@ -2044,6 +2044,13 @@ function createApp(opts) {
 
   // Routes inside one company: /api/c/<companyId>/...
   const companyRoutes = [
+    ['GET', /^\/time\/summary$/, ctx => {
+      const cfg = ctx.store.getSetting('company') || {};
+      if (!cfg.features || cfg.features.timesheets !== true) throw new ValidationError('Timesheets & Tips is not enabled for this company.', 403);
+      if (ctx.user.role === 'client') throw new ValidationError('Time clock requires an authorized staff account.', 403);
+      needArea(ctx.user, 'timesheets', 'view');
+      return { workers: ctx.store.list('shiftworkers').filter(w => w.active !== false).map(w => ({ id:w.id, name:w.name })), shifts: ctx.store.list('workshifts') };
+    }],
     ['GET', /^\/state$/, ctx => state(ctx)],
     ['PUT', /^\/records\/([A-Za-z]+)\/([^/]+)$/, async (ctx, req, m) => {
       const data = await readJson(req);
