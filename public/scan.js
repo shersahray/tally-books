@@ -24,7 +24,7 @@ async function upload(files){if(busy)return;const company=el('company').value;if
  ok++;sent++;el('count').textContent=sent+' sent';if(sent===1)el('history').textContent='';const div=document.createElement('div');div.className='file';div.textContent='✓ '+f.name;el('history').prepend(div)}
  catch(e){showStatus('Could not upload '+f.name+': '+e.message,true)}}
  if(ok)showStatus(ok+' receipt'+(ok===1?'':'s')+' sent to Sumlora successfully.')}
- }finally{busy=false;el('camera').value='';el('files').value=''}}
+ finally{busy=false;el('camera').value='';el('files').value=''}}
 el('camera').addEventListener('change',e=>upload([...e.target.files]));
 el('files').addEventListener('change',e=>upload([...e.target.files]));
 async function submitScannerLogin(){
