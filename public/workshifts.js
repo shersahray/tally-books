@@ -9,7 +9,7 @@ function shiftRows(){const from=S.shifts.week,to=addDays(from,6);return S.worksh
 function shiftPage(){return head('Timesheets & Tips','Track daily hours and tips independently of payroll',perm('timesheets','edit')?'<button class="btn" data-worker-new>Add team member</button>':'')+shiftView()}
 function shiftView(){
   const rows=shiftRows(),to=addDays(S.shifts.week,6),emps=S.shiftworkers.filter(e=>e.active!==false||rows.some(s=>s.employeeId===e.id));
-  const totals=emps.map(emp=>{const rr=rows.filter(s=>s.employeeId===emp.id),hours=rr.reduce((n,s)=>n+shiftHours(s),0),tips=rr.reduce((n,s)=>n+(+s.tips||0),0),controlled=rr.reduce((n,s)=>n+(s.tipType==='controlled'?(+s.tips||0):0),0);return{emp,hours,tips,controlled,direct:tips-controlled,regularEstimate:emp.payType==='hourly'?hours*(+emp.rate||0):null}});
+  const totals=emps.map(emp=>{const rr=rows.filter(s=>s.employeeId===emp.id),hours=rr.reduce((n,s)=>n+shiftHours(s),0),tips=rr.reduce((n,s)=>n+(+s.tips||0),0),controlled=rr.reduce((n,s)=>n+((+s.controlledTips||0) || (s.controlledTips===undefined&&s.tipType==='controlled'?(+s.tips||0):0)),0);return{emp,hours,tips,controlled,direct:tips-controlled,regularEstimate:emp.payType==='hourly'?hours*(+emp.rate||0):null}});
   const grand=(key)=>totals.reduce((sum,r)=>sum+(r[key]||0),0);
   return '<div class="panel"><div class="toolbar"><strong>Weekly hours & tips</strong><span class="grow muted">Monday to Sunday · Payroll preparation, not a posted pay run</span><button class="btn" data-shift-csv>Export CSV</button><button class="btn primary" data-shift-edit="new">+ Daily entry</button></div>'+ 
     '<div class="toolbar"><button class="btn sm" data-shift-week="prev">← Previous</button><label>Week starting <input type="date" id="shiftWeek" value="'+esc(S.shifts.week)+'"></label><button class="btn sm" data-shift-week="next">Next →</button><span class="muted">Through '+esc(fmtDate(to))+'</span></div>'+
@@ -37,7 +37,7 @@ function shiftForm(id){
 }
 function shiftCSV(){
   const q=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
-  const rows=shiftRows().map(s=>[s.date,shiftworker(s.employeeId)?.name||'',s.start,s.end,s.breakMinutes,shiftHours(s).toFixed(2),s.tipType==='direct'?s.tips:0,s.tipType==='controlled'?s.tips:0,s.tips,s.notes||'']);
+  const rows=shiftRows().map(s=>[s.date,shiftworker(s.employeeId)?.name||'',s.start,s.end,s.breakMinutes,shiftHours(s).toFixed(2),s.directTips??(s.tipType==='direct'?s.tips:0),s.controlledTips??(s.tipType==='controlled'?s.tips:0),s.tips,s.notes||'']);
   const csv=[['Date','Employee','Clock in','Clock out','Unpaid break (min)','Hours worked','Direct tips CAD','Employer-controlled tips CAD','Total tips CAD','Notes'],...rows].map(r=>r.map(q).join(',')).join('\r\n');
   const url=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download='sumlora-weekly-hours-tips-'+S.shifts.week+'.csv';a.click();URL.revokeObjectURL(url);
 }
