@@ -1019,7 +1019,11 @@ function validateShiftworker(data) {
  if(!name||name.length>160)throw new ValidationError('Enter a team member name (up to 160 characters).');
  const rate=Number(data.rate||0);
  if(!Number.isFinite(rate)||rate<0||rate>10000)throw new ValidationError('Enter a valid hourly rate.');
- return {name,rate,active:data.active!==false};
+ const rawPhone=String(data.phone||'').trim();
+ const digits=rawPhone.replace(/[^0-9]/g,'');
+ const phone=!digits?'':digits.length===10?'+1'+digits:digits.length===11&&digits.startsWith('1')?'+'+digits:'';
+ if(rawPhone&&!phone)throw new ValidationError('Enter a valid Canadian or US phone number (10 digits).');
+ return {name,rate,phone,active:data.active!==false};
 }
 /** Daily employee time and tip entry (independent of posted payroll). */
 function validateWorkshift(data, store) {
