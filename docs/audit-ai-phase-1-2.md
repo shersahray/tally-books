@@ -25,3 +25,19 @@ Run `node --test test/audit-evidence.test.js` with compatible Node.js. This is *
 - `test/audit-intake-access.test.js`: validation, default-deny, tenant visibility and admin-only entitlement tests (committed; not executed in this session).
 
 **Critical warning:** These are isolated building blocks, not deployed application capabilities. No HTTP upload route or admin UI is connected, and no entitlement changes can presently be made through the app. Integrate the guard in the authenticated router before exposing PDF data. Do not merge or deploy until malware handling, resource limits, sandboxing, persistence, and complete authorization are reviewed.
+
+## Phase 3 code added (still a draft)
+- `src/server/audit-service.js`: AES-256-GCM encryption of PDFs in each company's SQLite file, authentication-bound company access checks, evidence metadata list, matching suggestions and reviewer audit records.
+- `src/server/app.js`: authenticated administrator-only overview and entitlement update routes; company-scoped evidence list/upload/download/match/review routes; uploads rejected before parsing when disabled.
+- `public/audit-ai.html` and `public/audit-ai.js`: basic pilot screen at `/audit-ai.html` for company ID entry, PDF upload, document viewing, GL JSON matching and approvals; platform administrator entitlement controls on the same page. No navigation-menu link has been added.
+- `test/audit-service.test.js`: ciphertext binding, denied cross-company access, and review audit tests.
+
+## Installation prerequisites and current release blockers
+1. Set a **random, secret** `AUDIT_AI_STORAGE_KEY` as 64 hexadecimal characters (32 bytes), only in the private server environment. Safeguard and back up this key: loss prevents decryption of evidence. This key is not set by the branch.
+2. Install poppler-utils (`pdfinfo`, `pdftotext`, `pdftoppm`) and Tesseract (`tesseract` and English/French language data) on the application host. Current OCR implementation is synchronous per request and needs an isolated worker with CPU/memory/time quotas before production exposure.
+3. Test the full branch locally: `npm test`; run manual authentic multi-firm tests for unauthorized user, disabled entitlement, uploading malformed/large PDFs, scanned invoices, and audit review persistence. The tests **have not been executed** in this session.
+4. Add antivirus scanning and hard limits on PDF decompression/image processing; disable scripts/active PDF content, consider sandboxed worker/process and queue; establish per-firm quotas, retention, cleanup and key rotation. This implementation is a pilot scaffold and **not approved for production handling of real customer documents**.
+5. Improve UX for embedded GL selection, side-by-side PDF preview, per-transaction decisions, permissioned reviewer roles, OCR review and invoice field corrections. Current viewer opens a PDF in a new tab, and the matching screen expects JSON transactions pasted manually.
+6. Reconcile existing administrator entitlement flows and restore/import handling so feature flags cannot be forged through any other update path. This branch only adds a guarded admin endpoint and no billing integration.
+
+Keep the paid feature disabled by default. Do not merge/deploy without independent security review.
