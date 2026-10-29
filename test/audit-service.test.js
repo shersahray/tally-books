@@ -145,3 +145,19 @@ test('retention preview is dry run and excludes legal hold',()=>{
   assert.throws(()=>svc.retentionPreview({context,store,days:1}),/Retention/);
  }finally{store.close();}
 });
+
+test('deletion rechecks newly applied legal hold inside transaction',()=>{
+ const store=new Store(':memory:'),svc=new AuditEvidenceService({key});
+ const ownerCtx={...context,user:{...user,role:'owner'}};
+ const id='6c1485bd-fb17-4291-85de-3761e4470ba5';
+ try {
+  store.putSetting('audit-ai-evidence',[{id,name:'hold-race.pdf',legalHold:false}]);
+  const transaction=store.transaction.bind(store);
+  store.transaction=fn=>transaction(()=>{
+   store.putSetting('audit-ai-evidence',[{id,name:'hold-race.pdf',legalHold:true}]);
+   return fn();
+  });
+  assert.throws(()=>svc.deleteEvidence({context:ownerCtx,store,id,reason:'End of retention window'}),/legal hold/);
+  assert.equal(store.getSetting('audit-ai-evidence')[0].id,id);
+ }finally{store.close();}
+});
