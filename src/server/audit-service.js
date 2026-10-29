@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const {validatePdf,extractPdf} = require('./audit-pdf');
 const {extractInvoiceFields,matchEvidence} = require('./audit-evidence');
 const {requireAuditAI} = require('./audit-access');
+const {scanPdf} = require('./audit-malware');
 const keyFromEnv = value => {
   if (typeof value !== 'string' || !/^[a-f0-9]{64}$/i.test(value)) return null;
   return Buffer.from(value,'hex');
@@ -29,6 +30,7 @@ class AuditEvidenceService {
     this.assertAccess(context);
     validatePdf(bytes);
     if (typeof name!=='string' || !/^[^\/\x00-\x1f]{1,150}\.pdf$/i.test(name)) throw new TypeError('Invalid PDF file name');
+    await scanPdf(bytes);
     const result=await extractPdf(bytes,{ocr});
     const fields=result.text.trim()?extractInvoiceFields(result.text):null;
     const id=crypto.randomUUID(),now=new Date().toISOString();
