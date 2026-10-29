@@ -18,3 +18,10 @@ This branch introduces `src/server/audit-evidence.js`, an isolated, dependency-f
 6. Test against synthetic invoices and tenant isolation/integration/security tests; evaluate hosted OCR/LLM costs and Canadian data-residency settings.
 
 Run `node --test test/audit-evidence.test.js` with compatible Node.js. This is **not** production ready.
+
+## Follow-up implementation in this PR
+- `audit-pdf.js`: validates PDF header/EOF, type and 10 MiB size; uses `pdfinfo` for page count (25 maximum), `pdftotext` for embedded text, and optional local `pdftoppm` + `tesseract` OCR for low-text scans. Temporary files are deleted in `finally`. Requires these binaries installed; no cloud OCR, file upload HTTP endpoint, or malware scanning yet.
+- `audit-access.js`: pure server-side default-deny entitlement policy. Only active platform owners can change the entitlement **through this module**. Consumers must supply verified company visibility, firm status, durable save, and immutable audit callback.
+- `test/audit-intake-access.test.js`: validation, default-deny, tenant visibility and admin-only entitlement tests (committed; not executed in this session).
+
+**Critical warning:** These are isolated building blocks, not deployed application capabilities. No HTTP upload route or admin UI is connected, and no entitlement changes can presently be made through the app. Integrate the guard in the authenticated router before exposing PDF data. Do not merge or deploy until malware handling, resource limits, sandboxing, persistence, and complete authorization are reviewed.
