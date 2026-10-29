@@ -48,3 +48,19 @@ test('duplicate PDF is rejected before OCR processing',async()=>{
  const store={getSetting:name=>name==='audit-ai-evidence'?[{id:'existing',sha256}]:null};
  await assert.rejects(svc.upload({context,store,bytes,name:'evidence.pdf'}),/already been uploaded/);
 });
+
+test('GL-entry to evidence pair review requires real records and writes audit trail',()=>{
+ const store=new Store(':memory:');
+ try {
+  const svc=new AuditEvidenceService({key});
+  store.put('entries','j1',{date:'2026-10-28',lines:[]});
+  store.putSetting('audit-ai-evidence',[{id:'doc1',name:'invoice.pdf',reviewStatus:'pending'}]);
+  assert.equal(svc.reviewPair({context,store,entryId:'missing',evidenceId:'doc1',decision:'approved',note:''}),null);
+  assert.throws(()=>svc.reviewPair({context:{...context,user:{...user,readOnly:true}},store,entryId:'j1',evidenceId:'doc1',decision:'approved',note:''}),/Reviewer/);
+  const result=svc.reviewPair({context,store,entryId:'j1',evidenceId:'doc1',decision:'approved',note:'Reviewed against GL'});
+  assert.equal(result.decision,'approved');
+  assert.equal(svc.pairReviews({context,store}).length,1);
+  assert.equal(store.auditList({collection:'audit-ai'}).length,1);
+  assert.throws(()=>svc.pairReviews({context:{...context,canSeeCompany:()=>false},store}),/unavailable/);
+ } finally {store.close();}
+});
