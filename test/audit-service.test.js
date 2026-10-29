@@ -31,6 +31,6 @@ test('review is audited, tenant checks gate reads and edits',()=>{
   const reviewed=svc.review({context,store,id:'test',decision:'approved',note:'checked supporting documentation'});
   assert.equal(reviewed.reviewStatus,'approved');
   assert.equal(store.auditList({collection:'audit-ai'}).length,1);
-  assert.equal(svc.match({context,store,transactions:[{id:'txn1',amount:125}]}).matches,undefined);
+  assert.equal(svc.match({context,store,transactions:[{id:'txn1',amount:125}]} )[0].candidates[0].documentId,'test');
  } finally {store.close();}
 });
