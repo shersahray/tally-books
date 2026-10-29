@@ -65,6 +65,19 @@ class AuditEvidenceService {
     const docs=this.index(store).filter(x=>x.fields).map(x=>({id:x.id,fields:x.fields}));
     return matchEvidence(transactions,docs);
   }
+  setLegalHold({context,store,id,enabled,reason}) {
+    this.assertAccess(context);
+    if(context.user.readOnly || context.user.role!=='owner')throw Object.assign(new Error('Owner required'),{status:403});
+    if(typeof enabled!=='boolean'||typeof reason!=='string'||reason.trim().length<5||reason.length>500)throw new TypeError('Valid legal hold and reason required');
+    const current=this.index(store),item=current.find(x=>x.id===id);
+    if(!item)return null;
+    const updated={...item,legalHold:enabled};
+    store.transaction(()=>{
+      store.putSetting('audit-ai-evidence',this.index(store).map(x=>x.id===id?updated:x));
+      store.audit(context.user,'audit-ai-legal-hold',{collection:'audit-ai',id,summary:(enabled?'Legal hold enabled: ':'Legal hold released: ')+reason.trim(),before:{legalHold:!!item.legalHold},after:{legalHold:enabled}});
+    });
+    return updated;
+  }
   deleteEvidence({context,store,id,reason}) {
     this.assertAccess(context);
     if(context.user.readOnly || !['owner','admin'].includes(context.user.role)) throw Object.assign(new Error('Owner or administrator required'),{status:403});
@@ -72,6 +85,7 @@ class AuditEvidenceService {
     if(typeof reason!=='string' || reason.trim().length<5 || reason.length>500) throw new TypeError('Deletion reason required');
     const current=this.index(store),evidence=current.find(x=>x.id===id);
     if(!evidence)return null;
+    if(evidence.legalHold===true) throw Object.assign(new Error('Evidence is under legal hold'),{status:409});
     store.transaction(()=>{
       const latest=this.index(store);
       if(!latest.some(x=>x.id===id))throw Object.assign(new Error('Evidence no longer exists'),{status:409});
