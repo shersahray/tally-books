@@ -28,7 +28,7 @@ class AuditEvidenceService {
   async upload({context,store,bytes,name,ocr=true}) {
     this.assertAccess(context);
     validatePdf(bytes);
-    if (typeof name!=='string' || !/^[^\\/\x00-\x1f]{1,150}\.pdf$/i.test(name)) throw new TypeError('Invalid PDF file name');
+    if (typeof name!=='string' || !/^[^\/\x00-\x1f]{1,150}\.pdf$/i.test(name)) throw new TypeError('Invalid PDF file name');
     const result=await extractPdf(bytes,{ocr});
     const fields=result.text.trim()?extractInvoiceFields(result.text):null;
     const id=crypto.randomUUID(),now=new Date().toISOString();
