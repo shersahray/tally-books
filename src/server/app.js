@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const { COLLECTIONS } = require('./db');
 const { AuditEvidenceService, keyFromEnv } = require('./audit-service');
 const auditAccess = require('./audit-access');
+const { ledgerCandidates } = require('./audit-ledger');
 
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
@@ -1723,6 +1724,13 @@ function createApp(opts) {
       const found=service.download({context,store:ctxFor(cid).store,id:m[2]});
       if(!found)throw new ValidationError('Evidence not found',404);
       return {name:found.metadata.name,mediaType:'application/pdf',data:found.bytes.toString('base64')};
+    }],
+    ['GET', /^\/api\/audit-ai\/([^/]+)\/ledger$/, (req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.role==='client')throw new ValidationError('Accountant access required',403);
+      return {transactions:ledgerCandidates(ctxFor(cid).store.list('entries'))};
     }],
     ['POST', /^\/api\/audit-ai\/([^/]+)\/match$/, async(req,m,res,user)=>{
       const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
