@@ -65,6 +65,14 @@ class AuditEvidenceService {
     const docs=this.index(store).filter(x=>x.fields).map(x=>({id:x.id,fields:x.fields}));
     return matchEvidence(transactions,docs);
   }
+  retentionPreview({context,store,days=2555,now=Date.now()}) {
+    this.assertAccess(context);
+    if(!Number.isSafeInteger(days)||days<365||days>36500)throw new TypeError('Retention must be between 365 and 36500 days');
+    const cutoff=now-days*86400000;
+    const due=this.index(store).filter(e=>e.legalHold!==true&&Number.isFinite(Date.parse(e.created))&&Date.parse(e.created)<cutoff)
+      .map(e=>({id:e.id,name:e.name,created:e.created,reviewStatus:e.reviewStatus}));
+    return {days,due,excludedOnLegalHold:this.index(store).filter(e=>e.legalHold===true).length,dryRun:true};
+  }
   setLegalHold({context,store,id,enabled,reason}) {
     this.assertAccess(context);
     if(context.user.readOnly || context.user.role!=='owner')throw Object.assign(new Error('Owner required'),{status:403});
