@@ -22,7 +22,10 @@ async function load() {
    const {data}=await api('/api/audit-ai/'+id()+'/evidence/'+encodeURIComponent(entry.id));
    const binary=atob(data),bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));
    const url=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
-   window.open(url,'_blank','noopener,noreferrer');setTimeout(()=>URL.revokeObjectURL(url),60000);
+   const frame=el('preview');
+   if(frame.dataset.objectUrl)URL.revokeObjectURL(frame.dataset.objectUrl);
+   frame.dataset.objectUrl=url;
+   frame.src=url;
   });
   card.append(heading,info,view,note);
   for(const decision of ['approved','rejected']) {
@@ -88,3 +91,5 @@ async function adminList() {
 }
 el('refresh').onclick=()=>execute(adminList);
 api('/api/overview/audit-ai').then(()=>{el('admin').hidden=false;return adminList();}).catch(()=>{});
+
+window.addEventListener('pagehide',()=>{const frame=el('preview');if(frame?.dataset.objectUrl)URL.revokeObjectURL(frame.dataset.objectUrl);});
