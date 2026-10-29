@@ -60,6 +60,31 @@ class AuditEvidenceService {
     const docs=this.index(store).filter(x=>x.fields).map(x=>({id:x.id,fields:x.fields}));
     return matchEvidence(transactions,docs);
   }
+  reviewPair({context,store,entryId,evidenceId,decision,note}) {
+    this.assertAccess(context);
+    if(context.user.readOnly || context.user.role==='client') throw Object.assign(new Error('Reviewer access required'),{status:403});
+    if(!['approved','rejected'].includes(decision)||typeof note!=='string'||note.length>2000)throw new TypeError('Invalid review decision');
+    if(typeof entryId!=='string'||typeof evidenceId!=='string'||entryId.length>120||evidenceId.length>120)throw new TypeError('Invalid pair');
+    const entry=store.get('entries',entryId);
+    const document=this.index(store).find(d=>d.id===evidenceId);
+    if(!entry||!document)return null;
+    const key=entryId+':'+evidenceId;
+    const current=store.getSetting('audit-ai-pair-reviews')||{};
+    if(Object.keys(current).length>=10000&&!Object.hasOwn(current,key))throw Object.assign(new Error('Review limit reached'),{status:413});
+    const existing=current[key]||null;
+    const reviewed={entryId,evidenceId,decision,note,reviewedAt:new Date().toISOString(),reviewedBy:context.user.id};
+    store.transaction(()=>{
+      store.putSetting('audit-ai-pair-reviews',{...current,[key]:reviewed});
+      store.audit(context.user,'audit-ai-pair-review',{collection:'audit-ai',id:evidenceId,
+        summary:'Accountant '+decision+' evidence for GL entry '+entryId,
+        before:existing,after:reviewed});
+    });
+    return reviewed;
+  }
+  pairReviews({context,store}) {
+    this.assertAccess(context);
+    return Object.values(store.getSetting('audit-ai-pair-reviews')||{});
+  }
   review({context,store,id,decision,note}) {
     this.assertAccess(context);
     if (context.user.role==='client' || context.user.readOnly) throw Object.assign(new Error('Reviewer access required'),{status:403});
