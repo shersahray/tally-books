@@ -5,22 +5,22 @@ This is **draft-only**. Do not merge, deploy, or enable for paying customers bef
 ## Sandbox worker
 
 Build from the repository root:
-\`\`\`sh
+```sh
 docker build -f ops/audit-worker/Dockerfile -t sumlora/audit-ocr:staging .
-\`\`\`
+```
 
 Configure the Sumlora **application host** to call the Docker CLI (which must be separately provisioned and access-controlled). These are JSON array arguments, not shell text:
 
-\`\`\`
+```
 AUDIT_AI_WORKER_BIN=docker
 AUDIT_AI_WORKER_ARGS='["run","--rm","-i","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","64","--memory","256m","--cpus","1","--tmpfs","/tmp:rw,noexec,nosuid,size=48m","sumlora/audit-ocr:staging"]'
-\`\`\`
+```
 
-The application rejects PDF uploads when the worker is not configured or cannot start. **Security note:** Access to the Docker daemon is privileged. Restrict the Docker invocation and images at host level, pin a scanned image digest, use a dedicated account, and consider an isolated service behind an authenticated API instead of exposing the Docker socket to the app. The design is not independently penetration tested. The worker image must be built and run in staging; container limits above have not been verified here. Install and update \`clamscan\` and its signature database on the main app host (scan must complete before worker invocation).
+The application rejects PDF uploads when the worker is not configured or cannot start. **Security note:** Access to the Docker daemon is privileged. Restrict the Docker invocation and images at host level, pin a scanned image digest, use a dedicated account, and consider an isolated service behind an authenticated API instead of exposing the Docker socket to the app. The design is not independently penetration tested. The worker image must be built and run in staging; container limits above have not been verified here. Install and update `clamscan` and its signature database on the main app host (scan must complete before worker invocation).
 
 ## Encryption key recovery
 
-Generate a random 32-byte key into a managed secret store; expose only as \`AUDIT_AI_STORAGE_KEY\` (64 hex characters). Never commit or log it. Back up separately under restricted access. To validate recovery in staging, upload one **synthetic** PDF to a disposable company, restore the encrypted SQLite backup and secret in an isolated disposable instance, then ensure download/decryption succeeds; confirm a wrong key fails. This feature **does not implement key rotation**.
+Generate a random 32-byte key into a managed secret store; expose only as `AUDIT_AI_STORAGE_KEY` (64 hex characters). Never commit or log it. Back up separately under restricted access. To validate recovery in staging, upload one **synthetic** PDF to a disposable company, restore the encrypted SQLite backup and secret in an isolated disposable instance, then ensure download/decryption succeeds; confirm a wrong key fails. This feature **does not implement key rotation**.
 
 ## Two-firm acceptance test
 
