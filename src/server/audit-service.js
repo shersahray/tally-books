@@ -81,7 +81,9 @@ class AuditEvidenceService {
     if(!item)return null;
     const updated={...item,legalHold:enabled};
     store.transaction(()=>{
-      store.putSetting('audit-ai-evidence',this.index(store).map(x=>x.id===id?updated:x));
+      const latest=this.index(store),currentItem=latest.find(x=>x.id===id);
+      if(!currentItem)throw Object.assign(new Error('Evidence no longer exists'),{status:409});
+      store.putSetting('audit-ai-evidence',latest.map(x=>x.id===id?{...x,legalHold:enabled}:x));
       store.audit(context.user,'audit-ai-legal-hold',{collection:'audit-ai',id,summary:(enabled?'Legal hold enabled: ':'Legal hold released: ')+reason.trim(),before:{legalHold:!!item.legalHold},after:{legalHold:enabled}});
     });
     return updated;
@@ -96,7 +98,9 @@ class AuditEvidenceService {
     if(evidence.legalHold===true) throw Object.assign(new Error('Evidence is under legal hold'),{status:409});
     store.transaction(()=>{
       const latest=this.index(store);
-      if(!latest.some(x=>x.id===id))throw Object.assign(new Error('Evidence no longer exists'),{status:409});
+      const latestEvidence=latest.find(x=>x.id===id);
+      if(!latestEvidence)throw Object.assign(new Error('Evidence no longer exists'),{status:409});
+      if(latestEvidence.legalHold===true)throw Object.assign(new Error('Evidence is under legal hold'),{status:409});
       store.deleteFile('audit-ai-'+id);
       store.putSetting('audit-ai-evidence',latest.filter(x=>x.id!==id));
       const reviews=store.getSetting('audit-ai-pair-reviews')||{};
