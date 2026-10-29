@@ -80,3 +80,9 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - [ ] Complete transaction-evidence pair-specific approval and accounting workflow signoff. Existing review is document-level only.
 - [ ] Configure document retention/deletion policy and access auditing, run realistic scanned invoice/OCR examples, and obtain accountant pilot acceptance.
 - [ ] Only after above: approve merge/deployment separately and enable per-company entitlement deliberately.
+
+## Latest engineering work
+- Added cross-firm evidence access and AES-GCM binding regression tests (`test/audit-multitenant.test.js`), included in dedicated CI.
+- Added separate accountant GL-entry-to-evidence review records, auditable and company-scoped, with tests. Pilot screen can approve/reject suggested pairs without posting entries.
+- All three full application CI jobs passed for prior commit `425c82b` (run 40802963564); newer commits require their own green runs.
+- Production blockers remain: isolate untrusted PDF conversion/OCR in OS-sandboxed workers, staging recovery and deployed-host prerequisite verification, real two-firm browser integration, and retention controls. Keep draft and disabled by default.
