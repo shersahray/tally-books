@@ -110,3 +110,10 @@ test('owner deletion removes encrypted evidence and pair reviews with audit trai
   assert.equal(store.auditList({collection:'audit-ai'})[0].action,'audit-ai-evidence-deleted');
  }finally{store.close();}
 });
+
+test('rejected upload cannot persist when entitlement is disabled',async()=>{
+ const svc=new AuditEvidenceService({key});
+ const off={...context,company:{...company,auditAiEntitled:false}};
+ const store={getSetting:()=>[],transaction:()=>{throw new Error('must not write')}};
+ await assert.rejects(svc.upload({context:off,store,bytes:Buffer.from('%PDF-1.7\n%%EOF'),name:'off.pdf'}),/unavailable/);
+});
