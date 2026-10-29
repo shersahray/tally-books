@@ -86,3 +86,8 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - Added separate accountant GL-entry-to-evidence review records, auditable and company-scoped, with tests. Pilot screen can approve/reject suggested pairs without posting entries.
 - All three full application CI jobs passed for prior commit `425c82b` (run 40802963564); newer commits require their own green runs.
 - Production blockers remain: isolate untrusted PDF conversion/OCR in OS-sandboxed workers, staging recovery and deployed-host prerequisite verification, real two-firm browser integration, and retention controls. Keep draft and disabled by default.
+
+## Review-key hardening
+- Review records now use unambiguous serialized GL/evidence pairs, with a regression test that demonstrates colon-containing IDs cannot overwrite a different pair.
+- The 10,000-review cap is rechecked inside the SQLite transaction, after refreshing persisted reviews.
+- Isolated Audit AI CI passed on preceding commit `fd2a170` (run 40803556884); this new revision needs fresh CI verification.
