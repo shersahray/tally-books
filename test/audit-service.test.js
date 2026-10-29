@@ -34,3 +34,9 @@ test('review is audited, tenant checks gate reads and edits',()=>{
   assert.equal(svc.match({context,store,transactions:[{id:'txn1',amount:125}]} )[0].candidates[0].documentId,'test');
  } finally {store.close();}
 });
+
+test('per-company evidence limit rejects upload before scanning or extracting',async()=>{
+ const svc=new AuditEvidenceService({key});
+ const store={getSetting:name=>name==='audit-ai-evidence'?Array.from({length:500},(_,i)=>({id:String(i)})):null};
+ await assert.rejects(svc.upload({context,store,bytes:Buffer.from('%PDF-1.7\n%%EOF'),name:'evidence.pdf'}),/limit reached/);
+});
