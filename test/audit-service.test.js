@@ -132,3 +132,16 @@ test('legal hold blocks deletion until firm owner explicitly releases it',()=>{
   assert.equal(store.auditList({collection:'audit-ai'}).length,3);
  }finally{store.close();}
 });
+
+test('retention preview is dry run and excludes legal hold',()=>{
+ const store=new Store(':memory:'),svc=new AuditEvidenceService({key});
+ try{
+  store.putSetting('audit-ai-evidence',[{id:'expired',name:'old.pdf',created:'2017-01-01T00:00:00.000Z'},{id:'held',name:'held.pdf',created:'2017-01-01T00:00:00.000Z',legalHold:true},{id:'recent',name:'new.pdf',created:'2026-09-01T00:00:00.000Z'}]);
+  const preview=svc.retentionPreview({context,store,days:365,now:Date.parse('2026-10-28T00:00:00.000Z')});
+  assert.equal(preview.due.length,1);
+  assert.equal(preview.due[0].id,'expired');
+  assert.equal(preview.excludedOnLegalHold,1);
+  assert.equal(store.getSetting('audit-ai-evidence').length,3);
+  assert.throws(()=>svc.retentionPreview({context,store,days:1}),/Retention/);
+ }finally{store.close();}
+});
