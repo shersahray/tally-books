@@ -40,3 +40,11 @@ test('per-company evidence limit rejects upload before scanning or extracting',a
  const store={getSetting:name=>name==='audit-ai-evidence'?Array.from({length:500},(_,i)=>({id:String(i)})):null};
  await assert.rejects(svc.upload({context,store,bytes:Buffer.from('%PDF-1.7\n%%EOF'),name:'evidence.pdf'}),/limit reached/);
 });
+
+test('duplicate PDF is rejected before OCR processing',async()=>{
+ const svc=new AuditEvidenceService({key});
+ const bytes=Buffer.from('%PDF-1.7\n%%EOF');
+ const sha256=crypto.createHash('sha256').update(bytes).digest('hex');
+ const store={getSetting:name=>name==='audit-ai-evidence'?[{id:'existing',sha256}]:null};
+ await assert.rejects(svc.upload({context,store,bytes,name:'evidence.pdf'}),/already been uploaded/);
+});
