@@ -31,9 +31,9 @@ class AuditEvidenceService {
     validatePdf(bytes);
     if (this.index(store).length >= 500) throw Object.assign(new Error('Company evidence limit reached (500 files)'), {status:413});
     if (typeof name!=='string' || !/^[^\/\x00-\x1f]{1,150}\.pdf$/i.test(name)) throw new TypeError('Invalid PDF file name');
-    await scanPdf(bytes);
     const digest=crypto.createHash('sha256').update(bytes).digest('hex');
     if (this.index(store).some(item=>item.sha256===digest)) throw Object.assign(new Error('This PDF has already been uploaded for this company'),{status:409});
+    await scanPdf(bytes);
     const result=await extractPdf(bytes,{ocr});
     const fields=result.text.trim()?extractInvoiceFields(result.text):null;
     const id=crypto.randomUUID(),now=new Date().toISOString();
