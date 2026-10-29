@@ -50,7 +50,28 @@ el('ledger').onclick=()=>execute(async()=>{
 el('match').onclick=()=>execute(async()=>{
  const transactions=JSON.parse(el('transactions').value);
  const result=await api('/api/audit-ai/'+id()+'/match','POST',{transactions});
- el('results').textContent=JSON.stringify(result.matches,null,2);
+
+ const area=el('results');
+ area.replaceChildren();
+ const summary=document.createElement('pre');summary.textContent=JSON.stringify(result.matches,null,2);area.append(summary);
+ for(const match of result.matches||[]){
+  for(const candidate of (match.candidates||[]).slice(0,3)){
+   const row=document.createElement('div');row.style='padding:.5rem;border:1px solid #999;margin:.4rem 0';
+   const label=document.createElement('span');label.textContent='GL '+match.transactionId+' / PDF '+candidate.documentId+' (score '+candidate.score+') ';
+   const note=document.createElement('input');note.placeholder='Review note';note.maxLength=2000;
+   row.append(label,note);
+   for(const decision of ['approved','rejected']){
+    const button=document.createElement('button');button.textContent=decision;
+    button.onclick=()=>execute(async()=>{
+     await api('/api/audit-ai/'+id()+'/pair-reviews','POST',{entryId:match.transactionId,evidenceId:candidate.documentId,decision,note:note.value});
+     status('Accountant '+decision+' this GL-to-evidence pair. No accounting entry was changed.');
+    });
+    row.append(button);
+   }
+   area.append(row);
+  }
+ }
+
 });
 async function adminList() {
  const {companies}=await api('/api/overview/audit-ai');const root=el('companies');root.replaceChildren();
