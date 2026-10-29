@@ -17,4 +17,6 @@ jobs:
       - name: Install PDF tools for test environment
         run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra img2pdf
       - name: Run Audit AI tests
+        env:
+          AUDIT_AI_PDF_INTEGRATION: '1'
         run: node --test test/audit-evidence.test.js test/audit-intake-access.test.js test/audit-service.test.js test/audit-ledger.test.js test/audit-malware.test.js test/audit-registry.test.js test/audit-multitenant.test.js test/audit-isolated.test.js test/audit-pdf-integration.test.js
