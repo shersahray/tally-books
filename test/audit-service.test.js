@@ -64,3 +64,17 @@ test('GL-entry to evidence pair review requires real records and writes audit tr
   assert.throws(()=>svc.pairReviews({context:{...context,canSeeCompany:()=>false},store}),/unavailable/);
  } finally {store.close();}
 });
+
+test('GL pair review never changes source journal entry',()=>{
+ const store=new Store(':memory:');
+ try {
+  const svc=new AuditEvidenceService({key});
+  const original={date:'2026-10-28',memo:'Supplier',lines:[{accountId:'a1',debit:100,credit:0},{accountId:'a2',debit:0,credit:100}]};
+  store.put('entries','j2',original);
+  store.putSetting('audit-ai-evidence',[{id:'doc2',name:'proof.pdf',reviewStatus:'pending'}]);
+  svc.reviewPair({context,store,entryId:'j2',evidenceId:'doc2',decision:'rejected',note:'Incorrect invoice'});
+  assert.deepEqual((({id,...x})=>x)(store.get('entries','j2')),original);
+  assert.equal(svc.pairReviews({context,store})[0].decision,'rejected');
+  assert.equal(store.auditList({collection:'audit-ai'}).length,1);
+ } finally {store.close();}
+});
