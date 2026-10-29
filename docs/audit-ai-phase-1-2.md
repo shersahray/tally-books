@@ -96,3 +96,13 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - Added owner-only encrypted evidence deletion endpoint with mandatory reason, transactional removal of evidence and associated pair reviews, and an audit log entry that retains identifiers and SHA-256 rather than document bytes.
 - No automatic retention schedule, legal hold, or backup purge mechanism exists yet. Deleting an active SQLite blob does not guarantee deletion from backups, WAL pages, forensic media, or offsite retention; configure formal retention and backup procedures before production.
 - Deletion regression test added and must pass CI. PDF/OCR subprocesses still need a dedicated OS-isolated service before untrusted customer PDFs can be accepted.
+
+## Six-item hardening sweep (latest)
+1. Implemented a fail-closed external worker process boundary for OCR/PDF extraction, with unprivileged container image and documented restricted Docker runtime. **Actual deployment and host sandbox security validation still required.**
+2. Documented key generation, separate secret backup and isolated staging recovery drill; no key rotation feature or actual recovered backup test yet.
+3. Existing cross-firm unit regression checks remain, with a detailed two-firm HTTP acceptance procedure; no live two-account run yet.
+4. Added auditable firm-owner legal holds and deletion guards; no automatic retention expiry or backup purge.
+5. Added a sandboxed embedded PDF preview for pilot accountants; additional accessibility and browser QA remain.
+6. Added a pilot acceptance checklist for scanned/text PDFs, matching, accountant decisions, revocation and malware scanner failure. Real staging pilot not performed.
+
+Do not merge or deploy until all operational checks are performed and a new complete CI run passes.
