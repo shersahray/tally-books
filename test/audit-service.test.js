@@ -78,3 +78,16 @@ test('GL pair review never changes source journal entry',()=>{
   assert.equal(store.auditList({collection:'audit-ai'}).length,1);
  } finally {store.close();}
 });
+
+test('different GL/evidence pairs cannot collide through separators',()=>{
+ const store=new Store(':memory:');
+ try {
+  const service=new AuditEvidenceService({key});
+  store.put('entries','a:b',{date:'2026-10-28',lines:[]});
+  store.put('entries','a',{date:'2026-10-28',lines:[]});
+  store.putSetting('audit-ai-evidence',[{id:'c',name:'1.pdf'},{id:'b:c',name:'2.pdf'}]);
+  service.reviewPair({context,store,entryId:'a:b',evidenceId:'c',decision:'approved',note:'first'});
+  service.reviewPair({context,store,entryId:'a',evidenceId:'b:c',decision:'rejected',note:'second'});
+  assert.equal(service.pairReviews({context,store}).length,2);
+ }finally{store.close();}
+});
