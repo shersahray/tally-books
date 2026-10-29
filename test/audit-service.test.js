@@ -27,7 +27,7 @@ test('review is audited, tenant checks gate reads and edits',()=>{
   assert.equal(svc.download({context,store,id:'test'}).bytes.toString(),'PDF sensitive');
   assert.throws(()=>svc.list({context:{...context,company:{...company,auditAiEntitled:false}},store}),/unavailable/);
   assert.throws(()=>svc.download({context:{...context,canSeeCompany:()=>false},store,id:'test'}),/unavailable/);
-  assert.throws(()=>svc.review({context:{...context,user:{...user,role:'client'}},store,id:'test',decision:'approved',note:''}),/Reviewer/);
+  assert.throws(()=>svc.review({context:{...context,user:{...user,role:'client'}},store,id:'test',decision:'approved',note:''}),/unavailable/);
   const reviewed=svc.review({context,store,id:'test',decision:'approved',note:'checked supporting documentation'});
   assert.equal(reviewed.reviewStatus,'approved');
   assert.equal(store.auditList({collection:'audit-ai'}).length,1);
