@@ -1727,6 +1727,14 @@ function createApp(opts) {
       if(!found)throw new ValidationError('Evidence not found',404);
       return {name:found.metadata.name,mediaType:'application/pdf',data:found.bytes.toString('base64')};
     }],
+    ['GET', /^\/api\/audit-ai\/([^/]+)\/retention-preview$/, (req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.role!=='owner')throw new ValidationError('Firm owner required',403);
+      const query=new URL(req.url,'http://x').searchParams;
+      return service.retentionPreview({context,store:ctxFor(cid).store,days:Number(query.get('days')||2555)});
+    }],
     ['PUT', /^\/api\/audit-ai\/([^/]+)\/evidence\/([0-9a-f-]+)\/legal-hold$/, async(req,m,res,user)=>{
       const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
       const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
