@@ -13,7 +13,7 @@ async function company(province='ON'){const r=await req('POST','/api/companies',
 const st=id=>server.registry.store(id);
 function bankLine(id,key='b',amount=-113,desc='ROGERS'){st(id).put('bankTxns',key,{date:'2026-10-15',amount,desc,account:'a1000',status:'new'});}
 function rule(id){st(id).put('rules','rule',{text:'ROGERS',direction:'out',account:'a6500',tax:true});}
-async function enable(id,extra={}){const r=await req('PUT',route(id),{...settings,...extra});assert.equal(r.status,200,JSON.stringify(r.json));}
+async function enable(id,extra={}){assert.equal((await req('PUT','/api/overview/automation/'+id,{entitled:true})).status,200);const r=await req('PUT',route(id),{...settings,...extra});assert.equal(r.status,200,JSON.stringify(r.json));}
 async function draft(id,key='bank:b'){const r=await req('GET',route(id));assert.equal(r.status,200);return r.json.items.find(d=>d.id===key);}
 const decide=(id,d,action='approve',reason)=>req('POST',route(id,'/drafts/'+encodeURIComponent(d.id)),{version:d.version,action,reason});
 before(async()=>{dir=fs.mkdtempSync(path.join(os.tmpdir(),'sumlora-auto-'));server=createApp({dataDir:dir,autoBackup:false,autoFeeds:false,autoWorkflows:false,autoAutomation:false});await new Promise(r=>server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${server.address().port}`;const setup=await req('POST','/api/auth/setup',{name:'Owner',username:'owner@example.com',password:pw,firmName:'Test firm'},null);assert.equal(setup.status,200,JSON.stringify(setup.json));owner=setup.cookie;
@@ -22,8 +22,8 @@ before(async()=>{dir=fs.mkdtempSync(path.join(os.tmpdir(),'sumlora-auto-'));serv
 after(async()=>{await server.shutdown();fs.rmSync(dir,{recursive:true,force:true});});
 test('disabled by default, private drafts cannot bypass the posting API, company settings are isolated',async()=>{
  const id=await company(),other=await company();bankLine(id);rule(id);
- assert.equal((await req('GET',route(id))).json.config.on,false);await server.prepareAutomation(id,true);assert.equal(st(id).list(AUTO.COL).length,0);
- await enable(id);assert.equal((await req('GET',route(other))).json.items.length,0);assert.equal(st(id).list('entries').length,0);
+ assert.equal((await req('GET',route(id))).status,403);assert.equal(AUTO.cfg(st(id)).on,false);await server.prepareAutomation(id,true);assert.equal(st(id).list(AUTO.COL).length,0);
+ await enable(id);assert.equal((await req('GET',route(other))).status,403);assert.equal(st(id).list('entries').length,0);
  assert.equal((await req('PUT',`/api/c/${id}/records/_automation/forged`,{status:'approved'})).status,404);
  assert.equal((await req('POST',`/api/c/${id}/batch`,{writes:[{op:'set',collection:AUTO.COL,id:'forged',data:{status:'approved'}}]})).status,404);
  const state=(await req('GET',`/api/c/${id}/state`)).json;assert.equal(state[AUTO.COL],undefined);
@@ -75,8 +75,8 @@ test('background prepares without posting, survives restart; disabled companies 
  const id=await company();bankLine(id);rule(id);await enable(id,{background:true});await server.prepareAutomation(id);assert.equal(st(id).list('entries').length,0);assert.equal(st(id).list(AUTO.COL).length,1);
  const other=await company();bankLine(other);rule(other);assert.equal((await server.prepareAutomation(other)).skipped,true);
  await server.shutdown();server=createApp({dataDir:dir,autoBackup:false,autoFeeds:false,autoWorkflows:false,autoAutomation:false});await new Promise(r=>server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${server.address().port}`;
- owner=(await req('POST','/api/auth/login',{username:'owner@example.com',password:pw},null)).cookie;
- assert.equal(st(id).list(AUTO.COL).length,1);assert.equal(AUTO.cfg(st(id)).background,true);await server.prepareAutomation(id);assert.equal(st(id).list('entries').length,0);
+ owner=(await req('POST','/api/auth/login',{username:'owner@example.com',password:pw},null)).cookie;staff=(await req('POST','/api/auth/login',{username:'staff@example.com',password:pw+' new'},null)).cookie;
+ assert.equal(st(id).list(AUTO.COL).length,1);assert.equal(AUTO.cfg(st(id)).background,true);assert.equal(server.registry.get(id).automationEntitled,true);await server.prepareAutomation(id);assert.equal(st(id).list('entries').length,0);
 });
 test('Quebec splits GST/QST and BC capitalizes nonrecoverable PST; deposits balance too',async()=>{
  for(const [province,amount,net,tax] of [['QC',-114.98,100,14.98],['BC',-112,107,5],['ON',113,100,13]]){
@@ -102,4 +102,44 @@ test('background AI is explicit, bounded and discards results when sources chang
   await server.prepareAutomation(id);assert.equal(st(id).get('bankTxns','b').ai.account,'a6500');assert.equal((await draft(id)).proposal.confidence,'high');assert.equal(st(id).list('entries').length,0);
   await req('PUT',route(id),{on:false,background:false,ai:false});assert.equal((await decide(id,await draft(id))).status,409);assert.equal((await server.prepareAutomation(id)).skipped,true);
  }finally{release?.();AI.prototype.suggest=original;}
+});
+test('only the platform administrator grants paid access; company owners cannot bypass it',async()=>{
+ const created=await req('POST','/api/users',{name:'Firm owner',username:'firm-owner@example.com',password:pw,role:'owner'});assert.equal(created.status,200,JSON.stringify(created.json));
+ const login=await req('POST','/api/auth/login',{username:'firm-owner@example.com',password:pw},null),otherOwner=login.cookie;
+ assert.equal((await req('POST','/api/auth/password',{current:pw,password:pw+' maple'},otherOwner)).status,200);
+ const id=await company();bankLine(id);rule(id);
+ const stateBefore=(await req('GET',`/api/c/${id}/state`,undefined,otherOwner)).json;assert.equal(stateBefore.automationEntitled,false);
+ for(const [method,url,body] of [['GET','/api/overview/automation'],['PUT','/api/overview/automation/'+id,{entitled:true}],['GET',route(id)],['PUT',route(id),settings],['POST',route(id,'/prepare'),{}]])assert.equal((await req(method,url,body,otherOwner)).status,403,url);
+ await req('PUT',`/api/companies/${id}`,{automationEntitled:true,automation:true},otherOwner);
+ await req('PUT',`/api/c/${id}/settings`,{...stateBefore.company,automationEntitled:true,automation:{on:true}},otherOwner);
+ assert.equal(server.registry.get(id).automationEntitled,undefined);
+ await enable(id);assert.equal((await req('GET',route(id),undefined,otherOwner)).status,200,'entitled owner may review');
+ let d=await draft(id);assert.equal((await req('POST',route(id,'/drafts/'+encodeURIComponent(d.id)),{version:d.version,action:'approve'},staff)).status,403);
+ const deny=await req('PUT','/api/overview/automation/'+id,{entitled:false});assert.equal(deny.status,200);
+ assert.equal((await req('GET',`/api/c/${id}/state`,undefined,otherOwner)).json.automationEntitled,false);
+ assert.equal(AUTO.cfg(st(id)).on,false);assert.equal((await server.prepareAutomation(id,true)).skipped,true);
+ assert.equal((await decide(id,d)).status,403);assert.equal((await req('PUT',route(id,'/drafts/'+encodeURIComponent(d.id)),{version:d.version,account:'a6500',tax:'none'})).status,403);
+ assert.equal((await req('PUT',route(id),settings,otherOwner)).status,403);assert.equal(st(id).list('entries').length,0);assert.ok(st(id).get(AUTO.COL,d.id),'draft retained');
+ assert.equal((await req('PUT','/api/overview/automation/'+id,{entitled:'true'})).status,400);
+ await req('PUT','/api/overview/automation/'+id,{entitled:true});assert.equal((await req('GET',route(id))).json.config.on,false,'regrant does not resume automatically');
+ assert.ok(st(id).auditList().some(a=>a.action==='automation-access'));
+ const list=(await req('GET','/api/overview/automation')).json.companies;assert.ok(list.find(c=>c.id===id&&c.entitled));
+ const newCo=(await req('POST','/api/companies',{name:'Cannot self-entitle',automationEntitled:true})).json.company;assert.equal((await req('GET',route(newCo.id))).status,403);
+});
+test('revoking paid access during an AI request discards the result and stops preparation',async()=>{
+ const {AI}=require('../src/server/ai'),original=AI.prototype.suggest;let release,entered;const ready=new Promise(r=>entered=r),hold=new Promise(r=>release=r);
+ const id=await company();bankLine(id);st(id).putSetting('company',{...st(id).getSetting('company'),ai:true});await enable(id,{background:true,ai:true});
+ try{
+  AI.prototype.suggest=async()=>{entered();await hold;return {suggestions:{b:{account:'a6500',tax:true,confidence:'high',reason:'Mock'}},usd:0};};
+  const pending=server.prepareAutomation(id);await ready;await req('PUT','/api/overview/automation/'+id,{entitled:false});release();assert.equal((await pending).skipped,true);
+  assert.equal(st(id).get('bankTxns','b').ai,undefined);assert.equal(st(id).list('entries').length,0);assert.equal(AUTO.cfg(st(id)).background,false);
+ }finally{release?.();AI.prototype.suggest=original;}
+});
+
+test('paid feature controls are hidden from unentitled companies and non-administrators',()=>{
+ const vm=require('node:vm'),source=fs.readFileSync(path.join(__dirname,'../public/automation.js'),'utf8');
+ const context=vm.createContext({ME:{role:'owner',platformAdmin:false},S:{automationEntitled:false},document:{addEventListener(){}}});vm.runInContext(source,context);
+ assert.equal(vm.runInContext('automationPanel()',context),'');assert.equal(vm.runInContext('automationAdminPanel()',context),'');
+ context.S.automationEntitled=true;assert.match(vm.runInContext('automationPanel()',context),/Open approval inbox/);context.ME.platformAdmin=true;assert.match(vm.runInContext('automationAdminPanel()',context),/Manage client access/);
+ context.ME.role='client';assert.equal(vm.runInContext('automationPanel()',context),'');assert.equal(vm.runInContext('automationAdminPanel()',context),'');
 });

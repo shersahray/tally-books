@@ -92,7 +92,7 @@ async function load(){
   if(!CO)return;
   const co=CO;
   loading=(async()=>{
-    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.featureAddons=s.featureAddons||{};S.approvalOwners=s.approvalOwners||1;S.reminders=s.reminders||[];S.team=s.team||[];S.rev=s.rev;S.connErr=false}
+    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.automationEntitled=s.automationEntitled===true;S.addons=s.addons||{};S.featureAddons=s.featureAddons||{};S.approvalOwners=s.approvalOwners||1;S.reminders=s.reminders||[];S.team=s.team||[];S.rev=s.rev;S.connErr=false}
     catch(e){S.connErr=true}
     S.loaded=true;scheduleRender();
   })();

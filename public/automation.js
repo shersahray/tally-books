@@ -1,11 +1,11 @@
 'use strict';
 // Pilot controls are visible only to company owners; the server enforces the same rule.
 function automationPanel(){
-  if(!ME||ME.role!=='owner')return '';
+  if(!ME||ME.role!=='owner'||!S.automationEntitled)return '';
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bookkeeping automation</h3><div class="pad"><p>Prepare bank transactions and receipt matches for your approval. Drafts stay outside the books until approved. Disabled by default for each company.</p><button type="button" class="btn" data-automation-open>Open approval inbox</button></div></div>`;
 }
 async function automationInbox(company=CO){
-  if(company!==CO)return;
+  if(company!==CO||!S.automationEntitled)return;
   const url=`/api/c/${encodeURIComponent(company)}/automation`;
   try{
     const data=await api('GET',url);if(company!==CO)return;
@@ -57,3 +57,21 @@ function automationDetail(d,company){
   $('[data-auto-approve]',f).onclick=()=>task(()=>api('POST',url,{version:d.version,action:'approve'}));
 }
 document.addEventListener('click',e=>{if(e.target.closest('[data-automation-open]'))automationInbox();});
+
+function automationAdminPanel(){
+  if(!ME||ME.role!=='owner'||!ME.platformAdmin)return '';
+  return `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>Paid bookkeeping automation</h3><div class="pad"><p>Enable access only for client companies paying for this extra feature. Company owners cannot grant themselves access.</p><button type="button" class="btn" data-auto-admin>Manage client access</button></div></div>`;
+}
+async function automationAdmin(){
+  try{
+    const data=await api('GET','/api/overview/automation');
+    const f=openModal('Paid automation access',`<p>Choose which client companies receive bookkeeping automation. All companies start with access off.</p><div class="tbl-wrap"><table><thead><tr><th>Firm</th><th>Client company</th><th>Paid feature access</th></tr></thead><tbody>${data.companies.map(c=>`<tr><td translate="no">${esc(c.firmName)}</td><td translate="no">${esc(c.name)}${c.archived?' (archived)':''}</td><td><label class="check"><input type="checkbox" data-auto-access="${esc(c.id)}" ${c.entitled?'checked':''} ${ME.readOnly?'disabled':''}> Enabled</label></td></tr>`).join('')}</tbody></table></div><p class="muted">Turning access off immediately blocks the inbox, approvals and background preparation. Posted transactions and existing drafts are kept. Turning access back on requires the company owner to enable its preparation settings again.</p>`, '<button type="button" class="btn" data-close>Close</button>', 'wide');
+    $$('[data-auto-access]',f).forEach(input=>input.onchange=async()=>{
+      const wanted=input.checked;input.disabled=true;
+      try{await api('PUT','/api/overview/automation/'+encodeURIComponent(input.dataset.autoAccess),{entitled:wanted});if(CO===input.dataset.autoAccess)await load();toast(wanted?'Paid automation access enabled':'Paid automation access disabled');}
+      catch(e){input.checked=!wanted;f.err(e.message);}
+      finally{input.disabled=false;}
+    });
+  }catch(e){toast(e.message,true);}
+}
+document.addEventListener('click',e=>{if(e.target.closest('[data-auto-admin]'))automationAdmin();});

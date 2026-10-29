@@ -29,7 +29,7 @@ function resetBooks(){
   S.loaded=false;S.rev=-1;S.connErr=false;S.param=null;
   S.bank={tab:'review',acct:'',show:'new',sel:{},checked:new Set(),rec:null,draft:{}};
   S.stax={tax:'gst',period:null,drill:'',manual:{}};
-  S.cv=null;S.reminders=[];
+  S.cv=null;S.reminders=[];S.automationEntitled=false;
   PC=null;
 }
 // A client on a phone mostly sends receipts, so that's where they start.
@@ -187,3 +187,4 @@ async function boot(){
   }
 }
 boot();
+

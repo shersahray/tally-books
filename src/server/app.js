@@ -573,9 +573,11 @@ function createApp(opts) {
   }
   // Background preparation never posts. Opt-in per company; no new paid service is enabled implicitly.
   const automationBusy = new Set();
+  const automationEntitled = cid => (reg.get(cid) || {}).automationEntitled === true;
+  const needAutomation = cid => { if (!automationEntitled(cid)) throw new ValidationError('Paid bookkeeping automation is not enabled for this company. Contact the server administrator.', 403); };
   const automationAllowed = c => {
     const f = c && auth.firm(c.firmId);
-    return !!(c && !c.archived && f && f.status === 'active' && !firmNeedsPay(f)
+    return !!(c && c.automationEntitled === true && !c.archived && f && f.status === 'active' && !firmNeedsPay(f)
       && (!licence.on || licence.status().canChange));
   };
   async function prepareAutomation(cid, manual = false) {
@@ -914,6 +916,7 @@ function createApp(opts) {
       out.team = wfPeople(ctx.id, ctx.store.getSetting('company') || {}).map(u => ({ id: u.id, name: u.name || u.username, role: u.role }));
     }
     out.assistant = assistantInfo(ctx.id, ctx.store);
+    out.automationEntitled = automationEntitled(ctx.id);
     // Bill approvals: how many owners the firm has (one owner may approve their own bills).
     const cf = reg.get(ctx.id);
     out.approvalOwners = cf ? auth.firmUsers(cf.firmId).filter(u => u.role === 'owner' && !u.disabled).length : 1;
@@ -1675,6 +1678,28 @@ function createApp(opts) {
       auth.setFirmLogo(user.firmId, data ? data.toString('base64') : '', user);
       return { ok: true, logo: !!data };
     }],
+    // Server-owned paid entitlement, never accepted from a company settings/import/restore payload.
+    ['GET', /^\/api\/overview\/automation$/, (req, m, res, user) => {
+      adminOnly(user);
+      return { companies: reg.list().map(c => ({ id: c.id, name: c.name, firmName: (auth.firm(c.firmId) || {}).name || '', archived: !!c.archived, entitled: c.automationEntitled === true })) };
+    }],
+    ['PUT', /^\/api\/overview\/automation\/([^/]+)$/, async (req, m, res, user) => {
+      adminOnly(user);
+      if (user.readOnly) throw new ValidationError('Your account is view only.', 403);
+      const body = await readJson(req), id = decodeURIComponent(m[1]);
+      if (!body || typeof body.entitled !== 'boolean') throw new ValidationError('Send a boolean paid-feature entitlement.');
+      const c = reg.get(id);
+      if (!c) throw new ValidationError('That company does not exist.', 404);
+      // Revocation first: even a failed settings write cannot leave the paid feature accessible.
+      reg.update(id, { automationEntitled: body.entitled });
+      auth.log('automation-access', { by: user.username, company: id, firm: c.firmId, on: body.entitled });
+      const ctx = ctxFor(id);
+      if (!body.entitled) ctx.store.putSetting('automation', { on: false, background: false, ai: false });
+      ctx.store.audit(user, 'automation-access', { summary: body.entitled ? 'Administrator enabled paid automation access' : 'Administrator revoked paid automation access' });
+      ctx.bump();
+      broadcast({ companies: true, firmId: c.firmId });
+      return { ok: true, company: { id, entitled: body.entitled } };
+    }],
     ['GET', /^\/api\/firms$/, (req, m, res, user) => {
       adminOnly(user);
       const firms = auth.data.firms.map(f => {
@@ -2104,7 +2129,7 @@ function createApp(opts) {
     ['GET', /^\/state$/, ctx => state(ctx)],
     // Owner-only pilot. Drafts cannot be written via records/batch and are absent from /state.
     ['GET', /^\/automation$/, ctx => {
-      ownerOnly(ctx.user);
+      ownerOnly(ctx.user); needAutomation(ctx.id);
       const snapshot = AUTO.basis(ctx.store);
       const items = ctx.store.list(AUTO.COL).map(d => {
         let preview = [], problem = '';
@@ -2115,7 +2140,7 @@ function createApp(opts) {
     }],
     ['PUT', /^\/automation$/, async (ctx, req) => {
       ownerOnly(ctx.user);
-      const b = await readJson(req);
+      const b = await readJson(req); needAutomation(ctx.id);
       if (!b || typeof b !== 'object') throw new ValidationError('Send automation settings as an object.');
       if (['on','background','ai'].some(k => typeof b[k] !== 'boolean')) throw new ValidationError('Send boolean automation settings.');
       if (b.ai) { needFeature(ctx.id, 'ai', ctx.store); needFirmAi(ctx.id); if (!(ctx.store.getSetting('company') || {}).ai) throw new ValidationError('Enable company AI suggestions first.', 409); }
@@ -2128,17 +2153,17 @@ function createApp(opts) {
       return { ok: true, config, rev: ctx.bump() };
     }],
     ['POST', /^\/automation\/prepare$/, async ctx => {
-      ownerOnly(ctx.user);
+      ownerOnly(ctx.user); needAutomation(ctx.id);
       const out = await prepareAutomation(ctx.id, true);
       return { ...out, rev: ctx.bump() };
     }],
     ['PUT', /^\/automation\/drafts\/([^/]+)$/, async (ctx, req, m) => {
-      ownerOnly(ctx.user); const body = await readJson(req);
+      ownerOnly(ctx.user); const body = await readJson(req); needAutomation(ctx.id);
       AUTO.edit(ctx.store, decodeURIComponent(m[1]), body, ctx.user);
       return { ok: true, rev: ctx.bump() };
     }],
     ['POST', /^\/automation\/drafts\/([^/]+)$/, async (ctx, req, m) => {
-      ownerOnly(ctx.user); const body = await readJson(req);
+      ownerOnly(ctx.user); const body = await readJson(req); needAutomation(ctx.id);
       AUTO.decide(ctx.store, decodeURIComponent(m[1]), body, ctx.user, writes => {
         writes.forEach(w => applyWrite(ctx.store, w, ctx.user, ctx));
         checkDocumentPostings(ctx.store, writes);

@@ -1,10 +1,10 @@
 # Bookkeeping automation pilot
 
-This implementation adds an owner approval inbox and unattended preparation for bank lines and receipt matches. It does not enable automation in any company when deployed.
+This implementation adds an owner approval inbox and unattended preparation for bank lines and receipt matches. It does not enable automation in any company when deployed. Automation is an administrator-controlled paid feature, separate from the standard plans and other add-ons.
 
 ## Use after deployment
 
-1. Open the pilot company as its firm owner.
+1. As the server administrator, open Companies → Firms → Paid bookkeeping automation → Manage client access. Enable access only for the client companies paying the extra fee. Access defaults off for every company, including existing companies. Then open the enabled pilot company as its firm owner.
 2. Settings → Bookkeeping automation → Open approval inbox.
 3. Enable the inbox and save. Optionally enable background preparation (once a minute).
 4. Optionally enable automatic bank AI suggestions. This requires existing firm permission, a configured AI key, an eligible plan and company AI suggestions already enabled. Receipt reading continues to use the existing receipt pipeline.
@@ -15,7 +15,9 @@ This implementation adds an owner approval inbox and unattended preparation for 
 
 Private `_automation` records in each company's existing SQLite records table are not in `COLLECTIONS`, `/state`, reports, trial balance or the generic record/batch write API. No schema migration or additional service is required. Only the explicit decision endpoint can turn a pending proposal into a posting. It uses the normal `applyWrite` and document-posting checks inside the same SQLite transaction as the decision and audit event. A validation failure rolls everything back.
 
-The pilot is owner-only. Staff, clients and view-only accounts cannot make decisions. Normal company, firm, session, subscription, cross-origin and closing-date checks still apply. A version check plus a conservative snapshot of sources, accounts, settings and books blocks stale approval. Simultaneous approval attempts cannot post twice. Refresh after other changes; refresh can replace prior draft edits, so review the preview again. This pilot intentionally does not bulk approve.
+Only the server administrator can grant or revoke the paid entitlement in `companies.json`. Company settings, create/update, import and restore payloads cannot grant it. Revocation hides the feature, blocks every automation API, stops background preparation and invalidates in-flight AI results. It also clears preparation settings; granting access again does not restart them automatically. Grant/revoke actions are audited. Posted transactions and drafts are retained. This access control does not introduce a price or charge a card; the administrator enables access after arranging the extra fee.
+
+The pilot is owner-only after the administrator grants access. Staff, clients and view-only accounts cannot make decisions. Normal company, firm, session, subscription, cross-origin and closing-date checks still apply. A version check plus a conservative snapshot of sources, accounts, settings and books blocks stale approval. Simultaneous approval attempts cannot post twice. Refresh after other changes; refresh can replace prior draft edits, so review the preview again. This pilot intentionally does not bulk approve.
 
 ## Preparation
 
@@ -35,6 +37,6 @@ Rejecting a draft does not delete/exclude its bank line or receipt. It remains a
 
 ## Validation
 
-`npm test`: 478 passing tests, including 11 new automation integration cases covering off-by-default controls, owner-only access, private drafts, edits, tax postings, simultaneous approvals, stale inputs, rejected drafts, closed periods, held bills, existing-entry matching, receipt linking, ambiguous/foreign items, restart, background opt-in and AI race/attempt limits.
+`npm test`: 481 passing tests, including 14 new automation integration cases covering off-by-default controls, owner-only access, private drafts, edits, tax postings, simultaneous approvals, stale inputs, rejected drafts, closed periods, held bills, existing-entry matching, receipt linking, ambiguous/foreign items, restart, background opt-in and AI race/attempt limits, administrator-only paid entitlements, blocked self-enablement, revocation during AI preparation and hidden feature controls.
 
 Syntax checks pass for changed JavaScript. A real browser smoke test could not run in the build environment: Chromium was unavailable and the browser download returned an invalid archive. Browser layout, mobile review, real Plaid/Anthropic credentials and Azure deployment still require pilot verification. Keep the pull request in draft until those checks are completed.
