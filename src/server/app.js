@@ -1727,6 +1727,17 @@ function createApp(opts) {
       if(!found)throw new ValidationError('Evidence not found',404);
       return {name:found.metadata.name,mediaType:'application/pdf',data:found.bytes.toString('base64')};
     }],
+    ['PUT', /^\/api\/audit-ai\/([^/]+)\/evidence\/([0-9a-f-]+)\/legal-hold$/, async(req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.readOnly||user.role!=='owner')throw new ValidationError('Firm owner required',403);
+      const body=await readJson(req,4096),instance=ctxFor(cid);
+      const evidence=service.setLegalHold({context,store:instance.store,id:m[2],enabled:body?.enabled,reason:body?.reason});
+      if(!evidence)throw new ValidationError('Evidence not found',404);
+      instance.bump();
+      return {evidence};
+    }],
     ['DELETE', /^\/api\/audit-ai\/([^/]+)\/evidence\/([0-9a-f-]+)$/, async(req,m,res,user)=>{
       const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
       const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
