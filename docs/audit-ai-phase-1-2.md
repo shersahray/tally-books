@@ -68,3 +68,15 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - GitHub Actions full suite for commit `ed4ae904` completed successfully on macOS, Ubuntu, and Windows (workflow run 40802436769). Dedicated Audit AI test job also passed (run 40802436776).
 - PDF evidence now stores a SHA-256 fingerprint of the original PDF bytes and rejects identical subsequent uploads for the same company. A regression test was added; its new workflow result is not yet confirmed.
 - A green CI run does not substitute for sandboxed hostile-PDF testing, deployed-host ClamAV/OCR verification, integration testing for two firms, proper per-transaction approvals, key backup/rotation, and operational monitoring. Do not merge/deploy.
+
+## Release acceptance checklist — no production activation
+- [x] Dedicated Audit AI and complete cross-platform test suite passed on prior verified commit `425c82b` or its preceding fixed-code workflow; new branch changes must pass again.
+- [x] Added automated cross-firm negative authorization and AES-GCM company binding checks (`test/audit-multitenant.test.js`).
+- [ ] Confirm current branch CI jobs pass.
+- [ ] Exercise real two-firm sessions over HTTP, including revoked entitlement and client-portal role, using synthetic PDFs only.
+- [ ] Deploy PDF processing to an isolated, unprivileged worker/container with OS CPU, memory, file size and time limits; do not rely only on subprocess timeouts.
+- [ ] Configure and verify `clamscan`, `pdfinfo`, `pdftotext`, `pdftoppm` and `tesseract` on intended target environment.
+- [ ] Store a randomly generated 32-byte AES key as `AUDIT_AI_STORAGE_KEY` in a protected deployment secret (64 hex characters). Back it up securely in a separately controlled recovery vault; confirm restoration in isolated staging. Never commit, print or rotate it without first re-encrypting existing documents. There is currently **no built-in key rotation**.
+- [ ] Complete transaction-evidence pair-specific approval and accounting workflow signoff. Existing review is document-level only.
+- [ ] Configure document retention/deletion policy and access auditing, run realistic scanned invoice/OCR examples, and obtain accountant pilot acceptance.
+- [ ] Only after above: approve merge/deployment separately and enable per-company entitlement deliberately.
