@@ -63,3 +63,8 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - Audit AI isolated test job passed on GitHub Actions run 40802436776 (commit ed4ae904).
 - The full cross-platform application suite was also triggered as run 40802436769; confirm all three jobs finish successfully before merge.
 - Release blockers remain: actual two-firm upload/authorization browser integration, PDF/OCR sandboxing with hard OS quotas, OCR/malware tools on deployed host, rotation/backups for encryption keys, and real client-document acceptance testing. Audit AI must remain disabled and this PR draft until these are cleared.
+
+## Latest validation and duplicate control
+- GitHub Actions full suite for commit `ed4ae904` completed successfully on macOS, Ubuntu, and Windows (workflow run 40802436769). Dedicated Audit AI test job also passed (run 40802436776).
+- PDF evidence now stores a SHA-256 fingerprint of the original PDF bytes and rejects identical subsequent uploads for the same company. A regression test was added; its new workflow result is not yet confirmed.
+- A green CI run does not substitute for sandboxed hostile-PDF testing, deployed-host ClamAV/OCR verification, integration testing for two firms, proper per-transaction approvals, key backup/rotation, and operational monitoring. Do not merge/deploy.
