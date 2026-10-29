@@ -53,3 +53,8 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - Upload requires `clamscan` to be installed and functioning; failures and detected malware block intake. The scanner runs before PDF extraction. The scanner itself is not a guarantee against malicious PDFs.
 - New test cases cover client-role denial and malware-scanner failures. These tests have **not been verified as passing** in this session.
 - Remaining high-priority gates include an isolated PDF/OCR execution environment with hard CPU/memory limits, a complete verification of authorization and CSRF handling, storage/key/retention review, working CI, and live multi-tenant integration testing. Do not merge or deploy.
+
+## Registry entitlement integration fix
+- Corrected `Registry.update` to persist `auditAiEntitled` as a strict boolean; previously the admin endpoint tried to update a field ignored by the registry. With this fix new companies remain disabled until explicitly enabled by the platform administrator.
+- Added restart/revocation/default-off regression coverage in `test/audit-registry.test.js`, included in PR CI.
+- PDF extraction and UI continue to require end-to-end security verification. No successful CI run confirmed in this session. Remain in draft, unmerged and undeployed.
