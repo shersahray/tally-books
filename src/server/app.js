@@ -1741,6 +1741,23 @@ function createApp(opts) {
       const body=await readJson(req,1024*1024);
       return {matches:service.match({context,store:ctxFor(cid).store,transactions:body?.transactions})};
     }],
+    ['GET', /^\/api\/audit-ai\/([^/]+)\/pair-reviews$/, (req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      return {reviews:service.pairReviews({context,store:ctxFor(cid).store})};
+    }],
+    ['POST', /^\/api\/audit-ai\/([^/]+)\/pair-reviews$/, async(req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.readOnly)throw new ValidationError('Reviewer access required',403);
+      const b=await readJson(req,8192),instance=ctxFor(cid);
+      const review=service.reviewPair({context,store:instance.store,entryId:b?.entryId,evidenceId:b?.evidenceId,decision:b?.decision,note:b?.note||''});
+      if(!review)throw new ValidationError('GL entry or evidence not found',404);
+      instance.bump();
+      return {review};
+    }],
     ['POST', /^\/api\/audit-ai\/([^/]+)\/evidence\/([0-9a-f-]+)\/review$/, async(req,m,res,user)=>{
       const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
       const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
