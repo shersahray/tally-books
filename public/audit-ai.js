@@ -42,6 +42,11 @@ el('upload').onclick=()=>execute(async()=>{
  await api('/api/audit-ai/'+id()+'/evidence','POST',{name:file.name,data});
  await load();
 });
+el('ledger').onclick=()=>execute(async()=>{
+ const {transactions}=await api('/api/audit-ai/'+id()+'/ledger');
+ el('transactions').value=JSON.stringify(transactions,null,2);
+ status(transactions.length+' balanced GL entries loaded. Verify debit totals before matching.');
+});
 el('match').onclick=()=>execute(async()=>{
  const transactions=JSON.parse(el('transactions').value);
  const result=await api('/api/audit-ai/'+id()+'/match','POST',{transactions});
