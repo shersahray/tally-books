@@ -34,12 +34,16 @@ class AuditEvidenceService {
     const digest=crypto.createHash('sha256').update(bytes).digest('hex');
     if (this.index(store).some(item=>item.sha256===digest)) throw Object.assign(new Error('This PDF has already been uploaded for this company'),{status:409});
     await scanPdf(bytes);
+    // Revalidate entitlement after slow scanning/extraction before persisting.
     const result=await extractPdf(bytes,{ocr});
+    this.assertAccess(context);
     const fields=result.text.trim()?extractInvoiceFields(result.text):null;
     const id=crypto.randomUUID(),now=new Date().toISOString();
     const metadata={id,name,pages:result.pages,method:result.method,fields,sha256:digest,reviewStatus:'pending',created:now,createdBy:context.user.id};
     const encrypted=seal(bytes,this.key,context.company.id);
     store.transaction(()=>{
+      this.assertAccess(context);
+      if(this.index(store).length>=500 || this.index(store).some(item=>item.sha256===digest)) throw Object.assign(new Error('Evidence quota or duplicate changed during processing'),{status:409});
       store.putFile('audit-ai-'+id,{mediaType:'application/octet-stream',name:'encrypted-evidence',data:encrypted});
       store.putSetting('audit-ai-evidence',[...this.index(store),metadata]);
       store.audit(context.user,'audit-ai-upload',{collection:'audit-ai',id,summary:'Encrypted evidence uploaded'});
