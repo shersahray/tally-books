@@ -33,3 +33,9 @@ test('only active platform owner can change audit entitlement, and change is aud
  assert.equal(logged.kind,'audit-ai-entitlement');
  assert.equal(logged.actorId,'admin');
 });
+
+test('client portal users cannot access audit evidence even if company is entitled',()=>{
+ const company={id:'co',auditAiEntitled:true};
+ const user={id:'client',role:'client',disabled:false};
+ assert.equal(canUseAuditAI({user,company,firmActive:true,canSeeCompany:()=>true}),false);
+});
