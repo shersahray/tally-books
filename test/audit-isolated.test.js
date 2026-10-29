@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
 const {runWorker}=require('../src/server/audit-isolated');
 const pdf=Buffer.from('%PDF-1.4\n%%EOF');
 test('isolated OCR worker fails closed without configured sandbox',async()=>{
- await assert.rejects(runWorker(pdf,{command:''}),/not configured/);
+ assert.throws(()=>runWorker(pdf,{command:''}),/not configured/);
 });
 test('worker output validated and subprocess protocol works',async()=>{
  const program="process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(JSON.stringify({text:'Invoice total 100.00',pages:1,method:'pdf-text'})))";
