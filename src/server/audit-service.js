@@ -60,6 +60,24 @@ class AuditEvidenceService {
     const docs=this.index(store).filter(x=>x.fields).map(x=>({id:x.id,fields:x.fields}));
     return matchEvidence(transactions,docs);
   }
+  deleteEvidence({context,store,id,reason}) {
+    this.assertAccess(context);
+    if(context.user.readOnly || !['owner','admin'].includes(context.user.role)) throw Object.assign(new Error('Owner or administrator required'),{status:403});
+    if(typeof id!=='string' || !/^[0-9a-f-]{36}$/i.test(id)) throw new TypeError('Invalid evidence ID');
+    if(typeof reason!=='string' || reason.trim().length<5 || reason.length>500) throw new TypeError('Deletion reason required');
+    const current=this.index(store),evidence=current.find(x=>x.id===id);
+    if(!evidence)return null;
+    store.transaction(()=>{
+      const latest=this.index(store);
+      if(!latest.some(x=>x.id===id))throw Object.assign(new Error('Evidence no longer exists'),{status:409});
+      store.deleteFile('audit-ai-'+id);
+      store.putSetting('audit-ai-evidence',latest.filter(x=>x.id!==id));
+      const reviews=store.getSetting('audit-ai-pair-reviews')||{};
+      store.putSetting('audit-ai-pair-reviews',Object.fromEntries(Object.entries(reviews).filter(([,v])=>v.evidenceId!==id)));
+      store.audit(context.user,'audit-ai-evidence-deleted',{collection:'audit-ai',id,summary:'Evidence deleted: '+reason.trim(),before:{id,name:evidence.name,sha256:evidence.sha256},after:null});
+    });
+    return {id,deleted:true};
+  }
   reviewPair({context,store,entryId,evidenceId,decision,note}) {
     this.assertAccess(context);
     if(context.user.readOnly || context.user.role==='client') throw Object.assign(new Error('Reviewer access required'),{status:403});
