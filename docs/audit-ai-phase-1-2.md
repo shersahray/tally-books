@@ -91,3 +91,8 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - Review records now use unambiguous serialized GL/evidence pairs, with a regression test that demonstrates colon-containing IDs cannot overwrite a different pair.
 - The 10,000-review cap is rechecked inside the SQLite transaction, after refreshing persisted reviews.
 - Isolated Audit AI CI passed on preceding commit `fd2a170` (run 40803556884); this new revision needs fresh CI verification.
+
+## Retention controls (development)
+- Added owner-only encrypted evidence deletion endpoint with mandatory reason, transactional removal of evidence and associated pair reviews, and an audit log entry that retains identifiers and SHA-256 rather than document bytes.
+- No automatic retention schedule, legal hold, or backup purge mechanism exists yet. Deleting an active SQLite blob does not guarantee deletion from backups, WAL pages, forensic media, or offsite retention; configure formal retention and backup procedures before production.
+- Deletion regression test added and must pass CI. PDF/OCR subprocesses still need a dedicated OS-isolated service before untrusted customer PDFs can be accepted.
