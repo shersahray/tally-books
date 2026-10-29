@@ -74,7 +74,9 @@ class AuditEvidenceService {
     const existing=current[key]||null;
     const reviewed={entryId,evidenceId,decision,note,reviewedAt:new Date().toISOString(),reviewedBy:context.user.id};
     store.transaction(()=>{
-      store.putSetting('audit-ai-pair-reviews',{...current,[key]:reviewed});
+      // Re-check inside the transaction to avoid stale records across concurrent requests.
+      if (!store.get('entries',entryId) || !this.index(store).some(x=>x.id===evidenceId)) throw Object.assign(new Error('Review target was removed'),{status:409});
+      store.putSetting('audit-ai-pair-reviews',{...(store.getSetting('audit-ai-pair-reviews')||{}),[key]:reviewed});
       store.audit(context.user,'audit-ai-pair-review',{collection:'audit-ai',id:evidenceId,
         summary:'Accountant '+decision+' evidence for GL entry '+entryId,
         before:existing,after:reviewed});
