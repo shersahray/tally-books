@@ -41,3 +41,8 @@ Run `node --test test/audit-evidence.test.js` with compatible Node.js. This is *
 6. Reconcile existing administrator entitlement flows and restore/import handling so feature flags cannot be forged through any other update path. This branch only adds a guarded admin endpoint and no billing integration.
 
 Keep the paid feature disabled by default. Do not merge/deploy without independent security review.
+
+## Continuous integration
+- `.github/workflows/audit-ai-tests.yml` added to execute audit module tests on pull requests. No completed run has yet been verified.
+- The current UI uses manually supplied transaction JSON and reviews evidence documents rather than specific matched transactions. Full native GL selection and approval of transaction-evidence pairs remain incomplete.
+- Keep the feature off and PR in draft until these gaps and production security requirements are addressed.
