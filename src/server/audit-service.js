@@ -68,7 +68,7 @@ class AuditEvidenceService {
     const entry=store.get('entries',entryId);
     const document=this.index(store).find(d=>d.id===evidenceId);
     if(!entry||!document)return null;
-    const key=entryId+':'+evidenceId;
+    const key=JSON.stringify([entryId,evidenceId]);
     const current=store.getSetting('audit-ai-pair-reviews')||{};
     if(Object.keys(current).length>=10000&&!Object.hasOwn(current,key))throw Object.assign(new Error('Review limit reached'),{status:413});
     const existing=current[key]||null;
@@ -76,7 +76,9 @@ class AuditEvidenceService {
     store.transaction(()=>{
       // Re-check inside the transaction to avoid stale records across concurrent requests.
       if (!store.get('entries',entryId) || !this.index(store).some(x=>x.id===evidenceId)) throw Object.assign(new Error('Review target was removed'),{status:409});
-      store.putSetting('audit-ai-pair-reviews',{...(store.getSetting('audit-ai-pair-reviews')||{}),[key]:reviewed});
+      const latest=store.getSetting('audit-ai-pair-reviews')||{};
+      if(Object.keys(latest).length>=10000&&!Object.hasOwn(latest,key)) throw Object.assign(new Error('Review limit reached'),{status:413});
+      store.putSetting('audit-ai-pair-reviews',{...latest,[key]:reviewed});
       store.audit(context.user,'audit-ai-pair-review',{collection:'audit-ai',id:evidenceId,
         summary:'Accountant '+decision+' evidence for GL entry '+entryId,
         before:existing,after:reviewed});
