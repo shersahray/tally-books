@@ -58,3 +58,8 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - Corrected `Registry.update` to persist `auditAiEntitled` as a strict boolean; previously the admin endpoint tried to update a field ignored by the registry. With this fix new companies remain disabled until explicitly enabled by the platform administrator.
 - Added restart/revocation/default-off regression coverage in `test/audit-registry.test.js`, included in PR CI.
 - PDF extraction and UI continue to require end-to-end security verification. No successful CI run confirmed in this session. Remain in draft, unmerged and undeployed.
+
+## Verified CI (October 28, 2026)
+- Audit AI isolated test job passed on GitHub Actions run 40802436776 (commit ed4ae904).
+- The full cross-platform application suite was also triggered as run 40802436769; confirm all three jobs finish successfully before merge.
+- Release blockers remain: actual two-firm upload/authorization browser integration, PDF/OCR sandboxing with hard OS quotas, OCR/malware tools on deployed host, rotation/backups for encryption keys, and real client-document acceptance testing. Audit AI must remain disabled and this PR draft until these are cleared.
