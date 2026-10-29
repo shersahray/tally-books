@@ -80,6 +80,7 @@ class Registry {
     if (!c) return null;
     if (patch.name !== undefined) c.name = String(patch.name).slice(0, 120);
     if (patch.archived !== undefined) c.archived = !!patch.archived;
+    if (patch.automationEntitled !== undefined) c.automationEntitled = patch.automationEntitled === true;
     if (patch.lastOpened !== undefined) c.lastOpened = patch.lastOpened;
     if (patch.payer !== undefined) c.payer = patch.payer === 'client' ? 'client' : 'firm';   // who pays for Sumlora for this company
     if (patch.billing !== undefined) c.billing = patch.billing;
@@ -117,3 +118,4 @@ class Registry {
 const newId = () => 'co_' + crypto.randomBytes(6).toString('hex');
 
 module.exports = { Registry };
+

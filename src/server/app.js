@@ -12,6 +12,7 @@ const { Backups } = require('./backups');
 const { AI } = require('./ai');
 const { YearEndUsage } = require('./usage');
 const assistant = require('./assistant');
+const AUTO = require('./automation');
 const mail = require('./mail');
 const stripe = require('./stripe');
 const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
@@ -570,6 +571,64 @@ function createApp(opts) {
     feedTimer = setInterval(() => syncAllFeeds().catch(() => {}), 4 * 60 * 60 * 1000);
     feedTimer.unref();
   }
+  // Background preparation never posts. Opt-in per company; no new paid service is enabled implicitly.
+  const automationBusy = new Set();
+  const automationEntitled = cid => (reg.get(cid) || {}).automationEntitled === true;
+  const needAutomation = cid => { if (!automationEntitled(cid)) throw new ValidationError('Paid bookkeeping automation is not enabled for this company. Contact the server administrator.', 403); };
+  const automationAllowed = c => {
+    const f = c && auth.firm(c.firmId);
+    return !!(c && c.automationEntitled === true && !c.archived && f && f.status === 'active' && !firmNeedsPay(f)
+      && (!licence.on || licence.status().canChange));
+  };
+  async function prepareAutomation(cid, manual = false) {
+    if (closing || automationBusy.has(cid)) return { skipped: true };
+    const c = reg.get(cid);
+    if (!automationAllowed(c)) return { skipped: true };
+    const ctx = ctxFor(cid), st = ctx.store, config = AUTO.cfg(st);
+    if (!config.on || (!manual && !config.background)) return { skipped: true };
+    automationBusy.add(cid);
+    try {
+      const company = st.getSetting('company') || {}, day = new Date().toISOString().slice(0, 10);
+      // At most 100 automatic bank suggestions attempted per company/day. Existing AI spending limits also apply.
+      const usage = st.getSetting('automationUsage') || {};
+      const used = usage.day === day ? Number(usage.count || 0) : 0;
+      const cooldown = Date.now() - Number(usage.lastAttempt || 0) >= 30 * 60 * 1000;
+      if (config.ai && company.ai && firmAi(cid) && ai.status().configured && used < 100 && cooldown) {
+        AUTO.prepare(st);
+        const candidates = new Set(st.list(AUTO.COL).filter(d => d.status === 'pending' && d.proposal.kind === 'category' && !d.proposal.account && !d.warnings.length).map(d => d.bankId));
+        const ids = st.list('bankTxns').filter(x => candidates.has(x.id) && x.status === 'new' && !x.ai).slice(0, Math.min(20,100-used)).map(x => x.id);
+        if (ids.length) {
+          st.putSetting('automationUsage', { day, count: used + ids.length, lastAttempt: Date.now() });
+          const before = AUTO.basis(st);
+          try {
+            needFirmAi(cid);
+            const out = await ai.suggest(st, company, ids);
+            if (!closing) st.putSetting('automationRun', { ...(st.getSetting('automationRun') || {}), error: '' });
+            if (closing) return { skipped: true };
+            if (AUTO.cfg(st).on && AUTO.cfg(st).ai && automationAllowed(reg.get(cid)) && firmAi(cid) && AUTO.basis(st) === before) {
+              st.transaction(() => { for (const [id, sug] of Object.entries(out.suggestions)) {
+                const line = st.get('bankTxns', id); if (line && line.status === 'new') st.put('bankTxns', id, { ...line, ai: sug });
+              } });
+            }
+          } catch (e) {
+            if (!closing) st.putSetting('automationRun', { at: Date.now(), error: 'AI preparation failed or reached its limit. Review AI settings; rules and receipt review remain available.' });
+          }
+        }
+      }
+      if (closing || !AUTO.cfg(st).on || !automationAllowed(reg.get(cid))) return { skipped: true };
+      const out = AUTO.prepare(st);
+      const last = st.getSetting('automationRun') || {};
+      st.putSetting('automationRun', { ...last, at: Date.now(), count: out.count });
+      return out;
+    } finally { automationBusy.delete(cid); }
+  }
+  let automationTimer = null;
+  if (opts.autoAutomation !== false) {
+    automationTimer = setInterval(async () => {
+      for (const c of reg.list()) { if (closing) break; try { await prepareAutomation(c.id); } catch (e) { console.error('Automation preparation:', e.message); } }
+    }, 60 * 1000);
+    automationTimer.unref();
+  }
   const publicDir = opts.publicDir || PUBLIC_DIR;
   const clients = new Set();
 
@@ -857,6 +916,7 @@ function createApp(opts) {
       out.team = wfPeople(ctx.id, ctx.store.getSetting('company') || {}).map(u => ({ id: u.id, name: u.name || u.username, role: u.role }));
     }
     out.assistant = assistantInfo(ctx.id, ctx.store);
+    out.automationEntitled = automationEntitled(ctx.id);
     // Bill approvals: how many owners the firm has (one owner may approve their own bills).
     const cf = reg.get(ctx.id);
     out.approvalOwners = cf ? auth.firmUsers(cf.firmId).filter(u => u.role === 'owner' && !u.disabled).length : 1;
@@ -1618,6 +1678,28 @@ function createApp(opts) {
       auth.setFirmLogo(user.firmId, data ? data.toString('base64') : '', user);
       return { ok: true, logo: !!data };
     }],
+    // Server-owned paid entitlement, never accepted from a company settings/import/restore payload.
+    ['GET', /^\/api\/overview\/automation$/, (req, m, res, user) => {
+      adminOnly(user);
+      return { companies: reg.list().map(c => ({ id: c.id, name: c.name, firmName: (auth.firm(c.firmId) || {}).name || '', archived: !!c.archived, entitled: c.automationEntitled === true })) };
+    }],
+    ['PUT', /^\/api\/overview\/automation\/([^/]+)$/, async (req, m, res, user) => {
+      adminOnly(user);
+      if (user.readOnly) throw new ValidationError('Your account is view only.', 403);
+      const body = await readJson(req), id = decodeURIComponent(m[1]);
+      if (!body || typeof body.entitled !== 'boolean') throw new ValidationError('Send a boolean paid-feature entitlement.');
+      const c = reg.get(id);
+      if (!c) throw new ValidationError('That company does not exist.', 404);
+      // Revocation first: even a failed settings write cannot leave the paid feature accessible.
+      reg.update(id, { automationEntitled: body.entitled });
+      auth.log('automation-access', { by: user.username, company: id, firm: c.firmId, on: body.entitled });
+      const ctx = ctxFor(id);
+      if (!body.entitled) ctx.store.putSetting('automation', { on: false, background: false, ai: false });
+      ctx.store.audit(user, 'automation-access', { summary: body.entitled ? 'Administrator enabled paid automation access' : 'Administrator revoked paid automation access' });
+      ctx.bump();
+      broadcast({ companies: true, firmId: c.firmId });
+      return { ok: true, company: { id, entitled: body.entitled } };
+    }],
     ['GET', /^\/api\/firms$/, (req, m, res, user) => {
       adminOnly(user);
       const firms = auth.data.firms.map(f => {
@@ -2045,6 +2127,51 @@ function createApp(opts) {
   // Routes inside one company: /api/c/<companyId>/...
   const companyRoutes = [
     ['GET', /^\/state$/, ctx => state(ctx)],
+    // Owner-only pilot. Drafts cannot be written via records/batch and are absent from /state.
+    ['GET', /^\/automation$/, ctx => {
+      ownerOnly(ctx.user); needAutomation(ctx.id);
+      const snapshot = AUTO.basis(ctx.store);
+      const items = ctx.store.list(AUTO.COL).map(d => {
+        let preview = [], problem = '';
+        if (d.status === 'pending') { try { preview = AUTO.writes(ctx.store, d).filter(w => w.collection === 'entries').flatMap(w => w.data.lines); } catch (e) { problem = e.message; } }
+        return { ...d, preview, problem, stale: d.status === 'pending' && d.basis !== snapshot };
+      });
+      return { config: AUTO.cfg(ctx.store), run: ctx.store.getSetting('automationRun'), items };
+    }],
+    ['PUT', /^\/automation$/, async (ctx, req) => {
+      ownerOnly(ctx.user);
+      const b = await readJson(req); needAutomation(ctx.id);
+      if (!b || typeof b !== 'object') throw new ValidationError('Send automation settings as an object.');
+      if (['on','background','ai'].some(k => typeof b[k] !== 'boolean')) throw new ValidationError('Send boolean automation settings.');
+      if (b.ai) { needFeature(ctx.id, 'ai', ctx.store); needFirmAi(ctx.id); if (!(ctx.store.getSetting('company') || {}).ai) throw new ValidationError('Enable company AI suggestions first.', 409); }
+      const config = { on: b.on, background: b.on && b.background, ai: b.on && b.ai };
+      ctx.store.transaction(() => {
+        const before = AUTO.cfg(ctx.store); ctx.store.putSetting('automation', config);
+        ctx.store.audit(ctx.user, 'automation-settings', { summary: 'Changed company automation settings', before, after: config });
+      });
+      if (config.on) AUTO.prepare(ctx.store);
+      return { ok: true, config, rev: ctx.bump() };
+    }],
+    ['POST', /^\/automation\/prepare$/, async ctx => {
+      ownerOnly(ctx.user); needAutomation(ctx.id);
+      const out = await prepareAutomation(ctx.id, true);
+      return { ...out, rev: ctx.bump() };
+    }],
+    ['PUT', /^\/automation\/drafts\/([^/]+)$/, async (ctx, req, m) => {
+      ownerOnly(ctx.user); const body = await readJson(req); needAutomation(ctx.id);
+      AUTO.edit(ctx.store, decodeURIComponent(m[1]), body, ctx.user);
+      return { ok: true, rev: ctx.bump() };
+    }],
+    ['POST', /^\/automation\/drafts\/([^/]+)$/, async (ctx, req, m) => {
+      ownerOnly(ctx.user); const body = await readJson(req); needAutomation(ctx.id);
+      AUTO.decide(ctx.store, decodeURIComponent(m[1]), body, ctx.user, writes => {
+        writes.forEach(w => applyWrite(ctx.store, w, ctx.user, ctx));
+        checkDocumentPostings(ctx.store, writes);
+      });
+      AUTO.prepare(ctx.store);
+      return { ok: true, rev: ctx.bump() };
+    }],
+
     ['PUT', /^\/records\/([A-Za-z]+)\/([^/]+)$/, async (ctx, req, m) => {
       const data = await readJson(req);
       const w = { op: 'set', collection: m[1], id: decodeURIComponent(m[2]), data };
@@ -3229,7 +3356,7 @@ function createApp(opts) {
     }
   });
 
-  server.on('close', () => { closing = true; backups.stop(); if (feedTimer) clearInterval(feedTimer); if (wfTimer) clearInterval(wfTimer); if (billTimer) clearInterval(billTimer); reg.closeAll(); });
+  server.on('close', () => { closing = true; if (automationTimer) clearInterval(automationTimer); backups.stop(); if (feedTimer) clearInterval(feedTimer); if (wfTimer) clearInterval(wfTimer); if (billTimer) clearInterval(billTimer); reg.closeAll(); });
   /** Stop accepting requests, end live-update streams, and close the databases. */
   server.shutdown = () => new Promise(resolve => {
     for (const res of clients) res.end();
@@ -3241,6 +3368,7 @@ function createApp(opts) {
   server.chargePayrollEmployees = chargePayrollEmployees;
   server.backups = backups;
   server.auth = auth;
+  server.prepareAutomation = prepareAutomation;
   server.checkWorkflows = checkWorkflows; // tests: run the hourly check now
   return server;
 }
@@ -3388,4 +3516,5 @@ function sniffType(b, name) {
   }
   return '';
 }
+
 

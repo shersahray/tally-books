@@ -92,7 +92,7 @@ async function load(){
   if(!CO)return;
   const co=CO;
   loading=(async()=>{
-    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.addons=s.addons||{};S.featureAddons=s.featureAddons||{};S.approvalOwners=s.approvalOwners||1;S.reminders=s.reminders||[];S.team=s.team||[];S.rev=s.rev;S.connErr=false}
+    try{const s=await api('GET','/api/state');if(co!==CO)return;COLS.forEach(c=>S[c]=s[c]||[]);S.company={...S.company,...s.company};S.assistant=s.assistant||{on:false};S.automationEntitled=s.automationEntitled===true;S.addons=s.addons||{};S.featureAddons=s.featureAddons||{};S.approvalOwners=s.approvalOwners||1;S.reminders=s.reminders||[];S.team=s.team||[];S.rev=s.rev;S.connErr=false}
     catch(e){S.connErr=true}
     S.loaded=true;scheduleRender();
   })();
@@ -546,6 +546,7 @@ function vSettings(){
   ${featuresPanel()}
   ${typeof approvalsPanel==='function'?approvalsPanel():''}
   ${typeof workflowsPanel==='function'?workflowsPanel():''}
+  ${typeof automationPanel==='function'?automationPanel():''}
   ${ME&&ME.role!=='client'&&!ME.readOnly&&viewOk('dataimport')?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Import data</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Add customers, vendors, products and services, inventory, accounts, invoices, sales receipts, credits, bills or journal entries from a spreadsheet (CSV or Excel).</span><button class="btn" data-diopen="">Import data</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Bring over from QuickBooks or Sage</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Bring a client’s accounts, customers and vendors, balances, open invoices and bills from QuickBooks Online, Sage 50 or Sage Accounting into these books.</span><button class="btn" data-go="convert">Start</button></div></div>`:''}
   ${ME&&ME.role!=='client'?`<div class="panel" style="max-width:640px;margin-top:16px"><h3>Activity log</h3><div class="pad" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span class="muted">Every change to these books: who made it, when, and what it was before.</span><button class="btn" data-act="activity">View activity log</button></div></div>`:''}
@@ -1527,4 +1528,5 @@ function bindClasses(m){
     else if(b.dataset.clsact){await saveCls(cs.map(x=>x.id===b.dataset.clsact?{...x,active:x.active===false}:x),'Saved')}
     else if(b.dataset.clsdel){await saveCls(cs.filter(x=>x.id!==b.dataset.clsdel),'Class removed')}},{capture:true});
 }
+
 

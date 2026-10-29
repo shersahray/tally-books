@@ -505,6 +505,7 @@ function vFirms(){
   const list=FIRMS.firms.slice().sort((a,b)=>(a.status==='pending'?0:1)-(b.status==='pending'?0:1)||b.created-a.created);
   const pending=list.filter(f=>f.status==='pending').length;
   return `<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`+head('Firms','Bookkeeping firms using this server. Each firm sees only its own people and companies.',`<button class="btn primary" data-firminvite>+ Invite a firm</button>`)+
+  (typeof automationAdminPanel==='function'?automationAdminPanel():'')+
   (typeof invoicingPanel==='function'?invoicingPanel():'')+(typeof billingAdminPanel==='function'?billingAdminPanel():'')+sysMailPanel()+
   `<div class="panel" style="max-width:760px;margin-bottom:16px"><h3>New firms</h3><div class="pad" style="display:flex;flex-direction:column;gap:10px">
     <div class="field"><label for="fmSignups">Can new firms sign up from the sign-in screen?</label><select id="fmSignups">${[['off','No: only people you invite can sign in'],['approval','Yes, after I approve each one'],['open','Yes, straight away']].map(([k,v])=>`<option value="${k}" ${FIRMS.signups===k?'selected':''}>${v}</option>`).join('')}</select></div>
@@ -602,3 +603,4 @@ async function sysMailAction(a){
     try{await api('PUT','/api/sysmail',{host:$('#smHost',f).value.trim(),port:+$('#smPort',f).value,security:$('#smSec',f).value,user,fromEmail:user,fromName:$('#smName',f).value.trim(),pass:$('#smPass',f).value});await loadSysMail(true);closeModal();renderMain();toast('Saved. Send a test to check it.')}
     catch(ex){f.err(ex.message)}};
 }
+
