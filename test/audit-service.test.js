@@ -91,3 +91,22 @@ test('different GL/evidence pairs cannot collide through separators',()=>{
   assert.equal(service.pairReviews({context,store}).length,2);
  }finally{store.close();}
 });
+
+test('owner deletion removes encrypted evidence and pair reviews with audit trail',()=>{
+ const store=new Store(':memory:'),svc=new AuditEvidenceService({key});
+ const owner={...user,role:'owner'};
+ const ownerCtx={...context,user:owner};
+ const id='eb98e31d-d83a-4af5-84ab-c67c89a14e9b';
+ try {
+  store.putFile('audit-ai-'+id,{mediaType:'application/octet-stream',name:'encrypted-evidence',data:seal(Buffer.from('private'),key,company.id)});
+  store.putSetting('audit-ai-evidence',[{id,name:'test.pdf',sha256:'dummy'}]);
+  store.putSetting('audit-ai-pair-reviews',{first:{evidenceId:id,entryId:'j1'}});
+  assert.throws(()=>svc.deleteEvidence({context,store,id,reason:'Retention period reached'}),/Owner or administrator/);
+  assert.throws(()=>svc.deleteEvidence({context:ownerCtx,store,id,reason:'x'}),/Deletion reason/);
+  assert.equal(svc.deleteEvidence({context:ownerCtx,store,id,reason:'Retention period reached'}).deleted,true);
+  assert.equal(store.hasFile('audit-ai-'+id),false);
+  assert.equal(svc.list({context:ownerCtx,store}).length,0);
+  assert.equal(svc.pairReviews({context:ownerCtx,store}).length,0);
+  assert.equal(store.auditList({collection:'audit-ai'})[0].action,'audit-ai-evidence-deleted');
+ }finally{store.close();}
+});
