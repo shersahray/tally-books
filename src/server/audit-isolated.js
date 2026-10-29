@@ -5,10 +5,11 @@
 // No shell is used. Without a configured worker, fail closed.
 const {spawn}=require('node:child_process');
 const {validatePdf}=require('./audit-pdf');
-function runWorker(pdf,{ocr=true,language='eng',command=process.env.AUDIT_AI_WORKER_BIN,args=[],timeout=120000}={}) {
+function runWorker(pdf,{ocr=true,language='eng',command=process.env.AUDIT_AI_WORKER_BIN,args=null,timeout=120000}={}) {
  validatePdf(pdf);
  if(!['eng','fra','eng+fra'].includes(language))throw new TypeError('Unsupported OCR language');
  if(typeof command!=='string'||!command.trim())throw new Error('Isolated Audit AI worker is not configured');
+ if(args===null){try{args=JSON.parse(process.env.AUDIT_AI_WORKER_ARGS||'[]');}catch{throw new Error('Invalid Audit AI worker configuration');}}
  if(!Array.isArray(args)||args.some(x=>typeof x!=='string'))throw new TypeError('Invalid worker args');
  return new Promise((resolve,reject)=>{
   const child=spawn(command,[...args],{shell:false,stdio:['pipe','pipe','pipe'],windowsHide:true,env:{PATH:process.env.PATH||''}});
