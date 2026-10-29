@@ -29,6 +29,7 @@ class AuditEvidenceService {
   async upload({context,store,bytes,name,ocr=true}) {
     this.assertAccess(context);
     validatePdf(bytes);
+    if (this.index(store).length >= 500) throw Object.assign(new Error('Company evidence limit reached (500 files)'), {status:413});
     if (typeof name!=='string' || !/^[^\/\x00-\x1f]{1,150}\.pdf$/i.test(name)) throw new TypeError('Invalid PDF file name');
     await scanPdf(bytes);
     const result=await extractPdf(bytes,{ocr});
@@ -63,6 +64,7 @@ class AuditEvidenceService {
     if (!['approved','rejected'].includes(decision) || typeof note!=='string' || note.length>2000) throw new TypeError('Invalid decision');
     const records=this.index(store),item=records.find(x=>x.id===id);
     if (!item) return null;
+    // This is a review of the evidence document only, NOT an audit opinion or matched-transaction signoff.
     const updated={...item,reviewStatus:decision,reviewedBy:context.user.id,reviewedAt:new Date().toISOString(),note};
     store.transaction(()=>{
       store.putSetting('audit-ai-evidence',records.map(x=>x.id===id?updated:x));
