@@ -117,3 +117,18 @@ test('rejected upload cannot persist when entitlement is disabled',async()=>{
  const store={getSetting:()=>[],transaction:()=>{throw new Error('must not write')}};
  await assert.rejects(svc.upload({context:off,store,bytes:Buffer.from('%PDF-1.7\n%%EOF'),name:'off.pdf'}),/unavailable/);
 });
+
+test('legal hold blocks deletion until firm owner explicitly releases it',()=>{
+ const store=new Store(':memory:'),svc=new AuditEvidenceService({key});
+ const ownerCtx={...context,user:{...user,role:'owner'}};
+ const id='7a7bd04d-2f26-4c84-85d0-cb8b81d513e4';
+ try {
+  store.putSetting('audit-ai-evidence',[{id,name:'legal.pdf'}]);
+  assert.throws(()=>svc.setLegalHold({context,store,id,enabled:true,reason:'Audit inquiry'}),/Owner required/);
+  svc.setLegalHold({context:ownerCtx,store,id,enabled:true,reason:'Audit inquiry'});
+  assert.throws(()=>svc.deleteEvidence({context:ownerCtx,store,id,reason:'Retention period passed'}),/legal hold/);
+  svc.setLegalHold({context:ownerCtx,store,id,enabled:false,reason:'Inquiry resolved'});
+  assert.equal(svc.deleteEvidence({context:ownerCtx,store,id,reason:'Retention period passed'}).deleted,true);
+  assert.equal(store.auditList({collection:'audit-ai'}).length,3);
+ }finally{store.close();}
+});
