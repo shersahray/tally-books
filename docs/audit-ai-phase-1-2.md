@@ -46,3 +46,10 @@ Keep the paid feature disabled by default. Do not merge/deploy without independe
 - `.github/workflows/audit-ai-tests.yml` added to execute audit module tests on pull requests. No completed run has yet been verified.
 - The current UI uses manually supplied transaction JSON and reviews evidence documents rather than specific matched transactions. Full native GL selection and approval of transaction-evidence pairs remain incomplete.
 - Keep the feature off and PR in draft until these gaps and production security requirements are addressed.
+
+## Security hardening (latest)
+- File list and download routes check feature entitlement and company visibility before opening a company store.
+- Client portal users are excluded from Audit AI document access.
+- Upload requires `clamscan` to be installed and functioning; failures and detected malware block intake. The scanner runs before PDF extraction. The scanner itself is not a guarantee against malicious PDFs.
+- New test cases cover client-role denial and malware-scanner failures. These tests have **not been verified as passing** in this session.
+- Remaining high-priority gates include an isolated PDF/OCR execution environment with hard CPU/memory limits, a complete verification of authorization and CSRF handling, storage/key/retention review, working CI, and live multi-tenant integration testing. Do not merge or deploy.
