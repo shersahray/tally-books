@@ -3,7 +3,7 @@
 // Company setting is default-deny and may only be changed by platform admins.
 function admin(user) { return !!(user && user.role === 'owner' && user.platformAdmin === true && !user.disabled); }
 function canUseAuditAI({user, company, canSeeCompany, firmActive = false}) {
-  return !!(user && !user.disabled && company && !company.archived &&
+  return !!(user && !user.disabled && user.role !== 'client' && company && !company.archived &&
     company.auditAiEntitled === true && firmActive === true &&
     typeof canSeeCompany === 'function' && canSeeCompany(user,company.id) === true);
 }
