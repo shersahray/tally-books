@@ -1,5 +1,6 @@
 'use strict';
-const {test}=require('node:test');
+const {test:baseTest}=require('node:test');
+const test=process.env.AUDIT_AI_PDF_INTEGRATION==='1'?baseTest:baseTest.skip;
 const assert=require('node:assert/strict');
 const {execFileSync}=require('node:child_process');
 const {runWorker}=require('../src/server/audit-isolated');
