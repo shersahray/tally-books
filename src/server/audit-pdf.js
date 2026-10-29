@@ -9,6 +9,8 @@ const { promisify } = require('node:util');
 const run = promisify(execFile);
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const MAX_PAGES = 25;
+const MAX_ACTIVE_EXTRACTIONS = 2;
+let activeExtractions = 0;
 function validatePdf(buffer, declaredType = 'application/pdf') {
   if (!Buffer.isBuffer(buffer) || buffer.length < 8 || buffer.length > MAX_PDF_BYTES)
     throw new TypeError('PDF must be between 8 bytes and 10 MiB');
@@ -30,7 +32,12 @@ async function command(name, args, timeout = 15000) {
 async function extractPdf(buffer, { ocr = true, language = 'eng' } = {}) {
   validatePdf(buffer);
   if (!['eng','fra','eng+fra'].includes(language)) throw new TypeError('Unsupported OCR language');
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sumlora-audit-'));
+  if (activeExtractions >= MAX_ACTIVE_EXTRACTIONS) throw Object.assign(new Error('PDF extraction busy; retry later'), {status:503});
+  activeExtractions++;
+  let dir;
+  try {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sumlora-audit-'));
+  } catch (err) { activeExtractions--; throw err; }
   const input = path.join(dir,'evidence.pdf');
   try {
     await fs.chmod(dir, 0o700);
@@ -54,7 +61,7 @@ async function extractPdf(buffer, { ocr = true, language = 'eng' } = {}) {
     }
     return {text:scanned.slice(0,200000),pages,method:'ocr',ocrUsed:true};
   } finally {
-    await fs.rm(dir,{recursive:true,force:true});
+    try { await fs.rm(dir,{recursive:true,force:true}); } finally { activeExtractions--; }
   }
 }
 module.exports={validatePdf,extractPdf,MAX_PDF_BYTES,MAX_PAGES};
