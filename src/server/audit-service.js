@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
-const {validatePdf,extractPdf} = require('./audit-pdf');
+const {validatePdf} = require('./audit-pdf');
+const {runWorker} = require('./audit-isolated');
 const {extractInvoiceFields,matchEvidence} = require('./audit-evidence');
 const {requireAuditAI} = require('./audit-access');
 const {scanPdf} = require('./audit-malware');
@@ -35,7 +36,7 @@ class AuditEvidenceService {
     if (this.index(store).some(item=>item.sha256===digest)) throw Object.assign(new Error('This PDF has already been uploaded for this company'),{status:409});
     await scanPdf(bytes);
     // Revalidate entitlement after slow scanning/extraction before persisting.
-    const result=await extractPdf(bytes,{ocr});
+    const result=await runWorker(bytes,{ocr});
     this.assertAccess(context);
     const fields=result.text.trim()?extractInvoiceFields(result.text):null;
     const id=crypto.randomUUID(),now=new Date().toISOString();
