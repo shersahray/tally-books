@@ -1524,6 +1524,16 @@ function createApp(opts) {
       const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'ledger-settings', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
     }],
+    // Read-only Excel integration boundary. The Excel backend is not deployed yet.
+    // Inject a trusted server-side adapter via opts.excelAdminSummary after Entra,
+    // database and API authorization are provisioned. Never trust browser summaries.
+    ['GET', /^\\/api\\/overview\\/excel$/, async (req, m, res, user) => {
+      adminOnly(user);
+      if (typeof opts.excelAdminSummary !== 'function') return { connected: false, status: 'not-configured', firms: null, members: null, aiBudgetCents: null, aiSpentCents: null };
+      const data = await opts.excelAdminSummary({ requestedBy: user.username });
+      if (!data || !Number.isSafeInteger(data.firms) || data.firms < 0 || !Number.isSafeInteger(data.members) || data.members < 0 || !Number.isSafeInteger(data.aiBudgetCents) || data.aiBudgetCents < 0 || !Number.isSafeInteger(data.aiSpentCents) || data.aiSpentCents < 0) throw new ValidationError('Excel summary unavailable.', 503);
+      return { connected: true, status: 'connected', firms: data.firms, members: data.members, aiBudgetCents: data.aiBudgetCents, aiSpentCents: data.aiSpentCents };
+    }],
     // The administrator's overview: firms on this server, desktop licences sold, renewals due, AI use.
     ['GET', /^\/api\/overview$/, (req, m, res, user) => {
       adminOnly(user);
