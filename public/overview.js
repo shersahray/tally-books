@@ -4,14 +4,22 @@
    counted by the licences sold and the downloads, not by who's using them. */
 
 let OVW=null,OVW_DL=null,OVW_YE=null;
+let OV_PRODUCT='bookkeeping'; // Overview selection only. No change to licences or customer access.
+let OV_EXCEL=null;
 
 async function showOverview(){
   S.view='overview';OVW=null;OVW_DL=null;renderMain();
   try{OVW=await api('GET','/api/overview')}catch(e){toast(e.message,true)}
   if(S.view==='overview')renderMain();
+  await ovExcelSummary();
   await ovYearEnds();
   try{OVW_DL=await api('GET','/api/overview/downloads')}catch(e){OVW_DL={error:e.message}}
   if(S.view==='overview')renderMain();
+}
+async function ovExcelSummary(){
+  try{OV_EXCEL=await api('GET','/api/overview/excel')}
+  catch(e){OV_EXCEL={connected:false,status:'unavailable'}}
+  if(S.view==='overview'&&OV_PRODUCT==='excel')renderMain();
 }
 /* ---------- Year-end files started, by firm, for charging per file ---------- */
 async function ovYearEnds(month){
@@ -77,13 +85,40 @@ function ovMix(s){
   return `<div class="ov-bar" role="img" aria-label="${esc(parts.map(p=>`${p[1]}: ${p[2]}`).join(', '))}">${parts.map(p=>`<span style="flex:${p[2]};background:${p[3]}" title="${esc(T(p[1]))}: ${p[2]}"></span>`).join('')}</div>
     <div class="ov-legend">${parts.map(p=>`<span><i style="background:${p[3]}"></i>${esc(T(p[1]))} <b>${ovNum(p[2])}</b></span>`).join('')}</div>`;
 }
+// Keep both products visible in the existing platform-admin overview, without
+// treating the independent Excel pilot's example figures as live customer data.
+function ovProductTabs(){
+  return `<nav class="panel" aria-label="Sumlora products" style="display:flex;gap:8px;padding:10px;margin-bottom:16px;flex-wrap:wrap">
+    <button type="button" class="btn ${OV_PRODUCT==='bookkeeping'?'':'ghost'}" data-ov="product-bookkeeping" aria-pressed="${OV_PRODUCT==='bookkeeping'}">Bookkeeping</button>
+    <button type="button" class="btn ${OV_PRODUCT==='excel'?'':'ghost'}" data-ov="product-excel" aria-pressed="${OV_PRODUCT==='excel'}">Excel</button>
+  </nav>`;
+}
+function ovExcelPanel(){
+  const E=OV_EXCEL;
+  const live=E&&E.connected===true;
+  return `<section class="panel" style="margin-bottom:16px">
+    <h3>Sumlora for Excel · Firm management</h3>
+    <div class="pad" style="display:flex;flex-direction:column;gap:12px">
+      <div class="muted">${live?'Connected to Excel administration summary.':'Excel administration data is not connected yet. Live firms, invitations and AI usage are unavailable.'}</div>
+      <div class="ov-kpis">
+        ${ovKpi('firm','teal','Excel firms',live?ovNum(E.firms):'—',live?'Live administrator summary':'Awaiting secure backend connection')}
+        ${ovKpi('biz','navy','Employees',live?ovNum(E.members):'—','Unlimited per approved firm')}
+        ${ovKpi('pay','green','AI usage',live?ovMoney(E.aiSpentCents/100)+' / '+ovMoney(E.aiBudgetCents/100):'—','Per-firm limits enforced by future Excel backend')}
+      </div>
+      <div><b>Planned administration</b><p class="muted">Invite accounting firms, manage firm administrators and employee membership, approve access, and set per-firm monthly AI budgets with a hard spending limit.</p></div>
+      <div class="muted" style="font-size:12.5px">This view is informational only. Invites, AI-budget edits, and suspension actions will be enabled only after Microsoft sign-in and the trusted Excel backend are deployed. Bookkeeping access and licensing remain unchanged.</div>
+      <div><a class="btn ghost sm" href="https://sumlora-excel-addin.pages.dev/admin-preview.html" target="_blank" rel="noopener noreferrer">Open Excel pilot dashboard preview</a></div>
+    </div>
+  </section>`;
+}
 function vOverview(){
   const back=`<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`;
   if(!ME||!ME.platformAdmin)return back+head('Overview','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Only the server’s administrator sees the overview.</div></div>';
-  if(!OVW)return back+head('Overview','Loading…');
+  if(OV_PRODUCT==='excel')return back+head('Overview','Bookkeeping and Excel')+ovProductTabs()+ovExcelPanel();
+  if(!OVW)return back+head('Overview','Loading…')+ovProductTabs();
   const F=OVW.firms,Li=OVW.licences,D=OVW_DL,Su=OVW.subs,today=isoDay(new Date());
   const first=String(ME.name||'').split(' ')[0];
-  let h=back;
+  let h=back+ovProductTabs();
   // Hero: the month's subscription income and the two invite buttons.
   h+=`<section class="ov-hero">
     <div class="ov-hero-main">
@@ -202,6 +237,8 @@ function bindOverview(m){
   m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
     if(b.hasAttribute('data-back-co'))return showCompanies();
     const a=b.dataset.ov;
+    if(a==='product-bookkeeping'){OV_PRODUCT='bookkeeping';return renderMain()}
+    if(a==='product-excel'){OV_PRODUCT='excel';renderMain();return ovExcelSummary()}
     if(a==='refresh')return showOverview();
     if(a==='ye-csv')return ovYeCsv();
     if(a==='firms')return showFirms();
