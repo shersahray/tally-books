@@ -105,6 +105,10 @@ function ovExcelPanel(){
         ${ovKpi('biz','navy','Employees',live?ovNum(E.members):'—','Unlimited per approved firm')}
         ${ovKpi('pay','green','AI usage',live?ovMoney(E.aiSpentCents/100)+' / '+ovMoney(E.aiBudgetCents/100):'—','Per-firm limits enforced by future Excel backend')}
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn" data-ov="excel-invite">Invite accounting firm</button>
+        <button type="button" class="btn ghost" data-ov="excel-manage">Manage Excel firms</button>
+      </div>
       <div><b>Planned administration</b><p class="muted">Invite accounting firms, manage firm administrators and employee membership, approve access, and set per-firm monthly AI budgets with a hard spending limit.</p></div>
       <div class="muted" style="font-size:12.5px">This view is informational only. Invites, AI-budget edits, and suspension actions will be enabled only after Microsoft sign-in and the trusted Excel backend are deployed. Bookkeeping access and licensing remain unchanged.</div>
       <div><a class="btn ghost sm" href="https://sumlora-excel-addin.pages.dev/admin-preview.html" target="_blank" rel="noopener noreferrer">Open Excel pilot dashboard preview</a></div>
@@ -239,6 +243,8 @@ function bindOverview(m){
     const a=b.dataset.ov;
     if(a==='product-bookkeeping'){OV_PRODUCT='bookkeeping';return renderMain()}
     if(a==='product-excel'){OV_PRODUCT='excel';renderMain();return ovExcelSummary()}
+    if(a==='excel-invite')return openModal('Invite accounting firm', `<p>Excel invitations require Microsoft sign-in and the trusted Excel administration backend. This action is not live yet, so no invitation has been sent.</p><p class="muted">After configuration, you will enter the firm's name and administrator email, then set its monthly AI budget. Employees will be unlimited.</p>`);
+    if(a==='excel-manage')return openModal('Manage Excel firms', `<p>Excel firm management is not connected yet. No firms or usage figures can be safely displayed until the Excel administration database is available.</p><p class="muted">The Excel pilot preview is available in this dashboard, but it contains fictional data.</p>`);
     if(a==='refresh')return showOverview();
     if(a==='ye-csv')return ovYeCsv();
     if(a==='firms')return showFirms();
