@@ -1527,7 +1527,7 @@ function createApp(opts) {
     // Read-only Excel integration boundary. The Excel backend is not deployed yet.
     // Inject a trusted server-side adapter via opts.excelAdminSummary after Entra,
     // database and API authorization are provisioned. Never trust browser summaries.
-    ['GET', /^\\/api\\/overview\\/excel$/, async (req, m, res, user) => {
+    ['GET', /^\/api\/overview\/excel$/, async (req, m, res, user) => {
       adminOnly(user);
       if (typeof opts.excelAdminSummary !== 'function') return { connected: false, status: 'not-configured', firms: null, members: null, aiBudgetCents: null, aiSpentCents: null };
       const data = await opts.excelAdminSummary({ requestedBy: user.username });
