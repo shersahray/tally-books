@@ -236,6 +236,24 @@ async function inviteBusinessForm(after){
       closeModal();try{await loadCompanies()}catch(_){}if(after)await after();showLink(r.user,r.user.link,'invite',{business:r.company.name,pays:r.clientPays});toast(`${r.company.name} is set up`)}
     catch(ex){f.err(ex.message)}};
 }
+function ovExcelInviteForm(){
+  const f=openModal('Set up an Excel accounting firm', `
+    <p class="muted">Prepare a firm's invitation details. The Send invitation button will stay disabled until the secure Excel backend and Microsoft sign-in are connected.</p>
+    <label for="exFirmName">Accounting firm name</label><input id="exFirmName" maxlength="120" placeholder="Example CPA LLP" autocomplete="organization" />
+    <label for="exAdminEmail">Firm administrator's work email</label><input id="exAdminEmail" type="email" maxlength="254" placeholder="admin@example.com" autocomplete="email" />
+    <label for="exBudget">Monthly AI budget (CAD)</label><input id="exBudget" type="number" min="0" max="100000" step="0.01" value="25.00" />
+    <p class="muted">Employees: Unlimited. All AI features are off until explicitly enabled. No invitation is sent from this preview.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" type="button" id="exCheck">Check details</button><button class="btn ghost" type="button" disabled title="Backend configuration required">Send invitation (not yet available)</button></div>
+    <div id="exResult" role="status" aria-live="polite" class="muted"></div>
+  `);
+  const check=$('#exCheck',f);if(check)check.onclick=()=>{
+    const firm=String($('#exFirmName',f).value||'').trim();
+    const email=String($('#exAdminEmail',f).value||'').trim();
+    const amount=Number($('#exBudget',f).value);
+    const valid=firm.length>=2&&firm.length<=120&&/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)&&Number.isFinite(amount)&&amount>=0&&amount<=100000&&Math.round(amount*100)===amount*100;
+    $('#exResult',f).textContent=valid?'Details look valid. Invitation not sent: Excel identity and server integration are pending.':'Enter a valid firm name, work email and AI budget (CAD 0–100,000, up to two decimals).';
+  };
+}
 function bindOverview(m){
   const sel=$('[data-ovyemonth]',m);if(sel)sel.onchange=()=>{OVW_YE=null;renderMain();ovYearEnds(sel.value)};
   m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
@@ -243,7 +261,7 @@ function bindOverview(m){
     const a=b.dataset.ov;
     if(a==='product-bookkeeping'){OV_PRODUCT='bookkeeping';return renderMain()}
     if(a==='product-excel'){OV_PRODUCT='excel';renderMain();return ovExcelSummary()}
-    if(a==='excel-invite')return openModal('Invite accounting firm', `<p>Excel invitations require Microsoft sign-in and the trusted Excel administration backend. This action is not live yet, so no invitation has been sent.</p><p class="muted">After configuration, you will enter the firm's name and administrator email, then set its monthly AI budget. Employees will be unlimited.</p>`);
+    if(a==='excel-invite')return ovExcelInviteForm();
     if(a==='excel-manage')return openModal('Manage Excel firms', `<p>Excel firm management is not connected yet. No firms or usage figures can be safely displayed until the Excel administration database is available.</p><p class="muted">The Excel pilot preview is available in this dashboard, but it contains fictional data.</p>`);
     if(a==='refresh')return showOverview();
     if(a==='ye-csv')return ovYeCsv();
