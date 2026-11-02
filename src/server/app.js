@@ -24,6 +24,7 @@ const { Billing, paid: billingPaid, stale: billingStale, describe: billingDescri
 const { Auth, AuthError, sessionCookie, readCookie, COOKIE } = require('./auth');
 const { Licence, Issuer, localDay, addDays } = require('./licence');
 const { validateRecord, checkDocumentPostings, checkDelete, validateCompany, bankAccount, isDate, ValidationError, settledOn } = require('./validate');
+const { loadExcelAdminConfig, createExcelAdminClient, actorFor, friendly: excelFriendly } = require('./excel-admin');
 const { seedDefaults, exampleRecords, DEFAULT_COMPANY, PROVINCES } = require('./seed');
 const DEP = require('../../public/deposits-calc.js');
 const DELAYED = require('../../public/delayed-calc.js');
@@ -122,6 +123,16 @@ function createApp(opts) {
   const ownerOnly = u => { if (u.role !== 'owner') throw new ValidationError('Only an owner can do that.', 403); };
   // Server-wide settings (backups, the AI key, firms) belong to the server's administrators, not to each firm.
   const adminOnly = u => { if (u.role !== 'owner' || !u.platformAdmin) throw new ValidationError('Only the server’s administrator can do that.', 403); };
+  // Sumlora for Excel administration client (see excel-admin.js). null = not configured.
+  const excelAdmin = opts.excelAdmin !== undefined ? opts.excelAdmin : (() => { const c = loadExcelAdminConfig(opts.env || process.env); return c ? createExcelAdminClient(c) : null; })();
+  async function excelCall(user, fn) {
+    adminOnly(user);
+    if (!excelAdmin) throw new ValidationError('Sumlora for Excel administration is not connected on this server yet.', 503);
+    try { return await fn(actorFor(user)); }
+    catch (e) { if (e instanceof ValidationError) throw e; const f = excelFriendly(e); throw new ValidationError(f.message, f.status); }
+  }
+  // Only the listed fields are forwarded; the Excel service validates their values.
+  const excelBody = (b, keys) => { const out = {}; if (b && typeof b === 'object' && !Array.isArray(b)) for (const k of keys) if (b[k] !== undefined) out[k] = b[k]; return out; };
   /** Making licence codes: administrators, and in a licensed desktop copy only the seller's own (it holds the key). */
   const canIssue = u => { adminOnly(u); if (licence.on && !licence.isIssuer()) throw new ValidationError('Licence codes are made in your own copy of Sumlora.', 403); };
   /** Can this person see this company? Only companies of their own firm, and then as their role allows. */
@@ -1521,18 +1532,64 @@ function createApp(opts) {
       // A firm sees its own people's sign-ins; the server's administrators see everything.
       if (user.platformAdmin) return { log: auth.readLog(1000) };
       const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
-      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'ledger-settings', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made']);
+      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'ledger-settings', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made', 'excel-firm-created', 'excel-firm-suspended', 'excel-firm-reactivated', 'excel-ai-budget']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
     }],
-    // Read-only Excel integration boundary. The Excel backend is not deployed yet.
-    // Inject a trusted server-side adapter via opts.excelAdminSummary after Entra,
-    // database and API authorization are provisioned. Never trust browser summaries.
+    // Sumlora for Excel administration. The Excel service is separate: this server only
+    // forwards the platform administrator's requests, signed server-to-server
+    // (src/server/excel-admin.js). Nothing here touches Bookkeeping data or licences.
+    // Without EXCEL_ADMIN_API_URL (or an injected opts.excelAdmin) everything reports
+    // "not configured". opts.excelAdminSummary remains supported for tests.
     ['GET', /^\/api\/overview\/excel$/, async (req, m, res, user) => {
       adminOnly(user);
-      if (typeof opts.excelAdminSummary !== 'function') return { connected: false, status: 'not-configured', firms: null, members: null, aiBudgetCents: null, aiSpentCents: null };
-      const data = await opts.excelAdminSummary({ requestedBy: user.username });
+      const none = { connected: false, status: 'not-configured', firms: null, members: null, aiBudgetCents: null, aiSpentCents: null };
+      let data;
+      if (excelAdmin) {
+        try { data = await excelAdmin.summary(actorFor(user)); }
+        catch (e) { const f = excelFriendly(e); return { ...none, status: 'unavailable', message: f.message }; }
+      } else if (typeof opts.excelAdminSummary === 'function') data = await opts.excelAdminSummary({ requestedBy: user.username });
+      else return none;
       if (!data || !Number.isSafeInteger(data.firms) || data.firms < 0 || !Number.isSafeInteger(data.members) || data.members < 0 || !Number.isSafeInteger(data.aiBudgetCents) || data.aiBudgetCents < 0 || !Number.isSafeInteger(data.aiSpentCents) || data.aiSpentCents < 0) throw new ValidationError('Excel summary unavailable.', 503);
       return { connected: true, status: 'connected', firms: data.firms, members: data.members, aiBudgetCents: data.aiBudgetCents, aiSpentCents: data.aiSpentCents };
+    }],
+    ['GET', /^\/api\/overview\/excel\/firms$/, (req, m, res, user) => excelCall(user, a => excelAdmin.listFirms(a))],
+    ['POST', /^\/api\/overview\/excel\/firms$/, async (req, m, res, user) => {
+      const b = excelBody(await readJson(req, 16 * 1024), ['name', 'entraTenantId', 'monthlyLimitCents', 'aiEnabled', 'adminEmail', 'expiresInDays']);
+      return excelCall(user, async a => {
+        const { firm } = await excelAdmin.createFirm({ name: b.name, entraTenantId: b.entraTenantId, monthlyLimitCents: b.monthlyLimitCents, aiEnabled: b.aiEnabled === true }, a);
+        auth.log('excel-firm-created', { by: user.username, firm: firm.id, name: firm.name });
+        if (!b.adminEmail) return { firm };
+        // The firm exists even if the invitation fails; the administrator can invite again from Manage.
+        try { return { firm, ...(await excelAdmin.invite(firm.id, { email: b.adminEmail, role: 'firm_admin', expiresInDays: b.expiresInDays }, a)) }; }
+        catch (e) { return { firm, inviteError: excelFriendly(e).message }; }
+      });
+    }],
+    ['GET', /^\/api\/overview\/excel\/firms\/([^/]+)$/, (req, m, res, user) => excelCall(user, a => excelAdmin.getFirm(m[1], a))],
+    ['POST', /^\/api\/overview\/excel\/firms\/([^/]+)\/(suspend|reactivate)$/, async (req, m, res, user) => {
+      const b = excelBody(await readJson(req, 16 * 1024), ['reason']);
+      return excelCall(user, async a => {
+        const out = m[2] === 'suspend' ? await excelAdmin.suspend(m[1], b.reason, a) : await excelAdmin.reactivate(m[1], b.reason, a);
+        auth.log('excel-firm-' + (m[2] === 'suspend' ? 'suspended' : 'reactivated'), { by: user.username, firm: out.firm.id, name: out.firm.name });
+        return out;
+      });
+    }],
+    ['PUT', /^\/api\/overview\/excel\/firms\/([^/]+)\/ai-budget$/, async (req, m, res, user) => {
+      const b = excelBody(await readJson(req, 16 * 1024), ['monthlyLimitCents', 'aiEnabled']);
+      return excelCall(user, async a => {
+        const out = await excelAdmin.setAiBudget(m[1], { monthlyLimitCents: b.monthlyLimitCents, aiEnabled: b.aiEnabled }, a);
+        auth.log('excel-ai-budget', { by: user.username, firm: out.firm.id, monthlyLimitCents: out.firm.monthlyLimitCents, aiEnabled: out.firm.aiEnabled });
+        return out;
+      });
+    }],
+    ['GET', /^\/api\/overview\/excel\/firms\/([^/]+)\/invitations$/, (req, m, res, user) => excelCall(user, a => excelAdmin.listInvitations(m[1], a))],
+    ['POST', /^\/api\/overview\/excel\/firms\/([^/]+)\/invitations$/, async (req, m, res, user) => {
+      const b = excelBody(await readJson(req, 16 * 1024), ['email', 'role', 'expiresInDays']);
+      return excelCall(user, a => excelAdmin.invite(m[1], b, a));
+    }],
+    ['POST', /^\/api\/overview\/excel\/firms\/([^/]+)\/invitations\/([^/]+)\/revoke$/, (req, m, res, user) => excelCall(user, a => excelAdmin.revokeInvitation(m[1], m[2], a))],
+    ['GET', /^\/api\/overview\/excel\/firms\/([^/]+)\/audit$/, (req, m, res, user) => {
+      const limit = new URL(req.url, 'http://x').searchParams.get('limit');
+      return excelCall(user, a => excelAdmin.audit(m[1], limit, a));
     }],
     // The administrator's overview: firms on this server, desktop licences sold, renewals due, AI use.
     ['GET', /^\/api\/overview$/, (req, m, res, user) => {
