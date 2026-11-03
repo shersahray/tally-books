@@ -39,7 +39,14 @@ test('a new company with a code: the creator is in, everyone else types it', asy
   assert.equal(coA.hasCode, true); assert.equal(coB.hasCode, false);
   const list = (await call(staff, 'GET', '/api/companies')).json.companies;
   assert.equal(list.find(x => x.id === coA.id).hasCode, true);
-  assert.ok(!JSON.stringify(list).includes('4821'));
+  // Neither the code nor its hash is in the list. (Checking the whole JSON text for "4821" failed now and
+  // then, when a random id or timestamp happened to contain those four digits.)
+  const leaks = [];
+  (function walk(v, key) {
+    if (v && typeof v === 'object') { for (const [k, x] of Object.entries(v)) walk(x, k); return; }
+    if (v === '4821' || (key && /code/i.test(key) && key !== 'hasCode')) leaks.push(key);
+  })(list);
+  assert.deepEqual(leaks, [], 'the company code (or anything code-like) is not sent in the list');
 
   assert.equal((await call(owner, 'GET', c(coA, '/state'))).status, 200, 'the owner who created it is already in');
   let r = await call(staff, 'GET', c(coA, '/state'));

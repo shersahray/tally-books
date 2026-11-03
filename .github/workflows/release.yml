@@ -141,9 +141,13 @@ jobs:
           echo "::error title=Attaching to the release failed::$(echo "$out" | tr '\n' ' ' | cut -c1-500)"
           exit 1
 
+      # Every push to main builds all three installers (~30 MB each). Keep these copies for 7 days only:
+      # the default 90 days filled GitHub's artifact storage and made the build fail. Released
+      # versions are attached to their GitHub Release above and are not affected.
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
+          retention-days: 7
           path: |
             dist/*.exe
             dist/*.dmg
