@@ -17,6 +17,7 @@ const mail = require('./mail');
 const stripe = require('./stripe');
 const { Plaid, applyChanges: applyFeed, feedTwin } = require('./plaid');
 const { Ledgers } = require('./ledgers');
+const { Rise } = require('./rise');
 const escHtml = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const inbound = require('./inbound');
 const { TERMS_VERSION, TERMS_DRAFT } = require('./legal');
@@ -56,6 +57,7 @@ const BACKUP_FORMAT = 'tally-books-backup';
  * @param {string} [opts.aiKey]     Claude API key for AI suggestions (otherwise an owner enters one in Settings).
  * @param {object} [opts.plaid]     Plaid keys for bank feeds: { clientId, secret, env } (otherwise the administrator enters them in Settings).
  * @param {Function} [opts.plaidFetch] Tests only: answers in place of Plaid's API.
+ * @param {Function} [opts.riseFetch] Tests only: substitutes for the Rise API.
  * @param {Function} [opts.ledgerFetch] Tests only: answers in place of QuickBooks Online's and Xero's APIs (with opts.ledgerUrls).
  * @param {boolean} [opts.autoFeeds] Sync bank feeds every few hours (default true; tests turn it off).
  * @param {boolean} [opts.autoWorkflows] Check workflow reminders every hour (default true; tests turn it off).
@@ -370,7 +372,14 @@ function createApp(opts) {
   }
   // Plaid's keys and the banks' access tokens stay with this computer (the licence folder on desktop), never in a books folder that may be shared.
   const plaid = new Plaid(opts.licenceDir || opts.dataDir, { env: opts.plaid || {}, fetch: opts.plaidFetch });
-  // QuickBooks Online and Xero connections, for year-end files of clients whose books are kept there (ledgers.js).
+  // Rise connections are enabled per company and remain read-only during the pilot.
+  const rise = new Rise(opts.licenceDir || opts.dataDir, { fetch: opts.riseFetch });
+  const riseAllowed = s => {
+    const u = auth.data.users.find(u => u.id === s.userId);
+    const c = reg.get(s.cid), f = c && auth.firm(c.firmId);
+    return !!(u && !u.disabled && !u.readOnly && u.role === 'owner' && c && !c.archived && f && f.status === 'active' && !firmNeedsPay(f) && canSeeCo(u, s.cid));
+  };
+  // QuickBooks Online and Xero connections for year-end files.
   const ledgers = new Ledgers(opts.licenceDir || opts.dataDir, { fetch: opts.ledgerFetch, urls: opts.ledgerUrls });
   // Receipts by email: the server's settings and each company's address (inbound.js), kept with the server like Plaid's keys.
   const inSet = new inbound.InboundSettings(opts.licenceDir || opts.dataDir);
@@ -1532,7 +1541,7 @@ function createApp(opts) {
       // A firm sees its own people's sign-ins; the server's administrators see everything.
       if (user.platformAdmin) return { log: auth.readLog(1000) };
       const names = new Set(auth.firmUsers(user.firmId).map(u => u.username));
-      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'ledger-settings', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made', 'excel-firm-created', 'excel-firm-suspended', 'excel-firm-reactivated', 'excel-ai-budget']);
+      const serverWide = new Set(['firm-changed', 'firm-signup', 'firm-deleted', 'security-changed', 'ai-settings', 'plaid-settings', 'ledger-settings', 'rise-settings', 'rise-access', 'inbound-settings', 'licence-entered', 'licence-key-created', 'licence-key-copied', 'licence-key-restored', 'licence-made', 'excel-firm-created', 'excel-firm-suspended', 'excel-firm-reactivated', 'excel-ai-budget']);
       return { log: auth.readLog(5000).filter(e => !serverWide.has(e.event) && (names.has(e.username) || names.has(e.by))).slice(0, 1000) };
     }],
     // Sumlora for Excel administration. The Excel service is separate: this server only
@@ -1973,6 +1982,7 @@ function createApp(opts) {
       if (c.billing && billingPaid(c.billing)) throw new ValidationError('This company’s client has a Sumlora subscription running. Cancel it first (Stripe → Subscriptions), then remove the company.', 409);
       await plaid.removeCompany(id).catch(() => {});
       await ledgers.remove(id).catch(() => {});
+      await rise.enable(id, false);
       inSet.drop(id);
       reg.remove(id);
       auth.dropCompany(id);
@@ -2030,6 +2040,29 @@ function createApp(opts) {
       const st = plaid.update(body);
       auth.log('plaid-settings', { username: user.username, ip: clientIp(req), change: body.secret !== undefined || body.clientId !== undefined ? 'Plaid keys changed' : 'settings changed' });
       return st;
+    }],
+    // Rise uses a public OAuth app with PKCE; tokens never reach the browser.
+    ['GET', /^\/api\/rise$/, (req, m, res, user) => {
+      ownerOnly(user);
+      if (!user.platformAdmin) return { configured: rise.status().configured, admin: false, mode: 'read-only' };
+      return { ...rise.status(), admin: true, redirectUri: appUrl() ? appUrl() + '/api/rise/callback' : '',
+        ...(user.platformAdmin ? { companies: reg.list().map(c => ({ id: c.id, name: c.name, archived: !!c.archived, ...rise.status(c.id) })) } : {}) };
+    }],
+    ['PUT', /^\/api\/rise$/, async (req, m, res, user) => {
+      adminOnly(user); const out = rise.update(await readJson(req));
+      auth.log('rise-settings', { by: user.username }); return out;
+    }],
+    ['PUT', /^\/api\/rise\/companies\/([^/]+)$/, async (req, m, res, user) => {
+      adminOnly(user); const cid = decodeURIComponent(m[1]);
+      if (!reg.get(cid) || reg.get(cid).archived) throw new ValidationError('Choose an active company.', 404);
+      const body = await readJson(req); await rise.enable(cid, body.enabled);
+      auth.log('rise-access', { by: user.username, company: cid, enabled: body.enabled }); return rise.status(cid);
+    }],
+    ['GET', /^\/api\/rise\/callback$/, async (req, m, res) => {
+      let ok = false;
+      try { const cid = await rise.finish(Object.fromEntries(new URL(req.url, 'http://x').searchParams), riseAllowed); auth.log('rise-connected', { company: cid }); ok = true; }
+      catch { /* Never expose OAuth codes, tokens or provider error text. */ }
+      send(res, 200, '<!doctype html><html lang="en"><meta charset="utf-8"><title>Rise connection</title><h1>' + (ok ? 'Rise connected' : 'Rise connection incomplete') + '</h1><p>' + (ok ? 'Return to Sumlora Settings to check the connected account. Payroll processing is not enabled.' : 'Return to Sumlora and start again. If it continues, ask the administrator to check Rise API access.') + '</p><a href="/">Back to Sumlora</a></html>', { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     }],
     // QuickBooks Online and Xero: the app keys are the server's, set by its administrator.
     ['GET', /^\/api\/ledgers$/, (req, m, res, user) => {
@@ -2193,6 +2226,17 @@ function createApp(opts) {
 
   // Routes inside one company: /api/c/<companyId>/...
   const companyRoutes = [
+    ['GET', /^\/rise$/, ctx => { ownerOnly(ctx.user); return rise.status(ctx.id); }],
+    ['POST', /^\/rise\/connect$/, async (ctx, req) => {
+      ownerOnly(ctx.user);
+      const b = await readJson(req);
+      if (b.confirmCompany !== true) throw new ValidationError('Confirm that you will connect the Rise account belonging to this Sumlora company.');
+      if (!riseAllowed({ cid: ctx.id, userId: ctx.user.id })) throw new ValidationError('This company cannot connect to Rise.', 403);
+      return { url: rise.start(ctx.id, ctx.user.id, appUrl() ? appUrl() + '/api/rise/callback' : '') };
+    }],
+    ['GET', /^\/rise\/preview$/, async ctx => { ownerOnly(ctx.user); return rise.preview(ctx.id); }],
+    ['DELETE', /^\/rise$/, async ctx => { ownerOnly(ctx.user); const out = await rise.remove(ctx.id); auth.log('rise-disconnected', { by: ctx.user.username, company: ctx.id }); return out; }],
+
     ['GET', /^\/state$/, ctx => state(ctx)],
     // Owner-only pilot. Drafts cannot be written via records/batch and are absent from /state.
     ['GET', /^\/automation$/, ctx => {
@@ -3361,7 +3405,7 @@ function createApp(opts) {
         if (req.method !== 'GET' && !sameOrigin(req)) throw new ValidationError('Cross-site request blocked.', 403);
         // Everything except signing in needs a signed-in user.
         let user = null;
-        if (!/^\/api\/(health|ledger\/callback|auth\/(me|setup|signup|login|login\/code|logout|link|link\/accept|forgot))$/.test(url.pathname)) {
+        if (!/^\/api\/(health|ledger\/callback|rise\/callback|auth\/(me|setup|signup|login|login\/code|logout|link|link\/accept|forgot))$/.test(url.pathname)) {
           user = auth.userFor(req);
           if (!user) throw new AuthError(auth.needsSetup() ? 'Set up your owner account first.' : 'Your session ended. Please sign in again.', 401, { setup: auth.needsSetup(), forgot: !auth.needsSetup() && forgotReady() });
           if (user.mustChange && !['/api/auth/password', '/api/auth/prefs', '/api/events'].includes(url.pathname)) throw new AuthError('Choose a new password before continuing.', 403, { mustChange: true });
