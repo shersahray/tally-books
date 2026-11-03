@@ -564,6 +564,7 @@ function vSettings(){
   ${typeof rcMailPanel==='function'?rcMailPanel():''}
   ${typeof plaidPanel==='function'?plaidPanel():''}
   ${typeof ledgerPanel==='function'?ledgerPanel():''}
+  ${typeof risePanel==='function'?risePanel():''}
   ${typeof inboundPanel==='function'?inboundPanel():''}
   ${ME&&ME.role==='owner'?'<div class="panel" style="max-width:640px;margin-top:16px"><h3>Timesheets & Tips</h3><div class="pad"><label><input type="checkbox" id="tsEnable" '+(S.company.features?.timesheets===true?'checked':'')+'> Enable standalone time and tip tracking for this company</label><p class="muted">Independent of Payroll. Enable only for clients who need it.</p></div></div>':''}
   ${feat('payroll')?payrollSettingsPanel():''}
@@ -605,6 +606,7 @@ function bindMain(m){
     if(d.aiact)return aiAction(d.aiact);
     if(d.plact)return plaidAction(d.plact);
     if(d.ldact)return ledgerAction(d.ldact);
+    if(d.riseact)return riseAction(d.riseact,d);
     if(d.feed)return feedAction(d.feed);
     if(d.clact)return closingAction(d.clact);
     if(d.ccact)return codeAction(d.ccact);
