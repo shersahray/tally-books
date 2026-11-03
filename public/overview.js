@@ -94,24 +94,24 @@ function ovProductTabs(){
   </nav>`;
 }
 function ovExcelPanel(){
-  const E=OV_EXCEL;
-  const live=E&&E.connected===true;
+  const E=OV_EXCEL||{};
+  const live=E.connected===true;
+  const why=E.status==='not-configured'?'Sumlora for Excel administration is not connected on this server yet. Set EXCEL_ADMIN_API_URL, EXCEL_ADMIN_KEY_ID and EXCEL_ADMIN_HMAC_SECRET (see docs/EXCEL-ADMIN.md).'
+    :E.status==='unavailable'?(E.message||'The Sumlora for Excel service is not responding.'):'Loading…';
   return `<section class="panel" style="margin-bottom:16px">
     <h3>Sumlora for Excel · Firm management</h3>
     <div class="pad" style="display:flex;flex-direction:column;gap:12px">
-      <div class="muted">${live?'Connected to Excel administration summary.':'Excel administration data is not connected yet. Live firms, invitations and AI usage are unavailable.'}</div>
+      <div class="muted">${live?'Connected to the Sumlora for Excel service.':esc(why)}</div>
       <div class="ov-kpis">
-        ${ovKpi('firm','teal','Excel firms',live?ovNum(E.firms):'—',live?'Live administrator summary':'Awaiting secure backend connection')}
-        ${ovKpi('biz','navy','Employees',live?ovNum(E.members):'—','Unlimited per approved firm')}
-        ${ovKpi('pay','green','AI usage',live?ovMoney(E.aiSpentCents/100)+' / '+ovMoney(E.aiBudgetCents/100):'—','Per-firm limits enforced by future Excel backend')}
+        ${ovKpi('firm','teal','Excel firms',live?ovNum(E.firms):'—',live?'Including suspended firms':'Not connected')}
+        ${ovKpi('biz','navy','Employees',live?ovNum(E.members):'—','Unlimited per firm')}
+        ${ovKpi('pay','green','AI use this month',live?ovMoney(E.aiSpentCents/100)+' / '+ovMoney(E.aiBudgetCents/100):'—','Spent / total budgets of active firms')}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button type="button" class="btn" data-ov="excel-invite">Invite accounting firm</button>
-        <button type="button" class="btn ghost" data-ov="excel-manage">Manage Excel firms</button>
+        <button type="button" class="btn" data-ov="excel-invite" ${live?'':'disabled'}>Invite accounting firm</button>
+        <button type="button" class="btn ghost" data-ov="excel-manage" ${live?'':'disabled'}>Manage Excel firms</button>
       </div>
-      <div><b>Planned administration</b><p class="muted">Invite accounting firms, manage firm administrators and employee membership, approve access, and set per-firm monthly AI budgets with a hard spending limit.</p></div>
-      <div class="muted" style="font-size:12.5px">This view is informational only. Invites, AI-budget edits, and suspension actions will be enabled only after Microsoft sign-in and the trusted Excel backend are deployed. Bookkeeping access and licensing remain unchanged.</div>
-      <div><a class="btn ghost sm" href="https://sumlora-excel-addin.pages.dev/admin-preview.html" target="_blank" rel="noopener noreferrer">Open Excel pilot dashboard preview</a></div>
+      <div class="muted" style="font-size:12.5px">Sumlora for Excel is a separate service: these controls never change Bookkeeping companies, users or desktop licences. Each firm's administrator invites their own employees from inside Excel.</div>
     </div>
   </section>`;
 }
@@ -236,23 +236,109 @@ async function inviteBusinessForm(after){
       closeModal();try{await loadCompanies()}catch(_){}if(after)await after();showLink(r.user,r.user.link,'invite',{business:r.company.name,pays:r.clientPays});toast(`${r.company.name} is set up`)}
     catch(ex){f.err(ex.message)}};
 }
+/* ---------- Sumlora for Excel administration (forwarded to the Excel service by this server) ---------- */
+const OVX_ROLES={firm_admin:'Firm administrator',accountant:'Accountant',reviewer:'Reviewer',viewer:'Viewer'};
+const ovxCents=v=>{const n=Number(String(v).trim());return Number.isFinite(n)&&n>=0&&n<=100000&&Math.round(n*100)===Math.round(n*100*1e6)/1e6?Math.round(n*100):null};
+const ovxDate=s=>s?new Date(s).toLocaleString(LOC(),{dateStyle:'medium',timeStyle:'short'}):'';
+function ovxShowLink(email,r,back){
+  const f=openModal('Invitation link',`
+    <p>Send this link to <b translate="no">${esc(email)}</b>. It works once, only for that email signed in with their firm's Microsoft 365 account.</p>
+    <p><b>Expires:</b> ${esc(ovxDate(r.invitation&&r.invitation.expiresAt))}</p>
+    <input id="oxLink" readonly value="${esc(r.acceptUrl)}" aria-label="Invitation link" style="width:100%;font-family:monospace;font-size:12px">
+    <p class="muted">This link is shown only once. Sumlora keeps only a scrambled copy of the code.</p>`,
+    `${back?'<button type="button" class="btn" data-oxback>Back to firms</button>':'<button type="button" class="btn" data-close>Done</button>'}<button type="button" class="btn primary" id="oxCopy">Copy link</button>`);
+  $('#oxCopy',f).onclick=async()=>{const i=$('#oxLink',f);i.select();try{await navigator.clipboard.writeText(i.value);toast('Link copied')}catch(_){toast('Press Ctrl+C to copy')}};
+  const b=$('[data-oxback]',f);if(b)b.onclick=()=>ovExcelManage();
+}
 function ovExcelInviteForm(){
-  const f=openModal('Set up an Excel accounting firm', `
-    <p class="muted">Prepare a firm's invitation details. The Send invitation button will stay disabled until the secure Excel backend and Microsoft sign-in are connected.</p>
-    <label for="exFirmName">Accounting firm name</label><input id="exFirmName" maxlength="120" placeholder="Example CPA LLP" autocomplete="organization" />
-    <label for="exAdminEmail">Firm administrator's work email</label><input id="exAdminEmail" type="email" maxlength="254" placeholder="admin@example.com" autocomplete="email" />
-    <label for="exBudget">Monthly AI budget (CAD)</label><input id="exBudget" type="number" min="0" max="100000" step="0.01" value="25.00" />
-    <p class="muted">Employees: Unlimited. All AI features are off until explicitly enabled. No invitation is sent from this preview.</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" type="button" id="exCheck">Check details</button><button class="btn ghost" type="button" disabled title="Backend configuration required">Send invitation (not yet available)</button></div>
-    <div id="exResult" role="status" aria-live="polite" class="muted"></div>
-  `);
-  const check=$('#exCheck',f);if(check)check.onclick=()=>{
-    const firm=String($('#exFirmName',f).value||'').trim();
-    const email=String($('#exAdminEmail',f).value||'').trim();
-    const amount=Number($('#exBudget',f).value);
-    const valid=firm.length>=2&&firm.length<=120&&/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)&&Number.isFinite(amount)&&amount>=0&&amount<=100000&&Math.round(amount*100)===amount*100;
-    $('#exResult',f).textContent=valid?'Details look valid. Invitation not sent: Excel identity and server integration are pending.':'Enter a valid firm name, work email and AI budget (CAD 0–100,000, up to two decimals).';
+  const f=openModal('Invite an accounting firm to Sumlora for Excel',`
+    <label for="exFirmName">Accounting firm name</label><input id="exFirmName" maxlength="120" placeholder="Example CPA LLP" autocomplete="organization">
+    <label for="exTenant">Firm's Microsoft 365 tenant ID</label><input id="exTenant" maxlength="36" placeholder="1a2b3c4d-…" autocomplete="off" spellcheck="false">
+    <p class="muted" style="margin-top:2px">Their IT administrator finds it in Microsoft Entra admin center → Overview → Tenant ID. Employees must sign in with accounts from this organization.</p>
+    <label for="exAdminEmail">Firm administrator's work email</label><input id="exAdminEmail" type="email" maxlength="254" placeholder="admin@example.com" autocomplete="off">
+    <label for="exBudget">Monthly AI budget (CAD)</label><input id="exBudget" type="number" min="0" max="100000" step="0.01" value="25.00">
+    <label class="check"><input type="checkbox" id="exAi"> Turn on AI features now (paid AI stops automatically at the budget)</label>
+    <label for="exDays">Invitation expires after</label><select id="exDays"><option value="3">3 days</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select>
+    <p class="muted">Employees: unlimited. The firm administrator invites them from inside Excel.</p>`,
+    `<button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Create firm and invitation</button>`);
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    const cents=ovxCents($('#exBudget',f).value);
+    if(cents===null)return f.err('Enter an AI budget between $0 and $100,000 CAD (up to two decimals).');
+    const email=$('#exAdminEmail',f).value.trim();
+    const btn=$('[type=submit]',f);btn.disabled=true;
+    try{
+      const r=await api('POST','/api/overview/excel/firms',{name:$('#exFirmName',f).value,entraTenantId:$('#exTenant',f).value.trim(),monthlyLimitCents:cents,aiEnabled:$('#exAi',f).checked,adminEmail:email||undefined,expiresInDays:Number($('#exDays',f).value)});
+      ovExcelSummary();
+      if(r.acceptUrl)return ovxShowLink(email,r,false);
+      closeModal();toast(r.inviteError?`${r.firm.name} was created, but the invitation failed: ${r.inviteError}`:`${r.firm.name} was created`,!!r.inviteError);
+    }catch(ex){f.err(ex.message);btn.disabled=false}
   };
+}
+async function ovExcelManage(){
+  const f=openModal('Sumlora for Excel firms','<div class="muted">Loading…</div>','<button type="button" class="btn" data-close>Close</button>','wide');
+  let firms;
+  try{firms=(await api('GET','/api/overview/excel/firms')).firms}catch(ex){return f.err(ex.message)}
+  const st=x=>x.status==='suspended'?'<span class="neg">Suspended</span>':'Active';
+  const ai=x=>x.monthlyLimitCents==null?'—':`${ovMoney((x.spentCents||0)/100)} / ${ovMoney(x.monthlyLimitCents/100)}${x.aiEnabled?'':' <span class="muted">(off)</span>'}`;
+  $('.mbody',f).innerHTML=firms.length?`<div class="tbl-wrap"><table><thead><tr><th>Firm</th><th>Status</th><th class="n">Employees</th><th>AI this month</th><th></th></tr></thead><tbody>${firms.map(x=>`<tr>
+    <td translate="no">${esc(x.name)}<div class="muted" style="font-size:11.5px">${esc(x.entraTenantId)}</div></td><td>${st(x)}${x.statusReason&&x.status==='suspended'?`<div class="muted" style="font-size:11.5px">${esc(x.statusReason)}</div>`:''}</td>
+    <td class="n">${ovNum(x.activeMembers)}</td><td>${ai(x)}</td>
+    <td style="text-align:right;white-space:nowrap"><button type="button" class="btn sm" data-ox="budget" data-id="${esc(x.id)}">AI budget</button> <button type="button" class="btn sm" data-ox="invites" data-id="${esc(x.id)}">Invitations</button> <button type="button" class="btn sm" data-ox="audit" data-id="${esc(x.id)}">Activity</button> <button type="button" class="btn sm ${x.status==='suspended'?'':'ghost'}" data-ox="${x.status==='suspended'?'reactivate':'suspend'}" data-id="${esc(x.id)}">${x.status==='suspended'?'Reactivate':'Suspend'}</button></td></tr>`).join('')}</tbody></table></div><div class="err-msg" data-err></div>`
+    :'<div class="empty"><b>No Excel firms yet</b>Use “Invite accounting firm” to add the first one.</div><div class="err-msg" data-err></div>';
+  f.onclick=async e=>{const b=e.target.closest('[data-ox]');if(!b)return;const x=firms.find(y=>y.id===b.dataset.id);if(!x)return;
+    const a=b.dataset.ox;
+    if(a==='budget')return ovxBudget(x);
+    if(a==='invites')return ovxInvites(x);
+    if(a==='audit')return ovxAudit(x);
+    if(a==='suspend')return ovxSuspend(x);
+    if(a==='reactivate'){if(!await confirmBox('Reactivate firm',`Let ${x.name}'s employees use Sumlora for Excel again?`,'Reactivate'))return;
+      try{await api('POST',`/api/overview/excel/firms/${encodeURIComponent(x.id)}/reactivate`,{});toast(`${x.name} reactivated`);ovExcelSummary();ovExcelManage()}catch(ex){f.err(ex.message)}}
+  };
+}
+function ovxBack(f){const b=$('[data-oxback]',f);if(b)b.onclick=()=>ovExcelManage()}
+function ovxBudget(x){
+  const f=openModal(`AI budget · ${x.name}`,`
+    <label for="oxAmt">Monthly AI budget (CAD)</label><input id="oxAmt" type="number" min="0" max="100000" step="0.01" value="${esc(((x.monthlyLimitCents||0)/100).toFixed(2))}">
+    <label class="check"><input type="checkbox" id="oxOn" ${x.aiEnabled?'checked':''}> AI features on</label>
+    <p class="muted">Spent this month: ${esc(ovMoney((x.spentCents||0)/100))}. Lowering the budget below what's spent stops further AI use this month; it never cancels work already done.</p>`,
+    `<button type="button" class="btn" data-oxback>Back</button><button type="submit" class="btn primary">Save</button>`);
+  ovxBack(f);
+  f.onsubmit=async e=>{e.preventDefault();f.err('');const c=ovxCents($('#oxAmt',f).value);if(c===null)return f.err('Enter an amount between $0 and $100,000 CAD.');
+    try{await api('PUT',`/api/overview/excel/firms/${encodeURIComponent(x.id)}/ai-budget`,{monthlyLimitCents:c,aiEnabled:$('#oxOn',f).checked});toast('AI budget saved');ovExcelSummary();ovExcelManage()}catch(ex){f.err(ex.message)}};
+}
+function ovxSuspend(x){
+  const f=openModal(`Suspend · ${x.name}`,`
+    <p>Suspending stops every employee of <b translate="no">${esc(x.name)}</b> from using Sumlora for Excel accounts and AI until you reactivate the firm. Their data is kept.</p>
+    <label for="oxWhy">Reason (kept in the firm's activity log)</label><input id="oxWhy" maxlength="500">`,
+    `<button type="button" class="btn" data-oxback>Back</button><button type="submit" class="btn primary">Suspend firm</button>`);
+  ovxBack(f);
+  f.onsubmit=async e=>{e.preventDefault();f.err('');
+    try{await api('POST',`/api/overview/excel/firms/${encodeURIComponent(x.id)}/suspend`,{reason:$('#oxWhy',f).value});toast(`${x.name} suspended`);ovExcelSummary();ovExcelManage()}catch(ex){f.err(ex.message)}};
+}
+async function ovxInvites(x){
+  const f=openModal(`Invitations · ${x.name}`,'<div class="muted">Loading…</div>',`<button type="button" class="btn" data-oxback>Back</button>`,'wide');
+  ovxBack(f);
+  let list;try{list=(await api('GET',`/api/overview/excel/firms/${encodeURIComponent(x.id)}/invitations`)).invitations}catch(ex){return f.err(ex.message)}
+  const S_={pending:'Waiting',accepted:'Accepted',revoked:'Cancelled',expired:'Expired'};
+  $('.mbody',f).innerHTML=`${x.status==='suspended'?'<p class="neg">This firm is suspended, so new invitations cannot be sent.</p>':`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <div class="grow"><label for="oxEmail">Invite someone (usually another firm administrator)</label><input id="oxEmail" type="email" maxlength="254" autocomplete="off"></div>
+      <div><label for="oxRole">Role</label><select id="oxRole">${Object.entries(OVX_ROLES).map(([v,l])=>`<option value="${v}">${esc(l)}</option>`).join('')}</select></div>
+      <button type="button" class="btn primary" data-oxinvite>Create link</button></div>`}
+    <div class="tbl-wrap" style="margin-top:12px"><table><thead><tr><th>Email</th><th>Role</th><th>Status</th><th>Sent by</th><th>Expires</th><th></th></tr></thead><tbody>${list.length?list.map(i=>`<tr><td translate="no">${esc(i.email)}</td><td>${esc(OVX_ROLES[i.role]||i.role)}</td><td>${esc(S_[i.state]||i.state)}</td><td class="muted" translate="no">${esc(i.invitedByType==='platform_admin'?'Sumlora ('+i.invitedById+')':'Firm administrator')}</td><td class="muted">${esc(ovxDate(i.expiresAt))}</td><td style="text-align:right">${i.state==='pending'?`<button type="button" class="btn sm ghost" data-oxrevoke="${esc(i.id)}">Cancel</button>`:''}</td></tr>`).join(''):'<tr><td colspan="6" class="muted">No invitations yet.</td></tr>'}</tbody></table></div><div class="err-msg" data-err></div>`;
+  f.onclick=async e=>{
+    const r=e.target.closest('[data-oxrevoke]');
+    if(r){if(!await confirmBox('Cancel invitation','The link will stop working. Cancel it?','Cancel invitation'))return;
+      try{await api('POST',`/api/overview/excel/firms/${encodeURIComponent(x.id)}/invitations/${encodeURIComponent(r.dataset.oxrevoke)}/revoke`);toast('Invitation cancelled');ovxInvites(x)}catch(ex){f.err(ex.message)}return}
+    if(e.target.closest('[data-oxinvite]')){f.err('');const email=$('#oxEmail',f).value.trim();
+      try{const out=await api('POST',`/api/overview/excel/firms/${encodeURIComponent(x.id)}/invitations`,{email,role:$('#oxRole',f).value});ovxShowLink(email,out,true)}catch(ex){f.err(ex.message)}}
+  };
+}
+async function ovxAudit(x){
+  const f=openModal(`Activity · ${x.name}`,'<div class="muted">Loading…</div>',`<button type="button" class="btn" data-oxback>Back</button>`,'wide');
+  ovxBack(f);
+  let ev;try{ev=(await api('GET',`/api/overview/excel/firms/${encodeURIComponent(x.id)}/audit?limit=100`)).events}catch(ex){return f.err(ex.message)}
+  const who=v=>v.actorType==='platform_admin'?'Sumlora: '+v.actorId:v.actorType==='firm_member'?'Firm member':'System';
+  $('.mbody',f).innerHTML=`<p class="muted">The most recent 100 events, newest first. This log cannot be edited or deleted.</p><div class="tbl-wrap"><table><thead><tr><th>When</th><th>What</th><th>Who</th><th>Result</th></tr></thead><tbody>${ev.length?ev.map(v=>`<tr><td class="muted">${esc(ovxDate(v.occurredAt))}</td><td>${esc(v.action)}</td><td translate="no">${esc(who(v))}</td><td>${esc(v.outcome)}</td></tr>`).join(''):'<tr><td colspan="4" class="muted">No activity yet.</td></tr>'}</tbody></table></div><div class="err-msg" data-err></div>`;
 }
 function bindOverview(m){
   const sel=$('[data-ovyemonth]',m);if(sel)sel.onchange=()=>{OVW_YE=null;renderMain();ovYearEnds(sel.value)};
@@ -262,7 +348,7 @@ function bindOverview(m){
     if(a==='product-bookkeeping'){OV_PRODUCT='bookkeeping';return renderMain()}
     if(a==='product-excel'){OV_PRODUCT='excel';renderMain();return ovExcelSummary()}
     if(a==='excel-invite')return ovExcelInviteForm();
-    if(a==='excel-manage')return openModal('Manage Excel firms', `<p>Excel firm management is not connected yet. No firms or usage figures can be safely displayed until the Excel administration database is available.</p><p class="muted">The Excel pilot preview is available in this dashboard, but it contains fictional data.</p>`);
+    if(a==='excel-manage')return ovExcelManage();
     if(a==='refresh')return showOverview();
     if(a==='ye-csv')return ovYeCsv();
     if(a==='firms')return showFirms();
