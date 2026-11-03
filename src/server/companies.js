@@ -81,6 +81,8 @@ class Registry {
     if (patch.name !== undefined) c.name = String(patch.name).slice(0, 120);
     if (patch.archived !== undefined) c.archived = !!patch.archived;
     if (patch.automationEntitled !== undefined) c.automationEntitled = patch.automationEntitled === true;
+    // Audit AI premium access: only the platform-admin API may supply this field.
+    if (patch.auditAiEntitled !== undefined) c.auditAiEntitled = patch.auditAiEntitled === true;
     if (patch.lastOpened !== undefined) c.lastOpened = patch.lastOpened;
     if (patch.payer !== undefined) c.payer = patch.payer === 'client' ? 'client' : 'firm';   // who pays for Sumlora for this company
     if (patch.billing !== undefined) c.billing = patch.billing;
