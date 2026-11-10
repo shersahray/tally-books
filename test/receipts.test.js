@@ -136,3 +136,38 @@ test('receipts: the very same file sent twice is kept once', async () => {
   assert.equal((await call('DELETE', `/api/c/records/receipts/${first.json.id}`)).status, 200);
   assert.equal((await send(photo, 'gas.jpg', cookie)).json.duplicate, undefined);
 });
+
+test('a company’s own AI budget: an owner sets it, AI stops when it’s used, receipts are still kept', async () => {
+  const photo = n => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(120, n)]);
+  const readOf = async id => { let r; for (let i = 0; i < 50; i++) { r = (await state()).receipts.find(x => x.id === id); if (r.readStatus !== 'waiting' && r.readStatus !== 'reading') break; await new Promise(z => setTimeout(z, 50)); } return r; };
+  // No budget yet: no company limit, and what AI has cost this company so far is counted.
+  const b0 = (await call('GET', '/api/c/ai/budget')).json;
+  assert.equal(b0.capUsd, null); assert.equal(b0.used, false);
+  const first = await readOf((await send(photo(21), 'one.jpg', clientCookie)).json.id);
+  assert.equal(first.readStatus, 'read');
+  // Only an owner sets it; clients don't see it.
+  assert.equal((await call('GET', '/api/c/ai/budget', undefined, clientCookie)).status, 403);
+  assert.equal((await call('PUT', '/api/c/ai/budget', { capUsd: 5 }, clientCookie)).status, 403);
+  assert.equal((await call('PUT', '/api/c/ai/budget', { capUsd: -1 })).status, 400);
+  assert.equal((await call('PUT', '/api/c/ai/budget', { capUsd: 'lots' })).status, 400);
+  // A budget of $0: used up at once.
+  const set = await call('PUT', '/api/c/ai/budget', { capUsd: 0 });
+  assert.equal(set.status, 200); assert.equal(set.json.capUsd, 0); assert.equal(set.json.used, true);
+  const kept = await send(photo(22), 'two.jpg', clientCookie);
+  assert.equal(kept.status, 200, 'the client can still send receipts');
+  const two = (await state()).receipts.find(x => x.id === kept.json.id);
+  assert.equal(two.readStatus, 'off'); assert.match(two.readError, /AI budget for this month/);
+  const again = await call('POST', `/api/c/receipts/${kept.json.id}/read`);
+  assert.equal(again.status, 429); assert.match(again.json.error, /AI budget/);
+  assert.equal((await call('POST', '/api/c/ai/suggest', { ids: ['x'] })).status, 429, 'bank suggestions stop too');
+  // Raised: the receipt that waited can be read, and the spending shows.
+  assert.equal((await call('PUT', '/api/c/ai/budget', { capUsd: 25 })).json.used, false);
+  assert.equal((await call('POST', `/api/c/receipts/${kept.json.id}/read`)).status, 200);
+  assert.equal((await readOf(kept.json.id)).readStatus, 'read');
+  for (let n = 23; n < 27; n++) await readOf((await send(photo(n), `r${n}.jpg`, cookie)).json.id);
+  const b1 = (await call('GET', '/api/c/ai/budget')).json;
+  assert.equal(b1.capUsd, 25); assert.ok(b1.spentUsd > 0, 'reading receipts counts toward the budget');
+  assert.ok((await call('GET', '/api/c/audit')).json.rows.some(x => /AI budget set to US\$25\.00 a month \(was US\$0\.00\)/.test(x.summary)));
+  // Removed: no company limit again.
+  assert.equal((await call('PUT', '/api/c/ai/budget', { capUsd: null })).json.capUsd, null);
+});
