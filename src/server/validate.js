@@ -648,7 +648,7 @@ function sanitizeDraft(x, { accounts, vendors } = {}) {
     reason: str(x.reason, 300),
   };
 }
-const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'draft', 'readAt', 'wasAttached', 'source', 'emailFrom', 'emailSubject'];
+const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'draft', 'readAt', 'wasAttached', 'source', 'emailFrom', 'emailSubject', 'sha'];
 const RECEIPT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic'];
 function validateReceipt(data, store, id) {
   const prev = store.get('receipts', id);
@@ -664,6 +664,7 @@ function validateReceipt(data, store, id) {
     // Emailed in (kept through a backup and restore): who sent it and the subject.
     if (data.source === 'email') Object.assign(base, { source: 'email', emailFrom: str(data.emailFrom, 200), emailSubject: str(data.emailSubject, 200) });
     if (data.draft) base.draft = sanitizeDraft(data.draft);
+    if (/^[0-9a-f]{64}$/.test(String(data.sha || ''))) base.sha = String(data.sha);
   }
   const status = RECEIPT_STATUS.includes(data.status) ? data.status : 'inbox';
   const entryId = data.entryId ? String(data.entryId) : '', docId = data.docId ? String(data.docId) : '';

@@ -54,6 +54,8 @@ async function hook(body, { s = secret, type = 'application/json' } = {}) {
 }
 const postmark = (o = {}) => ({ From: '"Pat Lee" <pat@client.example>', FromFull: { Email: 'pat@client.example', Name: 'Pat Lee' }, To: address, ToFull: [{ Email: address }], OriginalRecipient: address,
   Subject: 'Costco receipt', TextBody: 'See attached.', HtmlBody: '', Attachments: [{ Name: 'costco.pdf', ContentType: 'application/pdf', Content: PDF.toString('base64'), ContentLength: PDF.length }], ...o });
+// A different file each time: the very same file sent twice is kept once.
+const other = n => { const b = Buffer.from(`%PDF-1.4\n%fake receipt ${n}\n`); return [{ Name: `receipt-${n}.pdf`, ContentType: 'application/pdf', Content: b.toString('base64'), ContentLength: b.length }]; };
 const stateOf = async c => (await (await fetch(`${base}/api/c/${c}/state`, { headers: { ...basic, cookie } })).json());
 
 test('administrator turns it on; the company gets an address it can change', async () => {
@@ -127,8 +129,8 @@ test('allowed senders: others are refused and logged', async () => {
   const info = (await call('GET', '/api/c/receipts/email')).json;
   assert.equal(info.rejected[0].from, 'eve@evil.example');
   // A whole domain, and an exact address (in any case).
-  assert.equal((await hook(postmark({ From: 'a@shop.example', FromFull: { Email: 'A@Shop.example' } }))).json.ok, true);
-  assert.equal((await hook(postmark({ From: 'boss@client.example', FromFull: { Email: 'boss@client.example' } }))).json.ok, true);
+  assert.equal((await hook(postmark({ From: 'a@shop.example', FromFull: { Email: 'A@Shop.example' }, Attachments: other('shop') }))).json.ok, true);
+  assert.equal((await hook(postmark({ From: 'boss@client.example', FromFull: { Email: 'boss@client.example' }, Attachments: other('boss') }))).json.ok, true);
   await call('PUT', '/api/c/receipts/email', { allowed: [] });
 });
 
@@ -163,6 +165,7 @@ test('only PDFs and photos; too big is refused; an email with no attachment beco
 });
 
 test('SendGrid Inbound Parse (multipart form) is read too', async () => {
+  const PDF = Buffer.from('%PDF-1.4\n%fake receipt from Home Depot\n');
   const B = '----xyzBOUNDARY';
   const part = (name, value) => `--${B}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
   const body = Buffer.concat([
@@ -178,6 +181,28 @@ test('SendGrid Inbound Parse (multipart form) is read too', async () => {
   assert.equal(rec.emailFrom, 'sam@client.example'); assert.equal(rec.emailSubject, 'Home Depot'); assert.equal(rec.fileName, 'hd.pdf');
   const f = Buffer.from(await (await fetch(`${base}/api/c/${co}/files/${rec.fileId}`, { headers: { ...basic, cookie } })).arrayBuffer());
   assert.deepEqual(f, PDF, 'the file comes through byte for byte');
+});
+
+test('the very same file emailed again, or already sent from a phone, is kept once', async () => {
+  const before = (await stateOf(co)).receipts.length;
+  // The first test's email, forwarded a second time.
+  const again = await hook(postmark());
+  assert.equal(again.status, 200); assert.match(again.json.results[0].rejected, /already in Receipts/);
+  assert.equal((await stateOf(co)).receipts.length, before);
+  assert.match((await call('GET', '/api/c/receipts/email')).json.rejected[0].reason, /already in Receipts/);
+  // One new file and one repeat (attached twice): only the new one is added.
+  const fresh = other('fresh')[0];
+  const mixed = await hook(postmark({ Attachments: [fresh, { ...fresh, Name: 'copy.pdf' }, ...postmark().Attachments] }));
+  assert.equal(mixed.json.results[0].receipts.length, 1); assert.equal(mixed.json.results[0].skipped.length, 2);
+  const st = await stateOf(co);
+  assert.equal(st.receipts.length, before + 1);
+  assert.match(st.receipts.find(x => x.id === mixed.json.results[0].receipts[0]).sha, /^[0-9a-f]{64}$/);
+  // Sent from the Receipts screen after it was emailed: the upload says so instead of adding it.
+  const up = await call('POST', '/api/c/receipts', { fileName: 'fresh.pdf', mediaType: 'application/pdf', data: fresh.Content });
+  assert.equal(up.status, 200); assert.equal(up.json.duplicate, true);
+  assert.equal((await stateOf(co)).receipts.length, before + 1);
+  // The same file is still a new receipt in another company.
+  assert.equal((await stateOf(co2)).receipts.length, 0);
 });
 
 test('a plan without the feature: emails are refused, settings can’t be changed', async () => {
