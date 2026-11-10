@@ -38,6 +38,20 @@ function rcMatches(r){
   return out.sort((x,y)=>x.gap-y.gap||rank[x.kind]-rank[y.kind]);
 }
 
+/* A different photo of the same receipt (photographed twice, or photographed and emailed) can't be told apart by its
+   file, so it's spotted from what AI read: the same total and date, and the same vendor or receipt number. */
+const rcKey=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[^a-z0-9]/g,'');
+function rcDup(r){
+  const d=r.draft;if(!d||!(d.total>0)||!d.date)return null;
+  const v=d.vendorId||rcKey(d.vendorName),n=rcKey(d.number);
+  return S.receipts.find(x=>{
+    const e=x.draft;if(x.id===r.id||x.status==='discarded'||!e||!e.date)return false;
+    if(Math.abs((+e.total||0)-d.total)>=0.005||e.date!==d.date||(e.currency||'')!==(d.currency||''))return false;
+    return !!(v&&v===(e.vendorId||rcKey(e.vendorName)))||!!(n&&n===rcKey(e.number));
+  })||null;
+}
+const rcDupLine=r=>{const x=!rcIsClient()&&r.status==='inbox'?rcDup(r):null;return x?`<span class="rc-err"><span>Possible duplicate of a receipt ${x.source==='email'?'emailed in':'sent'} on</span> ${fmtDate(rcDay(x.uploadedAt))}${x.status==='done'?' <span>(already recorded)</span>':''}</span>`:''};
+
 /* ---------- sending ---------- */
 // Phone photos are made smaller (2,000 pixels on the long side) before they're sent: faster on mobile data,
 // less storage, and cheaper for AI to read. PDFs go as they are.
@@ -56,16 +70,19 @@ async function rcShrink(file){
 }
 async function rcSend(files){
   files=[...files];if(!files.length)return;
-  let ok=0;
+  let ok=0,dup=0;
   for(let i=0;i<files.length;i++){
     S.rc.sending=files.length>1?`Sending ${i+1} of ${files.length}…`:'Sending…';renderMain();
     try{
       const f=await rcShrink(files[i]);
       if(f.size>10*1024*1024)throw new Error('That file is over 10 MB. Try a smaller photo or a shorter PDF.');
-      await api('POST','/api/receipts',{fileName:f.name,mediaType:f.type,data:await fileB64(f)});ok++;
+      const out=await api('POST','/api/receipts',{fileName:f.name,mediaType:f.type,data:await fileB64(f)});
+      if(out&&out.duplicate){dup++;continue}
+      ok++;
     }catch(e){toast(e.message,true)}
   }
   S.rc.sending='';S.rc.show='inbox';await load();
+  if(dup)toast(dup===1?'That receipt was already sent, so it wasn’t added again.':`${dup} of those receipts were already sent, so they weren’t added again.`,!ok);
   if(ok)toast(ok===1?(rcIsClient()?'Receipt sent to your bookkeeper':'Receipt added'):(rcIsClient()?`${ok} receipts sent to your bookkeeper`:`${ok} receipts added`));
 }
 
@@ -94,6 +111,7 @@ function rcCard(r){
       ${m?`<span class="rc-match">${m.kind==='bank'?'Bank line':m.kind==='doc'?'Unpaid bill':'Already recorded'}: <span translate="no">${esc(m.label)}</span> · ${fmtDate(m.date)}</span>`:''}
       ${linked?`<span class="rc-match"><span>${TLABEL[linked.type]||linked.type}</span> · ${fmtDate(linked.date)}</span>`:doc?`<span class="rc-match"><span>Bill</span>${doc.number?` <span translate="no">#${esc(doc.number)}</span>`:''} · ${fmtDate(doc.date)}</span>`:''}
       ${r.readStatus==='failed'&&!rcIsClient()?`<span class="rc-err">${esc(r.readError||'Reading failed.')}</span>`:''}
+      ${rcDupLine(r)}
     </span>
     <span class="rc-status">${rcStatus(r)}</span></button>`;
 }
@@ -130,6 +148,7 @@ function rcModal(r){
       ${d.taxes.map(t=>`<tr><td translate="no">${esc(t.name)}</td><td class="n">${money(t.amount)}</td></tr>`).join('')}
       <tr class="tot"><td>Total</td><td class="n">${money(d.total)}${d.currency&&d.currency!=='CAD'?` <span translate="no">${esc(d.currency)}</span>`:''}</td></tr>
     </tbody></table>${cl?'':`<div class="muted" style="font-size:12.5px;margin-top:6px"><span>Read by AI · ${conf} confidence</span>${d.paid?'':' <span>· Not paid yet</span>'}${d.reason?` · <span translate="no">${esc(d.reason)}</span>`:''}</div>`}`;
+    const dl=rcDupLine(r);if(dl)info+=`<div style="margin-top:6px">${dl}. <span class="muted">Check before recording it twice.</span></div>`;
   }else if(r.readStatus==='waiting'||r.readStatus==='reading')info='<div class="muted">AI is reading this receipt…</div>';
   else if(!cl)info=`<div class="muted">${r.readStatus==='failed'?`<span>${esc(r.readError||'Reading failed.')}</span>`:`<span>Not read by AI.</span>${r.readError?` <span>${esc(r.readError)}</span>`:''}`}</div>`;
 

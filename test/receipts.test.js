@@ -116,3 +116,23 @@ test('receipts: photos are backed up once, in their own folder', async () => {
   assert.ok(files.some(f => f.endsWith('.jpg')) && files.some(f => f.endsWith('.pdf')));
   fs.rmSync(out, { recursive: true, force: true });
 });
+
+test('receipts: the very same file sent twice is kept once', async () => {
+  const photo = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 9)]);
+  const first = await send(photo, 'gas.jpg', clientCookie);
+  assert.equal(first.status, 200); assert.equal(first.json.duplicate, undefined);
+  const count = (await state()).receipts.length;
+  const again = await send(photo, 'gas (1).jpg', cookie);
+  assert.equal(again.status, 200); assert.equal(again.json.duplicate, true); assert.equal(again.json.id, first.json.id, 'points at the one already there');
+  const st = await state();
+  assert.equal(st.receipts.length, count, 'nothing added');
+  const rec = st.receipts.find(x => x.id === first.json.id);
+  assert.match(rec.sha, /^[0-9a-f]{64}$/);
+  // The fingerprint is the server's: an edit can't change it.
+  await call('PUT', `/api/c/records/receipts/${first.json.id}`, { ...rec, id: undefined, note: 'fuel', sha: 'f'.repeat(64) });
+  assert.equal((await state()).receipts.find(x => x.id === first.json.id).sha, rec.sha);
+  // A different photo is a different receipt, and once the first is removed the same file can be sent again.
+  assert.equal((await send(Buffer.concat([photo, Buffer.from([1])]), 'gas2.jpg', cookie)).json.duplicate, undefined);
+  assert.equal((await call('DELETE', `/api/c/records/receipts/${first.json.id}`)).status, 200);
+  assert.equal((await send(photo, 'gas.jpg', cookie)).json.duplicate, undefined);
+});

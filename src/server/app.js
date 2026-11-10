@@ -2839,12 +2839,15 @@ function createApp(opts) {
       if (data.length > 10 * 1024 * 1024) throw new ValidationError('That file is over 10 MB. Try a smaller photo or a shorter PDF.', 413);
       const mediaType = sniffType(data);
       if (!mediaType) throw new ValidationError('Choose a PDF or a photo (JPEG, PNG or WebP).');
+      // The very same file sent twice (a double tap, or picked again from the gallery) isn't kept twice.
+      const sha = fileSha(data), same = sameReceipt(ctx.store, sha, data.length);
+      if (same) return { ok: true, duplicate: true, id: same.id, sentOn: same.uploadedAt || 0 };
       const id = crypto.randomUUID(), fileId = crypto.randomUUID();
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       let canRead = ai.status().configured && company.ai && firmAi(ctx.id);
       try { if (canRead) needFirmAi(ctx.id); } catch { canRead = false; }
       const fileName = String(body.fileName || 'receipt').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').slice(0, 120);
-      const rec = { fileId, fileName, mediaType, size: data.length, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now(),
+      const rec = { fileId, fileName, mediaType, size: data.length, sha, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now(),
         readStatus: canRead ? 'waiting' : 'off', readError: '', status: 'inbox', note: String(body.note || '').slice(0, 500), entryId: '', docId: '' };
       ctx.store.transaction(() => {
         ctx.store.putMeta(dayKey, sentToday + 1);
@@ -3263,6 +3266,18 @@ function createApp(opts) {
      Answers 200 for anything the provider shouldn't send again (an unknown address, a sender that isn't allowed,
      a company without the feature): the reason is in the answer and in that company's Settings → Receipts by email. */
   const inboundHits = new Map(); // company -> { since, n }: emails in the last hour
+  /* The same receipt file sent twice. Each receipt keeps a fingerprint (SHA-256) of its file; receipts from before
+     fingerprints existed are compared by size first and fingerprinted when the size is the same. */
+  const fileSha = data => crypto.createHash('sha256').update(data).digest('hex');
+  function sameReceipt(store, sha, size) {
+    for (const r of store.list('receipts')) {
+      if (r.sha) { if (r.sha === sha) return r; continue; }
+      if (r.size !== size) continue;
+      const f = store.getFile(r.fileId);
+      if (f && fileSha(f.data) === sha) return r;
+    }
+    return null;
+  }
   function inboundRefuse(cid, from, reason) {
     try {
       const store = reg.store(cid), cfg = store.getSetting('inboundEmail') || {};
@@ -3311,7 +3326,10 @@ function createApp(opts) {
       if (a.inline && a.data.length < inbound.INLINE_MIN) continue;
       if (a.data.length > inbound.LIMITS.attachment) { skipped.push(`${a.name || 'file'}: over 10 MB`); continue; }
       if (files.length >= inbound.LIMITS.files) { skipped.push(`${a.name || 'file'}: more than ${inbound.LIMITS.files} files`); continue; }
-      files.push({ data: a.data, mediaType, name: a.name });
+      // The very same file already in Receipts (the email forwarded twice, or also sent from a phone) isn't kept twice.
+      const sha = fileSha(a.data);
+      if (files.some(x => x.sha === sha) || sameReceipt(ctx.store, sha, a.data.length)) { skipped.push(`${a.name || 'file'}: already in Receipts`); continue; }
+      files.push({ data: a.data, mediaType, name: a.name, sha });
     }
     if (!files.length) {
       if (skipped.length) return { rejected: inboundRefuse(cid, mail.fromEmail, `Nothing could be used: ${skipped.join('; ')}.`.slice(0, 300)), skipped };
@@ -3334,7 +3352,7 @@ function createApp(opts) {
         const fileName = String(fl.name || 'receipt').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').trim().slice(0, 120) || 'receipt';
         // AI reads PDFs and the usual photo types; an iPhone's HEIC photo is kept for the bookkeeper to look at.
         const readable = fl.mediaType !== 'image/heic';
-        const rec = { fileId, fileName, mediaType: fl.mediaType, size: fl.data.length, uploadedBy: '', uploadedByName: mail.fromEmail, uploadedAt: Date.now(),
+        const rec = { fileId, fileName, mediaType: fl.mediaType, size: fl.data.length, sha: fl.sha || fileSha(fl.data), uploadedBy: '', uploadedByName: mail.fromEmail, uploadedAt: Date.now(),
           readStatus: canRead && readable ? 'waiting' : 'off', readError: canRead && !readable ? 'AI can’t read HEIC photos. Open it to record it.' : '', status: 'inbox', note: '', entryId: '', docId: '',
           source: 'email', emailFrom: mail.fromEmail, emailSubject: mail.subject.slice(0, 200) };
         ctx.store.putFile(fileId, { mediaType: fl.mediaType, name: fileName, data: fl.data });

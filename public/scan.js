@@ -15,15 +15,34 @@ async function init(){
   if(!companies.length){showStatus('No company is available for this account.',true);}
  }catch(err){el('signIn').hidden=false;el('scanner').hidden=true;el('logout').hidden=true;if(err.message!=='Request failed (401)'){const status=el('loginStatus');status.textContent='Could not open your companies: '+err.message;status.hidden=false}}
 }
+// Phone photos are made smaller (2,000 pixels on the long side) before they're sent, as on the Receipts screen:
+// faster on mobile data, less storage, and cheaper for AI to read. PDFs, and anything that can't be redrawn, go as they are.
+async function shrink(file){
+ if(file.type==='application/pdf')return file;
+ let url;
+ try{
+  url=URL.createObjectURL(file);
+  const img=new Image();await new Promise((ok,no)=>{img.onload=ok;img.onerror=no;img.src=url});
+  const k=Math.min(1,2000/Math.max(img.naturalWidth,img.naturalHeight));
+  const c=document.createElement('canvas');c.width=Math.round(img.naturalWidth*k);c.height=Math.round(img.naturalHeight*k);
+  c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  const blob=await new Promise(ok=>c.toBlob(ok,'image/jpeg',0.85));
+  return blob&&blob.size<file.size?new File([blob],file.name.replace(/\.[^.]+$/,'')+'.jpg',{type:'image/jpeg'}):file;
+ }catch(e){return file}finally{if(url)URL.revokeObjectURL(url)}
+}
+let listed=false;function note(div){if(!listed){el('history').textContent='';listed=true}el('history').prepend(div)}
 const b64=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('Could not read the file'));reader.readAsDataURL(file)});
 async function upload(files){if(busy)return;const company=el('company').value;if(!company)return showStatus('Select a business first.',true);busy=true;
- try{let ok=0;for(let i=0;i<files.length;i++){const f=files[i];if(f.size>10*1024*1024){showStatus(f.name+' is larger than 10 MB.',true);continue}
+ try{let ok=0,dup=0;for(let i=0;i<files.length;i++){let f=files[i];
  if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(f.type)){showStatus(f.name+' is not a supported image or PDF.',true);continue}
  showStatus('Uploading '+(i+1)+' of '+files.length+': '+f.name);
- try{await request('/api/c/'+encodeURIComponent(company)+'/receipts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileName:f.name,mediaType:f.type,data:await b64(f)})});
- ok++;sent++;el('count').textContent=sent+' sent';if(sent===1)el('history').textContent='';const div=document.createElement('div');div.className='file';div.textContent='✓ '+f.name;el('history').prepend(div)}
+ f=await shrink(f);
+ if(f.size>10*1024*1024){showStatus(f.name+' is larger than 10 MB.',true);continue}
+ try{const out=await request('/api/c/'+encodeURIComponent(company)+'/receipts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileName:f.name,mediaType:f.type,data:await b64(f)})});
+ if(out.duplicate){dup++;const div=document.createElement('div');div.className='file';div.textContent='• '+f.name+' (already sent, not added again)';note(div);continue}
+ ok++;sent++;el('count').textContent=sent+' sent';const div=document.createElement('div');div.className='file';div.textContent='✓ '+f.name;note(div)}
  catch(e){showStatus('Could not upload '+f.name+': '+e.message,true)}}
- if(ok)showStatus(ok+' receipt'+(ok===1?'':'s')+' sent to Sumlora successfully.')}
+ if(ok||dup)showStatus((ok?ok+' receipt'+(ok===1?'':'s')+' sent to Sumlora successfully.':'')+(ok&&dup?' ':'')+(dup?(dup===1?'1 receipt was':dup+' receipts were')+' already sent, so '+(dup===1?'it wasn’t':'they weren’t')+' added again.':''))}
  finally{busy=false;el('camera').value='';el('files').value=''}}
 el('camera').addEventListener('change',e=>upload([...e.target.files]));
 el('files').addEventListener('change',e=>upload([...e.target.files]));
