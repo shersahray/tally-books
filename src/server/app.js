@@ -176,14 +176,34 @@ function createApp(opts) {
     throw new ValidationError(`${PLANS.FEATURES[key].label} isn’t part of this company’s plan.`, 403);
   };
   const firmAi = cid => { const c = reg.get(cid); const f = c && auth.firm(c.firmId); return !!(f && f.ai) && featureOn(cid, 'ai'); };
+  /* ---------- AI budget per company ----------
+     An owner can give a company its own monthly AI budget (US$, like the server's and the firm's limits). Everything AI
+     costs for that company counts toward it: bank suggestions, receipt reading, working-paper drafts, the assistant.
+     When it's used up, AI stops for that company until the 1st (or until an owner raises it); nothing else changes.
+     No budget set = no company limit, as before. The amounts live with the company's own books. */
+  const coAiKey = () => 'ai-usd:' + ai.month();
+  function coAiBudget(cid) {
+    let store; try { store = reg.store(cid); } catch { return { capUsd: null, spentUsd: 0, month: ai.month() }; }
+    const cap = (store.getSetting('aiBudget') || {}).capUsd;
+    return { capUsd: Number.isFinite(cap) && cap >= 0 ? cap : null, spentUsd: Number(store.getMeta(coAiKey()) || 0), month: ai.month() };
+  }
+  const needCoBudget = cid => {
+    const b = coAiBudget(cid);
+    if (b.capUsd !== null && b.spentUsd >= b.capUsd) throw new ValidationError(`This company’s AI budget for this month, $${b.capUsd.toFixed(2)}, has been used. An owner can raise it in Settings.`, 429);
+  };
   const needFirmAi = cid => {
     needFeature(cid, 'ai');
     if (!firmAi(cid)) throw new ValidationError('AI suggestions aren’t turned on for your firm. Ask the server’s administrator.', 403);
     const f = auth.firm(reg.get(cid).firmId);
     // Firms other than the administrators' each have a monthly limit, so one firm can't use the whole server's AI budget.
     if (f.id !== auth.mainFirmId && ai.firmSpent(f.id) >= (f.aiCapUsd ?? 10)) throw new ValidationError(`Your firm’s AI limit for this month, $${Number(f.aiCapUsd ?? 10).toFixed(2)}, has been reached. The server’s administrator can raise it.`, 429);
+    needCoBudget(cid);
   };
-  const chargeFirm = (cid, usd) => { const c = reg.get(cid); if (c) ai.addFirmUsage(c.firmId, usd); };
+  const chargeFirm = (cid, usd) => {
+    const c = reg.get(cid); if (!c) return;
+    ai.addFirmUsage(c.firmId, usd);
+    if (usd > 0) { try { const store = reg.store(cid); store.putMeta(coAiKey(), Math.round((Number(store.getMeta(coAiKey()) || 0) + usd) * 1e6) / 1e6); } catch { /* the firm's count is still kept */ } }
+  };
   /* ---------- Paying for Sumlora (online server; nothing changes until the administrator adds a Stripe key) ---------- */
   const billing = new Billing(opts.licenceDir || opts.dataDir, { fetch: opts.billingFetch });
   /* Bank of Canada exchange rates, cached for a day (past dates don't change). */
@@ -614,6 +634,7 @@ function createApp(opts) {
           try {
             needFirmAi(cid);
             const out = await ai.suggest(st, company, ids);
+            chargeFirm(cid, out.usd);
             if (!closing) st.putSetting('automationRun', { ...(st.getSetting('automationRun') || {}), error: '' });
             if (closing) return { skipped: true };
             if (AUTO.cfg(st).on && AUTO.cfg(st).ai && automationAllowed(reg.get(cid)) && firmAi(cid) && AUTO.basis(st) === before) {
@@ -2744,6 +2765,26 @@ function createApp(opts) {
       });
       return { ok: true, rev: result.added ? ctx.bump() : ctx.rev, ...result };
     }],
+    // This company's own AI budget for the month: the bookkeeper's team sees it, an owner sets it.
+    ['GET', /^\/ai\/budget$/, ctx => {
+      notClient(ctx.user);
+      const b = coAiBudget(ctx.id);
+      return { ...b, spentUsd: Math.round(b.spentUsd * 100) / 100, used: b.capUsd !== null && b.spentUsd >= b.capUsd };
+    }],
+    ['PUT', /^\/ai\/budget$/, async (ctx, req) => {
+      ownerOnly(ctx.user);
+      const body = (await readJson(req)) || {};
+      const none = body.capUsd === null || body.capUsd === undefined || body.capUsd === '';
+      const cap = none ? null : Math.round(Number(body.capUsd) * 100) / 100;
+      if (!none && !(Number.isFinite(cap) && cap >= 0 && cap <= 10000)) throw new ValidationError('Enter the monthly AI budget as an amount from 0 to 10,000, or leave it empty for no company limit.');
+      const before = coAiBudget(ctx.id).capUsd;
+      ctx.store.transaction(() => {
+        ctx.store.putSetting('aiBudget', cap === null ? {} : { capUsd: cap });
+        ctx.store.audit(ctx.user, 'settings', { collection: 'settings', id: 'aiBudget', summary: cap === null ? 'AI budget removed (no company limit)' : `AI budget set to US$${cap.toFixed(2)} a month${before !== null ? ` (was US$${before.toFixed(2)})` : ''}` });
+      });
+      const b = coAiBudget(ctx.id);
+      return { ...b, spentUsd: Math.round(b.spentUsd * 100) / 100, used: b.capUsd !== null && b.spentUsd >= b.capUsd };
+    }],
     // AI suggestions for bank lines waiting for review. Suggestions are saved on each line; nothing is added to the books.
     ['POST', /^\/ai\/suggest$/, async (ctx, req) => {
       notClient(ctx.user); // AI costs money: only the bookkeeper's team uses it needArea(ctx.user, 'banking');
@@ -2813,6 +2854,7 @@ function createApp(opts) {
       // Firms other than the administrators' still have their monthly AI spending limit.
       if (f && f.id !== auth.mainFirmId && ai.firmSpent(f.id) >= (f.aiCapUsd ?? 10)) throw new ValidationError(`Your firm’s AI limit for this month, $${Number(f.aiCapUsd ?? 10).toFixed(2)}, has been reached. The server’s administrator can raise it.`, 429);
       if (ai.spent() >= ai.settings.capUsd) throw new ValidationError(`This month’s AI limit of $${ai.settings.capUsd.toFixed(2)} has been reached. The server’s administrator can raise it in Settings.`, 429);
+      needCoBudget(ctx.id);
       const body = (await readJson(req)) || {};
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       const key = 'assistant-q:' + assistant.month(Date.now());
@@ -2844,11 +2886,11 @@ function createApp(opts) {
       if (same) return { ok: true, duplicate: true, id: same.id, sentOn: same.uploadedAt || 0 };
       const id = crypto.randomUUID(), fileId = crypto.randomUUID();
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
-      let canRead = ai.status().configured && company.ai && firmAi(ctx.id);
-      try { if (canRead) needFirmAi(ctx.id); } catch { canRead = false; }
+      let canRead = ai.status().configured && company.ai && firmAi(ctx.id), whyNot = '';
+      try { if (canRead) needFirmAi(ctx.id); } catch (e) { canRead = false; if (e.status === 429) whyNot = e.message; }
       const fileName = String(body.fileName || 'receipt').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').slice(0, 120);
       const rec = { fileId, fileName, mediaType, size: data.length, sha, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now(),
-        readStatus: canRead ? 'waiting' : 'off', readError: '', status: 'inbox', note: String(body.note || '').slice(0, 500), entryId: '', docId: '' };
+        readStatus: canRead ? 'waiting' : 'off', readError: whyNot, status: 'inbox', note: String(body.note || '').slice(0, 500), entryId: '', docId: '' };
       ctx.store.transaction(() => {
         ctx.store.putMeta(dayKey, sentToday + 1);
         ctx.store.putFile(fileId, { mediaType, name: fileName, data });
@@ -3341,8 +3383,8 @@ function createApp(opts) {
     const dayKey = 'receipts-sent:' + new Date().toISOString().slice(0, 10), sentToday = Number(ctx.store.getMeta(dayKey) || 0);
     if (sentToday + files.length > 300) return { rejected: inboundRefuse(cid, mail.fromEmail, 'That’s 300 receipts today for this company.') };
     const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
-    let canRead = ai.status().configured && company.ai && firmAi(cid);
-    try { if (canRead) needFirmAi(cid); } catch { canRead = false; }
+    let canRead = ai.status().configured && company.ai && firmAi(cid), whyNot = '';
+    try { if (canRead) needFirmAi(cid); } catch (e) { canRead = false; if (e.status === 429) whyNot = e.message; }
     const who = { username: 'email', name: mail.fromName ? `${mail.fromName} (${mail.fromEmail})` : mail.fromEmail };
     const ids = [];
     ctx.store.transaction(() => {
@@ -3353,7 +3395,7 @@ function createApp(opts) {
         // AI reads PDFs and the usual photo types; an iPhone's HEIC photo is kept for the bookkeeper to look at.
         const readable = fl.mediaType !== 'image/heic';
         const rec = { fileId, fileName, mediaType: fl.mediaType, size: fl.data.length, sha: fl.sha || fileSha(fl.data), uploadedBy: '', uploadedByName: mail.fromEmail, uploadedAt: Date.now(),
-          readStatus: canRead && readable ? 'waiting' : 'off', readError: canRead && !readable ? 'AI can’t read HEIC photos. Open it to record it.' : '', status: 'inbox', note: '', entryId: '', docId: '',
+          readStatus: canRead && readable ? 'waiting' : 'off', readError: canRead && !readable ? 'AI can’t read HEIC photos. Open it to record it.' : whyNot, status: 'inbox', note: '', entryId: '', docId: '',
           source: 'email', emailFrom: mail.fromEmail, emailSubject: mail.subject.slice(0, 200) };
         ctx.store.putFile(fileId, { mediaType: fl.mediaType, name: fileName, data: fl.data });
         ctx.store.put('receipts', id, rec);

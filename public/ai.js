@@ -4,7 +4,18 @@
    and saves the answer on each line as b.ai. It's only a suggestion: nothing is added to the books
    until someone clicks Add. The API key stays on the server. */
 let AIS=null,aiTried=0,aiBusy=false;
-async function loadAI(){try{AIS=await api('GET','/api/ai')}catch(e){AIS={configured:false,unavailable:true}}}
+let AIB=null; // this company's own AI budget for the month: {capUsd|null, spentUsd, used}
+async function loadAI(){
+  try{AIS=await api('GET','/api/ai')}catch(e){AIS={configured:false,unavailable:true}}
+  await loadAIB();
+}
+let aibFor='';
+async function loadAIB(){
+  aibFor=typeof CO!=='undefined'&&CO||'';
+  if(!aibFor||!ME||ME.role==='client'||!AIS||!AIS.configured){AIB=null;return}
+  const co=CO;
+  try{const b=await api('GET','/api/ai/budget');if(co===CO)AIB={...b,co}}catch(e){if(co===CO)AIB=null}
+}
 const usd=v=>isFr()?(+v||0).toLocaleString('fr-CA',{minimumFractionDigits:2,maximumFractionDigits:2})+' $ US':'US$'+(+v||0).toFixed(2);
 const aiOn=()=>!!(AIS&&AIS.configured&&S.company.ai&&ME&&!ME.readOnly&&ME.role!=='client'&&(typeof feat!=='function'||feat('ai')));
 
@@ -34,6 +45,17 @@ async function aiSuggest(a){
   }catch(e){aiBusy=false;renderMain();toast(e.message,true)}
 }
 
+/* ---------- This company's AI budget ----------
+   An owner can cap what AI costs for one company each month. When it's used up, AI stops for that company only. */
+function aiBudgetBlock(){
+  if(!AIB||AIB.co!==CO||!ME||ME.role==='client')return '';
+  const has=AIB.capUsd!==null,pct=has?(AIB.capUsd?Math.min(100,Math.round(AIB.spentUsd/AIB.capUsd*100)):100):0;
+  const meter=`<div><span class="flabel">This company, this month</span>${has?`<div class="meter" aria-hidden="true"><span style="width:${pct}%"></span></div>`:''}<div class="muted" style="font-size:13px">${has?`<span translate="no">${usd(AIB.spentUsd)}</span> of <span translate="no">${usd(AIB.capUsd)}</span>`:`<span translate="no">${usd(AIB.spentUsd)}</span> <span>spent · no company budget</span>`}${AIB.used?' · <span class="neg">Budget used: AI is paused for this company until the 1st</span>':''}</div></div>`;
+  if(ME.role!=='owner')return meter;
+  return `<div class="fields">${fld('aiCoCap','Monthly AI budget for this company (US$)',`<input type="number" id="aiCoCap" min="0" max="10000" step="1" value="${has?AIB.capUsd:''}" placeholder="No limit"><span class="hint">AI stops for this company at this amount each month: bank suggestions, receipt reading and the AI assistant. Receipts sent after that are kept for you to record by hand. Leave empty for no company limit.</span>`)}</div>
+    ${meter}<div class="actions"><button class="btn" data-aiact="budget">Save this company’s budget</button></div>`;
+}
+
 /* ---------- Settings panel ---------- */
 function aiPanel(){
   if(!ME||ME.role==='client')return '';
@@ -43,7 +65,7 @@ function aiPanel(){
   const owner=ME.role==='owner'&&ME.platformAdmin,c=S.company;
   const sw=`<label class="check"><input type="checkbox" id="aiCo" ${c.ai?'checked':''} ${AIS.configured?'':'disabled'}> Use AI suggestions for this company</label>`;
   const intro=`<div class="muted" style="font-size:13px">AI suggests a category, payee and sales tax for bank lines that rules and past choices don’t cover. It only suggests: you review every line and click Add. When you turn it on, each line’s date, description and amount, this company’s chart of accounts and payee names are sent to Anthropic (the maker of Claude) to be read. Anthropic doesn’t use data sent through its API to train its models. Tell your client if their engagement letter needs to say so.</div>`;
-  if(!owner)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>AI suggestions</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">${intro}${AIS.configured?sw:AIS.firmAllowed===false?'<div class="muted">AI suggestions aren’t turned on for your firm. The server’s administrator can turn them on.</div>':'<div class="muted">An owner sets up AI suggestions.</div>'}</div></div>`;
+  if(!owner)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>AI suggestions</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">${intro}${AIS.configured?sw+aiBudgetBlock():AIS.firmAllowed===false?'<div class="muted">AI suggestions aren’t turned on for your firm. The server’s administrator can turn them on.</div>':'<div class="muted">An owner sets up AI suggestions.</div>'}</div></div>`;
   if(AIS.demo)return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>AI suggestions</h3><div class="pad" style="display:flex;flex-direction:column;gap:12px">${intro}${sw}<div class="muted" style="font-size:13px"><b>In this demo,</b> suggestions are simple keyword guesses so you can see how the screen works. In Sumlora, an owner adds a Claude API key here and the suggestions come from Claude.</div></div></div>`;
   const pct=AIS.capUsd?Math.min(100,Math.round(AIS.spentUsd/AIS.capUsd*100)):0;
   return `<div class="panel" style="max-width:640px;margin-top:16px"><h3>AI suggestions</h3><div class="pad" style="display:flex;flex-direction:column;gap:14px">
@@ -58,6 +80,7 @@ function aiPanel(){
     </div>
     <div><span class="flabel">This month</span><div class="meter" aria-hidden="true"><span style="width:${pct}%"></span></div><div class="muted" style="font-size:13px"><span translate="no">${usd(AIS.spentUsd)}</span> of <span translate="no">${usd(AIS.capUsd)}</span> · ${AIS.linesThisMonth} bank line${AIS.linesThisMonth===1?'':'s'}</div></div>
     <div class="actions"><button class="btn primary" data-aiact="save">Save AI settings</button>${AIS.configured&&AIS.source!=='env'?'<button class="btn ghost" data-aiact="remove">Remove API key</button>':''}</div>
+    ${aiBudgetBlock()?`<hr style="border:0;border-top:1px solid var(--line,#ddd);margin:2px 0">${aiBudgetBlock()}`:''}
   </div></div>`;
 }
 async function aiAction(act){
@@ -66,6 +89,12 @@ async function aiAction(act){
       const body={model:$('#aiModel').value,capUsd:+$('#aiCap').value||0,assistantCap:Math.max(0,Math.round(+$('#aiAsstCap').value||0))};
       const k=$('#aiKey')?.value.trim();if(k)body.apiKey=k;
       AIS=await api('PUT','/api/ai',body);renderMain();toast(k?'API key saved':'AI settings saved');return;
+    }
+    if(act==='budget'){
+      const v=$('#aiCoCap').value.trim();
+      if(v!==''&&!(+v>=0)){toast('Enter the budget as an amount, or leave it empty for no limit.',true);return}
+      AIB={...await api('PUT','/api/ai/budget',{capUsd:v===''?null:+v}),co:CO};renderMain();
+      toast(AIB.capUsd===null?'AI budget removed for this company':'AI budget saved for this company');return;
     }
     if(act==='remove'){
       if(!await confirmBox('Remove the API key?','AI suggestions stop for every company until a key is added again. Suggestions already made stay on their bank lines.','Remove key'))return;
@@ -76,6 +105,8 @@ async function aiAction(act){
 function bindAI(m){
   const v=S.view==='settings'||S.view==='banking'||S.view==='expenses';
   if(v&&Date.now()-aiTried>30000&&(aiTried=Date.now()))loadAI().then(()=>{if(S.view==='settings'||S.view==='banking'||S.view==='expenses')renderMain()});
+  // Another company was opened since the budget was loaded: fetch this one's.
+  else if(S.view==='settings'&&typeof CO!=='undefined'&&CO&&aibFor!==CO)loadAIB().then(()=>{if(S.view==='settings')renderMain()});
   const t=$('#aiCo',m);if(t)t.onchange=async()=>{if(await putCompany({...strip(S.company),ai:t.checked}))toast(t.checked?'AI suggestions on for this company':'AI suggestions off for this company')};
 }
 
