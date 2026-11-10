@@ -7,6 +7,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { COLLECTIONS } = require('./db');
+const { AuditEvidenceService, keyFromEnv } = require('./audit-service');
+const auditAccess = require('./audit-access');
+const { ledgerCandidates } = require('./audit-ledger');
+
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
@@ -1765,6 +1769,122 @@ function createApp(opts) {
       if (data && data.length > 300 * 1024) throw new ValidationError('That logo is over 300 KB. Try a smaller picture.', 413);
       auth.setFirmLogo(user.firmId, data ? data.toString('base64') : '', user);
       return { ok: true, logo: !!data };
+    }],
+    // Premium Audit AI: company-bound, administrator-controlled, OFF by default.
+    ['GET', /^\/api\/overview\/audit-ai$/, (req,m,res,user)=>{
+      adminOnly(user);
+      return {companies:reg.list().map(c=>({id:c.id,name:c.name,firmName:(auth.firm(c.firmId)||{}).name||'',entitled:c.auditAiEntitled===true}))};
+    }],
+    ['PUT', /^\/api\/overview\/audit-ai\/([^/]+)$/, async(req,m,res,user)=>{
+      adminOnly(user);
+      if(user.readOnly)throw new ValidationError('Read only account',403);
+      const body=await readJson(req),id=decodeURIComponent(m[1]),co=reg.get(id);
+      if(!co)throw new ValidationError('Company not found',404);
+      if(typeof body?.entitled!=='boolean')throw new ValidationError('Boolean entitled required');
+      auditAccess.changeAuditAI({actor:user,company:co,enabled:body.entitled,
+        saveCompany:next=>reg.update(id,{auditAiEntitled:next.auditAiEntitled}),
+        audit:evt=>auth.log('audit-ai-access',{by:user.username,company:id,firm:co.firmId,on:evt.enabled})});
+      broadcast({companies:true,firmId:co.firmId});
+      return {ok:true,company:{id,entitled:body.entitled}};
+    }],
+    ['GET', /^\/api\/audit-ai\/([^/]+)\/evidence$/, (req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      return {evidence:service.list({context,store:ctxFor(cid).store})};
+    }],
+    ['POST', /^\/api\/audit-ai\/([^/]+)\/evidence$/, async(req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.readOnly||user.role==='client')throw new ValidationError('Accountant access required',403);
+      const body=await readJson(req,14*1024*1024);
+      if(!body||typeof body.data!=='string'||body.data.length>14*1024*1024||!/^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body.data))
+        throw new ValidationError('Invalid base64 PDF');
+      const bytes=Buffer.from(body.data,'base64');
+      const contextStore=ctxFor(cid);
+      const evidence=await service.upload({context,store:contextStore.store,bytes,name:body.name,ocr:body.ocr!==false});
+      contextStore.bump();
+      return {evidence};
+    }],
+    ['GET', /^\/api\/audit-ai\/([^/]+)\/evidence\/([0-9a-f-]+)$/, (req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      const found=service.download({context,store:ctxFor(cid).store,id:m[2]});
+      if(!found)throw new ValidationError('Evidence not found',404);
+      return {name:found.metadata.name,mediaType:'application/pdf',data:found.bytes.toString('base64')};
+    }],
+    ['GET', /^\/api\/audit-ai\/([^/]+)\/retention-preview$/, (req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.role!=='owner')throw new ValidationError('Firm owner required',403);
+      const query=new URL(req.url,'http://x').searchParams;
+      return service.retentionPreview({context,store:ctxFor(cid).store,days:Number(query.get('days')||2555)});
+    }],
+    ['PUT', /^\/api\/audit-ai\/([^/]+)\/evidence\/([0-9a-f-]+)\/legal-hold$/, async(req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.readOnly||user.role!=='owner')throw new ValidationError('Firm owner required',403);
+      const body=await readJson(req,4096),instance=ctxFor(cid);
+      const evidence=service.setLegalHold({context,store:instance.store,id:m[2],enabled:body?.enabled,reason:body?.reason});
+      if(!evidence)throw new ValidationError('Evidence not found',404);
+      instance.bump();
+      return {evidence};
+    }],
+    ['DELETE', /^\/api\/audit-ai\/([^/]+)\/evidence\/([0-9a-f-]+)$/, async(req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.readOnly||user.role!=='owner')throw new ValidationError('Firm owner required to delete evidence',403);
+      const body=await readJson(req,4096),instance=ctxFor(cid);
+      const result=service.deleteEvidence({context,store:instance.store,id:m[2],reason:body?.reason});
+      if(!result)throw new ValidationError('Evidence not found',404);
+      instance.bump();
+      return result;
+    }],
+    ['GET', /^\/api\/audit-ai\/([^/]+)\/ledger$/, (req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.role==='client')throw new ValidationError('Accountant access required',403);
+      return {transactions:ledgerCandidates(ctxFor(cid).store.list('entries'))};
+    }],
+    ['POST', /^\/api\/audit-ai\/([^/]+)\/match$/, async(req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      const body=await readJson(req,1024*1024);
+      return {matches:service.match({context,store:ctxFor(cid).store,transactions:body?.transactions})};
+    }],
+    ['GET', /^\/api\/audit-ai\/([^/]+)\/pair-reviews$/, (req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      return {reviews:service.pairReviews({context,store:ctxFor(cid).store})};
+    }],
+    ['POST', /^\/api\/audit-ai\/([^/]+)\/pair-reviews$/, async(req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      if(user.readOnly)throw new ValidationError('Reviewer access required',403);
+      const b=await readJson(req,8192),instance=ctxFor(cid);
+      const review=service.reviewPair({context,store:instance.store,entryId:b?.entryId,evidenceId:b?.evidenceId,decision:b?.decision,note:b?.note||''});
+      if(!review)throw new ValidationError('GL entry or evidence not found',404);
+      instance.bump();
+      return {review};
+    }],
+    ['POST', /^\/api\/audit-ai\/([^/]+)\/evidence\/([0-9a-f-]+)\/review$/, async(req,m,res,user)=>{
+      const cid=decodeURIComponent(m[1]),c=reg.get(cid),service=new AuditEvidenceService({key:keyFromEnv(process.env.AUDIT_AI_STORAGE_KEY)});
+      const context={user,company:c,firmActive:!!(c&&auth.firm(c.firmId)?.status==='active'),canSeeCompany:canSeeCo};
+      service.assertAccess(context);
+      const body=await readJson(req,8192),instance=ctxFor(cid);
+      const evidence=service.review({context,store:instance.store,id:m[2],decision:body?.decision,note:body?.note||''});
+      if(!evidence)throw new ValidationError('Evidence not found',404);
+      instance.bump();
+      return {evidence};
     }],
     // Server-owned paid entitlement, never accepted from a company settings/import/restore payload.
     ['GET', /^\/api\/overview\/automation$/, (req, m, res, user) => {
