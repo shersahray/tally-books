@@ -17,6 +17,10 @@
 <p class="muted">Two-step verification is supported. For account recovery or first-time setup, use <a href="https://app.sumlora.ca/">Sumlora</a>.</p></section>
 <section id="scanner" hidden>
 <div class="panel"><label class="label" for="company">Send to business</label><select id="company"></select><p class="muted">Only businesses your Sumlora account can access appear here.</p></div>
+<div class="panel" id="codePanel" hidden><h2 style="margin-top:0">Enter the 4-digit code</h2><p class="muted">For <b id="codeFor" translate="no"></b>. It’s the same company code you type when opening this business in Sumlora.</p>
+<label class="label" for="companyCode">Company code</label><input id="companyCode" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off">
+<div id="codeStatus" class="notice error" role="alert" hidden></div>
+<button type="button" id="codeOpen">Open and send</button><button type="button" class="secondary" id="codeCancel">Cancel</button></div>
 <div class="panel"><h2 style="margin-top:0">Scan a receipt</h2>
 <label class="action">📷 Take a photo<input type="file" id="camera" accept="image/jpeg,image/png,image/webp" capture="environment"></label>
 <label class="action secondary">Upload photo or PDF<input type="file" id="files" accept="image/jpeg,image/png,image/webp,application/pdf" multiple></label>
@@ -25,4 +29,4 @@
 <div class="panel"><div class="row"><h3>Uploads this session</h3><span id="count" class="muted">0 sent</span></div><div id="history" class="muted">No receipts sent yet.</div></div>
 </section>
 <footer class="muted"><button type="button" class="secondary" id="logout" hidden>Sign out of scanner</button>Receipts appear in Sumlora's existing inbox for review. Uploading does not automatically post an accounting entry. <a href="https://app.sumlora.ca/">Open Sumlora</a></footer>
-</main><script src="/scan.js?v=6" defer></script></body></html>
+</main><script src="/scan.js?v=7" defer></script></body></html>
