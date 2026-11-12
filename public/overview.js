@@ -6,14 +6,12 @@
 let OVW=null,OVW_DL=null,OVW_YE=null;
 let OV_PRODUCT='bookkeeping'; // Overview selection only. No change to licences or customer access.
 let OV_EXCEL=null;
-let OV_SEO=null,OV_SEO_KW=[],OV_SEO_SELECTED='',OV_SEO_ERROR='',OV_SEO_BUSY=false;
 
 async function showOverview(){
   S.view='overview';OVW=null;OVW_DL=null;renderMain();
   try{OVW=await api('GET','/api/overview')}catch(e){toast(e.message,true)}
   if(S.view==='overview')renderMain();
   await ovExcelSummary();
-  await ovSeoLoad();
   await ovYearEnds();
   try{OVW_DL=await api('GET','/api/overview/downloads')}catch(e){OVW_DL={error:e.message}}
   if(S.view==='overview')renderMain();
@@ -93,7 +91,6 @@ function ovProductTabs(){
   return `<nav class="panel" aria-label="Sumlora products" style="display:flex;gap:8px;padding:10px;margin-bottom:16px;flex-wrap:wrap">
     <button type="button" class="btn ${OV_PRODUCT==='bookkeeping'?'':'ghost'}" data-ov="product-bookkeeping" aria-pressed="${OV_PRODUCT==='bookkeeping'}">Bookkeeping</button>
     <button type="button" class="btn ${OV_PRODUCT==='excel'?'':'ghost'}" data-ov="product-excel" aria-pressed="${OV_PRODUCT==='excel'}">Excel</button>
-    <button type="button" class="btn ${OV_PRODUCT==='seo'?'':'ghost'}" data-ov="product-seo" aria-pressed="${OV_PRODUCT==='seo'}">SEO Studio</button>
   </nav>`;
 }
 function ovExcelPanel(){
@@ -122,7 +119,6 @@ function vOverview(){
   const back=`<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`;
   if(!ME||!ME.platformAdmin)return back+head('Overview','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Only the server’s administrator sees the overview.</div></div>';
   if(OV_PRODUCT==='excel')return back+head('Overview','Bookkeeping and Excel')+ovProductTabs()+ovExcelPanel();
-  if(OV_PRODUCT==='seo')return back+head('SEO Studio','Phase 1 · private marketing workspace')+ovProductTabs()+ovSeoPanel();
   if(!OVW)return back+head('Overview','Loading…')+ovProductTabs();
   const F=OVW.firms,Li=OVW.licences,D=OVW_DL,Su=OVW.subs,today=isoDay(new Date());
   const first=String(ME.name||'').split(' ')[0];
@@ -351,8 +347,6 @@ function bindOverview(m){
     const a=b.dataset.ov;
     if(a==='product-bookkeeping'){OV_PRODUCT='bookkeeping';return renderMain()}
     if(a==='product-excel'){OV_PRODUCT='excel';renderMain();return ovExcelSummary()}
-    if(a==='product-seo'){OV_PRODUCT='seo';renderMain();return ovSeoLoad()}
-    if(a&&a.startsWith('seo-'))return ovSeoAction(a,m,b);
     if(a==='excel-invite')return ovExcelInviteForm();
     if(a==='excel-manage')return ovExcelManage();
     if(a==='refresh')return showOverview();
@@ -363,53 +357,4 @@ function bindOverview(m){
     if(a==='invite-biz')return inviteBusinessForm(showOverview);
     if(a==='renew'){const l=OVW.licences.due.find(x=>x.id===b.dataset.id);if(l)return renewLicence(l)}
   };
-}
-
-/* SEO Studio is platform-admin only. All APIs enforce access on the server.
-   Drafts stay in private server storage and cannot be published from this page. */
-async function ovSeoLoad(){
-  try{OV_SEO=await api('GET','/api/overview/seo');OV_SEO_ERROR=''}
-  catch(e){OV_SEO_ERROR=e.message;OV_SEO=null}
-  if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain();
-}
-function ovSeoPanel(){
-  const state=OV_SEO||{},audit=state.lastAudit, drafts=state.drafts||[];
-  const row=(text)=>'<div class="muted" style="font-size:13px">'+esc(text)+'</div>';
-  const auditHtml=!audit?row('No audit run yet. Scan the live sumlora.ca website to check key SEO metadata.'):
-    '<p class="muted">Last checked '+esc(new Date(audit.checkedAt).toLocaleString())+' · '+Number(audit.issueCount)+' potential issues</p>'+
-    (audit.checks||[]).map(x=>'<p>'+esc(x.path)+' · '+(x.valid?'Valid':'Needs attention')+' (HTTP '+Number(x.status)+')</p>').join('')+
-    (audit.pages||[]).map(x=>'<details style="padding:9px 0;border-top:1px solid var(--line)"><summary>'+esc(x.url)+' · '+(x.issues||[]).length+' issue(s)</summary>'+
-      '<div class="muted">'+esc(x.title||'No title')+'</div>'+(x.issues||[]).map(z=>'<div style="padding:5px 0">• '+esc(z)+'</div>').join('')+'</details>').join('');
-  const kwHtml=OV_SEO_KW.length?OV_SEO_KW.map((c,i)=>'<div style="padding:12px;border:1px solid var(--line);border-radius:9px;margin:8px 0"><b>'+esc(c.cluster)+'</b>'+
-    c.keywords.map(k=>'<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0"><span>'+esc(k)+'</span><button class="btn sm ghost" data-ov="seo-use-keyword" data-kw="'+esc(k)+'">Use</button></div>').join('')+'</div>').join(''):row('Enter a topic and select Find keywords. These are curated ideas, not live search-volume estimates.');
-  return '<div class="banner"><span><b>Private · Draft only.</b> SEO Studio does not publish pages, claim live keyword volumes, or access client bookkeeping files.</span></div>'+
-    (OV_SEO_ERROR?'<div class="banner" role="alert">'+esc(OV_SEO_ERROR)+'</div>':'')+
-    '<section class="panel" style="margin:14px 0"><h3>Website SEO audit</h3><div class="pad"><p class="muted">Checks the live site and its sitemap and robots file. HTTP failures may mean a URL needs checking.</p>'+
-    '<button class="btn primary" data-ov="seo-audit" '+(OV_SEO_BUSY?'disabled':'')+'>Run website audit</button>'+auditHtml+'</div></section>'+
-    '<section class="panel" style="margin-bottom:14px"><h3>Keyword planner</h3><div class="pad">'+
-    '<label for="seoTopic">Topic</label><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="seoTopic" style="flex:1;min-width:200px" value="bookkeeping software canada" maxlength="90"><button class="btn" data-ov="seo-keywords">Find keywords</button></div>'+
-    row('Curated Canadian accounting and bookkeeping keyword clusters.')+kwHtml+'</div></section>'+
-    '<section class="panel" style="margin-bottom:14px"><h3>Article draft workspace</h3><div class="pad" style="display:grid;gap:12px">'+
-    '<label>Article title <input id="seoTitle" maxlength="130" placeholder="e.g. Best bookkeeping workflows for Canadian accountants" style="width:100%"></label>'+
-    '<label>Primary keyword <input id="seoKeyword" maxlength="90" value="'+esc(OV_SEO_SELECTED)+'" placeholder="e.g. bookkeeping software canada" style="width:100%"></label>'+
-    '<label>Audience <input id="seoAudience" maxlength="110" value="Canadian businesses and accounting firms" style="width:100%"></label>'+
-    '<div class="actions"><button class="btn" data-ov="seo-outline">Create outline</button><button class="btn primary" data-ov="seo-generate">Generate AI draft</button></div>'+
-    row('AI drafting requires ANTHROPIC_API_KEY on the server and incurs provider usage charges. Both actions save private drafts requiring review.')+
-    '<h4>Saved drafts ('+drafts.length+')</h4>'+
-    (drafts.length?drafts.map((d,i)=>'<details style="border-top:1px solid var(--line);padding:9px 0"><summary><b>'+esc(d.topic)+'</b> · '+esc(d.mode)+' · Needs review</summary>'+
-      '<p class="muted">Keyword: '+esc(d.keyword)+' · '+esc(d.createdAt)+'</p><textarea readonly rows="16" style="width:100%;white-space:pre-wrap">'+esc(d.content)+'</textarea></details>').join(''):row('No articles generated yet.'))+'</div></section>';
-}
-async function ovSeoAction(action,m,b){
-  if(OV_SEO_BUSY)return;
-  if(action==='seo-use-keyword'){$('#seoKeyword',m).value=b.dataset.kw||'';OV_SEO_SELECTED=b.dataset.kw||'';return}
-  const body=action==='seo-keywords'?{topic:$('#seoTopic',m).value}:
-    {topic:$('#seoTitle',m)?.value||'',keyword:$('#seoKeyword',m)?.value||'',audience:$('#seoAudience',m)?.value||'',generateAI:action==='seo-generate'};
-  OV_SEO_BUSY=true;b.disabled=true;
-  try {
-    if(action==='seo-audit'){const a=await api('POST','/api/overview/seo/audit',{});OV_SEO=OV_SEO||{};OV_SEO.lastAudit=a;}
-    else if(action==='seo-keywords'){OV_SEO_KW=(await api('POST','/api/overview/seo/keywords',body)).clusters||[];}
-    else if(action==='seo-outline'||action==='seo-generate'){const d=(await api('POST','/api/overview/seo/drafts',body)).draft;OV_SEO=OV_SEO||{};OV_SEO.drafts=[d,...(OV_SEO.drafts||[])].slice(0,100);toast('Draft saved for review');}
-    OV_SEO_ERROR='';
-  } catch(e){OV_SEO_ERROR=e.message;toast(e.message,true)}
-  finally{OV_SEO_BUSY=false;if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain()}
 }
