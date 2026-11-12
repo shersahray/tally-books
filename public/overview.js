@@ -6,12 +6,16 @@
 let OVW=null,OVW_DL=null,OVW_YE=null;
 let OV_PRODUCT='bookkeeping'; // Overview selection only. No change to licences or customer access.
 let OV_EXCEL=null;
+let OV_SEO=null,OV_SEO_KW=[],OV_SEO_SELECTED='',OV_SEO_ERROR='',OV_SEO_BUSY=false;
+let OV_GSC=null,OV_GSC_STATUS=null;
+let OV_ADV={ publishing:null,opportunities:null,competitors:null,leads:null,optimization:null };
 
 async function showOverview(){
   S.view='overview';OVW=null;OVW_DL=null;renderMain();
   try{OVW=await api('GET','/api/overview')}catch(e){toast(e.message,true)}
   if(S.view==='overview')renderMain();
   await ovExcelSummary();
+  await ovSeoLoad();
   await ovYearEnds();
   try{OVW_DL=await api('GET','/api/overview/downloads')}catch(e){OVW_DL={error:e.message}}
   if(S.view==='overview')renderMain();
@@ -91,6 +95,7 @@ function ovProductTabs(){
   return `<nav class="panel" aria-label="Sumlora products" style="display:flex;gap:8px;padding:10px;margin-bottom:16px;flex-wrap:wrap">
     <button type="button" class="btn ${OV_PRODUCT==='bookkeeping'?'':'ghost'}" data-ov="product-bookkeeping" aria-pressed="${OV_PRODUCT==='bookkeeping'}">Bookkeeping</button>
     <button type="button" class="btn ${OV_PRODUCT==='excel'?'':'ghost'}" data-ov="product-excel" aria-pressed="${OV_PRODUCT==='excel'}">Excel</button>
+    <button type="button" class="btn ${OV_PRODUCT==='seo'?'':'ghost'}" data-ov="product-seo" aria-pressed="${OV_PRODUCT==='seo'}">SEO Studio</button>
   </nav>`;
 }
 function ovExcelPanel(){
@@ -119,6 +124,7 @@ function vOverview(){
   const back=`<button class="btn ghost sm" data-back-co style="margin-bottom:8px">← Companies</button>`;
   if(!ME||!ME.platformAdmin)return back+head('Overview','')+'<div class="panel"><div class="empty"><b>Administrators only</b>Only the server’s administrator sees the overview.</div></div>';
   if(OV_PRODUCT==='excel')return back+head('Overview','Bookkeeping and Excel')+ovProductTabs()+ovExcelPanel();
+  if(OV_PRODUCT==='seo')return back+head('SEO Studio','Phase 1 · private marketing workspace')+ovProductTabs()+ovSeoPanel();
   if(!OVW)return back+head('Overview','Loading…')+ovProductTabs();
   const F=OVW.firms,Li=OVW.licences,D=OVW_DL,Su=OVW.subs,today=isoDay(new Date());
   const first=String(ME.name||'').split(' ')[0];
@@ -347,6 +353,8 @@ function bindOverview(m){
     const a=b.dataset.ov;
     if(a==='product-bookkeeping'){OV_PRODUCT='bookkeeping';return renderMain()}
     if(a==='product-excel'){OV_PRODUCT='excel';renderMain();return ovExcelSummary()}
+    if(a==='product-seo'){OV_PRODUCT='seo';renderMain();return ovSeoLoad()}
+    if(a&&a.startsWith('seo-'))return ovSeoAction(a,m,b);
     if(a==='excel-invite')return ovExcelInviteForm();
     if(a==='excel-manage')return ovExcelManage();
     if(a==='refresh')return showOverview();
@@ -357,4 +365,195 @@ function bindOverview(m){
     if(a==='invite-biz')return inviteBusinessForm(showOverview);
     if(a==='renew'){const l=OVW.licences.due.find(x=>x.id===b.dataset.id);if(l)return renewLicence(l)}
   };
+}
+
+/* SEO Studio is platform-admin only. All APIs enforce access on the server.
+   Drafts stay in private server storage and cannot be published from this page. */
+async function ovSeoLoad(){
+  try{OV_SEO=await api('GET','/api/overview/seo');OV_SEO_ERROR=''}
+  catch(e){OV_SEO_ERROR=e.message;OV_SEO=null}
+  if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain();
+  try{OV_GSC_STATUS=await api('GET','/api/overview/seo/search-console')}catch(e){OV_GSC_STATUS={configured:false,error:e.message}}
+  try{
+    const [publishing,leads]=await Promise.all([
+      api('GET','/api/overview/seo/publishing'),
+      api('GET','/api/overview/seo/leads')
+    ]);
+    OV_ADV.publishing=publishing;OV_ADV.leads=leads;
+  }catch(e){OV_SEO_ERROR=e.message}
+  if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain();
+}
+function ovSeoPanel(){
+  const state=OV_SEO||{},audit=state.lastAudit, drafts=state.drafts||[];
+  const row=(text)=>'<div class="muted" style="font-size:13px">'+esc(text)+'</div>';
+  const auditHtml=!audit?row('No audit run yet. Scan the live sumlora.ca website to check key SEO metadata.'):
+    '<p class="muted">Last checked '+esc(new Date(audit.checkedAt).toLocaleString())+' · '+Number(audit.issueCount)+' potential issues</p>'+
+    (audit.checks||[]).map(x=>'<p>'+esc(x.path)+' · '+(x.valid?'Valid':'Needs attention')+' (HTTP '+Number(x.status)+')</p>').join('')+
+    (audit.pages||[]).map(x=>'<details style="padding:9px 0;border-top:1px solid var(--line)"><summary>'+esc(x.url)+' · '+(x.issues||[]).length+' issue(s)</summary>'+
+      '<div class="muted">'+esc(x.title||'No title')+'</div>'+(x.issues||[]).map(z=>'<div style="padding:5px 0">• '+esc(z)+'</div>').join('')+'</details>').join('');
+  const kwHtml=OV_SEO_KW.length?OV_SEO_KW.map((c,i)=>'<div style="padding:12px;border:1px solid var(--line);border-radius:9px;margin:8px 0"><b>'+esc(c.cluster)+'</b>'+
+    c.keywords.map(k=>'<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0"><span>'+esc(k)+'</span><button class="btn sm ghost" data-ov="seo-use-keyword" data-kw="'+esc(k)+'">Use</button></div>').join('')+'</div>').join(''):row('Enter a topic and select Find keywords. These are curated ideas, not live search-volume estimates.');
+  return '<div class="banner"><span><b>Private · Draft only.</b> SEO Studio does not publish pages, claim live keyword volumes, or access client bookkeeping files.</span></div>'+
+    (OV_SEO_ERROR?'<div class="banner" role="alert">'+esc(OV_SEO_ERROR)+'</div>':'')+
+    '<section class="panel" style="margin:14px 0"><h3>Website SEO audit</h3><div class="pad"><p class="muted">Checks the live site and its sitemap and robots file. HTTP failures may mean a URL needs checking.</p>'+
+    '<button class="btn primary" data-ov="seo-audit" '+(OV_SEO_BUSY?'disabled':'')+'>Run website audit</button>'+auditHtml+ovSeoHistory(state.auditHistory||[])+'</div></section>'+
+    '<section class="panel" style="margin-bottom:14px"><h3>Keyword planner</h3><div class="pad">'+
+    '<label for="seoTopic">Topic</label><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="seoTopic" style="flex:1;min-width:200px" value="bookkeeping software canada" maxlength="90"><button class="btn" data-ov="seo-keywords">Find keywords</button></div>'+
+    row('Curated Canadian accounting and bookkeeping keyword clusters.')+kwHtml+'</div></section>'+
+    '<section class="panel" style="margin-bottom:14px"><h3>Article draft workspace</h3><div class="pad" style="display:grid;gap:12px">'+
+    '<label>Article title <input id="seoTitle" maxlength="130" placeholder="e.g. Best bookkeeping workflows for Canadian accountants" style="width:100%"></label>'+
+    '<label>Primary keyword <input id="seoKeyword" maxlength="90" value="'+esc(OV_SEO_SELECTED)+'" placeholder="e.g. bookkeeping software canada" style="width:100%"></label>'+
+    '<label>Audience <input id="seoAudience" maxlength="110" value="Canadian businesses and accounting firms" style="width:100%"></label>'+
+    '<div class="actions"><button class="btn" data-ov="seo-outline">Create outline</button><button class="btn primary" data-ov="seo-generate">Generate AI draft</button></div>'+
+    row('AI drafting requires ANTHROPIC_API_KEY on the server and incurs provider usage charges. Both actions save private drafts requiring review.')+
+    '<h4>Saved drafts ('+drafts.length+')</h4>'+
+    (drafts.length?drafts.map((d,i)=>'<details style="border-top:1px solid var(--line);padding:9px 0"><summary><b>'+esc(d.topic)+'</b> · '+esc(d.mode)+' · '+esc(d.status||'needs-review')+'</summary>'+
+      '<p class="muted">Keyword: '+esc(d.keyword)+' · '+esc(d.createdAt)+'</p>'+(d.status==='approved'?'<button class="btn sm" data-ov="seo-export" data-id="'+esc(d.id)+'">Export approved Markdown</button>':'')+'<textarea id="seo-draft-'+esc(d.id)+'" rows="14" maxlength="20000" style="width:100%;white-space:pre-wrap">'+esc(d.content)+'</textarea><label>Review notes <input id="seo-notes-'+esc(d.id)+'" maxlength="1000" value="'+esc(d.reviewNotes||'')+'" style="width:100%"></label><div class="actions" style="margin-top:8px"><button class="btn sm" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="needs-review">Save edits</button><button class="btn sm primary" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="approved">Approve draft</button><button class="btn sm ghost" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="rejected">Reject</button></div><p class="muted">Approval does not publish content.</p></details>').join(''):row('No articles generated yet.'))+'</div></section>'+ovSeoSearchPanel()+ovSeoAdvancedPanel();
+}
+async function ovSeoAction(action,m,b){
+  if(OV_SEO_BUSY)return;
+  if(action==='seo-use-keyword'){$('#seoKeyword',m).value=b.dataset.kw||'';OV_SEO_SELECTED=b.dataset.kw||'';return}
+  if(action==='seo-export'){
+    const draft=(OV_SEO?.drafts||[]).find(x=>x.id===b.dataset.id);
+    if(!draft||draft.status!=='approved'){toast('Only approved drafts can be exported.',true);return}
+    const slug=String(draft.topic||'article').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,70)||'article';
+    saveFile(slug+'.md',new Blob([draft.content],{type:'text/markdown;charset=utf-8'}));
+    return;
+  }
+  if(['seo-opportunities','seo-competitors','seo-lead','seo-prepare','seo-schedule','seo-unschedule','seo-optimize'].includes(action))
+    return ovSeoAdvancedAction(action,m,b);
+  if(action==='seo-gsc-refresh'||action==='seo-review')return ovSeoPhase2Action(action,m,b);
+  const body=action==='seo-keywords'?{topic:$('#seoTopic',m).value}:
+    {topic:$('#seoTitle',m)?.value||'',keyword:$('#seoKeyword',m)?.value||'',audience:$('#seoAudience',m)?.value||'',generateAI:action==='seo-generate'};
+  OV_SEO_BUSY=true;b.disabled=true;
+  try {
+    if(action==='seo-audit'){const a=await api('POST','/api/overview/seo/audit',{});OV_SEO=OV_SEO||{};OV_SEO.lastAudit=a;}
+    else if(action==='seo-keywords'){OV_SEO_KW=(await api('POST','/api/overview/seo/keywords',body)).clusters||[];}
+    else if(action==='seo-outline'||action==='seo-generate'){const d=(await api('POST','/api/overview/seo/drafts',body)).draft;OV_SEO=OV_SEO||{};OV_SEO.drafts=[d,...(OV_SEO.drafts||[])].slice(0,100);toast('Draft saved for review');}
+    OV_SEO_ERROR='';
+  } catch(e){OV_SEO_ERROR=e.message;toast(e.message,true)}
+  finally{OV_SEO_BUSY=false;if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain()}
+}
+
+function ovSeoHistory(history){
+  if(!history.length)return '';
+  return '<details style="margin-top:12px"><summary>Audit history ('+history.length+')</summary>'+
+    history.map(h=>'<div style="padding:7px 0;border-top:1px solid var(--line)">'+esc(h.checkedAt)+' · '+Number(h.issueCount)+' issues across '+Number(h.pagesChecked)+' pages</div>').join('')+'</details>';
+}
+function ovSeoSearchPanel(){
+  const S_=OV_GSC_STATUS||{},r=OV_GSC,connected=S_.configured===true;
+  const rows=(items,caption)=>'<h4>'+caption+'</h4><div class="tbl-wrap"><table><thead><tr><th>Search '+(caption==='Top pages'?'page':'query')+'</th><th>Clicks</th><th>Impressions</th><th>CTR</th><th>Avg. position</th></tr></thead><tbody>'+
+    (items||[]).map(x=>'<tr><td>'+esc(x.key)+'</td><td>'+Number(x.clicks)+'</td><td>'+Number(x.impressions)+'</td><td>'+((Number(x.ctr)||0)*100).toFixed(1)+'%</td><td>'+Number(x.position).toFixed(1)+'</td></tr>').join('')+
+    '</tbody></table></div>';
+  return '<section class="panel" style="margin-bottom:14px"><h3>Google Search Console · Read-only</h3><div class="pad">'+
+    '<p class="muted">'+(connected?'Server-side connection configured for '+esc(S_.property):'Not connected. Configure a Google service account on the server to show real clicks and search queries.')+'</p>'+
+    '<button class="btn primary" data-ov="seo-gsc-refresh" '+(!connected?'disabled':'')+'>Load 28-day search performance</button>'+
+    (r?'<div class="ov-kpis" style="margin-top:14px">'+
+      ovKpi('pay','green','Google clicks',Number(r.totals.clicks).toLocaleString(),'Google organic search')+
+      ovKpi('biz','navy','Impressions',Number(r.totals.impressions).toLocaleString(),'Finalized Google data')+
+      ovKpi('firm','teal','CTR',((Number(r.totals.ctr)||0)*100).toFixed(1)+'%','Average position: '+Number(r.totals.position).toFixed(1))+
+      '</div><p class="muted">'+esc(r.startDate)+' through '+esc(r.endDate)+' · '+esc(r.note||'')+'</p>'+
+      rows(r.queries,'Top queries')+rows(r.pages,'Top pages'):'<p class="muted">No Search Console data loaded.</p>')+
+    '<p class="muted">Weekly automatic audits can be enabled with SEO_AUTO_AUDIT=1 on the Sumlora server. They are off by default. No auto-publishing is enabled.</p></div></section>';
+}
+async function ovSeoPhase2Action(action,m,b){
+  OV_SEO_BUSY=true;b.disabled=true;
+  try{
+    if(action==='seo-gsc-refresh'){
+      OV_GSC=await api('POST','/api/overview/seo/search-console/refresh',{});
+      toast('Search Console report loaded');
+    } else {
+      const id=b.dataset.id,status=b.dataset.status;
+      const content=$('#seo-draft-'+id,m).value, reviewNotes=$('#seo-notes-'+id,m).value;
+      const result=await api('POST','/api/overview/seo/drafts/'+encodeURIComponent(id)+'/review',{status,content,reviewNotes});
+      OV_SEO.drafts=OV_SEO.drafts.map(d=>d.id===id?result.draft:d);
+      toast(status==='approved'?'Draft approved (not published)':'Draft updated');
+    }
+    OV_SEO_ERROR='';
+  }catch(e){OV_SEO_ERROR=e.message;toast(e.message,true)}
+  finally{OV_SEO_BUSY=false;if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain()}
+}
+
+function ovSeoAdvancedPanel(){
+  const drafts=OV_SEO?.drafts||[];
+  const pub=OV_ADV.publishing||{};
+  const ops=OV_ADV.opportunities?.opportunities||[];
+  const competitors=OV_ADV.competitors?.reports||[];
+  const lead=OV_ADV.leads||{total:0,byChannel:[]};
+  const mini=t=>'<p class="muted">'+esc(t)+'</p>';
+  return '<section class="panel" style="margin-bottom:14px"><h3>Publishing pipeline</h3><div class="pad">'+
+    mini('Approved articles are proposed as draft pull requests to the Sumlora website repository. Nothing merges or deploys automatically.')+
+    mini(pub.enabled?'Publishing PR integration is configured.':'Publishing integration disabled; configure server-side scoped GitHub token and SEO_GITHUB_PUBLISH_ENABLED=1.')+
+    drafts.filter(d=>d.status==='approved').map(d=>
+      '<details style="border-top:1px solid var(--line);padding:9px 0"><summary>'+esc(d.topic)+
+      (d.publishPrUrl?' · PR prepared':d.scheduledAt?' · scheduled':' · ready for review')+'</summary>'+
+      (d.publishPrUrl?'<a class="btn sm" href="'+esc(d.publishPrUrl)+'" target="_blank" rel="noopener noreferrer">Review website PR</a>':
+      '<div class="actions"><button class="btn sm" data-ov="seo-prepare" data-id="'+esc(d.id)+'" '+(!pub.enabled?'disabled':'')+'>Create publishing PR</button>'+
+      '<input type="datetime-local" id="seo-scheduled-'+esc(d.id)+'" aria-label="Schedule approved article" style="min-width:190px">'+
+      '<button class="btn sm ghost" data-ov="seo-schedule" data-id="'+esc(d.id)+'">Schedule PR</button>'+
+      (d.scheduledAt?'<button class="btn sm ghost" data-ov="seo-unschedule" data-id="'+esc(d.id)+'">Cancel schedule</button>':'')+'</div>'+
+      (d.scheduledAt?mini('Scheduled for '+d.scheduledAt+'; automated PR creation requires SEO_PUBLISH_SCHEDULED=1.'):'') )+
+      '</details>').join('')+
+    mini('Publishing PRs require explicit administrator approval and website repository permissions. Automated scheduled PR creation is OFF by default.')+
+    '</div></section>'+
+    '<section class="panel" style="margin-bottom:14px"><h3>Search opportunities & competitor snapshots</h3><div class="pad">'+
+    '<div class="actions"><button class="btn" data-ov="seo-opportunities" '+(OV_GSC_STATUS?.configured?'':'disabled')+'>Analyze Google search opportunities</button>'+
+    '<button class="btn ghost" data-ov="seo-competitors">Compare public homepages</button></div>'+
+    mini('Opportunities use actual Search Console query data. Competitor comparisons inspect limited public metadata only; they do not estimate rivals’ traffic or keyword rankings.')+
+    (ops.length?'<h4>Search opportunities</h4>'+ops.map(o=>'<div style="border-top:1px solid var(--line);padding:9px 0"><b>'+esc(o.query)+'</b> · '+Number(o.impressions)+' impressions · '+(Number(o.ctr)*100).toFixed(1)+'% CTR'+mini(o.reasons.join(' '))+'</div>').join(''):mini('No keyword opportunities loaded.'))+
+    (competitors.length?'<h4>Competitor homepage checks</h4>'+competitors.map(c=>'<div style="border-top:1px solid var(--line);padding:9px 0"><b>'+esc(c.name)+'</b> · HTTP '+Number(c.status)+
+      mini(c.title||c.note||'No title retrieved')+'</div>').join(''):mini('No competitor snapshots loaded.'))+'</div></section>'+
+    '<section class="panel" style="margin-bottom:14px"><h3>Draft optimization</h3><div class="pad">'+
+    '<select id="seoOptimizeId" aria-label="Choose an article to optimize">'+
+    drafts.map(d=>'<option value="'+esc(d.id)+'">'+esc(d.topic)+'</option>').join('')+'</select> '+
+    '<button class="btn" data-ov="seo-optimize" '+(drafts.length?'':'disabled')+'>Analyze draft</button>'+
+    (OV_ADV.optimization?'<div style="margin-top:12px">'+
+      mini('Word count: '+OV_ADV.optimization.wordCount+' · Suggested title: '+OV_ADV.optimization.metaTitle)+
+      OV_ADV.optimization.checks.map(c=>'<div style="padding:7px 0;border-top:1px solid var(--line)"><b>'+esc(c.level)+'</b>: '+esc(c.issue)+'</div>').join('')+
+      mini(OV_ADV.optimization.note)+'</div>':mini('Checks article structure, keyword placement and verification markers.'))+
+    '</div></section>'+
+    '<section class="panel" style="margin-bottom:14px"><h3>SEO leads & conversion attribution</h3><div class="pad">'+
+    mini('Manual lead-entry register only. No cookies, visitor surveillance, or automatic attribution has been enabled.')+
+    '<div class="ov-kpis">'+ovKpi('firm','teal','Recorded demo requests',Number(lead.total||0).toLocaleString(),'Manually entered')+'</div>'+
+    '<label>Lead source <input id="seoLeadSource" maxlength="120" placeholder="Google Search or blog article"></label>'+
+    '<label>Channel <select id="seoLeadChannel"><option value="organic">Organic search</option><option value="referral">Referral</option><option value="social">Social</option><option value="email">Email</option><option value="direct">Direct</option><option value="paid">Paid</option><option value="unknown">Unknown</option></select></label>'+
+    '<label>Campaign (optional) <input id="seoLeadCampaign" maxlength="100"></label>'+
+    '<label>Sumlora landing page (optional) <input id="seoLeadPage" maxlength="220" placeholder="/blog/article/"></label>'+
+    '<button class="btn primary" data-ov="seo-lead">Record a demo request</button>'+
+    (lead.byChannel||[]).map(c=>'<div style="padding:6px 0">'+esc(c.channel)+': '+Number(c.count)+'</div>').join('')+
+    '</div></section>';
+}
+async function ovSeoAdvancedAction(action,m,b){
+  if(OV_SEO_BUSY)return;
+  OV_SEO_BUSY=true;b.disabled=true;
+  try {
+    if(action==='seo-opportunities') OV_ADV.opportunities=await api('POST','/api/overview/seo/opportunities',{});
+    if(action==='seo-competitors') OV_ADV.competitors=await api('POST','/api/overview/seo/competitors',{});
+    if(action==='seo-optimize') OV_ADV.optimization=await api('GET','/api/overview/seo/drafts/'+encodeURIComponent($('#seoOptimizeId',m).value)+'/optimization');
+    if(action==='seo-lead'){
+      const source=$('#seoLeadSource',m).value,channel=$('#seoLeadChannel',m).value,
+        campaign=$('#seoLeadCampaign',m).value,page=$('#seoLeadPage',m).value;
+      await api('POST','/api/overview/seo/leads',{source,channel,campaign,page});
+      OV_ADV.leads=await api('GET','/api/overview/seo/leads');
+      toast('Demo request attribution recorded');
+    }
+    if(action==='seo-prepare'){
+      const result=await api('POST','/api/overview/seo/drafts/'+encodeURIComponent(b.dataset.id)+'/publishing-pr',{});
+      OV_SEO=await api('GET','/api/overview/seo');
+      toast('Website draft PR created: '+result.url);
+    }
+    if(action==='seo-schedule'){
+      const value=$('#seo-scheduled-'+b.dataset.id,m).value;
+      if(!value)throw new Error('Select a date and time to schedule this PR.');
+      await api('POST','/api/overview/seo/drafts/'+encodeURIComponent(b.dataset.id)+'/schedule',{scheduledAt:new Date(value).toISOString()});
+      OV_SEO=await api('GET','/api/overview/seo');
+      toast('Draft PR scheduled. Automated creation requires server opt-in.');
+    }
+    if(action==='seo-unschedule'){
+      await api('POST','/api/overview/seo/drafts/'+encodeURIComponent(b.dataset.id)+'/unschedule',{});
+      OV_SEO=await api('GET','/api/overview/seo');
+    }
+    OV_SEO_ERROR='';
+  }catch(e){OV_SEO_ERROR=e.message;toast(e.message,true)}
+  finally{OV_SEO_BUSY=false;if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain()}
 }
