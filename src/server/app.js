@@ -10,6 +10,7 @@ const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
+const { createSeoStudio } = require('./seo-studio');
 const { YearEndUsage } = require('./usage');
 const assistant = require('./assistant');
 const AUTO = require('./automation');
@@ -371,6 +372,7 @@ function createApp(opts) {
   const notClient = u => { if (u.role === 'client') throw new ValidationError('Only your bookkeeper can do that.', 403); };
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
+  const seoStudio = createSeoStudio(opts.dataDir, { aiKey: opts.aiKey, fetchImpl: opts.seoFetch });
   // Year-end files started, per firm, for charging per file (usage.js).
   const yeUsage = new YearEndUsage(opts.dataDir);
   /** Count a year-end file as started (once per company and year-end). */
@@ -1310,6 +1312,11 @@ function createApp(opts) {
 
   // Routes that work across companies.
   const globalRoutes = [
+    // Server-administrator-only marketing studio; never touches client books.
+    ['GET', /^\/api\/overview\/seo$/, (req, m, res, user) => { adminOnly(user); return seoStudio.state(); }],
+    ['POST', /^\/api\/overview\/seo\/audit$/, async (req, m, res, user) => { adminOnly(user); return seoStudio.audit(); }],
+    ['POST', /^\/api\/overview\/seo\/keywords$/, async (req, m, res, user) => { adminOnly(user); const b = await readJson(req, 4096); return { clusters: seoStudio.keywords(b.topic || '') }; }],
+    ['POST', /^\/api\/overview\/seo\/drafts$/, async (req, m, res, user) => { adminOnly(user); const b = await readJson(req, 8192); return { draft: await seoStudio.draft(b) }; }],
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
     ['GET', /^\/api\/auth\/me$/, req => {
       const user = auth.userFor(req);
