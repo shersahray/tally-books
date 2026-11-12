@@ -11,6 +11,7 @@ const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
 const { createSeoStudio } = require('./seo-studio');
+const { createSearchConsole } = require('./seo-search-console');
 const { YearEndUsage } = require('./usage');
 const assistant = require('./assistant');
 const AUTO = require('./automation');
@@ -373,6 +374,7 @@ function createApp(opts) {
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
   const seoStudio = createSeoStudio(opts.dataDir, { aiKey: opts.aiKey, fetchImpl: opts.seoFetch });
+  const seoGsc = createSearchConsole({ env: opts.env || process.env, fetchImpl: opts.gscFetch });
   // Year-end files started, per firm, for charging per file (usage.js).
   const yeUsage = new YearEndUsage(opts.dataDir);
   /** Count a year-end file as started (once per company and year-end). */
@@ -1317,6 +1319,9 @@ function createApp(opts) {
     ['POST', /^\/api\/overview\/seo\/audit$/, async (req, m, res, user) => { adminOnly(user); return seoStudio.audit(); }],
     ['POST', /^\/api\/overview\/seo\/keywords$/, async (req, m, res, user) => { adminOnly(user); const b = await readJson(req, 4096); return { clusters: seoStudio.keywords(b.topic || '') }; }],
     ['POST', /^\/api\/overview\/seo\/drafts$/, async (req, m, res, user) => { adminOnly(user); const b = await readJson(req, 8192); return { draft: await seoStudio.draft(b) }; }],
+    ['POST', /^\/api\/overview\/seo\/drafts\/([a-f0-9-]{36})\/review$/, async (req, m, res, user) => { adminOnly(user); const b = await readJson(req, 24000); return { draft: seoStudio.updateDraft(m[1], b) }; }],
+    ['GET', /^\/api\/overview\/seo\/search-console$/, (req, m, res, user) => { adminOnly(user); return { configured: seoGsc.configured(), property: seoGsc.property }; }],
+    ['POST', /^\/api\/overview\/seo\/search-console\/refresh$/, async (req, m, res, user) => { adminOnly(user); return seoGsc.report(); }],
     ['GET', /^\/api\/health$/, () => ({ ok: true })],
     ['GET', /^\/api\/auth\/me$/, req => {
       const user = auth.userFor(req);
@@ -3492,6 +3497,15 @@ function createApp(opts) {
 
   server.on('close', () => { closing = true; if (automationTimer) clearInterval(automationTimer); backups.stop(); if (feedTimer) clearInterval(feedTimer); if (wfTimer) clearInterval(wfTimer); if (billTimer) clearInterval(billTimer); reg.closeAll(); });
   /** Stop accepting requests, end live-update streams, and close the databases. */
+  // Explicitly opt in to weekly SEO audits. No background scans by default.
+  let seoAuditTimer = null;
+  if ((opts.env || process.env).SEO_AUTO_AUDIT === '1' && opts.autoSeoAudit !== false) {
+    const runSeoAudit = () => seoStudio.auditIfDue().catch(e => console.error('SEO scheduled audit failed:', e.message));
+    seoAuditTimer = setInterval(runSeoAudit, 6 * 60 * 60 * 1000);
+    seoAuditTimer.unref();
+    setTimeout(runSeoAudit, 60 * 1000).unref();
+  }
+  server.on('close', () => { if (seoAuditTimer) clearInterval(seoAuditTimer); });
   server.shutdown = () => new Promise(resolve => {
     for (const res of clients) res.end();
     clients.clear();
