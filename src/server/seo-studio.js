@@ -52,8 +52,8 @@ function createSeoStudio(dataDir, options = {}) {
   const filename = path.join(dataDir, 'seo-studio.json');
   const fetcher = options.fetchImpl || fetch;
   function read() {
-    try { const j = JSON.parse(fs.readFileSync(filename, 'utf8')); return { drafts: Array.isArray(j.drafts) ? j.drafts.slice(0, 100) : [], lastAudit: j.lastAudit || null }; }
-    catch (e) { if (e.code === 'ENOENT') return { drafts: [], lastAudit: null }; throw e; }
+    try { const j = JSON.parse(fs.readFileSync(filename, 'utf8')); return { drafts: Array.isArray(j.drafts) ? j.drafts.slice(0, 100) : [], lastAudit: j.lastAudit || null, auditHistory: Array.isArray(j.auditHistory) ? j.auditHistory.slice(0, 12) : [] }; }
+    catch (e) { if (e.code === 'ENOENT') return { drafts: [], lastAudit: null, auditHistory: [] }; throw e; }
   }
   function write(state) {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -90,7 +90,7 @@ function createSeoStudio(dataDir, options = {}) {
     }
     const out = { checkedAt: new Date().toISOString(), site: SITE, pages, checks,
       issueCount: pages.reduce((sum, p) => sum + p.issues.length, 0) + checks.filter(c => !c.valid).length };
-    const state = read(); state.lastAudit = out; write(state); return out;
+    const state = read(); state.lastAudit = out; state.auditHistory = [{ checkedAt: out.checkedAt, issueCount: out.issueCount, pagesChecked: out.pages.length }, ...(state.auditHistory || [])].slice(0, 12); write(state); return out;
   }
   async function draft(input) {
     const topic = clean(input.topic, 130), keyword = clean(input.keyword, 90), audience = clean(input.audience || 'Canadian businesses and accounting firms', 110);
@@ -117,6 +117,31 @@ function createSeoStudio(dataDir, options = {}) {
     const state = read(); state.drafts.unshift(item); state.drafts = state.drafts.slice(0, 100); write(state);
     return item;
   }
-  return { state: read, audit, keywords: keywordPlan, draft };
+  function updateDraft(id, input) {
+    const state = read();
+    const item = state.drafts.find(x => x.id === id);
+    if (!item) throw Object.assign(new Error('Draft not found.'), { status: 404 });
+    const status = String(input.status || '');
+    if (!['needs-review', 'approved', 'rejected'].includes(status)) {
+      throw Object.assign(new Error('Invalid draft status.'), { status: 400 });
+    }
+    if (input.content !== undefined) {
+      const content = String(input.content).trim();
+      if (!content || content.length > 20000) throw Object.assign(new Error('Content must be between 1 and 20,000 characters.'), { status: 400 });
+      item.content = content;
+    }
+    item.status = status;
+    item.reviewNotes = clean(input.reviewNotes || '', 1000);
+    item.reviewedAt = new Date().toISOString();
+    item.published = false; // Phase 2 approval is not publication.
+    write(state);
+    return item;
+  }
+  async function auditIfDue(now = Date.now()) {
+    const prior = read().lastAudit;
+    if (prior && Date.parse(prior.checkedAt) > now - 7 * 86400000) return { skipped: true };
+    return audit();
+  }
+  return { state: read, audit, auditIfDue, keywords: keywordPlan, draft, updateDraft };
 }
 module.exports = { createSeoStudio, metadata, keywordPlan };
