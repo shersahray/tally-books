@@ -73,7 +73,7 @@ function createSeoStudio(dataDir, options = {}) {
   }
   async function audit() {
     // Fixed allow-list: no user-supplied target URLs, DNS, redirects, or internal-network probes.
-    const urls = [SITE + '/', SITE + '/bookkeeping', SITE + '/excel', SITE + '/about', SITE + '/contact'];
+    const urls = ['/', '/invoicing/', '/accounting-firms/', '/sumlora-excel/', '/bank-reconciliation/', '/sales-tax/', '/guides/month-end-bookkeeping-checklist/'].map(p => SITE + p);
     const pages = [];
     for (const url of urls) {
       try { pages.push(await retrieve(url)); }
