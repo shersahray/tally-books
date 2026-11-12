@@ -400,11 +400,18 @@ function ovSeoPanel(){
     row('AI drafting requires ANTHROPIC_API_KEY on the server and incurs provider usage charges. Both actions save private drafts requiring review.')+
     '<h4>Saved drafts ('+drafts.length+')</h4>'+
     (drafts.length?drafts.map((d,i)=>'<details style="border-top:1px solid var(--line);padding:9px 0"><summary><b>'+esc(d.topic)+'</b> · '+esc(d.mode)+' · '+esc(d.status||'needs-review')+'</summary>'+
-      '<p class="muted">Keyword: '+esc(d.keyword)+' · '+esc(d.createdAt)+'</p><textarea id="seo-draft-'+esc(d.id)+'" rows="14" maxlength="20000" style="width:100%;white-space:pre-wrap">'+esc(d.content)+'</textarea><label>Review notes <input id="seo-notes-'+esc(d.id)+'" maxlength="1000" value="'+esc(d.reviewNotes||'')+'" style="width:100%"></label><div class="actions" style="margin-top:8px"><button class="btn sm" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="needs-review">Save edits</button><button class="btn sm primary" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="approved">Approve draft</button><button class="btn sm ghost" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="rejected">Reject</button></div><p class="muted">Approval does not publish content.</p></details>').join(''):row('No articles generated yet.'))+'</div></section>'+ovSeoSearchPanel();
+      '<p class="muted">Keyword: '+esc(d.keyword)+' · '+esc(d.createdAt)+'</p>'+(d.status==='approved'?'<button class="btn sm" data-ov="seo-export" data-id="'+esc(d.id)+'">Export approved Markdown</button>':'')+'<textarea id="seo-draft-'+esc(d.id)+'" rows="14" maxlength="20000" style="width:100%;white-space:pre-wrap">'+esc(d.content)+'</textarea><label>Review notes <input id="seo-notes-'+esc(d.id)+'" maxlength="1000" value="'+esc(d.reviewNotes||'')+'" style="width:100%"></label><div class="actions" style="margin-top:8px"><button class="btn sm" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="needs-review">Save edits</button><button class="btn sm primary" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="approved">Approve draft</button><button class="btn sm ghost" data-ov="seo-review" data-id="'+esc(d.id)+'" data-status="rejected">Reject</button></div><p class="muted">Approval does not publish content.</p></details>').join(''):row('No articles generated yet.'))+'</div></section>'+ovSeoSearchPanel();
 }
 async function ovSeoAction(action,m,b){
   if(OV_SEO_BUSY)return;
   if(action==='seo-use-keyword'){$('#seoKeyword',m).value=b.dataset.kw||'';OV_SEO_SELECTED=b.dataset.kw||'';return}
+  if(action==='seo-export'){
+    const draft=(OV_SEO?.drafts||[]).find(x=>x.id===b.dataset.id);
+    if(!draft||draft.status!=='approved'){toast('Only approved drafts can be exported.',true);return}
+    const slug=String(draft.topic||'article').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,70)||'article';
+    saveFile(slug+'.md',new Blob([draft.content],{type:'text/markdown;charset=utf-8'}));
+    return;
+  }
   if(action==='seo-gsc-refresh'||action==='seo-review')return ovSeoPhase2Action(action,m,b);
   const body=action==='seo-keywords'?{topic:$('#seoTopic',m).value}:
     {topic:$('#seoTitle',m)?.value||'',keyword:$('#seoKeyword',m)?.value||'',audience:$('#seoAudience',m)?.value||'',generateAI:action==='seo-generate'};
