@@ -52,14 +52,21 @@ function createSeoStudio(dataDir, options = {}) {
   const filename = path.join(dataDir, 'seo-studio.json');
   const fetcher = options.fetchImpl || fetch;
   function read() {
-    try { const j = JSON.parse(fs.readFileSync(filename, 'utf8')); return { drafts: Array.isArray(j.drafts) ? j.drafts.slice(0, 100) : [], lastAudit: j.lastAudit || null, auditHistory: Array.isArray(j.auditHistory) ? j.auditHistory.slice(0, 12) : [] }; }
-    catch (e) { if (e.code === 'ENOENT') return { drafts: [], lastAudit: null, auditHistory: [] }; throw e; }
+    try { const j = JSON.parse(fs.readFileSync(filename, 'utf8')); return { drafts: Array.isArray(j.drafts) ? j.drafts.slice(0, 100) : [], lastAudit: j.lastAudit || null, auditHistory: Array.isArray(j.auditHistory) ? j.auditHistory.slice(0, 12) : [], leads: Array.isArray(j.leads) ? j.leads.slice(0,500) : [] }; }
+    catch (e) { if (e.code === 'ENOENT') return { drafts: [], lastAudit: null, auditHistory: [], leads: [] }; throw e; }
   }
   function write(state) {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const temp = filename + '.' + crypto.randomUUID() + '.tmp';
     try { fs.writeFileSync(temp, JSON.stringify(state, null, 2), { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, filename); }
     finally { try { fs.unlinkSync(temp); } catch {} }
+  }
+  function mutate(change) {
+    if(typeof change!=='function')throw new TypeError('Expected a mutation callback');
+    const state=read();
+    const result=change(state);
+    write(state);
+    return result;
   }
   async function retrieve(url) {
     const response = await fetcher(url, { redirect: 'manual', signal: AbortSignal.timeout(7000), headers: { 'User-Agent': 'SumloraSEOStudio/1.0 (+https://sumlora.ca)' } });
@@ -128,9 +135,15 @@ function createSeoStudio(dataDir, options = {}) {
     if (input.content !== undefined) {
       const content = String(input.content).trim();
       if (!content || content.length > 20000) throw Object.assign(new Error('Content must be between 1 and 20,000 characters.'), { status: 400 });
+      if (item.content !== content) {
+        // Edited content invalidates approval and publishing scheduling.
+        if(item.publishPrUrl) throw Object.assign(new Error('A publishing PR already exists. Update or close that PR separately.'), {status:409});
+        item.scheduledAt=undefined;
+      }
       item.content = content;
     }
     item.status = status;
+    if(status!=='approved') delete item.scheduledAt;
     item.reviewNotes = clean(input.reviewNotes || '', 1000);
     item.reviewedAt = new Date().toISOString();
     item.published = false; // Phase 2 approval is not publication.
@@ -142,6 +155,6 @@ function createSeoStudio(dataDir, options = {}) {
     if (prior && Date.parse(prior.checkedAt) > now - 7 * 86400000) return { skipped: true };
     return audit();
   }
-  return { state: read, audit, auditIfDue, keywords: keywordPlan, draft, updateDraft };
+  return { state: read, mutate, audit, auditIfDue, keywords: keywordPlan, draft, updateDraft };
 }
 module.exports = { createSeoStudio, metadata, keywordPlan };
