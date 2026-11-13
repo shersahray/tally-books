@@ -17,6 +17,15 @@ test('SEO metadata audit identifies title, description, canonical, H1 and noinde
   assert.ok(bad.issues.some(x => x.includes('noindex')));
   assert.ok(bad.issues.some(x => x.includes('H1')));
 });
+test('SEO audit counts displayed characters after decoding HTML entities', () => {
+  const url = 'https://sumlora.ca/';
+  const page = metadata('<title>Canadian Bookkeeping Software for Businesses &amp; Firms | Sumlora</title>' +
+    '<meta name="description" content="Accounting &amp; software">' +
+    '<link rel="canonical" href="https://sumlora.ca/"><h1>Welcome</h1>', url);
+  assert.equal(page.title, 'Canadian Bookkeeping Software for Businesses & Firms | Sumlora');
+  assert.equal(page.description, 'Accounting & software');
+  assert.equal(page.issues.some(issue => issue.startsWith('Long page title')), false);
+});
 test('keyword planning is clearly curated rather than claimed search volume', () => {
   const result = keywordPlan('audit');
   assert.ok(result.some(x => x.keywords.includes('excel audit automation')));

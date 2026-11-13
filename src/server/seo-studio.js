@@ -19,11 +19,22 @@ function attr(tag, key) {
   const m = tag.match(new RegExp('\\b' + escapeRe(key) + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]+))', 'i'));
   return m ? (m[1] || m[2] || m[3] || '') : '';
 }
+function decodeHtmlEntities(value) {
+  // Decode entities before counting visible title/description characters.
+  // Do not repeatedly decode, so &amp;lt; remains literal &lt;.
+  const named = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: '\u00a0' };
+  return String(value).replace(/&(#(?:x[0-9a-f]+|[0-9]+)|amp|quot|apos|lt|gt|nbsp);/gi, (match, entity) => {
+    if (entity[0] !== '#') return named[entity.toLowerCase()] ?? match;
+    const code = /^#x/i.test(entity) ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+    return Number.isInteger(code) && code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)
+      ? String.fromCodePoint(code) : match;
+  });
+}
 function metadata(html, url) {
-  const title = (html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i) || [,''])[1].replace(/<[^>]*>/g, '').trim();
+  const title = decodeHtmlEntities((html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i) || [,''])[1].replace(/<[^>]*>/g, '')).trim();
   const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map(m => m[0]);
   const links = [...html.matchAll(/<link\b[^>]*>/gi)].map(m => m[0]);
-  const description = attr(metas.find(x => attr(x, 'name').toLowerCase() === 'description') || '', 'content');
+  const description = decodeHtmlEntities(attr(metas.find(x => attr(x, 'name').toLowerCase() === 'description') || '', 'content'));
   const robots = attr(metas.find(x => attr(x, 'name').toLowerCase() === 'robots') || '', 'content');
   const canonical = attr(links.find(x => attr(x, 'rel').toLowerCase().split(/\s+/).includes('canonical')) || '', 'href');
   const h1 = [...html.matchAll(/<h1\b[^>]*>/gi)].length;
