@@ -8,6 +8,7 @@ let OV_PRODUCT='bookkeeping'; // Overview selection only. No change to licences 
 let OV_EXCEL=null;
 let OV_SEO=null,OV_SEO_KW=[],OV_SEO_SELECTED='',OV_SEO_ERROR='',OV_SEO_BUSY=false;
 let OV_GSC=null,OV_GSC_STATUS=null;
+let OV_PUBLIC_AUDIT=null;
 let OV_ADV={ publishing:null,opportunities:null,competitors:null,leads:null,optimization:null };
 
 async function showOverview(){
@@ -395,6 +396,7 @@ function ovSeoPanel(){
     c.keywords.map(k=>'<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0"><span>'+esc(k)+'</span><button class="btn sm ghost" data-ov="seo-use-keyword" data-kw="'+esc(k)+'">Use</button></div>').join('')+'</div>').join(''):row('Enter a topic and select Find keywords. These are curated ideas, not live search-volume estimates.');
   return '<div class="banner"><span><b>Private · Draft only.</b> SEO Studio does not publish pages, claim live keyword volumes, or access client bookkeeping files.</span></div>'+
     (OV_SEO_ERROR?'<div class="banner" role="alert">'+esc(OV_SEO_ERROR)+'</div>':'')+
+    ovPublicWebsitePanel()+
     '<section class="panel" style="margin:14px 0"><h3>Website SEO audit</h3><div class="pad"><p class="muted">Checks the live site and its sitemap and robots file. HTTP failures may mean a URL needs checking.</p>'+
     '<button class="btn primary" data-ov="seo-audit" '+(OV_SEO_BUSY?'disabled':'')+'>Run website audit</button>'+auditHtml+ovSeoHistory(state.auditHistory||[])+'</div></section>'+
     '<section class="panel" style="margin-bottom:14px"><h3>Keyword planner</h3><div class="pad">'+
@@ -413,6 +415,7 @@ function ovSeoPanel(){
 async function ovSeoAction(action,m,b){
   if(OV_SEO_BUSY)return;
   if(action==='seo-use-keyword'){$('#seoKeyword',m).value=b.dataset.kw||'';OV_SEO_SELECTED=b.dataset.kw||'';return}
+  if(action==='seo-public-audit')return ovPublicWebsiteAction(m,b);
   if(action==='seo-export'){
     const draft=(OV_SEO?.drafts||[]).find(x=>x.id===b.dataset.id);
     if(!draft||draft.status!=='approved'){toast('Only approved drafts can be exported.',true);return}
@@ -554,6 +557,35 @@ async function ovSeoAdvancedAction(action,m,b){
       OV_SEO=await api('GET','/api/overview/seo');
     }
     OV_SEO_ERROR='';
+  }catch(e){OV_SEO_ERROR=e.message;toast(e.message,true)}
+  finally{OV_SEO_BUSY=false;if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain()}
+}
+
+function ovPublicWebsitePanel(){
+  const r=OV_PUBLIC_AUDIT;
+  const issues=r?.issues||[];
+  return '<section class="panel" style="margin:14px 0"><h3>Analyze another website</h3><div class="pad">'+
+    '<p class="muted">Enter one publicly accessible HTTPS page. SEO Studio checks its title, description, H1, canonical and noindex directives. It does not crawl the entire website.</p>'+
+    '<label for="seoPublicUrl">Public website URL</label>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap"><input id="seoPublicUrl" type="url" style="flex:1;min-width:220px" placeholder="https://example.com/" maxlength="2048" value="'+esc(r?.url||'')+'">'+
+    '<button class="btn primary" data-ov="seo-public-audit" '+(OV_SEO_BUSY?'disabled':'')+'>Analyze website</button></div>'+
+    (r?'<div style="margin-top:14px"><p><b>'+esc(r.url)+'</b> · HTTP '+Number(r.httpStatus)+' · '+issues.length+' potential issue(s)</p>'+
+      '<p><b>Title:</b> '+esc(r.title||'Missing')+'</p><p><b>Description:</b> '+esc(r.description||'Missing')+'</p>'+
+      '<p><b>H1 tags:</b> '+Number(r.h1)+'</p><p><b>Canonical:</b> '+esc(r.canonical||'Missing')+'</p>'+
+      '<p><b>Robots:</b> '+esc(r.robots||'Not specified')+'</p>'+
+      (issues.length?issues.map(x=>'<div style="padding:7px 0;border-top:1px solid var(--line)">• '+esc(x)+'</div>').join(''):'<p class="muted">No issues found by the current checks.</p>')+
+      '<p class="muted">'+esc(r.note)+'</p></div>':'<p class="muted">No external website analyzed yet.</p>')+
+    '</div></section>';
+}
+async function ovPublicWebsiteAction(m,b){
+  if(OV_SEO_BUSY)return;
+  const input=$('#seoPublicUrl',m),url=input?.value?.trim();
+  if(!url){toast('Enter a full HTTPS website URL.',true);return}
+  OV_SEO_BUSY=true;b.disabled=true;
+  try{
+    OV_PUBLIC_AUDIT=await api('POST','/api/overview/seo/analyze-public',{url});
+    OV_SEO_ERROR='';
+    toast('Public website analysis complete');
   }catch(e){OV_SEO_ERROR=e.message;toast(e.message,true)}
   finally{OV_SEO_BUSY=false;if(S.view==='overview'&&OV_PRODUCT==='seo')renderMain()}
 }
