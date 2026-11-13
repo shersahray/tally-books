@@ -11,6 +11,7 @@ const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
 const { createSeoStudio } = require('./seo-studio');
+const { createPublicSeoAnalyzer } = require('./seo-public-analyzer');
 const { createSeoAdvanced } = require('./seo-advanced');
 const { createSearchConsole } = require('./seo-search-console');
 const { YearEndUsage } = require('./usage');
@@ -375,6 +376,7 @@ function createApp(opts) {
   const backups = new Backups(opts.dataDir, reg, { blobUrl: opts.backupBlobUrl });
   const ai = new AI(opts.dataDir, { envKey: opts.aiKey, apiUrl: opts.aiUrl });
   const seoStudio = createSeoStudio(opts.dataDir, { aiKey: opts.aiKey, fetchImpl: opts.seoFetch });
+  const publicSeoAnalyzer = createPublicSeoAnalyzer();
   const seoGsc = createSearchConsole({ env: opts.env || process.env, fetchImpl: opts.gscFetch });
   const seoEnv = opts.env || process.env;
   const seoAdvanced = createSeoAdvanced(seoStudio, {
@@ -1325,6 +1327,7 @@ function createApp(opts) {
     // Server-administrator-only marketing studio; never touches client books.
     ['GET', /^\/api\/overview\/seo$/, (req, m, res, user) => { adminOnly(user); return seoStudio.state(); }],
     ['POST', /^\/api\/overview\/seo\/audit$/, async (req, m, res, user) => { adminOnly(user); return seoStudio.audit(); }],
+    ['POST', /^\/api\/overview\/seo\/analyze-public$/, async (req, m, res, user) => { adminOnly(user); const b=await readJson(req,3072); return publicSeoAnalyzer.analyze(b.url); }],
     ['POST', /^\/api\/overview\/seo\/keywords$/, async (req, m, res, user) => { adminOnly(user); const b = await readJson(req, 4096); return { clusters: seoStudio.keywords(b.topic || '') }; }],
     ['POST', /^\/api\/overview\/seo\/drafts$/, async (req, m, res, user) => { adminOnly(user); const b = await readJson(req, 8192); return { draft: await seoStudio.draft(b) }; }],
     ['POST', /^\/api\/overview\/seo\/drafts\/([a-f0-9-]{36})\/review$/, async (req, m, res, user) => { adminOnly(user); const b = await readJson(req, 24000); return { draft: seoStudio.updateDraft(m[1], b) }; }],
