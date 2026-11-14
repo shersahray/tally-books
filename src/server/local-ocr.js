@@ -53,7 +53,8 @@ async function recognize(file, options = {}) {
   try {
     if (type === 'application/pdf') {
       // Fast path for digital PDFs; fallback to OCR on the first scanned page.
-      const pdfText = clean((await run('pdftotext', ['-f', '1', '-l', '3', '-layout', '-', '-'], data)).toString('utf8'));
+      let pdfText = '';
+      try { pdfText = clean((await run('pdftotext', ['-f', '1', '-l', '3', '-layout', '-', '-'], data)).toString('utf8')); } catch { /* scanned PDF or no text tool */ }
       if (pdfText.length >= 30) return { text: pdfText, engine: 'pdftotext' };
       const png = await run('pdftoppm', ['-f', '1', '-l', '1', '-singlefile', '-scale-to', '1800', '-png', '-', '-'], data);
       const recognized = clean((await run('tesseract', ['stdin', 'stdout', '-l', language], png)).toString('utf8'));
