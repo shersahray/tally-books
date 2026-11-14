@@ -15,6 +15,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { ValidationError, sanitizeDraft } = require('./validate');
+const { recognize } = require('./local-ocr');
 
 // USD per million tokens (input, output). https://platform.claude.com/docs/en/about-claude/pricing
 const MODELS = {
@@ -132,6 +133,10 @@ class AI {
     const lines = [...new Set(ids)].slice(0, MAX_LINES).map(id => store.get('bankTxns', id)).filter(b => b && b.status === 'new');
     if (!lines.length) return { suggestions: {}, usd: 0 };
 
+    // Local OCR supplements (not replaces) Claude vision. Only a short text excerpt is sent
+    // to the same API; the original document stays in the existing approval workflow.
+    const ocr = await recognize(file, { language: company.lang === 'fr' ? 'fra' : 'eng' });
+    const ocrHint = ocr.text ? '\nLocally recognized text (may contain OCR errors; verify against image):\n' + ocr.text : '';
     const accounts = store.list('accounts').filter(a => a.active !== false && a.detail !== 'ar' && a.detail !== 'ap');
     const byId = new Map(accounts.map(a => [a.id, a]));
     const contacts = store.list('contacts').slice(0, 400);
@@ -278,11 +283,11 @@ class AI {
       tool_choice: { type: 'tool', name: tool.name },
       messages: [{ role: 'user', content: [
         isPdf ? { type: 'document', source: { type: 'base64', media_type: type, data } } : { type: 'image', source: { type: 'base64', media_type: type, data } },
-        { type: 'text', text: 'Read this ' + (isPdf ? 'document' : 'photo') + ' and record it.' },
+        { type: 'text', text: 'Read this ' + (isPdf ? 'document' : 'photo') + ' and record it.' + ocrHint },
       ] }],
     };
     // Images are about 1,600 tokens; a PDF page is a few thousand. Estimate high so the limit holds.
-    const inTok = Math.ceil(JSON.stringify(body.system).length / 3) + (isPdf ? Math.min(400000, Math.ceil(data.length / 20)) : 2000);
+    const inTok = Math.ceil(JSON.stringify(body.system).length / 3) + Math.ceil(ocrHint.length / 3) + (isPdf ? Math.min(400000, Math.ceil(data.length / 20)) : 2000);
     const r = await this.reserve(body.model, inTok, body.max_tokens, () => this.call(body));
     const usd = this.record(r.usage || {}, 0, body.model);
     const use = (r.content || []).find(c => c.type === 'tool_use');
