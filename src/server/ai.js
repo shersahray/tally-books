@@ -133,10 +133,6 @@ class AI {
     const lines = [...new Set(ids)].slice(0, MAX_LINES).map(id => store.get('bankTxns', id)).filter(b => b && b.status === 'new');
     if (!lines.length) return { suggestions: {}, usd: 0 };
 
-    // Local OCR supplements (not replaces) Claude vision. Only a short text excerpt is sent
-    // to the same API; the original document stays in the existing approval workflow.
-    const ocr = await recognize(file, { language: company.lang === 'fr' ? 'fra' : 'eng' });
-    const ocrHint = ocr.text ? '\nLocally recognized text (may contain OCR errors; verify against image):\n' + ocr.text : '';
     const accounts = store.list('accounts').filter(a => a.active !== false && a.detail !== 'ar' && a.detail !== 'ap');
     const byId = new Map(accounts.map(a => [a.id, a]));
     const contacts = store.list('contacts').slice(0, 400);
@@ -239,6 +235,10 @@ class AI {
     if (!/^[A-Za-z0-9+/]+=*$/.test(data)) throw new ValidationError('That file couldn’t be read.');
     if (data.length * 0.75 > 10 * 1024 * 1024) throw new ValidationError('That file is over 10 MB. Try a smaller photo or a shorter PDF.');
 
+    // Local OCR supplements (not replaces) Claude vision. Only a short text excerpt is sent
+    // to the same API; the original document stays in the existing approval workflow.
+    const ocr = await recognize(file, { language: company.lang === 'fr' ? 'fra' : 'eng' });
+    const ocrHint = ocr.text ? '\nLocally recognized text (may contain OCR errors; verify against image):\n' + ocr.text : '';
     const accounts = store.list('accounts').filter(a => a.active !== false && !['ar', 'ap', 'bank', 'card', 'tax', 'qst', 'pst'].includes(a.detail) && a.type !== 'Income');
     const byId = new Map(accounts.map(a => [a.id, a]));
     const vendors = store.list('contacts').filter(c => c.kind !== 'customer').slice(0, 400);
