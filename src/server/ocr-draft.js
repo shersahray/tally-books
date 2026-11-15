@@ -31,7 +31,7 @@ function amountField(lines, re) {
 function draftFromText(text) {
   const lines = String(text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 200);
   // Require explicit, labelled totals to avoid picking a line item or tax registration number.
-  const total = amountField(lines, /^(?:grand\s+total|invoice\s+total|amount\s+due|balance\s+due|total\s+(?:due|payable)|total\s*[:：])\s*\$?\s*([\d,]+\.\d{2})\s*(?:CAD)?$/i);
+  const total = amountField(lines, /^(?:grand\s+total|invoice\s+total|amount\s+due|balance\s+due|total\s+(?:due|payable)|total(?:\s+cad)?\s*[:：]?)\s*\$?\s*([\d,]+\.\d{2})\s*(?:CAD)?$/i);
   const subtotal = amountField(lines, /^(?:sub\s*-?\s*total|sous[- ]total)\s*[:：]?\s*\$?\s*([\d,]+\.\d{2})\s*(?:CAD)?$/i);
   const patterns = [
     ['GST', /^(?:gst|tps)(?:\s*\(?5(?:\.0+)?%\)?)?\s*[:：]?\s*\$?\s*([\d,]+\.\d{2})\s*$/i],
