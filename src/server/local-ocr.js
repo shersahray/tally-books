@@ -6,9 +6,10 @@ const { spawn } = require('node:child_process');
 
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_OUTPUT = 128 * 1024;
+const MAX_PNG_OUTPUT = 12 * 1024 * 1024; // A rendered A4/letter PNG regularly exceeds 128 KiB.
 const TIMEOUT_MS = 12000;
 
-function run(binary, args, input, timeout = TIMEOUT_MS) {
+function run(binary, args, input, timeout = TIMEOUT_MS, maxOutput = MAX_OUTPUT) {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = Buffer.alloc(0);
@@ -26,7 +27,7 @@ function run(binary, args, input, timeout = TIMEOUT_MS) {
     }, timeout);
     child.on('error', error => done(error));
     child.stdout.on('data', chunk => {
-      if (stdout.length + chunk.length > MAX_OUTPUT) {
+      if (stdout.length + chunk.length > maxOutput) {
         child.kill('SIGKILL');
         done(new Error('OCR output exceeds limit'));
       } else stdout = Buffer.concat([stdout, chunk]);
@@ -56,7 +57,10 @@ async function recognize(file, options = {}) {
       let pdfText = '';
       try { pdfText = clean((await run('pdftotext', ['-f', '1', '-l', '3', '-layout', '-', '-'], data)).toString('utf8')); } catch { /* scanned PDF or no text tool */ }
       if (pdfText.length >= 30) return { text: pdfText, engine: 'pdftotext' };
-      const png = await run('pdftoppm', ['-f', '1', '-l', '1', '-singlefile', '-scale-to', '1800', '-png', '-', '-'], data);
+      // With stdin as PDF input, omit the optional output prefix to stream PNG to stdout.
+      // Passing a second '-' makes pdftoppm create a file instead of writing image bytes.
+      const png = await run('pdftoppm', pdfRenderArgs(), data, TIMEOUT_MS, MAX_PNG_OUTPUT);
+      if (png.length < 8 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error('PDF conversion produced no PNG');
       const recognized = clean((await run('tesseract', ['stdin', 'stdout', '-l', language], png)).toString('utf8'));
       return { text: recognized, engine: 'tesseract' };
     }
@@ -69,4 +73,8 @@ async function recognize(file, options = {}) {
   }
 }
 
-module.exports = { recognize };
+function pdfRenderArgs() {
+  return ['-f', '1', '-l', '1', '-singlefile', '-scale-to', '1800', '-png', '-'];
+}
+
+module.exports = { recognize, pdfRenderArgs };
