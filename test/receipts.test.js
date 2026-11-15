@@ -55,7 +55,7 @@ test('receipts: sending, viewing, and only real photos or PDFs', async () => {
   const r = await send(JPEG, 'lunch.jpg', clientCookie);
   assert.equal(r.status, 200);
   const rec = (await state()).receipts.find(x => x.id === r.json.id);
-  assert.equal(rec.status, 'inbox'); assert.equal(rec.uploadedBy, 'client@example.com'); assert.equal(rec.readStatus, 'off', 'AI isn’t set up');
+  assert.equal(rec.status, 'inbox'); assert.equal(rec.uploadedBy, 'client@example.com'); assert.ok(['waiting', 'reading', 'read', 'failed'].includes(rec.readStatus), 'local OCR runs without an AI key');
   assert.equal(rec.mediaType, 'image/jpeg', 'type comes from the file itself');
   const f = await fetch(`${base}/api/c/${co}/files/${rec.fileId}`, { headers: { cookie: clientCookie } });
   assert.equal(f.status, 200); assert.equal(f.headers.get('content-type'), 'image/jpeg');
