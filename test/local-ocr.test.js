@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { recognize } = require('../src/server/local-ocr');
+const { recognize, pdfRenderArgs } = require('../src/server/local-ocr');
 
 test('local OCR may be disabled without requiring system packages', async () => {
   const previous = process.env.SUMLORA_LOCAL_OCR;
@@ -23,4 +23,13 @@ test('local OCR rejects unsupported and empty uploads safely', async () => {
   } finally {
     if (previous !== undefined) process.env.SUMLORA_LOCAL_OCR = previous;
   }
+});
+
+test('scanned PDF rendering uses stdin and stdout without an output filename', () => {
+  const args = pdfRenderArgs();
+  assert.equal(args[args.length - 1], '-');
+  assert.equal(args.filter(a => a === '-').length, 1,
+    'a second dash is an output prefix, not stdout, and returns no PNG bytes');
+  assert.ok(args.includes('-png'));
+  assert.ok(args.includes('-singlefile'));
 });
