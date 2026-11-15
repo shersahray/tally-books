@@ -10,6 +10,7 @@ const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
+const { readLocal } = require('./ocr-draft');
 const { createSeoStudio } = require('./seo-studio');
 const { createPublicSeoAnalyzer } = require('./seo-public-analyzer');
 const { createSeoAdvanced } = require('./seo-advanced');
@@ -460,7 +461,8 @@ function createApp(opts) {
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
       const save = patch => { const cur = ctx.store.get('receipts', q.rid); if (cur) { ctx.store.put('receipts', q.rid, { ...cur, ...patch }); ctx.bump(); } };
       if (r.status !== 'inbox') { if (r.readStatus === 'waiting' || r.readStatus === 'reading') save({ readStatus: 'off' }); return; }
-      if (!firmAi(q.cid)) { save({ readStatus: 'off', readError: 'AI isn’t turned on for this firm.' }); return; }
+      // When AI is unavailable or disabled, receipts still use the free local OCR reader.
+      const useAi = !!(company.ai && firmAi(q.cid) && ai.status().configured);
       // Each company gets up to 100 automatic reads a day, so one busy client can't use up everyone's AI budget.
       const aiKey = 'receipts-read:' + new Date().toISOString().slice(0, 10), readsToday = Number(ctx.store.getMeta(aiKey) || 0);
       if (!q.manual && readsToday >= 100) { save({ readStatus: 'off', readError: 'This company has had 100 receipts read today. The rest can be read from here.' }); return; }
@@ -469,10 +471,11 @@ function createApp(opts) {
       try {
         const f = ctx.store.getFile(r.fileId);
         if (!f) throw new ValidationError('The photo for this receipt is missing.');
-        try { needFirmAi(q.cid); } catch (e) { save({ readStatus: 'off', readError: e.message }); return; }
-        const { draft, usd } = await ai.read(ctx.store, company, { fileName: r.fileName, mediaType: f.mediaType, data: f.data.toString('base64') });
-        chargeFirm(q.cid, usd);
-        save({ readStatus: 'read', draft, readAt: Date.now() });
+        if (useAi) needFirmAi(q.cid);
+        const file = { fileName: r.fileName, mediaType: f.mediaType, data: f.data.toString('base64') };
+        const { draft, usd, mode } = useAi ? await ai.read(ctx.store, company, file) : await readLocal(file);
+        if (useAi) chargeFirm(q.cid, usd);
+        save({ readStatus: 'read', draft, readMode: mode || 'ai', readAt: Date.now() });
       } catch (e) {
         // Busy with another AI request: try again shortly.
         if (e.code === 'AI_BUSY' && q.tries < 20) { q.tries++; again = true; save({ readStatus: 'waiting' }); }
@@ -2923,8 +2926,8 @@ function createApp(opts) {
       if (same) return { ok: true, duplicate: true, id: same.id, sentOn: same.uploadedAt || 0 };
       const id = crypto.randomUUID(), fileId = crypto.randomUUID();
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
-      let canRead = ai.status().configured && company.ai && firmAi(ctx.id), whyNot = '';
-      try { if (canRead) needFirmAi(ctx.id); } catch (e) { canRead = false; if (e.status === 429) whyNot = e.message; }
+      let canRead = true, whyNot = '';
+      try { if (company.ai && firmAi(ctx.id) && ai.status().configured) needFirmAi(ctx.id); } catch (e) { canRead = false; whyNot = e.message; }
       const fileName = String(body.fileName || 'receipt').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').slice(0, 120);
       const rec = { fileId, fileName, mediaType, size: data.length, sha, uploadedBy: ctx.user.username, uploadedByName: ctx.user.name || ctx.user.username, uploadedAt: Date.now(),
         readStatus: canRead ? 'waiting' : 'off', readError: whyNot, status: 'inbox', note: String(body.note || '').slice(0, 500), entryId: '', docId: '' };
@@ -3177,8 +3180,8 @@ function createApp(opts) {
       const r = ctx.store.get('receipts', m[1]);
       if (!r) throw new ValidationError('That receipt isn’t here any more.', 404);
       if (r.status !== 'inbox') throw new ValidationError('Only receipts waiting for review are read.', 409);
-      needFirmAi(ctx.id);
-      ai.precheck({ ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) });
+      const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
+      if (company.ai && firmAi(ctx.id) && ai.status().configured) { needFirmAi(ctx.id); ai.precheck(company); }
       ctx.store.put('receipts', r.id, { ...r, readStatus: 'waiting', readError: '' });
       queueRead(ctx.id, r.id, true);
       return { ok: true, rev: ctx.bump() };
@@ -3186,13 +3189,13 @@ function createApp(opts) {
     // Read a receipt or bill with AI and return a draft. Nothing is saved; the file isn't kept.
     ['POST', /^\/ai\/read$/, async (ctx, req) => {
       notClient(ctx.user); needArea(ctx.user, 'expenses');
-      needFirmAi(ctx.id);
       const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
-      ai.precheck(company); // before reading a large upload
+      const useAi = !!(company.ai && firmAi(ctx.id) && ai.status().configured);
+      if (useAi) { needFirmAi(ctx.id); ai.precheck(company); } // check before large upload
       const body = (await readJson(req, 15 * 1024 * 1024)) || {};
-      const out = await ai.read(ctx.store, company, body);
-      chargeFirm(ctx.id, out.usd);
-      ctx.store.audit(ctx.user, 'ai', { summary: `AI read ${String(body.fileName || 'a document').slice(0, 80)}` });
+      const out = useAi ? await ai.read(ctx.store, company, body) : await readLocal(body);
+      if (useAi) chargeFirm(ctx.id, out.usd);
+      ctx.store.audit(ctx.user, 'ai', { summary: `${useAi ? 'AI' : 'Local OCR'} read ${String(body.fileName || 'a document').slice(0, 80)}` });
       return { ok: true, ...out };
     }],
     // Bringing a client over from QuickBooks or Sage: everything in one go, or nothing. A copy of the
@@ -3420,8 +3423,8 @@ function createApp(opts) {
     const dayKey = 'receipts-sent:' + new Date().toISOString().slice(0, 10), sentToday = Number(ctx.store.getMeta(dayKey) || 0);
     if (sentToday + files.length > 300) return { rejected: inboundRefuse(cid, mail.fromEmail, 'That’s 300 receipts today for this company.') };
     const company = { ...DEFAULT_COMPANY, ...(ctx.store.getSetting('company') || {}) };
-    let canRead = ai.status().configured && company.ai && firmAi(cid), whyNot = '';
-    try { if (canRead) needFirmAi(cid); } catch (e) { canRead = false; if (e.status === 429) whyNot = e.message; }
+    let canRead = true, whyNot = '';
+    try { if (company.ai && firmAi(cid) && ai.status().configured) needFirmAi(cid); } catch (e) { canRead = false; whyNot = e.message; }
     const who = { username: 'email', name: mail.fromName ? `${mail.fromName} (${mail.fromEmail})` : mail.fromEmail };
     const ids = [];
     ctx.store.transaction(() => {
