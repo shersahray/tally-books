@@ -648,7 +648,7 @@ function sanitizeDraft(x, { accounts, vendors } = {}) {
     reason: str(x.reason, 300),
   };
 }
-const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'draft', 'readAt', 'wasAttached', 'source', 'emailFrom', 'emailSubject', 'sha'];
+const RECEIPT_SERVER = ['fileId', 'fileName', 'mediaType', 'size', 'uploadedBy', 'uploadedByName', 'uploadedAt', 'readStatus', 'readError', 'readMode', 'draft', 'readAt', 'wasAttached', 'source', 'emailFrom', 'emailSubject', 'sha'];
 const RECEIPT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic'];
 function validateReceipt(data, store, id) {
   const prev = store.get('receipts', id);
