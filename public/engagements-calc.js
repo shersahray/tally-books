@@ -447,6 +447,28 @@
     return { net: st.is.net.cur, amort: amort.cur, wc, operating: opening, investing, inv, financing, fin, change, begin, end, gap: r2(end - begin - change) };
   }
 
+  /* ---------- statement wording ---------- */
+  /**
+   * The accountant's own wording for lines and titles on a file's financial statements: { key: text }. Keys are
+   * 'h:bs' | 'h:is' | 'h:cf' (statement titles), 'ls:<leadsheet>' (balance sheet lines), 'a:<account>' (an account's
+   * own line) and 't:<standard label>' (headings, totals and other fixed lines). Blank or unknown entries are dropped.
+   */
+  function cleanLabels(labels) {
+    const out = {};
+    if (!labels || typeof labels !== 'object' || Array.isArray(labels)) return out;
+    for (const [k, v] of Object.entries(labels).slice(0, 500)) {
+      if (typeof v !== 'string' || !/^(h|ls|a|t):.{1,160}$/.test(k)) continue;
+      const text = v.replace(/\s+/g, ' ').trim().slice(0, 150);
+      if (text) out[k] = text;
+    }
+    return out;
+  }
+  /** Statement rows with the file's own wording put in: a changed row keeps its standard label as base and is marked custom. */
+  function withLabels(rows, labels) {
+    const L = cleanLabels(labels);
+    return rows.map(r => (r && r.key && L[r.key] && L[r.key] !== r.label ? { ...r, base: r.label, label: L[r.key], custom: true } : r));
+  }
+
   /* ---------- analysis (suggestions for the accountant, never conclusions) ---------- */
   const NORMAL_DEBIT = { Asset: true, Expense: true, 'Cost of Goods Sold': true, Liability: false, Equity: false, Income: false };
   const SIDE = { Asset: 'bs', Liability: 'bs', Equity: 'bs', Income: 'is', Expense: 'is', 'Cost of Goods Sold': 'is' };
@@ -668,5 +690,5 @@
     return out;
   }
 
-  return { suggestAjes, T2125, t2125, fyStart, fyEnd, tbFromEntries, gstCheck, shareholderLoans, cutoff, subsequent, deadlines, addMonths, gfi, ENTITIES, analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi };
+  return { suggestAjes, T2125, t2125, fyStart, fyEnd, tbFromEntries, gstCheck, shareholderLoans, cutoff, subsequent, deadlines, addMonths, gfi, ENTITIES, analyze, unusual, continuity, cashFlow, priorCheck, withPriorFrom, KINDS, FRAMEWORKS, STATUS, STATUS_LABEL, statusOf, EXTRA_WPS, WP_STATUS, TICKS, NOTE_STATUS, PRIORITY, CHECKLIST, workingPapers, checklist, progress, openNote, LEADSHEETS, BY_CODE, RE_OPEN, suggest, leadOf, ajeTotals, ajeProblem, workingTb, leadsheets, netIncome, changedSince, BS_GROUPS, statements, gifi, cleanLabels, withLabels };
 });

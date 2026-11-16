@@ -156,7 +156,7 @@ async function yfCreate(ye,kind='compilation',framework=yfDefaultFw(),from=null,
   const me=ME?{id:ME.id,name:ME.name}:null;
   const data={yearEnd:ye,kind,framework,status:'progress',snapshot,map:prev?{...prev.map}:{},ajes:[],notes:'',created:Date.now(),
     client:yfClientDefaults(prev),team:{preparer:me,reviewer:prev&&prev.team?prev.team.reviewer:null},fsNotes:prev?prev.fsNotes||[]:[],report:prev&&prev.report?{...prev.report,date:''}:undefined,
-    wps:{},reviewNotes:[],checklist:{},signoffs:{},rolledFrom:prev?prev.id:'',includeCashFlow:prev?!!prev.includeCashFlow:false};
+    wps:{},reviewNotes:[],checklist:{},signoffs:{},rolledFrom:prev?prev.id:'',labels:prev?TallyEngage.cleanLabels(prev.labels):{},includeCashFlow:prev?!!prev.includeCashFlow:false};
   if(!await put('engagements',id,data))return'Couldn’t save the year-end file.';
   // Sumlora's own reports (A/R and A/P listings, bank reconciliation, sales tax returns) go on their working papers.
   if(snapshot.source==='books'){const nf=yfFile(id);if(nf)await yfAttachReports(nf,true)}
@@ -236,6 +236,7 @@ async function yfClick(e,t,d){
   if(d.yftab){YF.tab=d.yftab;renderMain();return true}
   const f=YF.open&&yfFile(YF.open);if(!f)return false;
   if(t.hasAttribute('data-yfwords')){yfWordsForm(f);return true}
+  if(t.hasAttribute('data-yflabels')){yfLabelsForm(f);return true}
   if(t.hasAttribute('data-yfpackage')||t.hasAttribute('data-yfpdf'))await yfLoadLogo();
   if(t.hasAttribute('data-yfpackage')){const safe=String(S.company.name||'company').replace(/[^A-Za-z0-9]+/g,'-').replace(/^-|-$/g,'').toLowerCase();saveFile(`${safe}-engagement-package-${f.yearEnd}.pdf`,new Blob([yfPdf(f,true)],{type:'application/pdf'}));return true}
   if(d.yfxlsx){yfXlsx(f,d.yfxlsx);return true}
@@ -279,8 +280,10 @@ function yfBind(m){
 function yfStatementWords(f){
   const co=(f.client&&f.client.legalName)||S.company.name||'the company',ye=fmtDate(f.yearEnd);
   const W=yfWords(f),low=s=>s.replace(/^[A-Z]/,c=>c.toLowerCase());
-  const others=[`the ${low(W.is)}`,...(f.includeCashFlow?['the statement of cash flows']:[])];
-  return `the ${low(W.bs)} of ${co} as at ${ye}, ${others.join(' and ')} for the year then ended`;
+  // The report names the statements as the file titles them.
+  const own=TallyEngage.cleanLabels(f.labels),t=k=>low(own['h:'+k]||(k==='cf'?'Statement of cash flows':W[k]));
+  const others=[`the ${t('is')}`,...(f.includeCashFlow?[`the ${t('cf')}`]:[])];
+  return `the ${t('bs')} of ${co} as at ${ye}, ${others.join(' and ')} for the year then ended`;
 }
 /** The report's template: the one the file was finalized with, else the newest for its engagement type. */
 const yfTemplate=f=>(f.report&&f.report.template&&yfFinal(f)&&TallyReportTemplates.BY_ID[f.report.template])||TallyReportTemplates.current(f.kind||'compilation',f.yearEnd);
@@ -296,7 +299,7 @@ const yfNotes=f=>f.fsNotes&&f.fsNotes.length?f.fsNotes:yfDefaultNotes();
 /** The statements as rows ({cls, label, cur, prior}) for the screen and the PDF. */
 /** The statement of cash flows as rows (this year only; a prior-year column would need the year before it). */
 function yfCfRows(f){
-  const cf=TallyEngage.cashFlow(f,S.accounts),row=(cls,label,v)=>({cls,label,cur:v===undefined?null:v,prior:null});
+  const cf=TallyEngage.cashFlow(f,S.accounts),row=(cls,label,v)=>({cls,label,key:'t:'+label,cur:v===undefined?null:v,prior:null});
   const W=yfWords(f),R=[row('sec','Operating activities'),row('item',W.net,cf.net)];
   if(Math.abs(cf.amort)>=0.005)R.push(row('item','Amortization (not a cash expense)',cf.amort));
   if(cf.wc.length){R.push(row('sub','Changes in non-cash working capital'));cf.wc.forEach(([l,v])=>R.push(row('item',l,v)))}
@@ -306,27 +309,30 @@ function yfCfRows(f){
   R.push(row('spacer',''),row('item','Change in cash',cf.change),row('item','Cash, beginning of year',cf.begin));
   if(Math.abs(cf.gap)>=0.01)R.push(row('item','Not explained by the changes above',cf.gap));
   R.push(row('grand','Cash, end of year',cf.end));
-  return R;
+  return TallyEngage.withLabels(R,f.labels);
 }
 /** The entity kind for a file: chosen on the file, else from the company (a non-profit or charity, or a corporation). */
 const yfEntity=f=>TallyEngage.ENTITIES[f.entity]?f.entity:(S.company.orgType==='npo'||S.company.orgType==='charity'?'npo':'corporation');
 const yfWords=f=>TallyEngage.ENTITIES[yfEntity(f)];
+/** A statement's title ('bs', 'is' or 'cf'): the file's own wording, else the standard one for the entity. */
+const yfTitleBase=(f,k)=>k==='cf'?'Statement of cash flows':yfWords(f)[k];
+const yfTitle=(f,k)=>{const own=TallyEngage.cleanLabels(f.labels)['h:'+k];return own||T(yfTitleBase(f,k))};
 function yfRows(f){
   const st=TallyEngage.statements(f,S.accounts),bs=st.bs,is=st.is,re=st.re,nz=x=>Math.abs(x.cur)>=0.005||Math.abs(x.prior)>=0.005,E=yfWords(f);
   const netL=x=>E.netNeg&&x.cur<0?`${E.net.replace(/^Excess/,'Excess (deficiency)')}`:E.net;
   const add=(a,b)=>({cur:r2(a.cur+b.cur),prior:r2(a.prior+b.prior)});
-  const row=(cls,label,x)=>({cls,label,cur:x?x.cur:null,prior:x?x.prior:null});
+  const row=(cls,label,x,key)=>({cls,label,key:key||'t:'+label,cur:x?x.cur:null,prior:x?x.prior:null});
   const B=[row('sec','Assets')];
-  for(const g of bs.groups.filter(g=>g.key==='ca'||g.key==='la')){if(!g.lines.length)continue;B.push(row('sub',g.label));g.lines.forEach(l=>B.push(row('item',l.label,l)));B.push(row('tot','Total '+g.label.toLowerCase(),g.total))}
+  for(const g of bs.groups.filter(g=>g.key==='ca'||g.key==='la')){if(!g.lines.length)continue;B.push(row('sub',g.label));g.lines.forEach(l=>B.push(row('item',l.label,l,'ls:'+l.code)));B.push(row('tot','Total '+g.label.toLowerCase(),g.total))}
   B.push(row('grand','Total assets',bs.assets),row('spacer',''),row('sec','Liabilities'));
-  for(const g of bs.groups.filter(g=>g.key==='cl'||g.key==='ll')){if(!g.lines.length)continue;B.push(row('sub',g.label));g.lines.forEach(l=>B.push(row('item',l.label,l)));B.push(row('tot','Total '+g.label.toLowerCase(),g.total))}
+  for(const g of bs.groups.filter(g=>g.key==='cl'||g.key==='ll')){if(!g.lines.length)continue;B.push(row('sub',g.label));g.lines.forEach(l=>B.push(row('item',l.label,l,'ls:'+l.code)));B.push(row('tot','Total '+g.label.toLowerCase(),g.total))}
   B.push(row('tot','Total liabilities',bs.liabilities),row('spacer',''),row('sec',E.equity));
   if(E.split){if(nz(bs.shareCapital))B.push(row('item',E.capital,bs.shareCapital));B.push(row('item',E.re,bs.retained))}
   else if(yfEntity(f)==='npo'){if(nz(bs.shareCapital))B.push(row('item',E.capital,bs.shareCapital));B.push(row('item',E.re,bs.retained))}
   B.push(row('tot',E.split||yfEntity(f)==='npo'?'Total '+E.equity.replace(/^[A-Z]/,c=>c.toLowerCase()):E.equity,bs.equity),row('spacer',''),row('grand',`Total liabilities and ${E.equity.replace(/^[A-Z]/,c=>c.toLowerCase())}`,bs.totalLE));
   const I=[row('item','Revenue',is.revenue)];
   if(nz(is.cos))I.push(row('item','Cost of sales',is.cos),row('tot','Gross profit',is.gross));
-  if(is.opex.length){if(f.layout&&f.layout.expenses==='summary')I.push(row('item',E.expenses,is.opexTotal));else{I.push(row('sec',E.expenses));is.opex.forEach(x=>I.push(row('item',x.label,x)));I.push(row('tot','Total '+E.expenses.toLowerCase(),is.opexTotal))}}
+  if(is.opex.length){if(f.layout&&f.layout.expenses==='summary')I.push(row('item',E.expenses,is.opexTotal));else{I.push(row('sec',E.expenses));is.opex.forEach(x=>I.push(row('item',x.label,x,'a:'+x.account)));I.push(row('tot','Total '+E.expenses.toLowerCase(),is.opexTotal))}}
   if(nz(is.other))I.push(row('item','Other income (expenses)',is.other));
   if(nz(is.taxes))I.push(row('tot','Income before income taxes',is.beforeTax),row('item','Income taxes',is.taxes));
   I.push(row('grand',netL(is.net),is.net),row('spacer',''));
@@ -338,22 +344,22 @@ function yfRows(f){
   if(nz(re.dividends))I.push(row('item',E.out,{cur:-re.dividends.cur,prior:-re.dividends.prior}));
   if(nz(re.other))I.push(row('item','Other changes',re.other));
   I.push(row('grand',E.close,E.split||yfEntity(f)==='npo'?re.closing:add(re.closing,bs.shareCapital)));
-  return{st,bs:B,is:I};
+  return{st,bs:TallyEngage.withLabels(B,f.labels),is:TallyEngage.withLabels(I,f.labels)};
 }
 const yfPriorEnd=f=>f.snapshot.priorEnd||addDays(fyStartOf(f.yearEnd),-1);
 function yfTable(rows,f){
   const c=v=>v===null?'':mcell(v);
-  return `<table><thead><tr><th></th><th class="n">${esc(fmtDate(f.yearEnd))}</th><th class="n">${esc(fmtDate(yfPriorEnd(f)))}</th></tr></thead><tbody>${rows.map(r=>r.cls==='spacer'?'<tr class="spacer"><td colspan="3"></td></tr>':`<tr class="${r.cls==='sub'?'sec':r.cls}"><td>${esc(T(r.label))}</td><td class="n">${c(r.cur)}</td><td class="n">${c(r.prior)}</td></tr>`).join('')}</tbody></table>`;
+  return `<table><thead><tr><th></th><th class="n">${esc(fmtDate(f.yearEnd))}</th><th class="n">${esc(fmtDate(yfPriorEnd(f)))}</th></tr></thead><tbody>${rows.map(r=>r.cls==='spacer'?'<tr class="spacer"><td colspan="3"></td></tr>':`<tr class="${r.cls==='sub'?'sec':r.cls}"><td>${esc(r.custom?r.label:T(r.label))}</td><td class="n">${c(r.cur)}</td><td class="n">${c(r.prior)}</td></tr>`).join('')}</tbody></table>`;
 }
 function yfStatements(f,edit){
   const{st,bs,is}=yfRows(f),rp=yfReport(f),notes=yfNotes(f);
   const co=esc(S.company.name||''),off=st.bs.off;
-  let h=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><span class="grow muted">Built from the adjusted leadsheets, with the prior year beside each figure.</span><label class="check"><input type="checkbox" data-yfcf ${f.includeCashFlow?'checked':''} ${edit?'':'disabled'}> ${esc(T('Statement of cash flows'))}</label>${edit?'<button class="btn" data-yfwords>Edit the report and notes</button>':''}<button class="btn" data-yfxlsx="ls">Leadsheets (Excel)</button><button class="btn" data-yfpackage>Engagement package (PDF)</button><button class="btn primary" data-yfpdf>Statements (PDF)</button></div></div>`;
+  let h=`<div class="panel" style="margin-bottom:16px"><div class="toolbar"><span class="grow muted">Built from the adjusted leadsheets, with the prior year beside each figure.</span><label class="check"><input type="checkbox" data-yfcf ${f.includeCashFlow?'checked':''} ${edit?'':'disabled'}> ${esc(T('Statement of cash flows'))}</label>${edit?'<button class="btn" data-yflabels>Edit statement wording</button><button class="btn" data-yfwords>Edit the report and notes</button>':''}<button class="btn" data-yfxlsx="ls">Leadsheets (Excel)</button><button class="btn" data-yfpackage>Engagement package (PDF)</button><button class="btn primary" data-yfpdf>Statements (PDF)</button></div></div>`;
   if(Math.abs(off.cur)>=0.01||Math.abs(off.prior)>=0.01)h+=`<div class="banner err"><span><b>The balance sheet doesn’t balance</b> (off by ${money(off.cur)} this year, ${money(off.prior)} last year). Check the leadsheets of equity accounts.</span></div>`;
   h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${esc(T(rp.title))}</b><span>${esc(rp.custom?T('Your firm’s wording'):yfTemplate(f).label)}</span></div><div class="pad" style="white-space:pre-wrap;line-height:1.55">${esc(rp.text)}</div><div class="pad muted">${esc(rp.signer||'')}${rp.city?'<br>'+esc(rp.city):''}${rp.date?'<br>'+esc(fmtDate(rp.date)):''}</div></div>`;
-  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T(yfWords(f).bs))} · ${esc(T('As at'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(bs,f)}</div></div>`;
-  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T(yfWords(f).is))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(is,f)}</div></div>`;
-  if(f.includeCashFlow)h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(T('Statement of cash flows'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(yfCfRows(f),f)}</div></div>`;
+  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(yfTitle(f,'bs'))} · ${esc(T('As at'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(bs,f)}</div></div>`;
+  h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(yfTitle(f,'is'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(is,f)}</div></div>`;
+  if(f.includeCashFlow)h+=`<div class="panel report" style="margin-bottom:16px"><div class="rh"><b>${co}</b><span>${esc(yfTitle(f,'cf'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="tbl-wrap">${yfTable(yfCfRows(f),f)}</div></div>`;
   h+=`<div class="panel report"><div class="rh"><b>${co}</b><span>${esc(T('Notes to the financial information'))} · ${esc(T('Year ended'))} ${esc(fmtDate(f.yearEnd))}</span></div><div class="pad">${notes.map((n,i)=>`<p><b>${i+1}. ${esc(n.title)}</b></p><p style="white-space:pre-wrap;line-height:1.55">${esc(n.text)}</p>`).join('')}</div></div>`;
   return h;
 }
@@ -376,13 +382,32 @@ function yfWordsForm(f){
     if(await yfSave(f,{report,fsNotes,layout:{expenses:$('#ydLayout',m).value}}))closeModal()};
 }
 
+/**
+ * The statements' wording for this file: a line for each title and each row now on the statements, with the standard
+ * wording beside the accountant's own. A blank box goes back to the standard wording. Figures aren't touched.
+ */
+function yfLabelsForm(f){
+  const own=TallyEngage.cleanLabels(f.labels),seen=new Set();
+  const line=(key,base,indent)=>{if(seen.has(key))return'';seen.add(key);return `<tr><td${indent?' style="padding-left:22px"':''}>${esc(base)}</td><td><input type="text" data-ylkey="${esc(key)}" data-ylbase="${esc(base)}" value="${esc(own[key]||'')}" placeholder="${esc(base)}" maxlength="150" style="width:100%"></td></tr>`};
+  const section=(k,rows)=>`<tr class="sec"><td colspan="2">${esc(T(yfTitleBase(f,k)))}</td></tr>`+line('h:'+k,T(yfTitleBase(f,k)))+rows.filter(r=>r.cls!=='spacer'&&r.key).map(r=>{const b=r.base||r.label;return line(r.key,/^a:/.test(r.key)?b:T(b),r.cls==='item')}).join('');
+  const{bs,is}=yfRows(f);
+  const m=openModal('Statement wording',`<p class="muted" style="margin-top:0">${esc(T('Type your own wording for any title or line of the financial statements. Leave a box empty to keep the standard wording. Only the words change, never the figures. A line used on more than one statement changes on all of them.'))}</p><div class="tbl-wrap"><table><thead><tr><th>${esc(T('Standard wording'))}</th><th>${esc(T('Your wording'))}</th></tr></thead><tbody>${section('bs',bs)}${section('is',is)}${f.includeCashFlow?section('cf',yfCfRows(f)):''}</tbody></table></div>`,
+    `<button type="button" class="btn" data-ylreset>${esc(T('Back to the standard wording'))}</button><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Save</button>`,'wide');
+  $('[data-ylreset]',m).onclick=()=>$$('[data-ylkey]',m).forEach(i=>{i.value=''});
+  m.onsubmit=async e=>{e.preventDefault();
+    // Wording for lines that aren't on the statements just now (an account with no balance this year) is kept.
+    const labels={...own};
+    for(const i of $$('[data-ylkey]',m)){const v=i.value.replace(/\s+/g,' ').trim();if(v&&v!==i.dataset.ylbase)labels[i.dataset.ylkey]=v;else delete labels[i.dataset.ylkey]}
+    if(await yfSave(f,{labels}))closeModal()};
+}
+
 /** The statements package as a PDF: cover, compilation engagement report, balance sheet, income and retained earnings, notes. */
 /** The statements package as a PDF; with full, the whole engagement package for the firm's own file. */
 function yfPdf(f,full=false){
   const{bs,is}=yfRows(f),rp=yfReport(f),notes=yfNotes(f),co=S.company.name||'';
   const doc=TallyPDF.create(),W0=doc.width,H0=doc.height,M=56,C1=W0-M-110,C2=W0-M;
   let fresh=true,y=0;const page=()=>{if(fresh)fresh=false;else doc.addPage();y=M};
-  const title=(t,sub)=>{page();doc.text(W0/2,y,co,{size:14,bold:true,align:'center'});y+=18;doc.text(W0/2,y,tl(t),{size:12,bold:true,align:'center'});y+=15;if(sub){doc.text(W0/2,y,sub,{size:10,align:'center',color:'#555555'});y+=12}y+=18};
+  const title=(t,sub,own)=>{page();doc.text(W0/2,y,co,{size:14,bold:true,align:'center'});y+=18;doc.text(W0/2,y,own?t:tl(t),{size:12,bold:true,align:'center'});y+=15;if(sub){doc.text(W0/2,y,sub,{size:10,align:'center',color:'#555555'});y+=12}y+=18};
   const para=(text,size=10)=>{for(const line of doc.wrap(text,W0-2*M,size)){if(y>H0-M){page()}doc.text(M,y,line,{size});y+=size*1.45}};
   // Cover
   page();y=250;doc.text(W0/2,y,co,{size:22,bold:true,align:'center'});y+=34;doc.text(W0/2,y,tl('Financial statements'),{size:15,align:'center'});y+=22;doc.text(W0/2,y,`${tl('Year ended')} ${fmtDate(f.yearEnd)}`,{size:11,align:'center',color:'#555555'});
@@ -392,21 +417,21 @@ function yfPdf(f,full=false){
   // Statements
   const table=(rows,t,sub)=>{
     const headRow=()=>{doc.text(C1,y,fmtDate(f.yearEnd),{size:9,bold:true,align:'right'});doc.text(C2,y,fmtDate(yfPriorEnd(f)),{size:9,bold:true,align:'right'});y+=6;doc.line(M,y,W0-M,y,{color:'#999999'});y+=14};
-    title(t,sub);headRow();
+    title(t,sub,true);headRow();
     for(const r of rows){
-      if(y>H0-M-20){title(t,sub);headRow()}
+      if(y>H0-M-20){title(t,sub,true);headRow()}
       if(r.cls==='spacer'){y+=6;continue}
       const bold=['sec','sub','tot','grand'].includes(r.cls),ind=r.cls==='item'?14:0;
       if(r.cls==='tot'||r.cls==='grand')doc.line(C1-90,y-9,W0-M,y-9,{color:'#bbbbbb'});
-      doc.text(M+ind,y,tl(r.label),{size:10,bold});
+      doc.text(M+ind,y,r.custom?r.label:tl(r.label),{size:10,bold});
       if(r.cur!==null){doc.text(C1,y,money(r.cur),{size:10,bold:r.cls==='grand',align:'right'});if(r.prior!==null)doc.text(C2,y,money(r.prior),{size:10,bold:r.cls==='grand',align:'right'})}
       if(r.cls==='grand'){doc.line(C1-90,y+4,W0-M,y+4,{color:'#555555'});doc.line(C1-90,y+6,W0-M,y+6,{color:'#555555'})}
       y+=r.cls==='sec'?16:14;
     }
   };
-  table(bs,yfWords(f).bs,`${tl('As at')} ${fmtDate(f.yearEnd)}`);
-  table(is,yfWords(f).is,`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
-  if(f.includeCashFlow)table(yfCfRows(f),'Statement of cash flows',`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
+  table(bs,yfTitle(f,'bs'),`${tl('As at')} ${fmtDate(f.yearEnd)}`);
+  table(is,yfTitle(f,'is'),`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
+  if(f.includeCashFlow)table(yfCfRows(f),yfTitle(f,'cf'),`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
   // Notes
   title('Notes to the financial information',`${tl('Year ended')} ${fmtDate(f.yearEnd)}`);
   notes.forEach((n,i)=>{if(y>H0-M-40)page();doc.text(M,y,`${i+1}. ${n.title}`,{size:10,bold:true});y+=15;para(n.text);y+=10});
