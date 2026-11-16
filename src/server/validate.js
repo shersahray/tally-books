@@ -967,6 +967,8 @@ function validateEngagement(data, store, id) {
     unlocks: (Array.isArray(data.unlocks) ? data.unlocks : []).slice(-200).filter(isObj).map(u => ({ ...engStamp(u), reason: str(u.reason, 1000).trim() })).filter(u => u.at),
     // The financial statements' words: the compilation engagement report and the notes, written by the accountant.
     includeCashFlow: !!data.includeCashFlow,
+    // The accountant's own wording for statement lines and titles (engagements-calc.js: cleanLabels).
+    labels: ENGAGE.cleanLabels(data.labels),
     // Time spent on the engagement, the budget, and what was invoiced.
     time: (Array.isArray(data.time) ? data.time : []).slice(0, 2000).filter(isObj).map((t, i) => {
       const hours = Math.round((Number(t.hours) || 0) * 100) / 100;

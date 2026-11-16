@@ -3532,6 +3532,7 @@ addFr({
   "Recurring: suggest it again in next year’s file":"Récurrente : la suggérer de nouveau dans le dossier de l’an prochain","References to other working papers":"Renvois à d’autres feuilles de travail","Related parties":"Apparentés",
   "Reopen this year-end file":"Rouvrir ce dossier de fin d’exercice","Reopened":"Rouvert","Reopened after being final":"Rouvert après être devenu définitif",
   "Reopen…":"Rouvrir…","Replace the trial balance?":"Remplacer la balance de vérification?","Report and notes":"Rapport et notes",
+  "Edit statement wording":"Modifier le libellé des états","Statement wording":"Libellé des états","Your wording":"Votre libellé","Back to the standard wording":"Revenir au libellé standard","Type your own wording for any title or line of the financial statements. Leave a box empty to keep the standard wording. Only the words change, never the figures. A line used on more than one statement changes on all of them.":"Saisissez votre propre libellé pour tout titre ou toute ligne des états financiers. Laissez une case vide pour conserver le libellé standard. Seuls les mots changent, jamais les chiffres. Une ligne utilisée dans plus d’un état change dans chacun d’eux.",
   "Report date":"Date du rapport","Resolution":"Résolution",
   "Retained earnings, beginning of year":"Bénéfices non répartis au début de l’exercice","Retained earnings, end of year":"Bénéfices non répartis à la fin de l’exercice","Review in progress":"Révision en cours",
   "Review note":"Note de révision","Review notes":"Notes de révision","Reviewed":"Révisée",

@@ -1947,7 +1947,7 @@ function createApp(opts) {
             snapshot: { takenAt: Date.now(), by: me.name, priorEnd: tb.priorEnd, lines, source: 'books', priorSource: roll ? 'file' : 'books', bulk: true },
             map: prev ? { ...(prev.map || {}) } : {}, ajes: [], wps: {}, reviewNotes: [], checklist: {}, signoffs: {}, notes: '', created: Date.now(),
             client: prev && prev.client && prev.client.legalName ? { ...prev.client } : { legalName: s.name, operatingName: '', address: s.address || '', province: s.province || '', corpNumber: '', bn: s.bn || '', contact: [s.email, s.phone].filter(Boolean).join(' · '), industry: s.industry || '', owners: '' },
-            team: { preparer: me, reviewer: prev && prev.team ? prev.team.reviewer : null }, fsNotes: prev ? prev.fsNotes || [] : [], report: prev && prev.report ? { ...prev.report, date: '' } : undefined,
+            team: { preparer: me, reviewer: prev && prev.team ? prev.team.reviewer : null }, fsNotes: prev ? prev.fsNotes || [] : [], labels: prev ? prev.labels || {} : {}, report: prev && prev.report ? { ...prev.report, date: '' } : undefined,
             rolledFrom: prev ? prev.id : '', includeCashFlow: prev ? !!prev.includeCashFlow : false, layout: prev ? prev.layout : undefined, materiality: prev ? prev.materiality : undefined,
           };
           const id = crypto.randomUUID();

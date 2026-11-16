@@ -341,6 +341,27 @@ test('entities: wording for corporations, proprietors, partnerships and non-prof
   assert.equal(st.re.dividends.cur, 100, 'drawings are taken out like dividends'); assert.deepEqual(st.bs.off, { cur: 0, prior: 0 });
 });
 
+test('statement wording: the accountant’s own labels replace the standard ones, and nothing else', () => {
+  const rows = [{ cls: 'item', label: 'Cash', key: 'ls:A', cur: 5, prior: 0 }, { cls: 'item', label: 'Advertsing', key: 'a:adv', cur: 9, prior: 1 }, { cls: 'grand', label: 'Total assets', key: 't:Total assets', cur: 5, prior: 0 }, { cls: 'spacer', label: '' }];
+  const out = E.withLabels(rows, { 'ls:A': '  Cash and   bank ', 'a:adv': 'Advertising', 't:Total assets': 'Total assets', 'a:gone': 'Kept for later', junk: 'x', 'h:bs': 7 });
+  assert.deepEqual(out.map(r => [r.label, r.base, !!r.custom]), [['Cash and bank', 'Cash', true], ['Advertising', 'Advertsing', true], ['Total assets', undefined, false], ['', undefined, false]]);
+  assert.deepEqual(out.map(r => [r.cur, r.prior]), rows.map(r => [r.cur, r.prior]), 'figures are untouched');
+  assert.deepEqual(E.withLabels(rows, undefined), rows);
+  assert.deepEqual(E.cleanLabels({ 'h:is': 'Statement of earnings', 'ls:A': '   ', 'q:x': 'no', 't:Revenue': 'S'.repeat(200) }), { 'h:is': 'Statement of earnings', 't:Revenue': 'S'.repeat(150) });
+  assert.deepEqual(E.cleanLabels(['a']), {});
+});
+
+test('server: statement wording is kept on the file, cleaned, and locked once the file is final', async () => {
+  let r = await req(owner, 'PUT', c('/records/engagements/w1'), file({ yearEnd: '2019-12-31', labels: { 'h:bs': 'Statement of financial position', 't:Revenue': ' Sales ', bad: 'x', 'ls:A': '' } }));
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  let y = await getY('w1');
+  assert.deepEqual(y.labels, { 'h:bs': 'Statement of financial position', 't:Revenue': 'Sales' });
+  r = await req(owner, 'PUT', c('/records/engagements/w1'), { ...y, status: 'final' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  y = await getY('w1');
+  assert.equal((await req(owner, 'PUT', c('/records/engagements/w1'), { ...y, labels: { 't:Revenue': 'Fees' } })).status, 409);
+});
+
 test('letters come from the central templates and fill in the file', () => {
   const R = require('../public/report-templates.js');
   const t = R.render(R.current('engagement-letter'), { entity: 'Maple Dental', yearEnd: 'Dec 31, 2025', statements: 'the balance sheet', firm: 'Sher Bookkeeping', date: 'Jan 5, 2026' });
