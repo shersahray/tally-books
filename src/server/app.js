@@ -8,6 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { COLLECTIONS } = require('./db');
 const { Registry } = require('./companies');
+const { reportPeriod, locationProfitAndLoss } = require('./restaurant-group');
 const { Backups } = require('./backups');
 const { AI } = require('./ai');
 const { readLocal } = require('./ocr-draft');
@@ -153,6 +154,11 @@ function createApp(opts) {
   const needArea = (user, area, level = 'edit') => {
     if (!canArea(user, area, level)) throw new ValidationError(level === 'edit' ? `Your role doesn’t allow changes in ${ROLES.AREAS[area].label}.` : `Your role doesn’t include ${ROLES.AREAS[area].label}.`, 403);
   };
+  function restaurantLocations(user) {
+    if (!canArea(user, 'reports')) return [];
+    const ids = auth.firm(user.firmId)?.restaurantGroup || [];
+    return ids.map(id => reg.get(id)).filter(c => c && !c.archived && canSeeCo(user, c.id));
+  }
   /** Every area at this level (for things that touch the whole books, like a backup or example data). */
   /** Edit in the areas a write touches (roles.js writeAreas; a list there means any one of them). */
   const needWrite = (user, col, data, prev) => { for (const a of ROLES.writeAreas(col, data, prev)) { const any = Array.isArray(a) ? a : [a]; if (!any.some(x => canArea(user, x, 'edit'))) needArea(user, any[0], 'edit'); } };
@@ -1327,6 +1333,23 @@ function createApp(opts) {
 
   // Routes that work across companies.
   const globalRoutes = [
+    ['GET', /^\/api\/restaurant-group$/, (req, m, res, user) => {
+      const locations = restaurantLocations(user);
+      if (!locations.length) throw new ValidationError('The Restaurant Group Dashboard isn’t enabled for your account.', 404);
+      const query = new URL(req.url, 'http://localhost').searchParams;
+      const { from, to } = reportPeriod(query, localDay(opts.now ? opts.now() : new Date()));
+      const selected = query.get('location');
+      if (selected && !locations.some(c => c.id === selected)) throw new ValidationError('That location doesn’t exist.', 404);
+      const rows = locations.map(c => {
+        const location = { id: c.id, name: c.name };
+        if (user.role === 'client' && coNeedsPay(c)) return { ...location, billingRequired: true };
+        const store = reg.store(c.id);
+        try { codeGate(user, c.id, store); }
+        catch (e) { if (e.codeRequired) return { ...location, locked: true }; throw e; }
+        return { ...location, ...locationProfitAndLoss(store, from, to, c.id === selected) };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+      return { from, to, rows };
+    }],
     // Server-administrator-only marketing studio; never touches client books.
     ['GET', /^\/api\/overview\/seo$/, (req, m, res, user) => { adminOnly(user); return seoStudio.state(); }],
     ['POST', /^\/api\/overview\/seo\/audit$/, async (req, m, res, user) => { adminOnly(user); return seoStudio.audit(); }],
@@ -1832,12 +1855,36 @@ function createApp(opts) {
       adminOnly(user);
       const firms = auth.data.firms.map(f => {
         const people = auth.firmUsers(f.id), owner = people.find(u => u.role === 'owner');
-        const { logo, ...fNoLogo } = f;
-        return { ...fNoLogo, hasLogo: !!logo, users: people.length, companies: reg.list(f.id).length, owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
+        const { logo, restaurantGroup, ...fNoLogo } = f;
+        const companies = reg.list(f.id);
+        return { ...fNoLogo, hasLogo: !!logo, users: people.length, companies: companies.length,
+          restaurantGroupCount: companies.filter(c => !c.archived && restaurantGroup?.includes(c.id)).length,
+          owner: owner ? { name: owner.name, username: owner.username } : null, lastLogin: Math.max(0, ...people.map(u => u.lastLogin || 0)),
           aiSpentUsd: Math.round(ai.firmSpent(f.id) * 100) / 100, main: f.id === auth.mainFirmId, plan: PLANS.planOf(f.plan), legacy: f.legacy || '', billPayroll: !!f.billPayroll, early: f.early || [],
           payrollCompanies: reg.list(f.id).filter(c => !c.archived && c.payroll).length, billing: undefined, subscription: billingDescribe(f.billing) };
       });
       return { firms, signups: auth.signups, defaultPlan: auth.defaultPlan, myFirm: user.firmId, plans: PLANS.PLANS, legacy: PLANS.LEGACY, features: PLANS.FEATURES, addons: PLANS.ADDONS };
+    }],
+    ['GET', /^\/api\/firms\/([^/]+)\/restaurant-group$/, (req, m, res, user) => {
+      adminOnly(user);
+      const firm = auth.firm(decodeURIComponent(m[1]));
+      if (!firm) throw new ValidationError('That firm doesn’t exist.', 404);
+      const selected = new Set(firm.restaurantGroup);
+      return { companies: reg.list(firm.id).filter(c => !c.archived)
+        .map(c => ({ id: c.id, name: c.name, selected: selected.has(c.id) })) };
+    }],
+    ['PUT', /^\/api\/firms\/([^/]+)\/restaurant-group$/, async (req, m, res, user) => {
+      adminOnly(user);
+      if (user.readOnly) throw new ValidationError('Your account is view only.', 403);
+      const body = await readJson(req, 16384);
+      const firm = auth.firm(decodeURIComponent(m[1]));
+      if (!firm) throw new ValidationError('That firm doesn’t exist.', 404);
+      const ids = body?.companies;
+      const active = new Set(reg.list(firm.id).filter(c => !c.archived).map(c => c.id));
+      if (!Array.isArray(ids) || ids.some(id => !active.has(id))) throw new ValidationError('Select active companies from this firm.');
+      auth.setRestaurantGroup(firm, [...new Set(ids)], user);
+      broadcast({ companies: true, firmId: firm.id });
+      return { ok: true, count: new Set(ids).size };
     }],
     ['PUT', /^\/api\/firms\/settings$/, async (req, m, res, user) => {
       adminOnly(user);
@@ -1960,6 +2007,7 @@ function createApp(opts) {
       return { results };
     }],
     ['GET', /^\/api\/companies$/, (req, m, res, user) => ({ companies: reg.list(user.firmId).filter(c => canSeeCo(user, c.id)).map(summary).map(c => roleSummary(user, c)), provinces: PROVINCES,
+      restaurantGroup: restaurantLocations(user).length > 0,
       ...(user.platformAdmin ? { pendingFirms: auth.data.firms.filter(f => f.status === 'pending').length } : {}) })],
     // Invite a single business in one step: its company, and its owner as a client who signs in to see it
     // (and, when subscriptions are on, pays for it themselves). Returns the invitation link to send.

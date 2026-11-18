@@ -302,6 +302,13 @@ class Auth {
     this.log('firm-changed', { by: actor.username, firm: f.name, changes: Object.keys(patch) });
     return f;
   }
+  setRestaurantGroup(firm, companyIds, actor) {
+    if (companyIds.length) firm.restaurantGroup = companyIds;
+    else delete firm.restaurantGroup;
+    this.save();
+    this.log('restaurant-group-changed', { by: actor.username, firm: firm.id, companies: companyIds });
+  }
+
   /** Remove a firm that never got going (waiting, declined or suspended, with no companies), and its people, so their usernames are free again. */
   deleteFirm(id, actor, companyCount) {
     const f = this.firm(id);
