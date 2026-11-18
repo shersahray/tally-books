@@ -106,11 +106,18 @@ class Store {
       fileList: this.db.prepare('SELECT id, media_type, size, created FROM files ORDER BY created'),
       paymentsFor: this.db.prepare(`SELECT 1 FROM records WHERE collection = 'entries'
                                     AND json_extract(data, '$.applyTo') = ? LIMIT 1`),
+      periodBalances: this.db.prepare(`SELECT account_id AS id,
+        SUM(CAST(ROUND(COALESCE(debit, 0) * 100) AS INTEGER)
+          - CAST(ROUND(COALESCE(credit, 0) * 100) AS INTEGER)) AS cents
+        FROM journal_lines WHERE date BETWEEN ? AND ? GROUP BY account_id`),
     };
   }
 
   list(collection) {
     return this.stmt.all.all(collection).map(r => ({ ...JSON.parse(r.data), id: r.id }));
+  }
+  periodBalances(from, to) {
+    return this.stmt.periodBalances.all(from, to);
   }
   get(collection, id) {
     const r = this.stmt.get.get(collection, id);

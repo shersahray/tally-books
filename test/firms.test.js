@@ -251,3 +251,61 @@ test('live updates: only your own firm’s, and they stop when the session ends'
   assert.ok(closed, 'the stream ended with the session');
   ctl.abort();
 });
+
+test('restaurant group rolls up posted ledger amounts and respects company access and codes', async () => {
+  const restaurant = '/api/restaurant-group';
+  const period = '?from=2026-10-01&to=2026-10-31';
+  const firmId = (await req(admin, 'GET', '/api/firm')).json.firm.id;
+  const config = '/api/firms/' + firmId + '/restaurant-group';
+  const otherFirm = (await login('nora@north.ca')).cookie;
+  const north = (await req(admin, 'POST', '/api/companies', { name: 'Restaurant North', province: 'QC', code: '1234' })).json.company.id;
+  const south = (await req(admin, 'POST', '/api/companies', { name: 'Restaurant South', province: 'QC' })).json.company.id;
+  assert.equal((await req(admin, 'GET', restaurant)).status, 404);
+  assert.equal((await req(otherFirm, 'GET', config)).status, 403);
+  assert.equal((await req(otherFirm, 'PUT', config, { companies: [bCo] })).status, 403);
+  assert.equal((await req(admin, 'PUT', config, { companies: [bCo] })).status, 400);
+  assert.equal((await req(admin, 'PUT', config, { companies: [north, south, south] })).json.count, 2);
+  assert.equal((await req(admin, 'GET', '/api/companies')).json.restaurantGroup, true);
+  assert.equal((await req(otherFirm, 'GET', restaurant)).status, 404);
+  assert.equal((await req(admin, 'GET', restaurant + period + '&location=' + aCo)).status, 404);
+  assert.equal((await req(admin, 'GET', restaurant + '?from=2026-02-30')).status, 400);
+
+  const accounts = (await req(admin, 'GET', '/api/c/' + north + '/state')).json.accounts;
+  const id = type => accounts.find(a => a.type === type).id;
+  const posting = (account, debit, credit) => ({ account: id(account), debit, credit });
+  const post = (key, date, lines) => req(admin, 'PUT', '/api/c/' + north + '/records/entries/' + key, { type: 'journal', date, lines });
+  assert.equal((await post('sale', '2026-10-01', [
+    posting('Asset', 100.23, 0), posting('Income', 0, 100.23),
+  ])).status, 200);
+  assert.equal((await post('expense', '2026-10-31', [
+    posting('Expense', 23.36, 0), posting('Cost of Goods Sold', 17.09, 0), posting('Asset', 0, 40.45),
+  ])).status, 200);
+  assert.equal((await post('later', '2026-11-01', [
+    posting('Asset', 90, 0), posting('Income', 0, 90),
+  ])).status, 200);
+  const result = await req(admin, 'GET', restaurant + period + '&location=' + north);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.json.rows.map(r => r.id), [north, south]);
+  const [first, second] = result.json.rows;
+  assert.deepEqual([first.revenue, first.expenses, first.netIncome], [10023, 4045, 5978]);
+  assert.deepEqual(first.breakdown.map(row => row.amount).sort((a, b) => a - b), [1709, 2336, 10023]);
+  assert.equal(second.breakdown, undefined);
+  assert.equal(first.closed, false);
+
+  const session = (await login('sher@example.com')).cookie;
+  const locked = (await req(session, 'GET', restaurant + period)).json.rows[0];
+  assert.deepEqual(locked, { id: north, name: 'Restaurant North', locked: true });
+  assert.equal((await req(session, 'POST', '/api/c/' + north + '/code/check', { code: '1234' })).status, 200);
+  assert.equal((await req(session, 'GET', restaurant + period)).json.rows[0].netIncome, 5978);
+
+  const username = 'restaurant-south@example.com';
+  assert.equal((await req(admin, 'POST', '/api/users', { name: 'Restaurant South', username, password: PW, role: 'client', companies: [south], readOnly: true })).status, 200);
+  const viewer = (await login(username)).cookie;
+  assert.equal((await req(viewer, 'POST', '/api/auth/password', { current: PW, password: PW + ' changed' })).status, 200);
+  assert.deepEqual((await req(viewer, 'GET', restaurant + period)).json.rows.map(r => r.id), [south]);
+  assert.equal((await req(viewer, 'GET', restaurant + period + '&location=' + north)).status, 404);
+  assert.equal((await req(admin, 'PUT', '/api/companies/' + south, { archived: true })).status, 200);
+  assert.equal((await req(viewer, 'GET', restaurant + period)).status, 404);
+  assert.equal((await req(admin, 'PUT', config, { companies: [] })).status, 200);
+  assert.equal((await req(admin, 'GET', restaurant)).status, 404);
+});

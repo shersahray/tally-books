@@ -233,10 +233,12 @@ function showRecovery(codes,fromAccount){
 let reauthing=null;
 function sessionEnded(info){
   if(reauthing)return reauthing;
+  const wasRestaurantGroup=S.view==='restaurantGroup';
+  if(wasRestaurantGroup){restaurantGroup=null;restaurantGroupAvailable=false;S.view='companies'}
   if(info&&info.forgot!==undefined)FORGOT=!!info.forgot;
   $('#main').innerHTML='';ME=null;
   reauthing=requireSignIn(info&&info.setup?'setup':'signin',info&&info.setup?{setupCode:!!info.setupCode,licence:info.licenceSetup||null}:info&&info.idle?`Locked after ${IDLE_MIN} minutes without activity. Sign in to continue.`:'Your session ended. Sign in to continue.')
-    .then(()=>{reauthing=null;if(CO)load();renderMain()});
+    .then(()=>{reauthing=null;if(wasRestaurantGroup)return showCompanies();if(CO)load();renderMain()});
   return reauthing;
 }
 /** Start-up: who's signed in, or show the right screen first. */
@@ -518,13 +520,14 @@ function vFirms(){
       <td>${firmPlanCell(f)}</td>
       ${BILLADM&&BILLADM.configured?`<td style="white-space:nowrap">${f.main?'<span class="muted">Your firm (free)</span>':({trialing:'<span class="pill paid">Free trial</span>',active:'<span class="pill paid">Paying</span>',pastdue:'<span class="pill overdue">Payment failed</span>',stopped:'<span class="pill overdue">Stopped</span>'})[f.subscription&&f.subscription.state]||'<span class="pill quiet">Not started</span>'}</td>`:''}
       <td style="white-space:nowrap"><label class="check"><input type="checkbox" data-firmai="${f.id}" ${f.ai?'checked':''} aria-label="AI suggestions"> On</label>${f.main?'<div class="muted" style="font-size:12px">Server limit</div>':`<div class="muted" style="font-size:12px;display:flex;gap:4px;align-items:center"><span translate="no">${money(f.aiSpentUsd||0)}</span> / $<input type="number" min="0" step="1" value="${f.aiCapUsd??10}" data-firmcap="${f.id}" aria-label="Monthly AI limit (US$)" style="width:64px;padding:2px 4px"></div>`}</td><td><span class="pill ${st[0]}">${st[1]}</span></td>
-      <td style="white-space:nowrap">${f.status==='pending'?`<button class="btn sm primary" data-firmset="${f.id}" data-to="active">Approve</button>`:''}${f.status==='suspended'?`<button class="btn sm" data-firmset="${f.id}" data-to="active">Reactivate</button>`:''}${f.status!=='suspended'&&!mine?` <button class="btn sm ${f.status==='pending'?'ghost':'danger'}" data-firmset="${f.id}" data-to="suspended">${f.status==='pending'?'Decline':'Suspend'}</button>`:''}${f.status==='suspended'&&!f.companies&&!mine?` <button class="btn sm ghost" data-firmdel="${f.id}">Remove</button>`:''}${f.owner&&!mine?` <button class="btn sm ghost" data-firmhelp="${f.id}">Sign-in help</button>`:''}</td></tr>`}).join('')}</tbody></table></div></div>`;
+      <td style="white-space:nowrap">${f.status==='pending'?`<button class="btn sm primary" data-firmset="${f.id}" data-to="active">Approve</button>`:''}${f.status==='suspended'?`<button class="btn sm" data-firmset="${f.id}" data-to="active">Reactivate</button>`:''}${f.status!=='suspended'&&!mine?` <button class="btn sm ${f.status==='pending'?'ghost':'danger'}" data-firmset="${f.id}" data-to="suspended">${f.status==='pending'?'Decline':'Suspend'}</button>`:''}${f.status==='suspended'&&!f.companies&&!mine?` <button class="btn sm ghost" data-firmdel="${f.id}">Remove</button>`:''}${f.owner&&!mine?` <button class="btn sm ghost" data-firmhelp="${f.id}">Sign-in help</button>`:''}${f.companies?` <button class="btn sm ghost" data-firmrestaurant="${f.id}">Restaurant group${f.restaurantGroupCount?` (${f.restaurantGroupCount})`:''}</button>`:''}</td></tr>`}).join('')}</tbody></table></div></div>`;
 }
 function bindFirms(m){
   m.onclick=async e=>{const b=e.target.closest('button');if(!b)return;
     if(b.hasAttribute('data-back-co'))return showCompanies();
     if(b.hasAttribute('data-firminvite'))return inviteFirmForm(showFirms);
     if(b.dataset.sysmail)return sysMailAction(b.dataset.sysmail);
+    if(b.dataset.firmrestaurant)return configureRestaurantGroup(FIRMS.firms.find(f=>f.id===b.dataset.firmrestaurant));
     if(b.dataset.firmhelp)return firmHelp(b.dataset.firmhelp);
     if(typeof invoicingAction==='function'&&await invoicingAction(b))return;
     if(typeof billingAdminAction==='function'&&await billingAdminAction(b))return;

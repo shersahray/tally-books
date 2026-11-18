@@ -59,7 +59,7 @@ const newOk=k=>k==='contact'?perm('sales','edit')||perm('expenses','edit'):k==='
 let MODAL_AREA=null; // the area of the form being opened (set around each form; see the end of auth.js)
 // Company-scoped API paths: '/api/state' is sent as '/api/c/<company>/state'.
 function coUrl(url){
-  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|ledgers$|inbound$|billing(?:\/|$)|invoicing$|yearends(?:\/|$)|c\/)/.test(url))return url;
+  if(!/^\/api\/(?!companies|events|health|backups|auth|users|roles(?:\/|$)|security|sysmail|firms?(?:\/|$)|licences?(?:\/|$)|overview(?:\/|$)|ai$|plaid$|ledgers$|inbound$|billing(?:\/|$)|invoicing$|yearends(?:\/|$)|restaurant-group|c\/)/.test(url))return url;
   if(!CO)throw new Error('Open a company first.');
   return url.replace(/^\/api\//,`/api/c/${encodeURIComponent(CO)}/`);
 }
@@ -171,7 +171,7 @@ function renderMain(){
   document.title=CO&&S.loaded?`${S.company.name} · Sumlora`:'Sumlora';
   document.body.classList.toggle('no-co',!CO);
   $$('#nav button').forEach(b=>{if(b.dataset.view===S.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
-  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences'||S.view==='overview'||S.view==='yearends';
+  const noCo=S.view==='companies'||S.view==='users'||S.view==='signins'||S.view==='firms'||S.view==='licences'||S.view==='overview'||S.view==='yearends'||S.view==='restaurantGroup';
   if(typeof drawReminders==='function')drawReminders();
   if(!noCo&&!ready())return;
   const od=S.docs.filter(d=>d.kind==='invoice'&&docStatus(d).k==='overdue').length;
@@ -201,7 +201,7 @@ function renderMain(){
   if(lim){$$('#nav button').forEach(b=>{if(!viewOk(b.dataset.view))b.hidden=true});if(!noCo&&!viewOk(S.view))S.view='dashboard'}
   document.body.classList.toggle('area-ro',lim&&!!VIEW_AREA[S.view]&&!perm(VIEW_AREA[S.view],'edit'));
   document.body.classList.toggle('perm-limited',lim&&!permAll('edit'));
-  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,timesheets:shiftPage,yearfiles:typeof vYearFiles==='function'?vYearFiles:vDashboard,requests:typeof vRequests==='function'?vRequests:vDashboard,yearends:typeof vYearEnds==='function'?vYearEnds:vDashboard,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
+  const V={companies:vCompanies,users:vUsers,signins:vSignins,firms:vFirms,licences:vLicences,overview:vOverview,restaurantGroup:vRestaurantGroup,activity:vActivity,dashboard:vDashboard,projects:vProjects,assets:vAssets,yard:typeof vYard==='function'?vYard:vDashboard,sales:()=>vDocs('invoice'),expenses:()=>vDocs('bill'),transactions:vTx,accounts:vAccounts,register:vRegister,banking:vBanking,salestax:vSalesTax,review:vReviewPage,payroll:vPayroll,timesheets:shiftPage,yearfiles:typeof vYearFiles==='function'?vYearFiles:vDashboard,requests:typeof vRequests==='function'?vRequests:vDashboard,yearends:typeof vYearEnds==='function'?vYearEnds:vDashboard,receipts:vReceipts,convert:vConvert,dataimport:typeof vDataImport==='function'?vDataImport:vDashboard,reports:vReports,settings:vSettings}[S.view]||vDashboard;
   const main=$('#main');
   const keepFocus=document.activeElement&&main.contains(document.activeElement)&&document.activeElement.id?document.activeElement.id:null;
   main.innerHTML=(typeof licenceBanner==='function'?licenceBanner():'')+(noCo?'':banners())+V();
@@ -671,6 +671,7 @@ function bindMain(m){
   if(S.view==='convert')bindConvert(m);
   if(S.view==='dataimport'&&typeof bindDataImport==='function')bindDataImport(m);
   if(S.view==='companies')bindCompanies(m);
+  if(S.view==='restaurantGroup')bindRestaurantGroup(m);
   bindBackups(m);
   bindAI(m);bindAIRead(m);bindAssistantSettings(m);if(typeof bindFeeds==='function')bindFeeds();if(typeof bindRcMail==='function')bindRcMail(m);
   if(typeof bindDocout==='function')bindDocout(m);
