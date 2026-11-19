@@ -141,7 +141,7 @@ function vReconcile(a){
   }
   const lines=reconLines(a,R.date),n=reconNumbers(a),card=a.detail==='card';
   return reconBar(a)+`<div class="panel"><div class="toolbar"><span class="grow"><b>${esc(a.name)}</b> <span class="muted">· statement ending ${fmtDate(R.date)} · ${lines.length} uncleared transaction${lines.length===1?'':'s'} up to that date</span></span>
-    <button class="btn sm" data-bact="rec-tickall">${lines.length&&lines.every(x=>R.ticked.has(x.e.id))?'Untick all':'Tick all'}</button><button class="btn sm" data-bact="rec-edit">Edit statement info</button><button class="btn sm" data-bact="rec-save">Save for later</button><button class="btn sm primary" data-bact="rec-finish" ${Math.abs(n.diff)<0.005?'':'disabled'}>Finish</button></div>
+    <button class="btn sm" data-bact="rec-suggest" title="Suggests which transactions to tick so the difference is zero. You still check them and press Finish.">Suggest ticks</button><button class="btn sm" data-bact="rec-tickall">${lines.length&&lines.every(x=>R.ticked.has(x.e.id))?'Untick all':'Tick all'}</button><button class="btn sm" data-bact="rec-edit">Edit statement info</button><button class="btn sm" data-bact="rec-save">Save for later</button><button class="btn sm primary" data-bact="rec-finish" ${Math.abs(n.diff)<0.005?'':'disabled'}>Finish</button></div>
     <div class="tbl-wrap"><table><thead><tr><th style="width:36px"></th><th>Date</th><th>Type</th><th>No.</th><th>Payee / memo</th><th class="n">${card?'Charge':'Withdrawal'}</th><th class="n">${card?'Payment':'Deposit'}</th></tr></thead><tbody>${lines.length?lines.map(({e,amt})=>`<tr><td><input type="checkbox" data-rtick="${e.id}" ${R.ticked.has(e.id)?'checked':''} aria-label="Cleared"></td><td style="white-space:nowrap">${fmtDate(e.date)}</td><td style="white-space:nowrap"><button class="link" data-entry="${e.id}">${TLABEL[e.type]||e.type}</button></td><td class="mono">${esc(e.ref||'')}</td><td class="trunc" translate="no">${esc(contactName(e.contactId)||e.memo||'')}</td><td class="n">${amt<0?money(-amt):''}</td><td class="n">${amt>0?money(amt):''}</td></tr>`).join(''):emptyRow(7,'Nothing to tick','There are no uncleared transactions up to this date. Import or enter the missing ones first.')}</tbody></table></div>
     ${Math.abs(n.diff)>=0.005?`<div class="pad muted" style="font-size:13px;border-top:1px solid var(--line)">Finish unlocks when the difference is zero. If a transaction on the statement is missing here, add it (or import it under For review), then come back. Your ticks are kept while you do.</div>`:''}</div>`;
 }
@@ -320,6 +320,12 @@ async function bankClick(ev,t,d){
       renderMain();return true;
     }
     case 'rec-edit':B.draft[a.id]={date:B.rec.date,ending:B.rec.ending};B.rec=null;renderMain();return true;
+    case 'rec-suggest':{
+      const RS=window.TallyReconSuggest,ls=reconLines(a,B.rec.date);
+      const r=RS.suggest({lines:ls.map(x=>({id:x.e.id,effect:natural(a,x.amt)})),ticked:[...B.rec.ticked],beginning:reconciledBalance(a),ending:B.rec.ending});
+      if(r.ids)B.rec.ticked=new Set(r.ids);
+      toast(RS.message(r),!r.ids);renderMain();return true;
+    }
     case 'rec-tickall':{const ls=reconLines(a,B.rec.date);const all=ls.every(x=>B.rec.ticked.has(x.e.id));ls.forEach(x=>all?B.rec.ticked.delete(x.e.id):B.rec.ticked.add(x.e.id));renderMain();return true}
     case 'rec-save':await saveRecon(a);return true;
     case 'rec-finish':await finishRecon(a);return true;
