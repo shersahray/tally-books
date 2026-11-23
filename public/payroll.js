@@ -523,7 +523,7 @@ function payRunForm(){
   const included=()=>$$('.prl',f).filter(b=>b.querySelector('[data-inc]').checked);
   const totals=()=>{const r={lines:included().map(readLine)};const t=runTotals(r);
     $('[data-rtot]',f).innerHTML=`<div>Gross pay</div><div>${money(t.gross)}</div><div>Employee deductions</div><div>${money(t.ded)}</div><div>Employer contributions</div><div>${money(t.er)}</div><div>To CRA</div><div>${money(t.cra)}</div>${t.rq?`<div>To Revenu Québec</div><div>${money(t.rq)}</div>`:''}${t.vacAcc||t.vacOut?`<div>Vacation pay set aside</div><div>${money(r2(t.vacAcc-t.vacOut))}</div>`:''}${t.wsib?`<div>Workers’ compensation premium</div><div>${money(t.wsib)}</div>`:''}<div class="big">Net pay from bank</div><div class="big">${money(t.net)}</div>`;
-    const tb=PR.tableFor($('#rDate',f).value);$('[data-rates]',f).textContent=tb?`Rates: ${tb.label} (CRA T4127, 123rd edition).`:'';};
+    const tb=PR.tableFor($('#rDate',f).value);$('[data-rates]',f).textContent=tb?`Rates: ${tb.label} (${tb.source}).`:'';};
   const emps=$('[data-emps]',f);
   emps.addEventListener('input',ev=>{const box=ev.target.closest('.prl');if(!box)return;const el=ev.target;
     if(el.matches('[data-ded],[data-er],[data-x]')||(el.matches('[data-reg]')&&employee(box.dataset.emp).payType==='hourly'))el.dataset.ov='1';
