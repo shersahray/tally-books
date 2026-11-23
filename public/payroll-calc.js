@@ -3,10 +3,11 @@
  *
  * Works in the browser (window.TallyPayroll) and in Node (require) so the tests can check it.
  *
- * Rates: pay dates from 1 July to 31 December 2026.
+ * Rates: pay dates from 1 July 2026 to 30 June 2027.
  *   - Federal, provincial (outside Quebec), CPP, CPP2, EI: CRA T4127 "Payroll Deductions Formulas",
- *     123rd edition, effective July 1, 2026 (Option 1, annualized tax on regular pay).
- *   - QPP, QPP2, QPIP, Quebec EI rate: Revenu Québec / Retraite Québec 2026 rates.
+ *     123rd edition, effective July 1, 2026, and 124th edition, effective January 1, 2027
+ *     (Option 1, annualized tax on regular pay).
+ *   - QPP, QPP2, QPIP, Quebec EI rate: Revenu Québec / Retraite Québec rates, as given in T4127 Tables 8.3–8.8.
  *   - Quebec income tax: Revenu Québec TP-1015.F method (annualized). Not yet checked line by line
  *     against WebRAS, so the result carries a "check" note.
  * Every amount this returns is a suggestion; the pay-run screen lets the user override any of them.
@@ -22,7 +23,7 @@
   const pos = n => (n > 0 ? n : 0);
 
   const Y2026H2 = {
-    label: 'July–December 2026',
+    label: 'July–December 2026', source: 'CRA T4127, 123rd edition',
     from: '2026-07-01', to: '2026-12-31',
     cpp: { ympe: 74600, exemption: 3500, rate: 0.0595, baseRate: 0.0495, max: 4230.45, baseMaxCredit: 3519.45 },
     qpp: { ympe: 74600, exemption: 3500, rate: 0.063, baseRate: 0.053, max: 4479.30, baseMaxCredit: 3768.30 },
@@ -37,7 +38,8 @@
     },
     prov: {
       AB: { A: [0, 61200, 154259, 185111, 246813, 370220], V: [.08, .10, .12, .13, .14, .15], K: [0, 1224, 4309, 6160, 8628, 12331], bpa: 22769, k5pThreshold: 4896, k5pRate: 0.25 },
-      BC: { A: [0, 50363, 100728, 115648, 140430, 190405, 265545], V: [.0614, .077, .105, .1229, .147, .168, .205], K: [0, 786, 3606, 5676, 9061, 13059, 22884], bpa: 13216 },
+      BC: { A: [0, 50363, 100728, 115648, 140430, 190405, 265545], V: [.0614, .077, .105, .1229, .147, .168, .205], K: [0, 786, 3606, 5676, 9061, 13059, 22884], bpa: 13216,
+        reduction: { max: 805, from: 25570, to: 44952, rate: 0.0356 } },
       MB: { A: [0, 47000, 100000], V: [.108, .1275, .174], K: [0, 917, 5567], bpa: 15780, bpaPhaseOut: [200000, 400000] },
       NB: { A: [0, 52333, 104666, 193861], V: [.094, .14, .16, .195], K: [0, 2407, 4501, 11286], bpa: 13664 },
       NL: { A: [0, 44678, 89354, 159528, 223340, 285319, 570638, 1141275], V: [.087, .145, .158, .178, .198, .208, .213, .218], K: [0, 2591, 3753, 6943, 11410, 14263, 17117, 22823], bpa: 15000 },
@@ -52,11 +54,55 @@
     },
     qc: {
       A: [0, 54345, 108680, 132245], T: [.14, .19, .24, .2575], K: [0, 2717.25, 8151.25, 10465.54],
-      bpa: 18952, creditRate: 0.14, employmentDeduction: { rate: 0.06, max: 1450 }
+      bpa: 18952, creditRate: 0.14, employmentDeduction: { rate: 0.06, max: 1450 }, bonusFlatMax: 18952
     }
   };
 
-  const TABLES = [Y2026H2];
+  /* Pay dates January 1 to June 30, 2027: CRA T4127, 124th edition (effective January 1, 2027), Tables 8.1–8.8.
+     What's new: the base CPP rate drops to 4.75% each (total CPP 5.75%, of which 1% first additional);
+     BC brackets and credits are frozen at 2026 levels for 2027–2030. No other formula changes.
+     BC tax reduction: T4127 prints $690, phased out at 3.56% over $25,570, with the cut-off at $41,722 (copied as printed;
+     $690 / 3.56% would run out at $44,952 instead).
+     Quebec income tax (qc): PROVISIONAL. Revenu Québec hadn't published TP-1015.F for 2027 when this was added
+     (November 2026); these are the 2026 amounts indexed by 3.15% (TaxTips.ca, not yet confirmed by Finances Québec). */
+  const Y2027H1 = {
+    label: 'January–June 2027', source: 'CRA T4127, 124th edition',
+    from: '2027-01-01', to: '2027-06-30',
+    cpp: { ympe: 76700, exemption: 3500, rate: 0.0575, baseRate: 0.0475, max: 4209.00, baseMaxCredit: 3477.00 },
+    qpp: { ympe: 76700, exemption: 3500, rate: 0.063, baseRate: 0.053, max: 4611.60, baseMaxCredit: 3879.60 },
+    cpp2: { yampe: 87400, rate: 0.04, max: 428 },
+    ei: { mie: 70800, rate: 0.0164, max: 1161.12, qcRate: 0.0129, qcMax: 913.32, employer: 1.4 },
+    qpip: { mie: 106000, rate: 0.0043, max: 455.80, erRate: 0.00602, erMax: 638.12 },
+    fed: {
+      A: [0, 60044, 120088, 186157, 265203],
+      R: [0.14, 0.205, 0.26, 0.29, 0.33],
+      K: [0, 3903, 10508, 16092, 26701],
+      bpaMax: 16879, bpaMin: 15214, cea: 1540, qcAbatement: 0.165
+    },
+    prov: {
+      AB: { A: [0, 62424, 157344, 188813, 251750, 377625], V: [.08, .10, .12, .13, .14, .15], K: [0, 1248, 4395, 6283, 8801, 12577], bpa: 23225, k5pThreshold: 4993.92, k5pRate: 0.25 },
+      BC: { A: [0, 50363, 100728, 115648, 140430, 190405, 265545], V: [.056, .077, .105, .1229, .147, .168, .205], K: [0, 1058, 3878, 5948, 9332, 13331, 23156], bpa: 13216,
+        reduction: { max: 690, from: 25570, to: 41722, rate: 0.0356 } },
+      MB: { A: [0, 47000, 100000], V: [.108, .1275, .174], K: [0, 917, 5567], bpa: 15780, bpaPhaseOut: [200000, 400000] },
+      NB: { A: [0, 53693, 107388, 198902], V: [.094, .14, .16, .195], K: [0, 2470, 4618, 11579], bpa: 14019 },
+      NL: { A: [0, 46152, 92303, 164792, 230710, 294734, 589469, 1178938], V: [.087, .145, .158, .178, .198, .208, .213, .218], K: [0, 2677, 3877, 7173, 11787, 14734, 17681, 23576], bpa: 15495 },
+      NS: { A: [0, 32080, 64160, 100827, 162624], V: [.0879, .1495, .1667, .175, .21], K: [0, 1976, 3080, 3917, 9608], bpa: 12350 },
+      NT: { A: [0, 54381, 108765, 176827], V: [.059, .086, .122, .1405], K: [0, 1468, 5384, 8655], bpa: 18672 },
+      NU: { A: [0, 57252, 114503, 186156], V: [.04, .07, .09, .115], K: [0, 1718, 4008, 8662], bpa: 20170 },
+      ON: { A: [0, 55023, 110049, 150000, 220000], V: [.0505, .0915, .1116, .1216, .1316], K: [0, 2256, 4468, 5968, 8168], bpa: 13261,
+        surtax: [[5940, 0.20], [7603, 0.36]], reduction: { base: 306, perDependant: 566 } },
+      PE: { A: [0, 33928, 65820, 106890, 142520, 200000], V: [.095, .1347, .166, .1762, .19, .20], K: [0, 1347, 3407, 4497, 6464, 8464], bpa: 15000 },
+      SK: { A: [0, 55950, 159856], V: [.105, .125, .145], K: [0, 1119, 4316], bpa: 21411 },
+      YT: { A: [0, 60044, 120088, 186157, 500000], V: [.064, .09, .109, .128, .15], K: [0, 1561, 3843, 7380, 18380], bpa: null /* = federal BPA */, ceaRate: 0.064 }
+    },
+    qc: {
+      provisional: true,
+      A: [0, 56055, 112105, 136410], T: [.14, .19, .24, .2575], K: [0, 2802.75, 8408, 10795.18],
+      bpa: 19549, creditRate: 0.14, employmentDeduction: { rate: 0.06, max: 1495 }, bonusFlatMax: 19549
+    }
+  };
+
+  const TABLES = [Y2026H2, Y2027H1];
   const FREQUENCIES = { weekly: 52, biweekly: 26, semimonthly: 24, monthly: 12 };
   const FREQ_LABEL = { weekly: 'Weekly', biweekly: 'Every 2 weeks', semimonthly: 'Twice a month', monthly: 'Monthly' };
   const PROVINCES = ['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'];
@@ -215,9 +261,10 @@
         const S = pos(Math.min(T4 + V1, 2 * (p.reduction.base + Y) - (T4 + V1)));
         T2 = pos(T4 + V1 + V2 - S);
       } else if (prov === 'BC') {
+        const rd = p.reduction;
         let S = 0;
-        if (A <= 25570) S = Math.min(T4, 805);
-        else if (A <= 44952) S = Math.min(T4, pos(805 - (A - 25570) * 0.0356));
+        if (A <= rd.from) S = Math.min(T4, rd.max);
+        else if (A <= rd.to) S = Math.min(T4, pos(rd.max - (A - rd.from) * rd.rate));
         T2 = pos(T4 - S);
       }
       return T2;
@@ -257,13 +304,14 @@
       const regIncome = P * (regular - F - CSAreg);
       qcTax = r2(qcYear(regIncome, P * regular) / P + num(input.extraQcTax));
       if (bonus > 0) {
-        // Revenu Québec: 7% when the year's pay with the bonus is $18,952 or less; otherwise the difference.
+        // Revenu Québec: 7% when the year's pay with the bonus is at most q.bonusFlatMax ($18,952 in 2026); otherwise the difference.
         const yearPay = P * regular + B1 + bonus;
-        qcBonus = yearPay <= 18952 ? r2(bonus * 0.07)
+        qcBonus = yearPay <= q.bonusFlatMax ? r2(bonus * 0.07)
           : r2(pos(qcYear(regIncome + B1 + bonus - CSAb, yearPay) - qcYear(regIncome + B1, P * regular + B1)));
         qcTax = r2(qcTax + qcBonus);
       }
       notes.push('Quebec income tax follows Revenu Québec’s formula but hasn’t been checked against WebRAS yet. Compare with WebRAS before your first Quebec pay run.');
+      if (q.provisional) notes.push('Quebec income tax for this period uses provisional brackets (2026 amounts indexed), because Revenu Québec hadn’t published its tables when they were loaded. Check against WebRAS.');
     }
     if (bonus > 0) notes.push(bonusFlat ? `The bonus is taxed at the flat ${qc ? '10%' : '15%'} rate, because the year’s income is $5,000 or less.` : 'The bonus is taxed with CRA’s method for bonuses: the year’s tax with the bonus minus the year’s tax without it.');
 
@@ -454,6 +502,9 @@
   const YEAR_LIMITS = {
     2026: { ympe: 74600, yampe: 85000, exemption: 3500, cppRate: 0.0595, cppMax: 4230.45, qppRate: 0.063, qppMax: 4479.30, cpp2Rate: 0.04,
       eiMax: 68900, eiRate: 0.0163, eiRateQc: 0.013, qpipMax: 103000, qpipRate: 0.0043, cntRate: 0.0006, cntMax: 103000 },
+    // T4127 124th edition, Tables 8.3–8.8. CNT: rate assumed unchanged, maximum = QPIP maximum insurable earnings (as in 2026).
+    2027: { ympe: 76700, yampe: 87400, exemption: 3500, cppRate: 0.0575, cppMax: 4209.00, qppRate: 0.063, qppMax: 4611.60, cpp2Rate: 0.04,
+      eiMax: 70800, eiRate: 0.0164, eiRateQc: 0.0129, qpipMax: 106000, qpipRate: 0.0043, cntRate: 0.0006, cntMax: 106000 },
   };
   /** SIN check (Luhn). Returns '' when fine, 'none' for 000 000 000 (CRA's "not provided"), or what's wrong. */
   function sinProblem(sin) {

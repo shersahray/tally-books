@@ -31,11 +31,39 @@ example 2 do.
    amounts worked out for another date, or left them blank, and the run could be posted with no CPP, EI or
    tax. The amounts are now cleared and posting asks for confirmation.
 
-## Before January 1, 2027 (must do)
+## 2027 rates (added November 23, 2026)
 
-- Add the **2027 rate table** (T4127 124th edition, usually out in November/December) and
-  `YEAR_LIMITS[2027]`. Known already: the CPP base rate drops to 4.75% (total CPP 5.75%), and BC brackets
-  are frozen at 2026 levels.
+Pay dates **January 1 – June 30, 2027** use T4127 124th edition (effective January 1, 2027), table `Y2027H1`,
+and `YEAR_LIMITS[2027]` is loaded for the 2027 T4 and RL-1. Pay dates from July 1, 2027 are refused (`NO_RATES`)
+until the July 2027 edition is added.
+
+- **What changed in the formulas:** only the CPP base rate, 4.95% → 4.75% each (total CPP 5.75%; first additional
+  1% and CPP2 4% unchanged). The calculator already works out the base and enhanced parts from `rate` and
+  `baseRate`, so no formula change was needed. BC brackets and credits are frozen at 2026 levels for 2027–2030.
+- **Numbers:** every federal and provincial threshold, rate, constant and basic personal amount (Tables 8.1, 8.2),
+  federal BPA phase-out ($16,879 → $15,214 between $186,157 and $265,203), CEA $1,540, CPP/QPP (YMPE $76,700,
+  max $4,209.00 / QPP $4,611.60), CPP2 (YAMPE $87,400, max $428), EI ($70,800; 1.64%, Quebec 1.29%), QPIP
+  ($106,000; 0.43% / 0.602%), Ontario surtax ($5,940 / $7,603), Ontario tax reduction ($306, $566 per dependant),
+  health premium (unchanged), Alberta supplemental credit threshold ($4,993.92), BC tax reduction ($690).
+- **Bonus flat rate** for a year's income of $5,000 or less is still 15% (10% in Quebec) in T4127 2027 — the
+  "Low" item about it below is settled.
+- **BC tax reduction cut-off:** T4127 2027 prints $41,722 as the income above which the reduction is nil, but
+  $690 at 3.56% runs out at $44,952 (41,722 is the 2026 cut-off). Sumlora copies CRA as printed; check with PDOC
+  at about $43,000 a year in BC.
+- The BC tax reduction, Alberta supplemental credit threshold and Quebec bonus threshold are now in the rate tables
+  instead of being written into `calc()`.
+
+Still to do for 2027:
+
+- **T4032-ON (January 2027) wasn't published yet.** The 2027 tests in `test/payroll-cra.test.js` use the T4032-ON
+  2026 scenarios with amounts from an independent calculation of the T4127 2027 formulas. Replace them with CRA's
+  printed January 2027 worked examples and table rows when T4032-ON comes out (usually December).
+- **Quebec income tax 2027 is provisional:** 2026 brackets and amounts indexed by 3.15% (TaxTips.ca, not yet confirmed
+  by Finances Québec): brackets $56,055 / $112,105 / $136,410, basic amount $19,549, employment deduction maximum
+  $1,495 (estimated), 7% bonus threshold $19,549 (assumed equal to the basic amount, as in 2026). The calculator shows
+  a "provisional" note on Quebec pays. Update from Revenu Québec's TP-1015.F / WebRAS 2027.
+- **CNT (labour standards) 2027:** rate assumed unchanged at 0.06%, maximum assumed = QPIP maximum ($106,000).
+- **WSIB 2027 maximum** isn't in `WSIB_MAX` yet.
 - Add the January–June 2026 table if pay runs before July 2026 ever need recalculating.
 
 ## Still open (from the code review)
@@ -55,8 +83,7 @@ Medium:
 
 Low:
 - Client-role users can post and delete pay runs and see full SINs — confirm that's intended.
-- The flat bonus rate for very low incomes is 15% (10% in Quebec) — confirm with PDOC that it's still 15%
-  now that the lowest federal rate is 14%.
+- ~~The flat bonus rate for very low incomes is 15% (10% in Quebec)~~ — confirmed in T4127 2027 (still 15% / 10%).
 
 ## Checking with PDOC before going live
 

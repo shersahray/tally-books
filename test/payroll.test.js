@@ -73,7 +73,7 @@ test('Every province produces sensible deductions', () => {
 });
 
 test('Refuses pay dates without loaded rates, and remittance due dates', () => {
-  assert.throws(() => P.calc({ date: '2027-01-15', prov: 'ON', gross: 1000 }), /aren't loaded/);
+  assert.throws(() => P.calc({ date: '2027-07-15', prov: 'ON', gross: 1000 }), /aren't loaded/);
   assert.equal(P.remittanceDue('2026-09-30'), '2026-10-15');
   assert.equal(P.remittanceDue('2026-12-31'), '2027-01-15');
 });
